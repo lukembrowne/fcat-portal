@@ -12,7 +12,6 @@ import { CacaoTable } from "./cacao-table";
 
 interface DashboardShellProps {
   records: CacaoRecord[];
-  metrics: CacaoMetrics;
 }
 
 const emptyFilters: CacaoFilterState = {
@@ -23,7 +22,7 @@ const emptyFilters: CacaoFilterState = {
   survivalMax: 100,
 };
 
-export function DashboardShell({ records, metrics }: DashboardShellProps) {
+export function DashboardShell({ records }: DashboardShellProps) {
   const [filters, setFilters] = useState<CacaoFilterState>(emptyFilters);
 
   const filteredRecords = useMemo(() => {

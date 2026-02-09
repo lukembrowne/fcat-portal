@@ -1,11 +1,14 @@
 "use server";
 
+import { requirePermission } from "@/lib/auth";
 import { fetchSubmissions, parseWktPoint } from "@/lib/odk-client";
+import { GIZ_PROJECT_ID, GIZ_FORM_CACAO_MONITORING } from "@/lib/odk-constants";
 import type {
   OdkCacaoSubmission,
   CacaoRecord,
   CacaoMetrics,
 } from "@/lib/odk-types";
+import type { ActionResult } from "@/lib/types";
 
 function transformSubmissions(raw: OdkCacaoSubmission[]): CacaoRecord[] {
   return raw.map((s) => {
@@ -33,14 +36,10 @@ function transformSubmissions(raw: OdkCacaoSubmission[]): CacaoRecord[] {
   });
 }
 
-export async function fetchCacaoData(): Promise<{
-  success: boolean;
-  records: CacaoRecord[];
-  metrics: CacaoMetrics;
-  error?: string;
-}> {
+export async function fetchCacaoData(): Promise<ActionResult<{ records: CacaoRecord[]; metrics: CacaoMetrics }>> {
   try {
-    const raw = await fetchSubmissions<OdkCacaoSubmission>("2", "monitoreo_cacao_v1");
+    await requirePermission("giz", "viewer");
+    const raw = await fetchSubmissions<OdkCacaoSubmission>(GIZ_PROJECT_ID, GIZ_FORM_CACAO_MONITORING);
     const records = transformSubmissions(raw);
 
     const totalPlants = records.reduce((sum, r) => sum + (r.plantsPlanted ?? 0), 0);
@@ -60,13 +59,11 @@ export async function fetchCacaoData(): Promise<{
       communities: communities.size,
     };
 
-    return { success: true, records, metrics };
+    return { success: true, data: { records, metrics } };
   } catch (err) {
     console.error("Failed to fetch cacao data:", err);
     return {
       success: false,
-      records: [],
-      metrics: { totalFarms: 0, totalPlants: 0, plantsAlive: 0, avgSurvivalRate: 0, communities: 0 },
       error: err instanceof Error ? err.message : "Unknown error",
     };
   }

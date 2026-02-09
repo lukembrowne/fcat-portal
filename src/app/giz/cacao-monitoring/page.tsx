@@ -5,9 +5,9 @@ import { DashboardShell } from "./dashboard-shell";
 export default async function CacaoMonitoringPage() {
   await requirePermission("giz", "viewer");
 
-  const { success, records, metrics, error } = await fetchCacaoData();
+  const result = await fetchCacaoData();
 
-  if (!success) {
+  if (!result.success) {
     return (
       <div className="container mx-auto px-4 py-8">
         <h1 className="text-2xl font-bold mb-4">Monitoreo de Cacao</h1>
@@ -15,11 +15,11 @@ export default async function CacaoMonitoringPage() {
           <p className="text-destructive font-medium">
             Error al cargar datos de ODK Central
           </p>
-          <p className="text-sm text-muted-foreground mt-2">{error}</p>
+          <p className="text-sm text-muted-foreground mt-2">{result.error}</p>
         </div>
       </div>
     );
   }
 
-  return <DashboardShell records={records} metrics={metrics} />;
+  return <DashboardShell records={result.data.records} />;
 }

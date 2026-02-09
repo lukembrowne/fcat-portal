@@ -14,10 +14,10 @@ export function Validation() {
     setFetchError(null);
     startTransition(async () => {
       const result = await runValidation();
-      if (result.success && result.data) {
+      if (result.success) {
         setErrors(result.data);
       } else {
-        setFetchError(result.error ?? "Error desconocido");
+        setFetchError(result.error);
       }
     });
   }

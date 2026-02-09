@@ -109,6 +109,11 @@ export async function loadSchedule(): Promise<ScheduleRow[]> {
 
 /**
  * Overwrite the entire schedule sheet with new data.
+ *
+ * Write-then-clear: writes new data first, then clears leftover rows below.
+ * If the process crashes between write and clear, stale rows may remain at
+ * the bottom but no data is lost. This is recoverable, unlike clear-then-write
+ * which can destroy all data on crash.
  */
 export async function saveSchedule(rows: ScheduleRow[]): Promise<void> {
   const sheets = getSheets();
@@ -124,19 +129,31 @@ export async function saveSchedule(rows: ScheduleRow[]): Promise<void> {
     })
   );
 
-  await sheets.spreadsheets.values.clear({
+  const newValues = [headers, ...dataRows];
+  const newRowCount = newValues.length;
+
+  // Step 1: Read current row count to know what to clean up
+  const existing = await sheets.spreadsheets.values.get({
     spreadsheetId,
     range: "Sheet1",
   });
+  const oldRowCount = existing.data.values?.length ?? 0;
 
+  // Step 2: Write new data (overwrites existing rows in range)
   await sheets.spreadsheets.values.update({
     spreadsheetId,
     range: "Sheet1!A1",
     valueInputOption: "RAW",
-    requestBody: {
-      values: [headers, ...dataRows],
-    },
+    requestBody: { values: newValues },
   });
+
+  // Step 3: Clear leftover rows below new data (if old sheet was longer)
+  if (oldRowCount > newRowCount) {
+    await sheets.spreadsheets.values.clear({
+      spreadsheetId,
+      range: `Sheet1!A${newRowCount + 1}:${String.fromCharCode(64 + headers.length)}${oldRowCount}`,
+    });
+  }
 }
 
 /**

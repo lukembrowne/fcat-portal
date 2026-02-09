@@ -13,35 +13,50 @@ const ODK_CENTRAL_PASSWORD = process.env.ODK_CENTRAL_PASSWORD!;
 const PAGE_SIZE = 250;
 
 let cachedToken: { token: string; expiresAt: number } | null = null;
+let pendingTokenRequest: Promise<string> | null = null;
 
 async function getSessionToken(): Promise<string> {
   if (cachedToken && Date.now() < cachedToken.expiresAt) {
     return cachedToken.token;
   }
 
-  const res = await fetch(`${ODK_CENTRAL_URL}/v1/sessions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      email: ODK_CENTRAL_EMAIL,
-      password: ODK_CENTRAL_PASSWORD,
-    }),
-  });
-
-  if (!res.ok) {
-    throw new Error(`ODK auth failed: ${res.status} ${res.statusText}`);
+  // Singleton promise: if a request is already in-flight, reuse it
+  if (pendingTokenRequest) {
+    return pendingTokenRequest;
   }
 
-  const data = await res.json();
-  cachedToken = {
-    token: data.token,
-    expiresAt: Date.now() + 55 * 60 * 1000, // refresh 5 min before 1hr expiry
-  };
-  return data.token;
+  pendingTokenRequest = (async () => {
+    try {
+      const res = await fetch(`${ODK_CENTRAL_URL}/v1/sessions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: ODK_CENTRAL_EMAIL,
+          password: ODK_CENTRAL_PASSWORD,
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error(`ODK auth failed: ${res.status} ${res.statusText}`);
+      }
+
+      const data = await res.json();
+      cachedToken = {
+        token: data.token,
+        expiresAt: Date.now() + 55 * 60 * 1000, // refresh 5 min before 1hr expiry
+      };
+      return data.token;
+    } finally {
+      pendingTokenRequest = null;
+    }
+  })();
+
+  return pendingTokenRequest;
 }
 
 function invalidateToken() {
   cachedToken = null;
+  pendingTokenRequest = null;
 }
 
 async function authHeaders(): Promise<Record<string, string>> {
@@ -111,37 +126,56 @@ export async function fetchSubmissions<T = Record<string, unknown>>(
 
 /**
  * Fetch entities from an ODK entity list (dataset) via OData.
+ * Paginates through >250 results.
  */
 export async function fetchEntities<T = Record<string, unknown>>(
   projectId: string,
   datasetName: string,
   options?: { revalidate?: number }
 ): Promise<T[]> {
-  const url = `${ODK_CENTRAL_URL}/v1/projects/${projectId}/datasets/${datasetName}.svc/Entities`;
-  const res = await odkFetch(url, {
-    next: { revalidate: options?.revalidate ?? 300 },
-  } as RequestInit);
+  const baseUrl = `${ODK_CENTRAL_URL}/v1/projects/${projectId}/datasets/${datasetName}.svc/Entities`;
+  const all: T[] = [];
+  let skip = 0;
 
-  if (!res.ok) {
-    throw new Error(`ODK entities fetch failed: ${res.status} ${res.statusText}`);
+  while (true) {
+    const params = new URLSearchParams({
+      $top: String(PAGE_SIZE),
+      $skip: String(skip),
+    });
+
+    const url = `${baseUrl}?${params}`;
+    const res = await odkFetch(url, {
+      next: { revalidate: options?.revalidate ?? 300 },
+    } as RequestInit);
+
+    if (!res.ok) {
+      throw new Error(`ODK entities fetch failed: ${res.status} ${res.statusText}`);
+    }
+
+    const data = await res.json();
+    const entities = (data.value ?? []) as Record<string, unknown>[];
+
+    // Flatten: extract __id as uuid, keep label, copy non-system properties
+    const page = entities.map((entity) => {
+      const flat: Record<string, unknown> = {
+        uuid: entity.__id ?? "",
+        label: entity.label ?? "",
+      };
+      for (const [key, value] of Object.entries(entity)) {
+        if (!key.startsWith("__") && key !== "label") {
+          flat[key] = value;
+        }
+      }
+      return flat as T;
+    });
+
+    all.push(...page);
+
+    if (entities.length < PAGE_SIZE) break;
+    skip += PAGE_SIZE;
   }
 
-  const data = await res.json();
-  const entities = (data.value ?? []) as Record<string, unknown>[];
-
-  // Flatten: extract __id as uuid, keep label, copy non-system properties
-  return entities.map((entity) => {
-    const flat: Record<string, unknown> = {
-      uuid: entity.__id ?? "",
-      label: entity.label ?? "",
-    };
-    for (const [key, value] of Object.entries(entity)) {
-      if (!key.startsWith("__") && key !== "label") {
-        flat[key] = value;
-      }
-    }
-    return flat as T;
-  });
+  return all;
 }
 
 /**
@@ -164,6 +198,7 @@ export async function fetchAttachment(
 
 /**
  * Fetch data from a repeat group (e.g., Submissions.fotos).
+ * Paginates through >250 results.
  */
 export async function fetchRepeatData<T = Record<string, unknown>>(
   projectId: string,
@@ -171,17 +206,34 @@ export async function fetchRepeatData<T = Record<string, unknown>>(
   repeatName: string,
   options?: { revalidate?: number }
 ): Promise<T[]> {
-  const url = `${ODK_CENTRAL_URL}/v1/projects/${projectId}/forms/${formId}.svc/Submissions.${repeatName}`;
-  const res = await odkFetch(url, {
-    next: { revalidate: options?.revalidate ?? 300 },
-  } as RequestInit);
+  const baseUrl = `${ODK_CENTRAL_URL}/v1/projects/${projectId}/forms/${formId}.svc/Submissions.${repeatName}`;
+  const all: T[] = [];
+  let skip = 0;
 
-  if (!res.ok) {
-    throw new Error(`ODK repeat fetch failed: ${res.status} ${res.statusText}`);
+  while (true) {
+    const params = new URLSearchParams({
+      $top: String(PAGE_SIZE),
+      $skip: String(skip),
+    });
+
+    const url = `${baseUrl}?${params}`;
+    const res = await odkFetch(url, {
+      next: { revalidate: options?.revalidate ?? 300 },
+    } as RequestInit);
+
+    if (!res.ok) {
+      throw new Error(`ODK repeat fetch failed: ${res.status} ${res.statusText}`);
+    }
+
+    const data = await res.json();
+    const values = (data.value ?? []) as T[];
+    all.push(...values);
+
+    if (values.length < PAGE_SIZE) break;
+    skip += PAGE_SIZE;
   }
 
-  const data = await res.json();
-  return (data.value ?? []) as T[];
+  return all;
 }
 
 /**

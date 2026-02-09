@@ -12,7 +12,6 @@ import { PhotoViewer } from "./photo-viewer";
 
 interface DashboardShellProps {
   trees: TreeRecord[];
-  metrics: TreeDashboardMetrics;
 }
 
 const emptyFilters: TreeFilterState = {
@@ -24,7 +23,7 @@ const emptyFilters: TreeFilterState = {
   dateTo: "",
 };
 
-export function DashboardShell({ trees, metrics }: DashboardShellProps) {
+export function DashboardShell({ trees }: DashboardShellProps) {
   const [filters, setFilters] = useState<TreeFilterState>(emptyFilters);
   const [selectedTree, setSelectedTree] = useState<TreeRecord | null>(null);
   const [photoOpen, setPhotoOpen] = useState(false);

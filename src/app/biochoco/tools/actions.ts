@@ -1,11 +1,13 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { getCurrentUser, requirePermission } from "@/lib/auth";
+import { requirePermission } from "@/lib/auth";
 import { loadSchedule, saveSchedule, loadSlotTemplate, updateScheduleRows } from "@/lib/sheets-client";
 import { fetchEntities, fetchSubmissions } from "@/lib/odk-client";
+import { BIOCHOCO_PROJECT_ID, BIOCHOCO_DATASET_SITES, BIOCHOCO_FORM_DEPLOY, BIOCHOCO_FORM_RETRIEVE } from "@/lib/odk-constants";
 import type { ScheduleRow, ScheduleChange, SlotRow } from "@/lib/schedule-types";
 import type { OdkSiteEntity } from "@/lib/odk-types";
+import type { ActionResult } from "@/lib/types";
 import {
   shiftSchedule,
   shiftScheduleBySlots,
@@ -14,32 +16,37 @@ import {
   validateSchedule,
   validateSlotSchedule,
 } from "@/lib/schedule-utils";
+import { createHash } from "crypto";
 import { db } from "@/db";
 import { activityLog } from "@/db/schema";
 
-// ─── Types ───────────────────────────────────────────────────
+// ─── Helpers ─────────────────────────────────────────────────
 
-interface ActionResult<T> {
-  success: boolean;
-  data?: T;
-  error?: string;
+function scheduleHash(rows: ScheduleRow[]): string {
+  const content = JSON.stringify(rows.map((r) => [r.deploymentId, r.status, r.plannedDeployDate, r.plannedRetrieveDate]));
+  return createHash("sha256").update(content).digest("hex").slice(0, 16);
 }
+
+// ─── Types ───────────────────────────────────────────────────
 
 export interface ShiftPreview {
   changes: ScheduleChange[];
   validationErrors: string[];
   scheduledCount: number;
+  hash: string;
 }
 
 export interface SwapPreview {
   changes: ScheduleChange[];
   row1: { deploymentId: string; deployDate: string; retrieveDate: string; season: string };
   row2: { deploymentId: string; deployDate: string; retrieveDate: string; season: string };
+  hash: string;
 }
 
 export interface AddSitePreview {
   newDeployments: ScheduleRow[];
   validationErrors: string[];
+  hash: string;
 }
 
 export interface SyncUpdate {
@@ -61,6 +68,7 @@ export interface ToolsPageData {
 
 export async function fetchToolsData(): Promise<ActionResult<ToolsPageData>> {
   try {
+    await requirePermission("biochoco", "editor");
     const schedule = await loadSchedule();
     let slots: SlotRow[] | null = null;
     let hasSlots = false;
@@ -82,6 +90,7 @@ export async function fetchToolsData(): Promise<ActionResult<ToolsPageData>> {
 
 export async function previewBulkShift(shiftAmount: number, useSlots: boolean): Promise<ActionResult<ShiftPreview>> {
   try {
+    await requirePermission("biochoco", "editor");
     const schedule = await loadSchedule();
     const scheduledCount = schedule.filter((r) => r.status === "scheduled").length;
 
@@ -99,18 +108,20 @@ export async function previewBulkShift(shiftAmount: number, useSlots: boolean): 
       validationErrors = validateSchedule(result.rows);
     }
 
-    return { success: true, data: { changes, validationErrors, scheduledCount } };
+    return { success: true, data: { changes, validationErrors, scheduledCount, hash: scheduleHash(schedule) } };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : "Unknown error" };
   }
 }
 
-export async function commitBulkShift(shiftAmount: number, useSlots: boolean): Promise<ActionResult<void>> {
+export async function commitBulkShift(shiftAmount: number, useSlots: boolean, expectedHash: string): Promise<ActionResult<void>> {
   try {
-    const user = await getCurrentUser();
-    if (!user) return { success: false, error: "No autenticado" };
+    const user = await requirePermission("biochoco", "editor");
 
     const schedule = await loadSchedule();
+    if (scheduleHash(schedule) !== expectedHash) {
+      return { success: false, error: "El cronograma fue modificado por otro usuario. Por favor, revisa la vista previa de nuevo." };
+    }
 
     let newRows: ScheduleRow[];
     let changes: ScheduleChange[];
@@ -137,7 +148,7 @@ export async function commitBulkShift(shiftAmount: number, useSlots: boolean): P
     });
 
     revalidatePath("/biochoco");
-    return { success: true };
+    return { success: true, data: undefined };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : "Unknown error" };
   }
@@ -147,6 +158,7 @@ export async function commitBulkShift(shiftAmount: number, useSlots: boolean): P
 
 export async function previewDateSwap(id1: string, id2: string): Promise<ActionResult<SwapPreview>> {
   try {
+    await requirePermission("biochoco", "editor");
     const schedule = await loadSchedule();
     const result = swapDeploymentDates(schedule, id1, id2);
 
@@ -159,6 +171,7 @@ export async function previewDateSwap(id1: string, id2: string): Promise<ActionR
         changes: result.changes,
         row1: { deploymentId: id1, deployDate: r1.plannedDeployDate ?? "N/A", retrieveDate: r1.plannedRetrieveDate ?? "N/A", season: r1.season },
         row2: { deploymentId: id2, deployDate: r2.plannedDeployDate ?? "N/A", retrieveDate: r2.plannedRetrieveDate ?? "N/A", season: r2.season },
+        hash: scheduleHash(schedule),
       },
     };
   } catch (err) {
@@ -166,12 +179,14 @@ export async function previewDateSwap(id1: string, id2: string): Promise<ActionR
   }
 }
 
-export async function commitDateSwap(id1: string, id2: string): Promise<ActionResult<void>> {
+export async function commitDateSwap(id1: string, id2: string, expectedHash: string): Promise<ActionResult<void>> {
   try {
-    const user = await getCurrentUser();
-    if (!user) return { success: false, error: "No autenticado" };
+    const user = await requirePermission("biochoco", "editor");
 
     const schedule = await loadSchedule();
+    if (scheduleHash(schedule) !== expectedHash) {
+      return { success: false, error: "El cronograma fue modificado por otro usuario. Por favor, revisa la vista previa de nuevo." };
+    }
     const result = swapDeploymentDates(schedule, id1, id2);
     await saveSchedule(result.rows);
 
@@ -184,7 +199,7 @@ export async function commitDateSwap(id1: string, id2: string): Promise<ActionRe
     });
 
     revalidatePath("/biochoco");
-    return { success: true };
+    return { success: true, data: undefined };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : "Unknown error" };
   }
@@ -202,9 +217,10 @@ export interface AvailableSite {
 
 export async function getAvailableSites(): Promise<ActionResult<AvailableSite[]>> {
   try {
+    await requirePermission("biochoco", "editor");
     const [schedule, rawSites] = await Promise.all([
       loadSchedule(),
-      fetchEntities<OdkSiteEntity>("8", "monitoring_sites_v0_14"),
+      fetchEntities<OdkSiteEntity>(BIOCHOCO_PROJECT_ID, BIOCHOCO_DATASET_SITES),
     ]);
 
     const inSchedule = new Set(schedule.map((r) => r.siteId));
@@ -227,22 +243,25 @@ export async function getAvailableSites(): Promise<ActionResult<AvailableSite[]>
 
 export async function previewAddSite(siteId: string, siteName: string, habitatType: string): Promise<ActionResult<AddSitePreview>> {
   try {
+    await requirePermission("biochoco", "editor");
     const schedule = await loadSchedule();
     const result = addSiteToSchedule(schedule, { siteId, siteName, habitatType });
     const validationErrors = validateSchedule(result.rows);
 
-    return { success: true, data: { newDeployments: result.newDeployments, validationErrors } };
+    return { success: true, data: { newDeployments: result.newDeployments, validationErrors, hash: scheduleHash(schedule) } };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : "Unknown error" };
   }
 }
 
-export async function commitAddSite(siteId: string, siteName: string, habitatType: string): Promise<ActionResult<void>> {
+export async function commitAddSite(siteId: string, siteName: string, habitatType: string, expectedHash: string): Promise<ActionResult<void>> {
   try {
-    const user = await getCurrentUser();
-    if (!user) return { success: false, error: "No autenticado" };
+    const user = await requirePermission("biochoco", "editor");
 
     const schedule = await loadSchedule();
+    if (scheduleHash(schedule) !== expectedHash) {
+      return { success: false, error: "El cronograma fue modificado por otro usuario. Por favor, revisa la vista previa de nuevo." };
+    }
     const result = addSiteToSchedule(schedule, { siteId, siteName, habitatType });
     await saveSchedule(result.rows);
 
@@ -255,7 +274,7 @@ export async function commitAddSite(siteId: string, siteName: string, habitatTyp
     });
 
     revalidatePath("/biochoco");
-    return { success: true };
+    return { success: true, data: undefined };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : "Unknown error" };
   }
@@ -265,6 +284,7 @@ export async function commitAddSite(siteId: string, siteName: string, habitatTyp
 
 export async function runValidation(): Promise<ActionResult<string[]>> {
   try {
+    await requirePermission("biochoco", "editor");
     const schedule = await loadSchedule();
     const errors = validateSchedule(schedule);
     return { success: true, data: errors };
@@ -275,64 +295,88 @@ export async function runValidation(): Promise<ActionResult<string[]>> {
 
 // ─── Sync ODK ───────────────────────────────────────────────
 
+/**
+ * Derive sync updates from ODK submissions vs current schedule.
+ * Used by both preview and commit to ensure server-side truth.
+ */
+async function deriveSyncUpdates(): Promise<SyncUpdate[]> {
+  const [schedule, , rawDeploys, rawRetrieves] = await Promise.all([
+    loadSchedule(),
+    fetchEntities<OdkSiteEntity>(BIOCHOCO_PROJECT_ID, BIOCHOCO_DATASET_SITES),
+    fetchSubmissions<Record<string, unknown>>(BIOCHOCO_PROJECT_ID, BIOCHOCO_FORM_DEPLOY),
+    fetchSubmissions<Record<string, unknown>>(BIOCHOCO_PROJECT_ID, BIOCHOCO_FORM_RETRIEVE),
+  ]);
+
+  // Build deploy/retrieve ID sets with actual dates
+  const deployedMap = new Map<string, string>();
+  for (const sub of rawDeploys) {
+    const sel = sub.site_selection as Record<string, unknown> | undefined;
+    const depId = (sel?.deployment_id as string) ?? (sub.deployment_id as string) ?? "";
+    const date = (sel?.fecha_instalacion as string) ?? (sub.fecha_instalacion as string) ?? "";
+    if (depId) deployedMap.set(depId, date.slice(0, 10));
+  }
+
+  const retrievedMap = new Map<string, string>();
+  for (const sub of rawRetrieves) {
+    const sel = sub.site_selection as Record<string, unknown> | undefined;
+    const depId = (sel?.deployment_id as string) ?? (sub.deployment_id as string) ?? "";
+    const date = (sel?.fecha_recuperacion as string) ?? (sub.fecha_recuperacion as string) ?? "";
+    if (depId) retrievedMap.set(depId, date.slice(0, 10));
+  }
+
+  const updates: SyncUpdate[] = [];
+
+  for (const row of schedule) {
+    if (row.status === "scheduled" && deployedMap.has(row.deploymentId)) {
+      updates.push({
+        deploymentId: row.deploymentId,
+        siteId: row.siteId,
+        oldStatus: "scheduled",
+        newStatus: "deployed",
+        actualDeployDate: deployedMap.get(row.deploymentId),
+      });
+    } else if (row.status === "deployed" && retrievedMap.has(row.deploymentId)) {
+      updates.push({
+        deploymentId: row.deploymentId,
+        siteId: row.siteId,
+        oldStatus: "deployed",
+        newStatus: "retrieved",
+        actualRetrieveDate: retrievedMap.get(row.deploymentId),
+      });
+    }
+  }
+
+  return updates;
+}
+
 export async function previewSyncOdk(): Promise<ActionResult<SyncUpdate[]>> {
   try {
-    const [schedule, rawSites, rawDeploys, rawRetrieves] = await Promise.all([
-      loadSchedule(),
-      fetchEntities<OdkSiteEntity>("8", "monitoring_sites_v0_14"),
-      fetchSubmissions<Record<string, unknown>>("8", "instalar_sensores"),
-      fetchSubmissions<Record<string, unknown>>("8", "retrieve_sensors"),
-    ]);
-
-    // Build deploy/retrieve ID sets with actual dates
-    const deployedMap = new Map<string, string>();
-    for (const sub of rawDeploys) {
-      const sel = sub.site_selection as Record<string, unknown> | undefined;
-      const depId = (sel?.deployment_id as string) ?? (sub.deployment_id as string) ?? "";
-      const date = (sel?.fecha_instalacion as string) ?? (sub.fecha_instalacion as string) ?? "";
-      if (depId) deployedMap.set(depId, date.slice(0, 10));
-    }
-
-    const retrievedMap = new Map<string, string>();
-    for (const sub of rawRetrieves) {
-      const sel = sub.site_selection as Record<string, unknown> | undefined;
-      const depId = (sel?.deployment_id as string) ?? (sub.deployment_id as string) ?? "";
-      const date = (sel?.fecha_recuperacion as string) ?? (sub.fecha_recuperacion as string) ?? "";
-      if (depId) retrievedMap.set(depId, date.slice(0, 10));
-    }
-
-    const updates: SyncUpdate[] = [];
-
-    for (const row of schedule) {
-      if (row.status === "scheduled" && deployedMap.has(row.deploymentId)) {
-        updates.push({
-          deploymentId: row.deploymentId,
-          siteId: row.siteId,
-          oldStatus: "scheduled",
-          newStatus: "deployed",
-          actualDeployDate: deployedMap.get(row.deploymentId),
-        });
-      } else if (row.status === "deployed" && retrievedMap.has(row.deploymentId)) {
-        updates.push({
-          deploymentId: row.deploymentId,
-          siteId: row.siteId,
-          oldStatus: "deployed",
-          newStatus: "retrieved",
-          actualRetrieveDate: retrievedMap.get(row.deploymentId),
-        });
-      }
-    }
-
+    await requirePermission("biochoco", "editor");
+    const updates = await deriveSyncUpdates();
     return { success: true, data: updates };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : "Unknown error" };
   }
 }
 
-export async function commitSyncOdk(updates: SyncUpdate[]): Promise<ActionResult<void>> {
+/**
+ * Commit sync — re-derives updates server-side from ODK, then applies only
+ * the deploymentIds the user confirmed. Client cannot inject arbitrary data.
+ */
+export async function commitSyncOdk(deploymentIds: string[]): Promise<ActionResult<void>> {
   try {
-    const user = await getCurrentUser();
-    if (!user) return { success: false, error: "No autenticado" };
+    const user = await requirePermission("biochoco", "editor");
+
+    // Re-derive updates from ODK (server-side truth)
+    const allUpdates = await deriveSyncUpdates();
+
+    // Only apply updates for deployment IDs the user confirmed
+    const confirmedSet = new Set(deploymentIds);
+    const updates = allUpdates.filter((u) => confirmedSet.has(u.deploymentId));
+
+    if (updates.length === 0) {
+      return { success: true, data: undefined };
+    }
 
     const sheetUpdates = updates.map((u) => ({
       deploymentId: u.deploymentId,
@@ -354,7 +398,7 @@ export async function commitSyncOdk(updates: SyncUpdate[]): Promise<ActionResult
     });
 
     revalidatePath("/biochoco");
-    return { success: true };
+    return { success: true, data: undefined };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : "Unknown error" };
   }

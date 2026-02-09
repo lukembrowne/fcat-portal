@@ -5,9 +5,9 @@ import { DashboardShell } from "./dashboard-shell";
 export default async function TreePlantingPage() {
   await requirePermission("giz", "viewer");
 
-  const { success, trees, metrics, error } = await fetchTreeData();
+  const result = await fetchTreeData();
 
-  if (!success) {
+  if (!result.success) {
     return (
       <div className="container mx-auto px-4 py-8">
         <h1 className="text-2xl font-bold mb-4">Siembra de Árboles</h1>
@@ -15,11 +15,11 @@ export default async function TreePlantingPage() {
           <p className="text-destructive font-medium">
             Error al cargar datos de ODK Central
           </p>
-          <p className="text-sm text-muted-foreground mt-2">{error}</p>
+          <p className="text-sm text-muted-foreground mt-2">{result.error}</p>
         </div>
       </div>
     );
   }
 
-  return <DashboardShell trees={trees} metrics={metrics} />;
+  return <DashboardShell trees={result.data.trees} />;
 }

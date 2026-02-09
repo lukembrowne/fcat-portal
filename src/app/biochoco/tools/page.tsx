@@ -7,7 +7,7 @@ export default async function BiochocoToolsPage() {
 
   const result = await fetchToolsData();
 
-  if (!result.success || !result.data) {
+  if (!result.success) {
     return (
       <div className="container mx-auto px-4 py-8">
         <h1 className="text-2xl font-bold mb-4">Herramientas de Cronograma</h1>

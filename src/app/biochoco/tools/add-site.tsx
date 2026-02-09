@@ -18,8 +18,8 @@ export function AddSite() {
 
   useEffect(() => {
     getAvailableSites().then((result) => {
-      if (result.success && result.data) setSites(result.data);
-      else setError(result.error ?? "Error al cargar sitios");
+      if (result.success) setSites(result.data);
+      else setError(result.error);
       setLoading(false);
     });
   }, []);
@@ -32,10 +32,10 @@ export function AddSite() {
     setSuccess(null);
     startTransition(async () => {
       const result = await previewAddSite(selectedSite.siteId, selectedSite.siteName, selectedSite.habitatType);
-      if (result.success && result.data) {
+      if (result.success) {
         setPreview(result.data);
       } else {
-        setError(result.error ?? "Error desconocido");
+        setError(result.error);
       }
     });
   }
@@ -44,14 +44,14 @@ export function AddSite() {
     if (!selectedSite) return;
     setError(null);
     startTransition(async () => {
-      const result = await commitAddSite(selectedSite.siteId, selectedSite.siteName, selectedSite.habitatType);
+      const result = await commitAddSite(selectedSite.siteId, selectedSite.siteName, selectedSite.habitatType, preview!.hash);
       if (result.success) {
         setSuccess("Sitio agregado al cronograma correctamente.");
         setPreview(null);
         setSites((prev) => prev.filter((s) => s.siteId !== selectedSite.siteId));
         setSelectedSiteId("");
       } else {
-        setError(result.error ?? "Error al guardar");
+        setError(result.error);
       }
     });
   }

@@ -32,10 +32,10 @@ export function DateSwap({ schedule }: { schedule: ScheduleRow[] }) {
     setSuccess(null);
     startTransition(async () => {
       const result = await previewDateSwap(id1, id2);
-      if (result.success && result.data) {
+      if (result.success) {
         setPreview(result.data);
       } else {
-        setError(result.error ?? "Error desconocido");
+        setError(result.error);
       }
     });
   }
@@ -43,12 +43,12 @@ export function DateSwap({ schedule }: { schedule: ScheduleRow[] }) {
   function handleCommit() {
     setError(null);
     startTransition(async () => {
-      const result = await commitDateSwap(id1, id2);
+      const result = await commitDateSwap(id1, id2, preview!.hash);
       if (result.success) {
         setSuccess("Fechas intercambiadas correctamente.");
         setPreview(null);
       } else {
-        setError(result.error ?? "Error al guardar");
+        setError(result.error);
       }
     });
   }

@@ -85,8 +85,9 @@ function findNextValidWorkDay(
   usedDates: Set<string>,
   monthlyCounts: Map<string, number>,
   maxPerMonth: number,
+  precomputedCalendar?: Date[],
 ): Date {
-  const calendar = generateWorkingCalendar(target.getFullYear(), target.getMonth() + 1, 12);
+  const calendar = precomputedCalendar ?? generateWorkingCalendar(target.getFullYear(), target.getMonth() + 1, 12);
 
   for (const day of calendar) {
     if (day >= target && !usedDates.has(dateStr(day))) {
@@ -145,6 +146,11 @@ export function shiftSchedule(
     }
   }
 
+  // Pre-compute calendar once for all iterations
+  const firstDate = sorted.find((r) => r.plannedDeployDate)?.plannedDeployDate;
+  const calendarStart = firstDate ? parseDate(firstDate) : new Date();
+  const calendar = generateWorkingCalendar(calendarStart.getFullYear(), calendarStart.getMonth() + 1, 24);
+
   const updatedScheduled: ScheduleRow[] = [];
 
   for (const row of sorted) {
@@ -157,7 +163,7 @@ export function shiftSchedule(
     const targetDeploy = new Date(oldDeploy);
     targetDeploy.setDate(targetDeploy.getDate() + shiftDays);
 
-    const newDeploy = findNextValidWorkDay(targetDeploy, deployUsed, deployMonthly, MAX_DEPLOYS_PER_MONTH);
+    const newDeploy = findNextValidWorkDay(targetDeploy, deployUsed, deployMonthly, MAX_DEPLOYS_PER_MONTH, calendar);
     const newDeployStr = dateStr(newDeploy);
     deployUsed.add(newDeployStr);
     const mk = monthKey(newDeploy);
@@ -179,7 +185,7 @@ export function shiftSchedule(
       const targetRetrieve = new Date(newDeploy);
       targetRetrieve.setDate(targetRetrieve.getDate() + duration);
 
-      const newRetrieve = findNextValidWorkDay(targetRetrieve, retrieveUsed, retrieveMonthly, MAX_RETRIEVES_PER_MONTH);
+      const newRetrieve = findNextValidWorkDay(targetRetrieve, retrieveUsed, retrieveMonthly, MAX_RETRIEVES_PER_MONTH, calendar);
       newRetrieveStr = dateStr(newRetrieve);
       retrieveUsed.add(newRetrieveStr);
       const rmk = monthKey(newRetrieve);
@@ -368,6 +374,9 @@ export function addSiteToSchedule(
     ? parseDate(deployDates.sort()[0])
     : new Date(FIRST_MONTH_YEAR, FIRST_MONTH_MONTH - 1, FIRST_MONTH_START_DAY);
 
+  // Pre-compute calendar once for all visits
+  const calendar = generateWorkingCalendar(firstAvailable.getFullYear(), firstAvailable.getMonth() + 1, 24);
+
   const newDeployments: ScheduleRow[] = [];
 
   for (let visit = 1; visit <= VISITS_PER_SITE; visit++) {
@@ -380,14 +389,14 @@ export function addSiteToSchedule(
       targetDate = new Date(prev.getFullYear(), targetMonth, WORK_DAY_START);
     }
 
-    const deployDate = findNextValidWorkDay(targetDate, deployUsed, deployMonthly, MAX_DEPLOYS_PER_MONTH);
+    const deployDate = findNextValidWorkDay(targetDate, deployUsed, deployMonthly, MAX_DEPLOYS_PER_MONTH, calendar);
     deployUsed.add(dateStr(deployDate));
     const dmk = monthKey(deployDate);
     deployMonthly.set(dmk, (deployMonthly.get(dmk) ?? 0) + 1);
 
     const targetRetrieve = new Date(deployDate);
     targetRetrieve.setDate(targetRetrieve.getDate() + DEPLOYMENT_DURATION_DAYS);
-    const retrieveDate = findNextValidWorkDay(targetRetrieve, retrieveUsed, retrieveMonthly, MAX_RETRIEVES_PER_MONTH);
+    const retrieveDate = findNextValidWorkDay(targetRetrieve, retrieveUsed, retrieveMonthly, MAX_RETRIEVES_PER_MONTH, calendar);
     retrieveUsed.add(dateStr(retrieveDate));
     const rmk = monthKey(retrieveDate);
     retrieveMonthly.set(rmk, (retrieveMonthly.get(rmk) ?? 0) + 1);

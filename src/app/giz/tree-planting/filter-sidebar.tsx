@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -25,10 +26,10 @@ export function FilterSidebar({
   onFilterChange,
   filteredCount,
 }: FilterSidebarProps) {
-  const farms = [...new Set(trees.map((t) => t.farm).filter(Boolean))].sort();
-  const species = [...new Set(trees.map((t) => t.species).filter(Boolean))].sort();
-  const workers = [...new Set(trees.map((t) => t.worker).filter(Boolean))].sort();
-  const survivals = [...new Set(trees.map((t) => t.survival).filter(Boolean))].sort();
+  const farms = useMemo(() => [...new Set(trees.map((t) => t.farm).filter(Boolean))].sort(), [trees]);
+  const species = useMemo(() => [...new Set(trees.map((t) => t.species).filter(Boolean))].sort(), [trees]);
+  const workers = useMemo(() => [...new Set(trees.map((t) => t.worker).filter(Boolean))].sort(), [trees]);
+  const survivals = useMemo(() => [...new Set(trees.map((t) => t.survival).filter(Boolean))].sort(), [trees]);
 
   function update(key: keyof TreeFilterState, value: string) {
     onFilterChange({ ...filters, [key]: value });

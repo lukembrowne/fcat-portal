@@ -1,12 +1,15 @@
 "use server";
 
+import { requirePermission } from "@/lib/auth";
 import { fetchSubmissions } from "@/lib/odk-client";
+import { GIZ_PROJECT_ID, GIZ_FORM_TREE_PLANTING } from "@/lib/odk-constants";
 import type {
   OdkTreeSubmission,
   TreeRecord,
   TreeDashboardMetrics,
   OdkGeoPoint,
 } from "@/lib/odk-types";
+import type { ActionResult } from "@/lib/types";
 
 function transformSubmissions(raw: OdkTreeSubmission[]): TreeRecord[] {
   return raw.map((s) => {
@@ -40,14 +43,10 @@ function transformSubmissions(raw: OdkTreeSubmission[]): TreeRecord[] {
   });
 }
 
-export async function fetchTreeData(): Promise<{
-  success: boolean;
-  trees: TreeRecord[];
-  metrics: TreeDashboardMetrics;
-  error?: string;
-}> {
+export async function fetchTreeData(): Promise<ActionResult<{ trees: TreeRecord[]; metrics: TreeDashboardMetrics }>> {
   try {
-    const raw = await fetchSubmissions<OdkTreeSubmission>("2", "siembra_arboles");
+    await requirePermission("giz", "viewer");
+    const raw = await fetchSubmissions<OdkTreeSubmission>(GIZ_PROJECT_ID, GIZ_FORM_TREE_PLANTING);
     const trees = transformSubmissions(raw);
 
     const uniqueSpecies = new Set(trees.map((t) => t.species).filter(Boolean));
@@ -63,13 +62,11 @@ export async function fetchTreeData(): Promise<{
       survivalRate: Math.round(survivalRate * 10) / 10,
     };
 
-    return { success: true, trees, metrics };
+    return { success: true, data: { trees, metrics } };
   } catch (err) {
     console.error("Failed to fetch tree data:", err);
     return {
       success: false,
-      trees: [],
-      metrics: { totalTrees: 0, uniqueSpecies: 0, uniqueFarms: 0, survivalRate: 0 },
       error: err instanceof Error ? err.message : "Unknown error",
     };
   }

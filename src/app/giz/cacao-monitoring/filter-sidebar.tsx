@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -25,9 +26,9 @@ export function FilterSidebar({
   onFilterChange,
   filteredCount,
 }: FilterSidebarProps) {
-  const communities = [...new Set(records.map((r) => r.community).filter(Boolean))].sort();
-  const farmCodes = [...new Set(records.map((r) => r.farmCode).filter(Boolean))].sort();
-  const fertilizedOptions = [...new Set(records.map((r) => r.fertilized).filter((v): v is string => !!v))].sort();
+  const communities = useMemo(() => [...new Set(records.map((r) => r.community).filter(Boolean))].sort(), [records]);
+  const farmCodes = useMemo(() => [...new Set(records.map((r) => r.farmCode).filter(Boolean))].sort(), [records]);
+  const fertilizedOptions = useMemo(() => [...new Set(records.map((r) => r.fertilized).filter((v): v is string => !!v))].sort(), [records]);
 
   function update(key: keyof CacaoFilterState, value: string | number) {
     onFilterChange({ ...filters, [key]: value });

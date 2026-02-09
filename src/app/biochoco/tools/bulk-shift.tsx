@@ -22,10 +22,10 @@ export function BulkShift({ hasSlots, scheduledCount }: { hasSlots: boolean; sch
     setSuccess(null);
     startTransition(async () => {
       const result = await previewBulkShift(amount, hasSlots);
-      if (result.success && result.data) {
+      if (result.success) {
         setPreview(result.data);
       } else {
-        setError(result.error ?? "Error desconocido");
+        setError(result.error);
       }
     });
   }
@@ -33,12 +33,12 @@ export function BulkShift({ hasSlots, scheduledCount }: { hasSlots: boolean; sch
   function handleCommit() {
     setError(null);
     startTransition(async () => {
-      const result = await commitBulkShift(amount, hasSlots);
+      const result = await commitBulkShift(amount, hasSlots, preview!.hash);
       if (result.success) {
         setSuccess("Cronograma actualizado correctamente.");
         setPreview(null);
       } else {
-        setError(result.error ?? "Error al guardar");
+        setError(result.error);
       }
     });
   }

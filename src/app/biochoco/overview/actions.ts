@@ -1,21 +1,21 @@
 "use server";
 
+import { requirePermission } from "@/lib/auth";
 import { fetchEntities, fetchSubmissions } from "@/lib/odk-client";
+import { BIOCHOCO_PROJECT_ID, BIOCHOCO_DATASET_SITES, BIOCHOCO_FORM_DEPLOY, BIOCHOCO_FORM_RETRIEVE } from "@/lib/odk-constants";
 import { loadSchedule } from "@/lib/sheets-client";
 import type { OdkSiteEntity } from "@/lib/odk-types";
+import type { ActionResult } from "@/lib/types";
 import type { BiochocoOverviewData, SiteInfo } from "./types";
 
-export async function fetchBiochocoData(): Promise<{
-  success: boolean;
-  data: BiochocoOverviewData;
-  error?: string;
-}> {
+export async function fetchBiochocoData(): Promise<ActionResult<BiochocoOverviewData>> {
   try {
+    await requirePermission("biochoco", "viewer");
     const [schedule, rawSites, rawDeploys, rawRetrieves] = await Promise.all([
       loadSchedule(),
-      fetchEntities<OdkSiteEntity>("8", "monitoring_sites_v0_14"),
-      fetchSubmissions<Record<string, unknown>>("8", "instalar_sensores"),
-      fetchSubmissions<Record<string, unknown>>("8", "retrieve_sensors"),
+      fetchEntities<OdkSiteEntity>(BIOCHOCO_PROJECT_ID, BIOCHOCO_DATASET_SITES),
+      fetchSubmissions<Record<string, unknown>>(BIOCHOCO_PROJECT_ID, BIOCHOCO_FORM_DEPLOY),
+      fetchSubmissions<Record<string, unknown>>(BIOCHOCO_PROJECT_ID, BIOCHOCO_FORM_RETRIEVE),
     ]);
 
     // Transform sites
@@ -51,7 +51,6 @@ export async function fetchBiochocoData(): Promise<{
     console.error("Failed to fetch BioChoco data:", err);
     return {
       success: false,
-      data: { schedule: [], sites: [], deployedIds: [], retrievedIds: [] },
       error: err instanceof Error ? err.message : "Unknown error",
     };
   }

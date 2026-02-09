@@ -19,10 +19,10 @@ export function SyncOdk() {
     setSuccess(null);
     startTransition(async () => {
       const result = await previewSyncOdk();
-      if (result.success && result.data) {
+      if (result.success) {
         setUpdates(result.data);
       } else {
-        setError(result.error ?? "Error desconocido");
+        setError(result.error);
       }
     });
   }
@@ -31,12 +31,12 @@ export function SyncOdk() {
     if (!updates) return;
     setError(null);
     startTransition(async () => {
-      const result = await commitSyncOdk(updates);
+      const result = await commitSyncOdk(updates.map((u) => u.deploymentId));
       if (result.success) {
         setSuccess("Estado y fechas actualizados correctamente.");
         setUpdates(null);
       } else {
-        setError(result.error ?? "Error al guardar");
+        setError(result.error);
       }
     });
   }

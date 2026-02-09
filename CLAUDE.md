@@ -34,9 +34,23 @@ Internal web application for FCAT staff and collaborators. Replaces Streamlit da
 npm run dev          # Start dev server
 npm test             # Run Vitest in watch mode
 npm run test:run     # Run Vitest once
+npm run test:e2e     # Run Playwright E2E tests
+npm run test:all     # Run all tests (Vitest + Playwright)
 npm run build        # Production build
 npm run lint         # ESLint
 ```
+
+## Docker
+
+```bash
+docker compose up                          # Dev mode with hot reload
+docker compose -f docker-compose.yml up --build  # Production build
+./deploy.sh                                 # Deploy to DigitalOcean
+```
+
+CRITICAL: ML Python venv is mounted from the host as a read-only volume.
+It is NOT included in the Docker image. If the host is rebuilt without
+reinstalling the venv, the ML pipeline will silently fail.
 
 ## Database
 

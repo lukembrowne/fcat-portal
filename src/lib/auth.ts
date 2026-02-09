@@ -15,6 +15,15 @@ import { users, userPermissions } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import type { AuthUser, ProjectRole, GlobalRole } from "@/lib/types";
 
+/**
+ * Check if user has access to a given project.
+ * Super admins have access to all projects.
+ */
+export function hasProjectAccess(user: AuthUser, projectId: string): boolean {
+  if (user.globalRole === "super_admin") return true;
+  return user.permissions.some((p) => p.projectId === projectId);
+}
+
 const ROLE_HIERARCHY: Record<ProjectRole, number> = {
   viewer: 1,
   editor: 2,

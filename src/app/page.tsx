@@ -1,14 +1,8 @@
-import { getCurrentUser } from "@/lib/auth";
+import { getCurrentUser, hasProjectAccess } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Camera, Shield, TreePine, Leaf } from "lucide-react";
-import type { AuthUser } from "@/lib/types";
-
-function hasProjectAccess(user: AuthUser, projectId: string): boolean {
-  if (user.globalRole === "super_admin") return true;
-  return user.permissions.some((p) => p.projectId === projectId);
-}
 
 interface ModuleCard {
   href: string;
@@ -33,7 +27,7 @@ export default async function HomePage() {
       title: "Cámaras Trampa",
       description:
         "Procesamiento de imágenes con detección y clasificación de especies mediante inteligencia artificial",
-      icon: <Camera className="h-8 w-8 text-muted-foreground" />,
+      icon: <Camera className="h-6 w-6" />,
       show: hasProjectAccess(user, "camera-trap"),
     },
     {
@@ -41,7 +35,7 @@ export default async function HomePage() {
       title: "GIZ",
       description:
         "Monitoreo de siembra de árboles y cacao para el proyecto GIZ",
-      icon: <TreePine className="h-8 w-8 text-muted-foreground" />,
+      icon: <TreePine className="h-6 w-6" />,
       show: hasProjectAccess(user, "giz"),
     },
     {
@@ -49,14 +43,14 @@ export default async function HomePage() {
       title: "BioChocó",
       description:
         "Cronograma de sensores acústicos y monitoreo de biodiversidad",
-      icon: <Leaf className="h-8 w-8 text-muted-foreground" />,
+      icon: <Leaf className="h-6 w-6" />,
       show: hasProjectAccess(user, "biochoco"),
     },
     {
       href: "/admin",
       title: "Administración",
       description: "Gestión de usuarios, permisos y acceso a módulos del portal",
-      icon: <Shield className="h-8 w-8 text-muted-foreground" />,
+      icon: <Shield className="h-6 w-6" />,
       show: user.globalRole === "super_admin",
     },
   ];
@@ -66,7 +60,7 @@ export default async function HomePage() {
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-2xl font-bold">
+        <h1 className="text-2xl font-bold text-foreground">
           Bienvenido, {displayName}
         </h1>
         <p className="text-muted-foreground mt-1">
@@ -88,11 +82,13 @@ export default async function HomePage() {
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {visibleModules.map((mod) => (
             <Link key={mod.href} href={mod.href}>
-              <Card className="h-full transition-colors hover:bg-accent/50 cursor-pointer">
+              <Card className="h-full group transition-all duration-200 hover:shadow-md hover:border-primary/30 cursor-pointer border-border/60">
                 <CardHeader>
-                  <div className="mb-2">{mod.icon}</div>
-                  <CardTitle className="text-lg">{mod.title}</CardTitle>
-                  <CardDescription>{mod.description}</CardDescription>
+                  <div className="mb-3 inline-flex items-center justify-center w-10 h-10 rounded-lg bg-primary/10 text-primary group-hover:bg-primary/15 transition-colors">
+                    {mod.icon}
+                  </div>
+                  <CardTitle className="text-lg text-foreground">{mod.title}</CardTitle>
+                  <CardDescription className="text-muted-foreground">{mod.description}</CardDescription>
                 </CardHeader>
               </Card>
             </Link>

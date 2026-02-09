@@ -1,13 +1,16 @@
 /**
- * Auth Middleware — Edge Runtime
+ * Auth Proxy — Node.js Runtime
  *
- * IMPORTANT: This runs in Edge runtime. NO DB imports, NO Node.js-only modules.
- * Only forwards the authenticated email from oauth2-proxy headers (or dev env var).
+ * Runs before routes are rendered. Forwards the authenticated email
+ * from oauth2-proxy headers (or DEV_USER_EMAIL env var in dev).
+ *
+ * Next.js 16 renamed middleware.ts → proxy.ts.
+ * This runs in Node.js runtime (not Edge).
  */
 
 import { NextResponse, type NextRequest } from "next/server";
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   // In production, oauth2-proxy sets X-Forwarded-Email
   // In dev, use DEV_USER_EMAIL env var
   const email =

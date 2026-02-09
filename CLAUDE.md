@@ -15,7 +15,7 @@ Internal web application for FCAT staff and collaborators. Replaces Streamlit da
 ## Architecture
 
 - **Auth**: oauth2-proxy → `X-Forwarded-Email` header → middleware → `getCurrentUser()` DB lookup
-- **Middleware**: Edge runtime ONLY — NO DB imports. Header forwarding only.
+- **Proxy**: `src/proxy.ts` (Next.js 16 convention, was middleware.ts). Node.js runtime. Header forwarding only — NO DB imports.
 - **Nav**: Async Server Component. NOT a Client Component. NOT a React Context provider.
 - **Server Actions**: MUST call `requirePermission()` for all operations. No client-side-only hiding.
 - **ML pipeline**: No mock fallback. ML works via `ML_PYTHON_PATH` or it fails with a clear error.
@@ -51,4 +51,5 @@ npm run lint         # ESLint
 - `useActionState` signature: `(prevState, formData) => newState` — prevState is first arg
 - FormData checkbox values: `formData.get('field')` returns `"on"` not `true`
 - Drizzle singleton: Use module-level `let db` with lazy init, not `globalThis` pattern
-- Middleware is Edge runtime: Cannot import `better-sqlite3` or any Node.js-only modules
+- Proxy (was middleware): Keep header forwarding only, no DB imports
+- Next.js 16 renamed `middleware.ts` → `proxy.ts` and uses Node.js runtime

@@ -44,7 +44,7 @@ export function getDb(): BetterSQLite3Database<typeof schema> {
 
 export const db = new Proxy({} as BetterSQLite3Database<typeof schema>, {
   get(_target, prop) {
-    return (getDb() as Record<string | symbol, unknown>)[prop];
+    return (getDb() as unknown as Record<string | symbol, unknown>)[prop];
   },
 });
 

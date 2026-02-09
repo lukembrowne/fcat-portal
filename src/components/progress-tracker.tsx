@@ -1,0 +1,242 @@
+"use client";
+
+import { useEffect, useState, useCallback, useRef } from "react";
+import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
+
+interface ProgressData {
+  jobId: number;
+  status: string;
+  processed: number;
+  total: number;
+  failed: number;
+  error?: string;
+}
+
+interface ProgressTrackerProps {
+  jobId: number;
+  onComplete?: () => void;
+  onCancel?: () => void;
+}
+
+const MAX_RETRIES = 3;
+const RETRY_DELAY_MS = 2000;
+
+export function ProgressTracker({
+  jobId,
+  onComplete,
+  onCancel,
+}: ProgressTrackerProps) {
+  const [progress, setProgress] = useState<ProgressData | null>(null);
+  const [connectionState, setConnectionState] = useState<
+    "connecting" | "connected" | "reconnecting" | "failed" | "closed"
+  >("connecting");
+  const [retryCount, setRetryCount] = useState(0);
+
+  const eventSourceRef = useRef<EventSource | null>(null);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onCompleteRef = useRef(onComplete);
+  onCompleteRef.current = onComplete;
+
+  const connect = useCallback(() => {
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+    }
+
+    const es = new EventSource(`/api/progress?jobId=${jobId}`);
+    eventSourceRef.current = es;
+
+    es.onopen = () => {
+      setConnectionState("connected");
+      setRetryCount(0);
+    };
+
+    es.onmessage = (event) => {
+      try {
+        const data: ProgressData = JSON.parse(event.data);
+        setProgress(data);
+
+        if (["completed", "failed", "cancelled"].includes(data.status)) {
+          es.close();
+          setConnectionState("closed");
+
+          if (data.status === "completed" && onCompleteRef.current) {
+            onCompleteRef.current();
+          }
+        }
+      } catch (e) {
+        console.error("Failed to parse progress data:", e);
+      }
+    };
+
+    es.onerror = () => {
+      es.close();
+      eventSourceRef.current = null;
+
+      setRetryCount((prev) => {
+        const next = prev + 1;
+        if (next <= MAX_RETRIES) {
+          setConnectionState("reconnecting");
+          retryTimerRef.current = setTimeout(() => {
+            connect();
+          }, RETRY_DELAY_MS);
+        } else {
+          setConnectionState("failed");
+        }
+        return next;
+      });
+    };
+  }, [jobId]);
+
+  useEffect(() => {
+    connect();
+
+    return () => {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+      }
+      if (retryTimerRef.current) {
+        clearTimeout(retryTimerRef.current);
+      }
+    };
+  }, [connect]);
+
+  const handleManualReconnect = () => {
+    setRetryCount(0);
+    setConnectionState("connecting");
+    connect();
+  };
+
+  const percentage = progress
+    ? Math.round((progress.processed / progress.total) * 100)
+    : 0;
+
+  const statusLabel = {
+    pending: "Esperando inicio...",
+    processing: "Procesando imágenes...",
+    completed: "Completado",
+    failed: "Fallido",
+    cancelled: "Cancelado",
+  }[progress?.status || "pending"];
+
+  const statusColor = {
+    pending: "text-muted-foreground",
+    processing: "text-blue-600",
+    completed: "text-green-600",
+    failed: "text-red-600",
+    cancelled: "text-orange-600",
+  }[progress?.status || "pending"];
+
+  return (
+    <Card>
+      <CardContent className="pt-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <span className={cn("font-medium", statusColor)}>
+            {statusLabel}
+          </span>
+          <ConnectionIndicator
+            state={connectionState}
+            retryCount={retryCount}
+            jobStatus={progress?.status}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <div className="h-4 bg-muted rounded-full overflow-hidden">
+            <div
+              className={cn(
+                "h-full transition-all duration-300 rounded-full",
+                progress?.status === "completed"
+                  ? "bg-green-500"
+                  : progress?.status === "failed"
+                    ? "bg-red-500"
+                    : progress?.status === "cancelled"
+                      ? "bg-orange-500"
+                      : "bg-primary"
+              )}
+              style={{ width: `${percentage}%` }}
+            />
+          </div>
+          <div className="flex justify-between text-sm text-muted-foreground">
+            <span>
+              {progress?.processed || 0} de {progress?.total || 0} imágenes
+            </span>
+            <span>{percentage}%</span>
+          </div>
+        </div>
+
+        {progress && progress.failed > 0 && (
+          <p className="text-sm text-orange-600">
+            {progress.failed} imágenes fallaron al procesar
+          </p>
+        )}
+
+        {connectionState === "failed" && (
+          <div className="flex items-center gap-3 rounded-md bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-900 p-3">
+            <p className="text-sm text-red-700 dark:text-red-300 flex-1">
+              Conexión perdida después de {MAX_RETRIES} intentos.
+            </p>
+            <Button variant="outline" size="sm" onClick={handleManualReconnect}>
+              Reconectar
+            </Button>
+          </div>
+        )}
+
+        {progress?.status === "processing" && onCancel && (
+          <Button variant="outline" onClick={onCancel} className="w-full">
+            Cancelar procesamiento
+          </Button>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function ConnectionIndicator({
+  state,
+  retryCount,
+  jobStatus,
+}: {
+  state: string;
+  retryCount: number;
+  jobStatus?: string;
+}) {
+  if (jobStatus && ["completed", "failed", "cancelled"].includes(jobStatus)) {
+    return null;
+  }
+
+  if (state === "connected") {
+    return (
+      <span className="flex items-center gap-1 text-sm text-muted-foreground">
+        <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+        En vivo
+      </span>
+    );
+  }
+
+  if (state === "reconnecting") {
+    return (
+      <span className="flex items-center gap-1 text-sm text-orange-600">
+        <span className="w-2 h-2 bg-orange-500 rounded-full animate-pulse" />
+        Reconectando ({retryCount}/{MAX_RETRIES})...
+      </span>
+    );
+  }
+
+  if (state === "failed") {
+    return (
+      <span className="flex items-center gap-1 text-sm text-red-600">
+        <span className="w-2 h-2 bg-red-500 rounded-full" />
+        Desconectado
+      </span>
+    );
+  }
+
+  return (
+    <span className="flex items-center gap-1 text-sm text-muted-foreground">
+      <span className="w-2 h-2 bg-gray-400 rounded-full animate-pulse" />
+      Conectando...
+    </span>
+  );
+}

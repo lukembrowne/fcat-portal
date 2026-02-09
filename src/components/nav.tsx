@@ -26,6 +26,16 @@ export function Nav({ user }: NavProps) {
       show: hasProjectAccess(user, "camera-trap"),
     },
     {
+      href: "/giz",
+      label: "GIZ",
+      show: hasProjectAccess(user, "giz"),
+    },
+    {
+      href: "/biochoco",
+      label: "BioChocó",
+      show: hasProjectAccess(user, "biochoco"),
+    },
+    {
       href: "/admin",
       label: "Administración",
       show: user.globalRole === "super_admin",

@@ -245,6 +245,23 @@ export const species = sqliteTable("species", {
 });
 
 // ---------------------------------------------------------------------------
+// Activity Log (audit trail for BioChoco tools, etc.)
+// ---------------------------------------------------------------------------
+
+export const activityLog = sqliteTable("activity_log", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  userEmail: text("user_email").notNull(),
+  action: text("action").notNull(),
+  projectId: text("project_id"),
+  targetType: text("target_type"),
+  targetId: text("target_id"),
+  details: text("details"), // JSON
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+
+// ---------------------------------------------------------------------------
 // Type Exports
 // ---------------------------------------------------------------------------
 
@@ -274,3 +291,6 @@ export type NewIdentification = typeof identifications.$inferInsert;
 
 export type Species = typeof species.$inferSelect;
 export type NewSpecies = typeof species.$inferInsert;
+
+export type ActivityLog = typeof activityLog.$inferSelect;
+export type NewActivityLog = typeof activityLog.$inferInsert;

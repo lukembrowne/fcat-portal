@@ -32,8 +32,18 @@ insertProject.run(
   "Cámaras Trampa",
   "Pipeline de procesamiento de imágenes de cámaras trampa con detección y clasificación de especies"
 );
+insertProject.run(
+  "giz",
+  "GIZ",
+  "Proyecto GIZ - Siembra de árboles y monitoreo de cacao"
+);
+insertProject.run(
+  "biochoco",
+  "BioChoco",
+  "Programa de monitoreo de biodiversidad BioChoco"
+);
 
-console.log("Seeded projects: camera-trap");
+console.log("Seeded projects: camera-trap, giz, biochoco");
 
 // --- Super admin user ---
 const superAdminEmail =
@@ -44,10 +54,16 @@ db.prepare(
   "INSERT OR IGNORE INTO users (email, name, is_external, global_role) VALUES (?, ?, ?, ?)"
 ).run(superAdminEmail, "Luke Browne", 0, "super_admin");
 
-// Grant super admin access to camera-trap as admin
+// Grant super admin access to all projects
 db.prepare(
   "INSERT OR IGNORE INTO user_permissions (user_email, project_id, role) VALUES (?, ?, ?)"
 ).run(superAdminEmail, "camera-trap", "admin");
+db.prepare(
+  "INSERT OR IGNORE INTO user_permissions (user_email, project_id, role) VALUES (?, ?, ?)"
+).run(superAdminEmail, "giz", "admin");
+db.prepare(
+  "INSERT OR IGNORE INTO user_permissions (user_email, project_id, role) VALUES (?, ?, ?)"
+).run(superAdminEmail, "biochoco", "admin");
 
 console.log(`Seeded super admin: ${superAdminEmail}`);
 

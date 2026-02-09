@@ -2,7 +2,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Camera, Shield } from "lucide-react";
+import { Camera, Shield, TreePine, Leaf } from "lucide-react";
 import type { AuthUser } from "@/lib/types";
 
 function hasProjectAccess(user: AuthUser, projectId: string): boolean {
@@ -35,6 +35,22 @@ export default async function HomePage() {
         "Procesamiento de imágenes con detección y clasificación de especies mediante inteligencia artificial",
       icon: <Camera className="h-8 w-8 text-muted-foreground" />,
       show: hasProjectAccess(user, "camera-trap"),
+    },
+    {
+      href: "/giz",
+      title: "GIZ",
+      description:
+        "Monitoreo de siembra de árboles y cacao para el proyecto GIZ",
+      icon: <TreePine className="h-8 w-8 text-muted-foreground" />,
+      show: hasProjectAccess(user, "giz"),
+    },
+    {
+      href: "/biochoco",
+      title: "BioChocó",
+      description:
+        "Cronograma de sensores acústicos y monitoreo de biodiversidad",
+      icon: <Leaf className="h-8 w-8 text-muted-foreground" />,
+      show: hasProjectAccess(user, "biochoco"),
     },
     {
       href: "/admin",

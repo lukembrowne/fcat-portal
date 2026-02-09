@@ -139,6 +139,18 @@ const statements = [
     type TEXT NOT NULL DEFAULT 'mammal' CHECK(type IN ('mammal', 'bird', 'reptile', 'amphibian', 'insect', 'system'))
   )`,
 
+  // Activity Log
+  `CREATE TABLE IF NOT EXISTS activity_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_email TEXT NOT NULL,
+    action TEXT NOT NULL,
+    project_id TEXT,
+    target_type TEXT,
+    target_id TEXT,
+    details TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+
   // Indexes
   `CREATE INDEX IF NOT EXISTS idx_user_permissions_user_email ON user_permissions(user_email)`,
   `CREATE INDEX IF NOT EXISTS idx_user_permissions_project_id ON user_permissions(project_id)`,

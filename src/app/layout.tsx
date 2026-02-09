@@ -1,7 +1,10 @@
 import type { Metadata } from "next";
+import { cookies } from "next/headers";
 import { Geist, Geist_Mono } from "next/font/google";
-import { Nav } from "@/components/nav";
 import { getCurrentUser } from "@/lib/auth";
+import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar";
+import { SidebarNav } from "@/components/sidebar-nav";
+import { TopHeader } from "@/components/top-header";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -25,14 +28,28 @@ export default async function RootLayout({
   children: React.ReactNode;
 }>) {
   const user = await getCurrentUser();
+  const cookieStore = await cookies();
+  const sidebarState = cookieStore.get("sidebar_state")?.value;
+  const defaultOpen = sidebarState !== "false";
 
   return (
     <html lang="es">
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        {user && <Nav user={user} />}
-        <main className="container mx-auto px-4 py-6">{children}</main>
+        {user ? (
+          <SidebarProvider defaultOpen={defaultOpen}>
+            <SidebarNav user={user} />
+            <SidebarInset>
+              <TopHeader />
+              <main className="flex-1 overflow-auto px-4 py-6">
+                <div className="mx-auto max-w-7xl">{children}</div>
+              </main>
+            </SidebarInset>
+          </SidebarProvider>
+        ) : (
+          <main className="container mx-auto px-4 py-6">{children}</main>
+        )}
       </body>
     </html>
   );

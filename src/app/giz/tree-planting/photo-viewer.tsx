@@ -28,7 +28,7 @@ function PhotoImage({
 
   if (!filename) {
     return (
-      <div className="flex items-center justify-center h-48 bg-muted rounded-md">
+      <div className="flex items-center justify-center h-72 bg-muted rounded-md">
         <p className="text-xs text-muted-foreground">Sin {label}</p>
       </div>
     );
@@ -36,7 +36,7 @@ function PhotoImage({
 
   if (error) {
     return (
-      <div className="flex items-center justify-center h-48 bg-muted rounded-md">
+      <div className="flex items-center justify-center h-72 bg-muted rounded-md">
         <p className="text-xs text-muted-foreground">Error cargando {label}</p>
       </div>
     );
@@ -48,7 +48,7 @@ function PhotoImage({
       <img
         src={`/api/odk/photos?projectId=2&formId=siembra_arboles&id=${encodeURIComponent(instanceId)}&file=${encodeURIComponent(filename)}`}
         alt={label}
-        className="w-full h-48 object-cover rounded-md"
+        className="w-full h-72 object-cover rounded-md"
         onError={() => setError(true)}
       />
       <p className="text-xs text-center text-muted-foreground">{label}</p>
@@ -61,7 +61,7 @@ export function PhotoViewer({ tree, open, onOpenChange }: PhotoViewerProps) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-4xl">
         <DialogHeader>
           <DialogTitle>
             {tree.code} — {tree.species}

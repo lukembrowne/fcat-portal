@@ -7,9 +7,11 @@ import {
   CircleMarker,
   Popup,
   LayersControl,
+  GeoJSON,
 } from "react-leaflet";
 import type { ScheduleRow } from "@/lib/schedule-types";
 import type { SiteInfo } from "./types";
+import { useReserveBoundary } from "@/lib/use-reserve-boundary";
 import { getHabitatName } from "./types";
 
 interface OverviewMapInnerProps {
@@ -27,6 +29,8 @@ export default function OverviewMapInner({
   deployedSet,
   retrievedSet,
 }: OverviewMapInnerProps) {
+  const boundary = useReserveBoundary();
+
   const deployingSiteIds = useMemo(
     () => new Set(deploymentsThisMonth.map((r) => r.siteId)),
     [deploymentsThisMonth]
@@ -61,7 +65,7 @@ export default function OverviewMapInner({
     <div className="rounded-xl overflow-hidden border">
       <MapContainer
         center={[center.lat, center.lng]}
-        zoom={11}
+        zoom={13}
         style={{ height: "500px", width: "100%" }}
       >
         <LayersControl position="topright">
@@ -77,6 +81,20 @@ export default function OverviewMapInner({
               attribution="&copy; Esri"
             />
           </LayersControl.BaseLayer>
+          {boundary && (
+            <LayersControl.Overlay checked name="Reserva FCAT">
+              <GeoJSON
+                data={boundary}
+                style={{
+                  color: "#22c55e",
+                  weight: 2,
+                  dashArray: "6 4",
+                  fillColor: "#22c55e",
+                  fillOpacity: 0.08,
+                }}
+              />
+            </LayersControl.Overlay>
+          )}
         </LayersControl>
 
         {validSites.map((site) => {

@@ -128,19 +128,25 @@ export function TreeTable({ trees, onViewPhotos }: TreeTableProps) {
       {
         id: "photos",
         header: "",
-        cell: ({ row }) => (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 w-7 p-0"
-            onClick={() => onViewPhotos(row.original)}
-          >
-            <Camera className="h-4 w-4" />
-          </Button>
-        ),
+        cell: ({ row }) => {
+          const t = row.original;
+          const hasPhotos = t.photoTop || t.photoSide || t.photoLeaf;
+          if (!hasPhotos) return null;
+          return (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2 gap-1"
+              onClick={() => onViewPhotos(t)}
+            >
+              <Camera className="h-4 w-4" />
+              <span className="text-xs">Ver Fotos</span>
+            </Button>
+          );
+        },
         enableSorting: false,
         enableGlobalFilter: false,
-        size: 40,
+        size: 100,
       },
       {
         accessorKey: "code",

@@ -3,6 +3,7 @@
 import { useState, useMemo } from "react";
 import { Separator } from "@/components/ui/separator";
 import type { TreeRecord, TreeDashboardMetrics, TreeFilterState } from "@/lib/odk-types";
+import type { ColorByMode } from "./tree-map-inner";
 import { MetricsRow } from "./metrics-row";
 import { FilterSidebar } from "./filter-sidebar";
 import { TreeMap } from "./tree-map";
@@ -25,6 +26,7 @@ const emptyFilters: TreeFilterState = {
 
 export function DashboardShell({ trees }: DashboardShellProps) {
   const [filters, setFilters] = useState<TreeFilterState>(emptyFilters);
+  const [colorBy, setColorBy] = useState<ColorByMode>("condicion");
   const [selectedTree, setSelectedTree] = useState<TreeRecord | null>(null);
   const [photoOpen, setPhotoOpen] = useState(false);
 
@@ -84,7 +86,7 @@ export function DashboardShell({ trees }: DashboardShellProps) {
 
           <section>
             <h2 className="text-lg font-semibold mb-3">Ubicaciones de Árboles</h2>
-            <TreeMap trees={filteredTrees} />
+            <TreeMap trees={filteredTrees} colorBy={colorBy} onColorByChange={setColorBy} />
           </section>
 
           <Separator />

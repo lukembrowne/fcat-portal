@@ -7,8 +7,10 @@ import {
   CircleMarker,
   Popup,
   LayersControl,
+  GeoJSON,
 } from "react-leaflet";
 import type { CacaoRecord } from "@/lib/odk-types";
+import { useReserveBoundary } from "@/lib/use-reserve-boundary";
 
 function getMarkerColor(survivalRate: number | null): string {
   if (survivalRate == null) return "#3b82f6";
@@ -18,6 +20,8 @@ function getMarkerColor(survivalRate: number | null): string {
 }
 
 export default function CacaoMapInner({ records }: { records: CacaoRecord[] }) {
+  const boundary = useReserveBoundary();
+
   const center = useMemo(() => {
     const lats = records.map((r) => r.lat!);
     const lngs = records.map((r) => r.lng!);
@@ -47,6 +51,20 @@ export default function CacaoMapInner({ records }: { records: CacaoRecord[] }) {
               attribution="&copy; Esri"
             />
           </LayersControl.BaseLayer>
+          {boundary && (
+            <LayersControl.Overlay checked name="Reserva FCAT">
+              <GeoJSON
+                data={boundary}
+                style={{
+                  color: "#22c55e",
+                  weight: 2,
+                  dashArray: "6 4",
+                  fillColor: "#22c55e",
+                  fillOpacity: 0.08,
+                }}
+              />
+            </LayersControl.Overlay>
+          )}
         </LayersControl>
 
         {records.map((record) => {

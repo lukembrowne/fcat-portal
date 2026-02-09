@@ -26,12 +26,12 @@ export function Nav({ user }: NavProps) {
       show: hasProjectAccess(user, "camera-trap"),
     },
     {
-      href: "/giz/tree-planting",
+      href: "/giz",
       label: "GIZ",
       show: hasProjectAccess(user, "giz"),
     },
     {
-      href: "/biochoco/overview",
+      href: "/biochoco",
       label: "BioChocó",
       show: hasProjectAccess(user, "biochoco"),
     },

@@ -37,7 +37,7 @@ export default async function HomePage() {
       show: hasProjectAccess(user, "camera-trap"),
     },
     {
-      href: "/giz/tree-planting",
+      href: "/giz",
       title: "GIZ",
       description:
         "Monitoreo de siembra de árboles y cacao para el proyecto GIZ",
@@ -45,7 +45,7 @@ export default async function HomePage() {
       show: hasProjectAccess(user, "giz"),
     },
     {
-      href: "/biochoco/overview",
+      href: "/biochoco",
       title: "BioChocó",
       description:
         "Cronograma de sensores acústicos y monitoreo de biodiversidad",

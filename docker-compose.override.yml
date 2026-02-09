@@ -1,0 +1,15 @@
+services:
+  portal:
+    build:
+      target: deps
+    command: npx next dev
+    ports:
+      - "3000:3000"
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/.next
+    environment:
+      - NODE_ENV=development
+      - DEV_USER_EMAIL=lukebrowne@fcat-ecuador.org
+      - DB_PATH=data/portal.db

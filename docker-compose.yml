@@ -1,0 +1,21 @@
+services:
+  portal:
+    build: .
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./data:/app/data                     # DB + thumbnails + allowed emails
+      - /mnt/gdrive:/mnt/gdrive:ro          # rclone mount (read-only)
+      - /root/opt/ml-venv:/ml-venv:ro       # ML Python venv from host
+    environment:
+      - NODE_ENV=production
+      - DB_PATH=data/portal.db
+      - ML_PYTHON_PATH=/ml-venv/bin/python3
+      - SUPER_ADMIN_EMAILS=lukebrowne@fcat-ecuador.org
+      - ALLOWED_EMAILS_PATH=data/allowed_external_emails.txt
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

@@ -6,6 +6,7 @@ export interface SiteInfo {
   habitatType: string;
   lat: number | null;
   lng: number | null;
+  habitatAssessed: string;
 }
 
 export interface BiochocoOverviewData {

@@ -25,6 +25,7 @@ export async function fetchBiochocoData(): Promise<ActionResult<BiochocoOverview
       habitatType: s.habitat_type ?? "",
       lat: s.latitude ? parseFloat(String(s.latitude)) : null,
       lng: s.longitude ? parseFloat(String(s.longitude)) : null,
+      habitatAssessed: (s.habitat_assessed as string) ?? "",
     }));
 
     // Extract deployment_ids from form submissions

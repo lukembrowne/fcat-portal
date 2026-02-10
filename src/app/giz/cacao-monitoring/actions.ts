@@ -10,6 +10,13 @@ import type {
 } from "@/lib/odk-types";
 import type { ActionResult } from "@/lib/types";
 
+/** Parse a value that should be numeric — ODK OData may return numbers as strings. */
+function toNum(v: unknown): number | null {
+  if (v == null) return null;
+  const n = Number(v);
+  return Number.isNaN(n) ? null : n;
+}
+
 function transformSubmissions(raw: OdkCacaoSubmission[]): CacaoRecord[] {
   return raw.map((s) => {
     const coords = parseWktPoint(s.metadata_ubicacion);
@@ -23,15 +30,15 @@ function transformSubmissions(raw: OdkCacaoSubmission[]): CacaoRecord[] {
       monitoringDate: s.metadata_fecha_monitoreo?.split("T")[0] ?? null,
       lat: coords?.lat ?? null,
       lng: coords?.lng ?? null,
-      plantsPlanted: s.datos_plantas_num_plantas_sembradas,
-      plantsAlive: s.datos_plantas_num_plantas_vivas,
-      survivalRate: s.datos_plantas_tasa_sobrevivencia,
-      numCleanings: s.manejo_num_limpiezas,
+      plantsPlanted: toNum(s.datos_plantas_num_plantas_sembradas),
+      plantsAlive: toNum(s.datos_plantas_num_plantas_vivas),
+      survivalRate: toNum(s.datos_plantas_tasa_sobrevivencia),
+      numCleanings: toNum(s.manejo_num_limpiezas),
       fertilized: s.manejo_realizo_fertilizacion,
       ownerComments: s.observaciones_comentarios_propietario,
       monitorNotes: s.observaciones_notas_monitor,
-      plantsDead: s.num_plantas_muertas,
-      daysSincePlanting: s.dias_desde_siembra,
+      plantsDead: toNum(s.num_plantas_muertas),
+      daysSincePlanting: toNum(s.dias_desde_siembra),
     };
   });
 }
@@ -39,7 +46,7 @@ function transformSubmissions(raw: OdkCacaoSubmission[]): CacaoRecord[] {
 export async function fetchCacaoData(): Promise<ActionResult<{ records: CacaoRecord[]; metrics: CacaoMetrics }>> {
   try {
     await requirePermission("giz", "viewer");
-    const raw = await fetchSubmissions<OdkCacaoSubmission>(GIZ_PROJECT_ID, GIZ_FORM_CACAO_MONITORING);
+    const raw = await fetchSubmissions<OdkCacaoSubmission>(GIZ_PROJECT_ID, GIZ_FORM_CACAO_MONITORING, { flatten: true });
     const records = transformSubmissions(raw);
 
     const totalPlants = records.reduce((sum, r) => sum + (r.plantsPlanted ?? 0), 0);

@@ -9,6 +9,8 @@ import { ScheduleTable } from "./schedule-table";
 import { ProjectSummary } from "./project-summary";
 import { HabitatChart } from "./habitat-chart";
 import { WorkloadTable } from "./workload-table";
+import { DurationOutliersTable } from "./duration-outliers-table";
+import { SiteSummaryTable } from "./site-summary-table";
 
 export function DashboardShell({ data }: { data: BiochocoOverviewData }) {
   const now = new Date();
@@ -84,6 +86,7 @@ export function DashboardShell({ data }: { data: BiochocoOverviewData }) {
       <ScheduleTable
         deploymentsThisMonth={deploymentsThisMonth}
         retrievalsThisMonth={retrievalsThisMonth}
+        allSchedule={data.schedule}
         sites={data.sites}
         deployedSet={deployedSet}
         retrievedSet={retrievedSet}
@@ -111,6 +114,14 @@ export function DashboardShell({ data }: { data: BiochocoOverviewData }) {
         <h2 className="text-lg font-semibold mb-3">Carga de Trabajo Mensual</h2>
         <WorkloadTable schedule={data.schedule} />
       </section>
+
+      <Separator />
+
+      <DurationOutliersTable schedule={data.schedule} />
+
+      <Separator />
+
+      <SiteSummaryTable schedule={data.schedule} />
     </div>
   );
 }

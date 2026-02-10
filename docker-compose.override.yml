@@ -3,8 +3,6 @@ services:
     build:
       target: deps
     command: npx next dev
-    ports:
-      - "3000:3000"
     volumes:
       - .:/app
       - /app/node_modules

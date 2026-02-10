@@ -5,8 +5,8 @@ services:
       - "127.0.0.1:3000:3000"
     volumes:
       - ./data:/app/data                     # DB + thumbnails + allowed emails
-      - /mnt/gdrive:/mnt/gdrive:ro          # rclone mount (read-only)
-      - /root/opt/ml-venv:/ml-venv:ro       # ML Python venv from host
+      - ${GDRIVE_PATH:-./data/gdrive}:/mnt/gdrive:ro    # rclone mount (prod: /mnt/gdrive)
+      - ${ML_VENV_PATH:-./data/ml-venv}:/ml-venv:ro   # ML Python venv (prod: /root/opt/ml-venv)
     environment:
       - NODE_ENV=production
       - DB_PATH=data/portal.db

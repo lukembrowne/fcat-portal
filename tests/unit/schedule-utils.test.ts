@@ -27,6 +27,7 @@ function makeRow(overrides: Partial<ScheduleRow>): ScheduleRow {
     deploySlotId: null,
     retrieveSlotId: null,
     notes: "",
+    driveFolderLink: "",
     ...overrides,
   };
 }

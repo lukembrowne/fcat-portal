@@ -19,6 +19,7 @@ export interface ScheduleRow {
   deploySlotId: number | null;
   retrieveSlotId: number | null;
   notes: string;
+  driveFolderLink: string;
 }
 
 export interface SlotRow {

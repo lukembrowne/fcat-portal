@@ -12,6 +12,33 @@ const ODK_CENTRAL_PASSWORD = process.env.ODK_CENTRAL_PASSWORD!;
 
 const PAGE_SIZE = 250;
 
+/**
+ * Recursively flatten nested objects using `_` as separator.
+ * Mirrors Python's `pd.json_normalize(data, sep="_")`.
+ * Skips system keys that start with `__` (except `__id`).
+ */
+function flattenObject(
+  obj: Record<string, unknown>,
+  prefix = "",
+  sep = "_"
+): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    const newKey = prefix ? `${prefix}${sep}${key}` : key;
+    if (
+      value !== null &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      !key.startsWith("__")
+    ) {
+      Object.assign(result, flattenObject(value as Record<string, unknown>, newKey, sep));
+    } else {
+      result[newKey] = value;
+    }
+  }
+  return result;
+}
+
 let cachedToken: { token: string; expiresAt: number } | null = null;
 let pendingTokenRequest: Promise<string> | null = null;
 
@@ -89,7 +116,7 @@ async function odkFetch(
 export async function fetchSubmissions<T = Record<string, unknown>>(
   projectId: string,
   formId: string,
-  options?: { since?: string; revalidate?: number }
+  options?: { since?: string; revalidate?: number; flatten?: boolean }
 ): Promise<T[]> {
   const baseUrl = `${ODK_CENTRAL_URL}/v1/projects/${projectId}/forms/${formId}.svc/Submissions`;
   const all: T[] = [];
@@ -114,7 +141,10 @@ export async function fetchSubmissions<T = Record<string, unknown>>(
     }
 
     const data = await res.json();
-    const values = (data.value ?? []) as T[];
+    const rawValues = data.value ?? [];
+    const values = (options?.flatten
+      ? rawValues.map((v: Record<string, unknown>) => flattenObject(v))
+      : rawValues) as T[];
     all.push(...values);
 
     if (values.length < PAGE_SIZE) break;

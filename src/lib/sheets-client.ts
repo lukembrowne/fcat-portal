@@ -54,6 +54,7 @@ const HEADER_MAP: Record<string, keyof ScheduleRow> = {
   deploy_slot_id: "deploySlotId",
   retrieve_slot_id: "retrieveSlotId",
   notes: "notes",
+  drive_folder_link: "driveFolderLink",
 };
 
 const REVERSE_HEADER_MAP = Object.fromEntries(
@@ -81,6 +82,7 @@ function parseRow(headers: string[], values: string[]): ScheduleRow {
     deploySlotId: raw.deploy_slot_id ? parseInt(raw.deploy_slot_id, 10) : null,
     retrieveSlotId: raw.retrieve_slot_id ? parseInt(raw.retrieve_slot_id, 10) : null,
     notes: raw.notes ?? "",
+    driveFolderLink: raw.drive_folder_link ?? "",
   };
 }
 

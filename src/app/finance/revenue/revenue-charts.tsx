@@ -82,7 +82,7 @@ export function RevenueCharts({
                   ))}
                 </Pie>
                 <Tooltip
-                  formatter={(value: number) => formatCurrency(value)}
+                  formatter={(value) => formatCurrency(Number(value))}
                 />
               </PieChart>
             </ResponsiveContainer>
@@ -105,7 +105,7 @@ export function RevenueCharts({
                   tickFormatter={formatCurrency}
                   tick={{ fontSize: 11 }}
                 />
-                <Tooltip formatter={(value: number) => formatCurrency(value)} />
+                <Tooltip formatter={(value) => formatCurrency(Number(value))} />
                 <Bar dataKey="amount" fill="var(--chart-1)" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>

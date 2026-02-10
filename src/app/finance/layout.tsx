@@ -65,9 +65,6 @@ function DateFilter() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
-  const showFilter = DATE_FILTER_TABS.has(pathname);
-  if (!showFilter) return null;
-
   const currentRange = (searchParams.get("range") || "this-year") as DateRangePreset;
   const customFrom = searchParams.get("from") || "";
   const customTo = searchParams.get("to") || "";
@@ -90,7 +87,6 @@ function DateFilter() {
       const params = new URLSearchParams(searchParams.toString());
       params.set("range", "custom");
       params.set(key, value);
-      // Keep existing other date
       if (key === "from" && !params.get("to")) {
         params.set("to", new Date().toISOString().slice(0, 10));
       }
@@ -102,6 +98,9 @@ function DateFilter() {
     },
     [pathname, searchParams, router]
   );
+
+  const showFilter = DATE_FILTER_TABS.has(pathname);
+  if (!showFilter) return null;
 
   return (
     <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-b bg-muted/30">

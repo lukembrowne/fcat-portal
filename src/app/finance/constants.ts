@@ -88,7 +88,7 @@ export const CASH_RESERVE_TARGET = 140000;
 
 /** LibroMayor CSV expected columns (tab-separated, ISO-8859-1) */
 export const LIBRO_MAYOR_COLUMNS = [
-  "CUENTA CÓDIGO",
+  "CUENTA CóDIGO",
   "CUENTA NOMBRE",
   "FECHA",
   "# ASIENTO",

@@ -27,8 +27,9 @@ export interface BudgetParseResult {
  */
 export function parseBudgetExcel(
   buffer: ArrayBuffer,
-  budgetYear: number
+  requestedYear: number
 ): BudgetParseResult {
+  let budgetYear = requestedYear;
   const errors: string[] = [];
   const wb = XLSX.read(buffer, { type: "array" });
 
@@ -57,19 +58,33 @@ export function parseBudgetExcel(
     };
   }
 
-  // Find the budget year column
+  // Find the budget year column — try requested year first, then auto-detect latest
   const headers = data[0] as string[];
-  const budgetColName = `${budgetYear} Budget`;
-  const budgetColIdx = headers.indexOf(budgetColName);
+  let budgetColName = `${budgetYear} Budget`;
+  let budgetColIdx = headers.indexOf(budgetColName);
+
   if (budgetColIdx === -1) {
-    return {
-      items: [],
-      totalBudget: 0,
-      budgetYear,
-      errors: [
-        `No se encontró la columna "${budgetColName}". Columnas disponibles: ${headers.filter(Boolean).join(", ")}`,
-      ],
-    };
+    // Auto-detect: find the latest "YYYY Budget" column
+    const budgetCols = headers
+      .map((h, i) => ({ header: String(h || ""), idx: i }))
+      .filter((c) => /^\d{4}\s+Budget$/i.test(c.header))
+      .sort((a, b) => b.header.localeCompare(a.header));
+
+    if (budgetCols.length > 0) {
+      budgetColIdx = budgetCols[0].idx;
+      budgetColName = budgetCols[0].header;
+      const detectedYear = parseInt(budgetColName, 10);
+      if (!isNaN(detectedYear)) budgetYear = detectedYear;
+    } else {
+      return {
+        items: [],
+        totalBudget: 0,
+        budgetYear,
+        errors: [
+          `No se encontró columna de presupuesto. Columnas disponibles: ${headers.filter(Boolean).join(", ")}`,
+        ],
+      };
+    }
   }
 
   // Extract budget items matching known categories

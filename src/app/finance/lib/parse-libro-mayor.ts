@@ -80,19 +80,20 @@ export function parseLibroMayor(buffer: ArrayBuffer): {
   const headerLine = lines[0];
   const headers = headerLine.split("\t").map((h) => h.trim());
 
-  // Check for expected columns
+  // Check for expected columns (case-insensitive to handle encoding quirks)
+  const headersLower = headers.map((h) => h.toLowerCase());
   const missingCols = LIBRO_MAYOR_COLUMNS.filter(
-    (col) => !headers.includes(col)
+    (col) => !headersLower.includes(col.toLowerCase())
   );
   if (missingCols.length > 0) {
     errors.push(`Columnas faltantes: ${missingCols.join(", ")}`);
     return { rows: [], errors };
   }
 
-  // Build column index map
+  // Build column index map (case-insensitive lookup)
   const colIdx: Record<string, number> = {};
   for (const col of LIBRO_MAYOR_COLUMNS) {
-    colIdx[col] = headers.indexOf(col);
+    colIdx[col] = headersLower.indexOf(col.toLowerCase());
   }
 
   // Parse data rows
@@ -103,7 +104,7 @@ export function parseLibroMayor(buffer: ArrayBuffer): {
     const fields = lines[i].split("\t");
     if (fields.length < headers.length - 1) continue; // Skip malformed rows
 
-    const codigo = (fields[colIdx["CUENTA CÓDIGO"]] || "").trim();
+    const codigo = (fields[colIdx["CUENTA CóDIGO"]] || "").trim();
     const cuentaNombre = (fields[colIdx["CUENTA NOMBRE"]] || "").trim();
     const fechaRaw = (fields[colIdx["FECHA"]] || "").trim();
     const asiento = (fields[colIdx["# ASIENTO"]] || "").trim();

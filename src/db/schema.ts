@@ -4,6 +4,9 @@
  * Tables:
  * - users, projects, user_permissions (auth/permissions)
  * - deployments, processing_jobs, images, detections, identifications, species (camera trap)
+ * - finance_transactions, finance_budget_items, finance_category_map,
+ *   finance_sueldos_grants, finance_sueldos_totals, finance_projections,
+ *   finance_uploads (financial dashboard)
  */
 
 import {
@@ -262,6 +265,136 @@ export const activityLog = sqliteTable("activity_log", {
 });
 
 // ---------------------------------------------------------------------------
+// Finance — Transactions (from LibroMayor CSV)
+// ---------------------------------------------------------------------------
+
+export const financeTransactions = sqliteTable(
+  "finance_transactions",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    fecha: text("fecha").notNull(),
+    codigo: text("codigo").notNull(),
+    cuentaNombre: text("cuenta_nombre").notNull(),
+    asiento: text("asiento").notNull(),
+    detalle: text("detalle"),
+    actor: text("actor"),
+    centrosDeIngreso: text("centros_de_ingreso"),
+    cCosto: text("c_costo"),
+    debe: real("debe").notNull().default(0),
+    haber: real("haber").notNull().default(0),
+    balance: real("balance"),
+    year: integer("year").notNull(),
+    month: integer("month").notNull(),
+    yearMonth: text("year_month").notNull(),
+    txType: text("tx_type", {
+      enum: ["revenue", "expense", "cash", "other"],
+    }).notNull(),
+  },
+  (table) => [
+    index("idx_ft_fecha").on(table.fecha),
+    index("idx_ft_codigo").on(table.codigo),
+    index("idx_ft_tx_type").on(table.txType),
+    index("idx_ft_year_month").on(table.yearMonth),
+  ]
+);
+
+// ---------------------------------------------------------------------------
+// Finance — Budget Items (from Annual Budget Excel)
+// ---------------------------------------------------------------------------
+
+export const financeBudgetItems = sqliteTable("finance_budget_items", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  budgetYear: integer("budget_year").notNull(),
+  category: text("category").notNull(),
+  amount: real("amount").notNull(),
+});
+
+// ---------------------------------------------------------------------------
+// Finance — Category Map (Budget ↔ Accounting link)
+// ---------------------------------------------------------------------------
+
+export const financeCategoryMap = sqliteTable(
+  "finance_category_map",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    budgetCategory: text("budget_category").notNull(),
+    linkExpenseCategory: text("link_expense_category").notNull(),
+  },
+  (table) => [
+    index("idx_fcm_budget_cat").on(table.budgetCategory),
+    index("idx_fcm_link_cat").on(table.linkExpenseCategory),
+  ]
+);
+
+// ---------------------------------------------------------------------------
+// Finance — Sueldos Grants (from Sueldos Excel, Sheet 1)
+// ---------------------------------------------------------------------------
+
+export const financeSueldosGrants = sqliteTable("finance_sueldos_grants", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  person: text("person").notNull(),
+  source: text("source").notNull(),
+  status: text("status", { enum: ["funded", "pending"] }).notNull(),
+  amount: real("amount").notNull(),
+  startDate: text("start_date").notNull(),
+  endDate: text("end_date").notNull(),
+});
+
+// ---------------------------------------------------------------------------
+// Finance — Sueldos Totals (from Sueldos Excel, Sheet 2)
+// ---------------------------------------------------------------------------
+
+export const financeSueldosTotals = sqliteTable("finance_sueldos_totals", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  person: text("person").notNull().unique(),
+  annualCost: real("annual_cost").notNull(),
+  monthlyCost: real("monthly_cost").notNull(),
+});
+
+// ---------------------------------------------------------------------------
+// Finance — Projections (user-editable cashflow projections)
+// ---------------------------------------------------------------------------
+
+export const financeProjections = sqliteTable("finance_projections", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull(),
+  type: text("type", { enum: ["income", "expense"] }).notNull(),
+  status: text("status", {
+    enum: ["confirmed", "very_likely", "maybe"],
+  })
+    .notNull()
+    .default("confirmed"),
+  amount: real("amount").notNull(),
+  date: text("date").notNull(),
+  includeInProjection: integer("include_in_projection", { mode: "boolean" })
+    .notNull()
+    .default(true),
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+  updatedAt: integer("updated_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+
+// ---------------------------------------------------------------------------
+// Finance — Uploads (metadata for tracking data imports)
+// ---------------------------------------------------------------------------
+
+export const financeUploads = sqliteTable("finance_uploads", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  fileType: text("file_type", {
+    enum: ["libro_mayor", "budget", "category_map", "sueldos"],
+  }).notNull(),
+  fileName: text("file_name").notNull(),
+  rowCount: integer("row_count"),
+  uploadedBy: text("uploaded_by").notNull(),
+  uploadedAt: integer("uploaded_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+
+// ---------------------------------------------------------------------------
 // Type Exports
 // ---------------------------------------------------------------------------
 
@@ -294,3 +427,24 @@ export type NewSpecies = typeof species.$inferInsert;
 
 export type ActivityLog = typeof activityLog.$inferSelect;
 export type NewActivityLog = typeof activityLog.$inferInsert;
+
+export type FinanceTransaction = typeof financeTransactions.$inferSelect;
+export type NewFinanceTransaction = typeof financeTransactions.$inferInsert;
+
+export type FinanceBudgetItem = typeof financeBudgetItems.$inferSelect;
+export type NewFinanceBudgetItem = typeof financeBudgetItems.$inferInsert;
+
+export type FinanceCategoryMapRow = typeof financeCategoryMap.$inferSelect;
+export type NewFinanceCategoryMapRow = typeof financeCategoryMap.$inferInsert;
+
+export type FinanceSueldosGrant = typeof financeSueldosGrants.$inferSelect;
+export type NewFinanceSueldosGrant = typeof financeSueldosGrants.$inferInsert;
+
+export type FinanceSueldosTotal = typeof financeSueldosTotals.$inferSelect;
+export type NewFinanceSueldosTotal = typeof financeSueldosTotals.$inferInsert;
+
+export type FinanceProjection = typeof financeProjections.$inferSelect;
+export type NewFinanceProjection = typeof financeProjections.$inferInsert;
+
+export type FinanceUpload = typeof financeUploads.$inferSelect;
+export type NewFinanceUpload = typeof financeUploads.$inferInsert;

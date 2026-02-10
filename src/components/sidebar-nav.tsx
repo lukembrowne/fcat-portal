@@ -12,7 +12,7 @@ import { hasProjectAccess } from "@/lib/auth";
 import type { AuthUser } from "@/lib/types";
 import { SidebarShell } from "@/components/sidebar-shell";
 
-export type IconName = "home" | "tree-pine" | "leaf" | "camera" | "shield";
+export type IconName = "home" | "tree-pine" | "leaf" | "camera" | "shield" | "dollar-sign";
 
 export interface NavItem {
   label: string;
@@ -98,7 +98,22 @@ export function SidebarNav({ user }: SidebarNavProps) {
   if (user.globalRole === "super_admin") {
     sections.push({
       title: "Administración",
-      items: [{ label: "Panel de Admin", href: "/admin", icon: "shield" }],
+      items: [
+        {
+          label: "Finanzas",
+          icon: "dollar-sign",
+          children: [
+            { label: "Flujo de Caja", href: "/finance/cashflow" },
+            { label: "Ingresos", href: "/finance/revenue" },
+            { label: "Gastos", href: "/finance/expenses" },
+            { label: "Sueldos", href: "/finance/sueldos" },
+            { label: "Presupuesto", href: "/finance/budget" },
+            { label: "Comparación Anual", href: "/finance/annual" },
+            { label: "Cargar Datos", href: "/finance/data" },
+          ],
+        },
+        { label: "Panel de Admin", href: "/admin", icon: "shield" },
+      ],
     });
   }
 

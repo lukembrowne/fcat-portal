@@ -151,6 +151,83 @@ const statements = [
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
   )`,
 
+  // Finance — Transactions
+  `CREATE TABLE IF NOT EXISTS finance_transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fecha TEXT NOT NULL,
+    codigo TEXT NOT NULL,
+    cuenta_nombre TEXT NOT NULL,
+    asiento TEXT NOT NULL,
+    detalle TEXT,
+    actor TEXT,
+    centros_de_ingreso TEXT,
+    c_costo TEXT,
+    debe REAL NOT NULL DEFAULT 0,
+    haber REAL NOT NULL DEFAULT 0,
+    balance REAL,
+    year INTEGER NOT NULL,
+    month INTEGER NOT NULL,
+    year_month TEXT NOT NULL,
+    tx_type TEXT NOT NULL CHECK(tx_type IN ('revenue', 'expense', 'cash', 'other'))
+  )`,
+
+  // Finance — Budget Items
+  `CREATE TABLE IF NOT EXISTS finance_budget_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    budget_year INTEGER NOT NULL,
+    category TEXT NOT NULL,
+    amount REAL NOT NULL
+  )`,
+
+  // Finance — Category Map
+  `CREATE TABLE IF NOT EXISTS finance_category_map (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    budget_category TEXT NOT NULL,
+    link_expense_category TEXT NOT NULL
+  )`,
+
+  // Finance — Sueldos Grants
+  `CREATE TABLE IF NOT EXISTS finance_sueldos_grants (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    person TEXT NOT NULL,
+    source TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('funded', 'pending')),
+    amount REAL NOT NULL,
+    start_date TEXT NOT NULL,
+    end_date TEXT NOT NULL
+  )`,
+
+  // Finance — Sueldos Totals
+  `CREATE TABLE IF NOT EXISTS finance_sueldos_totals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    person TEXT NOT NULL UNIQUE,
+    annual_cost REAL NOT NULL,
+    monthly_cost REAL NOT NULL
+  )`,
+
+  // Finance — Projections
+  `CREATE TABLE IF NOT EXISTS finance_projections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL CHECK(type IN ('income', 'expense')),
+    status TEXT NOT NULL DEFAULT 'confirmed' CHECK(status IN ('confirmed', 'very_likely', 'maybe')),
+    amount REAL NOT NULL,
+    date TEXT NOT NULL,
+    include_in_projection INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+
+  // Finance — Uploads
+  `CREATE TABLE IF NOT EXISTS finance_uploads (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_type TEXT NOT NULL CHECK(file_type IN ('libro_mayor', 'budget', 'category_map', 'sueldos')),
+    file_name TEXT NOT NULL,
+    row_count INTEGER,
+    uploaded_by TEXT NOT NULL,
+    uploaded_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+
   // Indexes
   `CREATE INDEX IF NOT EXISTS idx_user_permissions_user_email ON user_permissions(user_email)`,
   `CREATE INDEX IF NOT EXISTS idx_user_permissions_project_id ON user_permissions(project_id)`,
@@ -160,6 +237,14 @@ const statements = [
   `CREATE INDEX IF NOT EXISTS idx_detections_image_id ON detections(image_id)`,
   `CREATE INDEX IF NOT EXISTS idx_detections_job_id ON detections(job_id)`,
   `CREATE INDEX IF NOT EXISTS idx_identifications_detection_id ON identifications(detection_id)`,
+
+  // Finance indexes
+  `CREATE INDEX IF NOT EXISTS idx_ft_fecha ON finance_transactions(fecha)`,
+  `CREATE INDEX IF NOT EXISTS idx_ft_codigo ON finance_transactions(codigo)`,
+  `CREATE INDEX IF NOT EXISTS idx_ft_tx_type ON finance_transactions(tx_type)`,
+  `CREATE INDEX IF NOT EXISTS idx_ft_year_month ON finance_transactions(year_month)`,
+  `CREATE INDEX IF NOT EXISTS idx_fcm_budget_cat ON finance_category_map(budget_category)`,
+  `CREATE INDEX IF NOT EXISTS idx_fcm_link_cat ON finance_category_map(link_expense_category)`,
 ];
 
 for (const stmt of statements) {

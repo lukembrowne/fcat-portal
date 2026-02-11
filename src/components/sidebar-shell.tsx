@@ -3,7 +3,8 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Home, TreePine, Leaf, Camera, Shield, DollarSign } from "lucide-react";
+import { Home, TreePine, Leaf, Camera, Shield, DollarSign, ChevronRight } from "lucide-react";
+import { Collapsible } from "radix-ui";
 import type { AuthUser } from "@/lib/types";
 import type { IconName, NavItem, NavSection } from "@/components/sidebar-nav";
 import {
@@ -72,6 +73,12 @@ function findActiveHref(pathname: string, sections: NavSection[]): string | null
   return bestMatch;
 }
 
+function isChildActive(item: NavItem, activeHref: string | null): boolean {
+  if (!activeHref) return false;
+  if (item.href === activeHref) return true;
+  return item.children?.some((child) => isChildActive(child, activeHref)) ?? false;
+}
+
 function NavLink({
   item,
   activeHref,
@@ -108,36 +115,31 @@ function NavLink({
 
   // Group item with children
   if (item.children) {
+    const hasActive = isChildActive(item, activeHref);
     return (
-      <SidebarMenuItem>
-        {item.href ? (
-          <SidebarMenuButton
-            asChild
-            isActive={false}
-            tooltip={item.label}
-          >
-            <Link href={item.href} onClick={handleClick}>
+      <Collapsible.Root defaultOpen={hasActive} asChild>
+        <SidebarMenuItem>
+          <Collapsible.Trigger asChild>
+            <SidebarMenuButton tooltip={item.label} className="group/collapsible">
               <NavIcon name={item.icon} />
               <span>{item.label}</span>
-            </Link>
-          </SidebarMenuButton>
-        ) : (
-          <SidebarMenuButton tooltip={item.label}>
-            <NavIcon name={item.icon} />
-            <span>{item.label}</span>
-          </SidebarMenuButton>
-        )}
-        <SidebarMenuSub>
-          {item.children.map((child) => (
-            <SubNavItem
-              key={child.label}
-              item={child}
-              activeHref={activeHref}
-              onNavigate={handleClick}
-            />
-          ))}
-        </SidebarMenuSub>
-      </SidebarMenuItem>
+              <ChevronRight className="ml-auto size-4 shrink-0 transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
+            </SidebarMenuButton>
+          </Collapsible.Trigger>
+          <Collapsible.Content>
+            <SidebarMenuSub>
+              {item.children.map((child) => (
+                <SubNavItem
+                  key={child.label}
+                  item={child}
+                  activeHref={activeHref}
+                  onNavigate={handleClick}
+                />
+              ))}
+            </SidebarMenuSub>
+          </Collapsible.Content>
+        </SidebarMenuItem>
+      </Collapsible.Root>
     );
   }
 

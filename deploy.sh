@@ -1,12 +1,53 @@
 #!/bin/bash
-# Deploy fcat-portal to DigitalOcean droplet
-# Build failure won't tear down the running container (build && up are separate)
+# deploy.sh - Deploy fcat-portal to DigitalOcean droplet
+#
+# Usage:
+#   ./deploy.sh              # Deploy and rebuild container
+#   ./deploy.sh --quick      # Deploy without rebuilding (config/data changes only)
+#   ./deploy.sh --logs       # Deploy and tail logs
+#
+# First-time server setup:
+#   ssh digitalocean
+#   mkdir -p /root/opt/fcat-portal/data
+#   cd /root/opt && git clone git@github.com:fcat-ecuador/fcat-portal.git
+#   cp .env.production /root/opt/fcat-portal/.env.local   # copy secrets
+#   # Then run ./deploy.sh from your local machine
 
 set -e
 
-SERVER="root@portal.fcat-ecuador.org"
+SERVER="digitalocean"
 SERVER_PATH="/root/opt/fcat-portal"
 
 echo "Deploying fcat-portal..."
-ssh -A "$SERVER" "cd $SERVER_PATH && git pull && docker compose build && docker compose up -d && docker compose ps"
-echo "Done."
+
+# Parse arguments
+REBUILD="--build"
+SHOW_LOGS=false
+
+for arg in "$@"; do
+    case $arg in
+        --quick)
+            REBUILD=""
+            echo "  Quick deploy (no rebuild)"
+            ;;
+        --logs)
+            SHOW_LOGS=true
+            ;;
+    esac
+done
+
+# Build separately so a build failure doesn't tear down the running container
+if [ -n "$REBUILD" ]; then
+    ssh -A "$SERVER" "cd ${SERVER_PATH} && git pull && docker compose build && docker compose up -d && docker compose ps"
+else
+    ssh -A "$SERVER" "cd ${SERVER_PATH} && git pull && docker compose up -d && docker compose ps"
+fi
+
+echo ""
+echo "Deployed! https://portal.fcat-ecuador.org"
+
+if [ "$SHOW_LOGS" = true ]; then
+    echo ""
+    echo "Showing logs (Ctrl+C to exit)..."
+    ssh "$SERVER" "cd ${SERVER_PATH} && docker compose logs -f --tail=50"
+fi

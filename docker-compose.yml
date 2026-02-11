@@ -3,6 +3,9 @@ services:
     build: .
     ports:
       - "127.0.0.1:3000:3000"
+    env_file:
+      - path: .env
+        required: false
     volumes:
       - ./data:/app/data                     # DB + thumbnails + allowed emails
       - ${GDRIVE_PATH:-./data/gdrive}:/mnt/gdrive:ro    # rclone mount (prod: /mnt/gdrive)

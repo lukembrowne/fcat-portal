@@ -6,49 +6,60 @@ import { checkDeploymentUploads, extractFolderId, type UploadStatus } from "@/li
 import type { ScheduleRow } from "@/lib/schedule-types";
 import type { ActionResult } from "@/lib/types";
 
-export interface DataStatusRow {
-  deployment: ScheduleRow;
-  uploads: UploadStatus | null; // null = no Drive link
+export interface DriveStatusResult {
+  deploymentId: string;
+  uploads: UploadStatus | null;
   error?: string;
 }
 
 /**
- * Fetch data upload status for all retrieved BioChoco deployments.
- *
- * Loads the schedule from Google Sheets, filters to retrieved deployments,
- * then checks Google Drive for upload status per data type.
+ * Load all BioChoco deployments from Google Sheets (no Drive checks).
  */
-export async function fetchDataStatus(): Promise<ActionResult<DataStatusRow[]>> {
+export async function fetchSchedule(): Promise<ActionResult<ScheduleRow[]>> {
+  try {
+    await requirePermission("biochoco", "viewer");
+    const schedule = await loadSchedule();
+    return { success: true, data: schedule };
+  } catch (err) {
+    console.error("Failed to load schedule:", err);
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : "Error desconocido",
+    };
+  }
+}
+
+/**
+ * Check Drive upload status for a batch of deployments.
+ * Called on-demand for the currently visible page only.
+ */
+export async function checkDriveForDeployments(
+  deployments: { deploymentId: string; driveFolderLink: string }[]
+): Promise<ActionResult<DriveStatusResult[]>> {
   try {
     await requirePermission("biochoco", "viewer");
 
-    const schedule = await loadSchedule();
-
-    // Only check retrieved deployments — scheduled/deployed won't have data yet
-    const retrieved = schedule.filter((row) => row.status === "retrieved");
-
-    // Check Drive uploads with concurrency limit
     const CONCURRENCY = 10;
-    const results: DataStatusRow[] = [];
+    const results: DriveStatusResult[] = [];
 
-    for (let i = 0; i < retrieved.length; i += CONCURRENCY) {
-      const batch = retrieved.slice(i, i + CONCURRENCY);
+    for (let i = 0; i < deployments.length; i += CONCURRENCY) {
+      const batch = deployments.slice(i, i + CONCURRENCY);
 
       const batchResults = await Promise.allSettled(
-        batch.map(async (deployment): Promise<DataStatusRow> => {
-          const folderId = extractFolderId(deployment.driveFolderLink);
+        batch.map(async ({ deploymentId, driveFolderLink }): Promise<DriveStatusResult> => {
+          const folderId = extractFolderId(driveFolderLink);
 
           if (!folderId) {
-            return { deployment, uploads: null };
+            return { deploymentId, uploads: null };
           }
 
           const result = await checkDeploymentUploads(folderId);
 
           if (!result.success) {
-            return { deployment, uploads: null, error: result.error };
+            return { deploymentId, uploads: null, error: result.error };
           }
 
-          return { deployment, uploads: result.data };
+          return { deploymentId, uploads: result.data };
         })
       );
 
@@ -57,9 +68,8 @@ export async function fetchDataStatus(): Promise<ActionResult<DataStatusRow[]>> 
         if (result.status === "fulfilled") {
           results.push(result.value);
         } else {
-          // Shouldn't happen since errors are caught inside, but handle gracefully
           results.push({
-            deployment: batch[j],
+            deploymentId: batch[j].deploymentId,
             uploads: null,
             error: "Error inesperado al verificar carpeta",
           });
@@ -69,7 +79,7 @@ export async function fetchDataStatus(): Promise<ActionResult<DataStatusRow[]>> 
 
     return { success: true, data: results };
   } catch (err) {
-    console.error("Failed to fetch data status:", err);
+    console.error("Failed to check Drive status:", err);
     return {
       success: false,
       error: err instanceof Error ? err.message : "Error desconocido",

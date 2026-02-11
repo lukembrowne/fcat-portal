@@ -1,11 +1,11 @@
 import { requirePermission } from "@/lib/auth";
-import { fetchDataStatus } from "./actions";
+import { fetchSchedule } from "./actions";
 import { UploadStatusTable } from "./upload-status-table";
 
 export default async function BiochocoDataPage() {
   await requirePermission("biochoco", "viewer");
 
-  const result = await fetchDataStatus();
+  const result = await fetchSchedule();
 
   if (!result.success) {
     return (
@@ -21,5 +21,5 @@ export default async function BiochocoDataPage() {
     );
   }
 
-  return <UploadStatusTable rows={result.data} />;
+  return <UploadStatusTable schedule={result.data} />;
 }

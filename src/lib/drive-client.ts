@@ -80,13 +80,17 @@ export async function checkDeploymentUploads(
     const drive = getDrive();
 
     // Step 1: List subfolders of the deployment folder
+    console.log(`[Drive] Checking folder ${folderId}`);
     const foldersRes = await drive.files.list({
       q: `'${folderId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
       fields: "files(id, name)",
       pageSize: 20,
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
     });
 
     const subfolders = foldersRes.data.files ?? [];
+    console.log(`[Drive] Found ${subfolders.length} subfolders:`, subfolders.map((f) => f.name));
 
     // Build a map of subfolder name → subfolder ID
     const subfolderMap = new Map<string, string>();
@@ -107,7 +111,7 @@ export async function checkDeploymentUploads(
       async ([key, folderName]) => {
         const subfolderId = subfolderMap.get(folderName);
         if (!subfolderId) {
-          // Subfolder doesn't exist — no data uploaded
+          console.log(`[Drive] ${folderName}: subfolder not found in parent`);
           return { key, count: 0 };
         }
 
@@ -116,9 +120,14 @@ export async function checkDeploymentUploads(
             q: `'${subfolderId}' in parents and trashed = false`,
             fields: "files(id)",
             pageSize: 1000,
+            supportsAllDrives: true,
+            includeItemsFromAllDrives: true,
           });
-          return { key, count: filesRes.data.files?.length ?? 0 };
-        } catch {
+          const count = filesRes.data.files?.length ?? 0;
+          console.log(`[Drive] ${folderName} (${subfolderId}): ${count} files`);
+          return { key, count };
+        } catch (err) {
+          console.error(`[Drive] Error counting files in ${folderName}:`, err);
           return { key, count: null };
         }
       }
@@ -135,6 +144,7 @@ export async function checkDeploymentUploads(
 
     return { success: true, data: status };
   } catch (err) {
+    console.error(`[Drive] Failed to check folder ${folderId}:`, err);
     return {
       success: false,
       error: err instanceof Error ? err.message : "Failed to check Drive folder",

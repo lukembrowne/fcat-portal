@@ -48,6 +48,7 @@ export function SidebarNav({ user }: SidebarNavProps) {
 
   if (hasBiochoco) {
     biochocoChildren.push({ label: "Resumen", href: "/biochoco/overview" });
+    biochocoChildren.push({ label: "Recursos", href: "/biochoco/recursos" });
     if (isBiochocoEditor) {
       biochocoChildren.push({
         label: "Herramientas",

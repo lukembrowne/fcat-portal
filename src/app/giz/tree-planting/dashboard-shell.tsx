@@ -5,7 +5,7 @@ import { Separator } from "@/components/ui/separator";
 import type { TreeRecord, TreeDashboardMetrics, TreeFilterState } from "@/lib/odk-types";
 import type { ColorByMode } from "./tree-map-inner";
 import { MetricsRow } from "./metrics-row";
-import { FilterSidebar } from "./filter-sidebar";
+import { FilterBar } from "./filter-sidebar";
 import { TreeMap } from "./tree-map";
 import { TreeCharts } from "./tree-charts";
 import { TreeTable } from "./tree-table";
@@ -71,17 +71,14 @@ export function DashboardShell({ trees }: DashboardShellProps) {
         </p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[240px_1fr] gap-6">
-        <aside className="space-y-4 lg:sticky lg:top-4 lg:self-start">
-          <FilterSidebar
-            trees={trees}
-            filters={filters}
-            onFilterChange={setFilters}
-            filteredCount={filteredTrees.length}
-          />
-        </aside>
+      <FilterBar
+        trees={trees}
+        filters={filters}
+        onFilterChange={setFilters}
+        filteredCount={filteredTrees.length}
+      />
 
-        <main className="space-y-6 min-w-0">
+      <div className="mt-6 space-y-6">
           <MetricsRow metrics={filteredMetrics} />
 
           <section>
@@ -102,7 +99,6 @@ export function DashboardShell({ trees }: DashboardShellProps) {
             <h2 className="text-lg font-semibold mb-3">Todos los Registros</h2>
             <TreeTable trees={filteredTrees} onViewPhotos={handleViewPhotos} />
           </section>
-        </main>
       </div>
 
       <PhotoViewer

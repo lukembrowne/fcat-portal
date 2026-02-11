@@ -10,22 +10,21 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
 import type { TreeRecord, TreeFilterState } from "@/lib/odk-types";
 
-interface FilterSidebarProps {
+interface FilterBarProps {
   trees: TreeRecord[];
   filters: TreeFilterState;
   onFilterChange: (filters: TreeFilterState) => void;
   filteredCount: number;
 }
 
-export function FilterSidebar({
+export function FilterBar({
   trees,
   filters,
   onFilterChange,
   filteredCount,
-}: FilterSidebarProps) {
+}: FilterBarProps) {
   const farms = useMemo(() => [...new Set(trees.map((t) => t.farm).filter(Boolean))].sort(), [trees]);
   const species = useMemo(() => [...new Set(trees.map((t) => t.species).filter(Boolean))].sort(), [trees]);
   const workers = useMemo(() => [...new Set(trees.map((t) => t.worker).filter(Boolean))].sort(), [trees]);
@@ -47,15 +46,20 @@ export function FilterSidebar({
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <h3 className="font-semibold text-sm">Filtros</h3>
+        <div className="flex items-center gap-3">
+          <h3 className="font-semibold text-sm">Filtros</h3>
+          <p className="text-xs text-muted-foreground">
+            {filteredCount} de {trees.length} registros
+          </p>
+        </div>
         <Button variant="ghost" size="sm" onClick={reset}>
           Limpiar
         </Button>
       </div>
 
-      <div className="space-y-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
         <div className="space-y-1.5">
           <Label className="text-xs">Finca</Label>
           <Select
@@ -136,8 +140,6 @@ export function FilterSidebar({
           </Select>
         </div>
 
-        <Separator />
-
         <div className="space-y-1.5">
           <Label className="text-xs">Fecha desde</Label>
           <input
@@ -158,12 +160,6 @@ export function FilterSidebar({
           />
         </div>
       </div>
-
-      <Separator />
-
-      <p className="text-xs text-muted-foreground">
-        Mostrando {filteredCount} de {trees.length} registros
-      </p>
     </div>
   );
 }

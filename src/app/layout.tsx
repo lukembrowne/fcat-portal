@@ -40,9 +40,9 @@ export default async function RootLayout({
         {user ? (
           <SidebarProvider defaultOpen={defaultOpen}>
             <SidebarNav user={user} />
-            <SidebarInset>
+            <SidebarInset className="min-w-0">
               <TopHeader />
-              <main className="flex-1 overflow-y-auto px-4 py-6">
+              <main className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-6 min-w-0">
                 <div className="mx-auto max-w-7xl">{children}</div>
               </main>
             </SidebarInset>

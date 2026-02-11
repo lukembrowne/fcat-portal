@@ -33,10 +33,12 @@ import {
   ChevronsRight,
   Search,
   ExternalLink,
+  Download,
 } from "lucide-react";
 import type { ScheduleRow } from "@/lib/schedule-types";
 import type { SiteInfo } from "./types";
 import { getHabitatName, getDeploymentStatus, SPANISH_MONTHS } from "./types";
+import { toUtm17N } from "@/lib/utm";
 
 interface ScheduleTableProps {
   deploymentsThisMonth: ScheduleRow[];
@@ -108,6 +110,70 @@ function buildRows(
       driveFolderLink: r.driveFolderLink,
     };
   });
+}
+
+function downloadCsv(rows: CombinedRow[]) {
+  const headers = [
+    "Fecha",
+    "Tipo",
+    "ID Sitio",
+    "Nombre",
+    "Hábitat",
+    "Hab. Evaluado",
+    "ID Instalación",
+    "Estado",
+    "Latitud",
+    "Longitud",
+    "UTM Este",
+    "UTM Norte",
+  ];
+
+  const statusLabel: Record<string, string> = {
+    scheduled: "Programado",
+    deployed: "Instalado",
+    retrieved: "Recuperado",
+  };
+
+  const csvRows = rows.map((r) => {
+    let utmE = "";
+    let utmN = "";
+    if (r.lat != null && r.lng != null) {
+      const utm = toUtm17N(r.lat, r.lng);
+      utmE = Math.round(utm.easting).toString();
+      utmN = Math.round(utm.northing).toString();
+    }
+    return [
+      r.date,
+      r.type === "deploy" ? "Instalación" : "Recuperación",
+      r.siteId,
+      r.siteName,
+      r.habitat,
+      r.habitatAssessed,
+      r.deploymentId,
+      statusLabel[r.status] ?? r.status,
+      r.lat?.toString() ?? "",
+      r.lng?.toString() ?? "",
+      utmE,
+      utmN,
+    ];
+  });
+
+  const csvContent = [
+    headers.join(","),
+    ...csvRows.map((row) =>
+      row.map((cell) => `"${cell.replace(/"/g, '""')}"`).join(","),
+    ),
+  ].join("\n");
+
+  const blob = new Blob(["\uFEFF" + csvContent], {
+    type: "text/csv;charset=utf-8;",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `cronograma_biochoco_${new Date().toISOString().split("T")[0]}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 export function ScheduleTable({
@@ -199,7 +265,7 @@ export function ScheduleTable({
       },
       {
         accessorKey: "habitatAssessed",
-        header: "Habitat Evaluado",
+        header: "Hab. Evaluado",
         cell: ({ getValue }) => (
           <span className="whitespace-normal">{getValue<string>() || "—"}</span>
         ),
@@ -232,6 +298,28 @@ export function ScheduleTable({
         cell: ({ getValue }) => {
           const v = getValue<number | null>();
           return v != null ? <span className="tabular-nums">{v.toFixed(5)}</span> : "—";
+        },
+        enableGlobalFilter: false,
+      },
+      {
+        id: "utmEasting",
+        header: "UTM Este",
+        cell: ({ row }) => {
+          const { lat, lng } = row.original;
+          if (lat == null || lng == null) return "—";
+          const utm = toUtm17N(lat, lng);
+          return <span className="tabular-nums">{Math.round(utm.easting)}</span>;
+        },
+        enableGlobalFilter: false,
+      },
+      {
+        id: "utmNorthing",
+        header: "UTM Norte",
+        cell: ({ row }) => {
+          const { lat, lng } = row.original;
+          if (lat == null || lng == null) return "—";
+          const utm = toUtm17N(lat, lng);
+          return <span className="tabular-nums">{Math.round(utm.northing)}</span>;
         },
         enableGlobalFilter: false,
       },
@@ -300,16 +388,26 @@ export function ScheduleTable({
         <h2 className="text-lg font-semibold">
           {showAll ? "Cronograma — Todo el cronograma" : `Cronograma — ${monthLabel}`}
         </h2>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            setShowAll((v) => !v);
-            setPagination((p) => ({ ...p, pageIndex: 0 }));
-          }}
-        >
-          {showAll ? "Este mes" : "Todo el cronograma"}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => downloadCsv(table.getFilteredRowModel().rows.map((r) => r.original))}
+          >
+            <Download className="h-4 w-4 mr-1" />
+            CSV
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setShowAll((v) => !v);
+              setPagination((p) => ({ ...p, pageIndex: 0 }));
+            }}
+          >
+            {showAll ? "Este mes" : "Todo el cronograma"}
+          </Button>
+        </div>
       </div>
 
       <div className="space-y-3">

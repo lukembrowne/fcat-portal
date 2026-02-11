@@ -54,7 +54,7 @@ export function DashboardShell({ data }: { data: BiochocoOverviewData }) {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 overflow-hidden">
       <div>
         <h1 className="text-2xl font-bold">Panel BioChoco</h1>
         <p className="text-sm text-muted-foreground">

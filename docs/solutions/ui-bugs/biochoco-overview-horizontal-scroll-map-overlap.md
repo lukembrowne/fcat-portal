@@ -1,90 +1,114 @@
 ---
 title: "Biochoco Overview: Horizontal Scroll and Map Overlapping Sidebar"
 type: bugfix
-date: 2026-02-10
+date: 2026-02-11
 category: ui-bugs
-tags: [css, overflow, leaflet, layout, tailwind, table]
+tags: [css, overflow, leaflet, layout, tailwind, table, flexbox, min-w-0, sidebar]
 module: biochoco
-symptoms: ["Entire main content area scrolls horizontally", "Leaflet map overlaps sidebar when scrolling", "12-column ScheduleTable wider than viewport", "SiteSummaryTable overflows container"]
+symptoms: ["Entire main content area scrolls horizontally", "Leaflet map overlaps sidebar when scrolling", "Wide ScheduleTable overflows viewport", "SiteSummaryTable overflows container", "Bug only appears when sidebar is open"]
 ---
 
 # Biochoco Overview: Horizontal Scroll and Map Overlapping Sidebar
 
 ## Problem
 
-The biochoco overview page (`/biochoco/overview`) had three related visual bugs:
+The biochoco overview page (`/biochoco/overview`) had content overflowing over the left sidebar:
 
-1. The entire main content area scrolled horizontally
-2. When scrolling, the Leaflet map overlapped the fixed sidebar
-3. Wide tables (ScheduleTable with 12 columns, SiteSummaryTable with 10 columns) forced the page wider than the viewport
+1. The Leaflet map overlapped the sidebar
+2. Wide tables (ScheduleTable with 14 columns) pushed the page wider than the viewport
+3. The bug only appeared **when the sidebar was open** — closing the sidebar gave enough room
 
 ## Root Cause
 
-Three compounding issues:
+Three compounding issues in the flex layout chain:
 
-### 1. `overflow-auto` on `<main>` (primary cause)
+```
+SidebarProvider (flex container)
+  SidebarNav (sidebar, ~256px when open)
+  SidebarInset (flex-1, flex-col) ← missing min-w-0!
+    <main> (flex-1, overflow-y-auto) ← overflow-y-auto alone doesn't prevent horizontal overflow
+      <div max-w-7xl>
+        DashboardShell
+          OverviewMap (Leaflet, width: 100%)
+          ScheduleTable (14 columns)
+```
 
-In `src/app/layout.tsx`, the `<main>` element had `overflow-auto`, which enables **both** horizontal and vertical scrolling. When table content exceeded the viewport width, the entire main area scrolled horizontally — and the Leaflet map (which uses `position: absolute/fixed` internally) scrolled with it, overlapping the sidebar.
+### 1. Missing `min-w-0` on `SidebarInset` (primary cause)
 
-### 2. Redundant container padding (space waste)
+`SidebarInset` is a flex child with `flex-1` but no `min-w-0`. In CSS flexbox, the default `min-width` is `auto`, which means the element **will not shrink below its content's intrinsic width**. When the sidebar is open (~256px), the remaining space is ~viewport-256px. But wide content (Leaflet map, 14-column table) has an intrinsic width larger than that remaining space, so `SidebarInset` refuses to shrink and overflows.
 
-`DashboardShell` had `container mx-auto px-4 py-6` while the root layout already provided `mx-auto max-w-7xl` + `px-4 py-6`. This double-padding wasted ~32px of horizontal space, making it easier for wide tables to overflow.
+When the sidebar is closed, there's enough room, so the bug disappears.
 
-### 3. `whitespace-nowrap` on table cells (table width)
+### 2. `overflow-y-auto` alone doesn't prevent horizontal overflow
 
-The shadcn/ui `Table` component applies `whitespace-nowrap` to both `TableHead` and `TableCell` by default. With 12 columns of non-wrapping text, the ScheduleTable exceeded the available width.
+Per CSS spec: **if one overflow axis is set to a non-`visible` value, the other axis computes to `auto`** (not `visible`). So `overflow-y: auto` on `<main>` still allows horizontal scrolling. You must explicitly set `overflow-x: hidden`.
+
+### 3. Wide table content
+
+The shadcn/ui `Table` component applies `whitespace-nowrap` by default. With 14 columns of non-wrapping text, the ScheduleTable exceeds available width. The table wrapper has `overflow-auto` but it only works if the wrapper itself is width-constrained.
 
 ## Solution
 
-### 1. Fix main area overflow — `src/app/layout.tsx`
+### 1. Add `min-w-0` to `SidebarInset` — `src/app/layout.tsx`
+
+```tsx
+// Before
+<SidebarInset>
+
+// After
+<SidebarInset className="min-w-0">
+```
+
+This allows the flex child to shrink below its content's intrinsic width when the sidebar is open.
+
+### 2. Fix main area overflow — `src/app/layout.tsx`
 
 ```tsx
 // Before
 <main className="flex-1 overflow-auto px-4 py-6">
 
 // After
-<main className="flex-1 overflow-y-auto px-4 py-6">
+<main className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-6 min-w-0">
 ```
 
-`overflow-y-auto` allows vertical scrolling while preventing horizontal scroll. This fixes both the page-level horizontal scroll and the map/sidebar overlap.
+Explicit `overflow-x-hidden` clips horizontal overflow. `min-w-0` on `<main>` too since it's also a flex child.
 
-### 2. Remove redundant padding — `dashboard-shell.tsx`
+### 3. `overflow-hidden` on DashboardShell — `dashboard-shell.tsx`
 
 ```tsx
 // Before
-<div className="container mx-auto px-4 py-6 space-y-6">
+<div className="space-y-6">
 
 // After
-<div className="space-y-6">
+<div className="space-y-6 overflow-hidden">
 ```
 
-The root layout already provides the container constraints and padding.
+Belt-and-suspenders: ensures all child content (map, tables) is clipped at the dashboard level.
 
-### 3. Compact ScheduleTable — `schedule-table.tsx`
+### 4. Compact tables
 
-- Added `text-xs` class to the `<Table>` element for smaller text across all columns
-- Added `whitespace-normal` to text-heavy cells (siteName, habitat, habitatAssessed) to allow wrapping
-- The table wrapper already has `overflow-x-auto`, so any remaining overflow scrolls within the table container, not the page
-
-### 4. Compact SiteSummaryTable — `site-summary-table.tsx`
-
-- Added `text-xs` class to the `<Table>` element
-- Added `whitespace-normal` to the siteName cell
+- `text-xs` on `<Table>` elements for smaller text
+- `whitespace-normal` on text-heavy cells (siteName, habitat, habitatAssessed)
+- Shortened "Habitat Evaluado" header to "Hab. Evaluado"
+- Table wrapper `overflow-auto` provides horizontal scrollbar within the table container
 
 ## Key Insight
 
-The `overflow-auto` vs `overflow-y-auto` distinction is critical in layouts with fixed/absolute-positioned elements like Leaflet maps. `overflow-auto` creates a new scroll context in both axes, which can cause positioned children to scroll out of their intended bounds and overlap adjacent layout elements (like sidebars).
+**`min-w-0` on flex children is essential in sidebar layouts.** Without it, flex items with `flex-1` refuse to shrink below their content's intrinsic width. This is invisible when there's enough viewport space (sidebar closed) but breaks immediately when the sidebar takes away ~256px. The fix must be applied at **every flex child in the chain** — `SidebarInset` AND `<main>`.
+
+The `overflow-y-auto` vs `overflow-x-hidden` distinction is a separate but related trap: the CSS spec says setting one axis to non-`visible` forces the other to `auto`, so `overflow-y-auto` alone does NOT prevent horizontal overflow.
 
 ## Prevention
 
-- Use `overflow-y-auto` (not `overflow-auto`) on main content areas in sidebar layouts
-- Avoid nesting `container` classes — check if a parent already provides max-width constraints
-- For wide data tables, use `text-xs` and allow wrapping on text-heavy columns rather than relying solely on `overflow-x-auto` wrappers
-- Test dashboard pages at the sidebar's narrowest content width (~768px minus sidebar)
+- Always add `min-w-0` to flex children in sidebar layouts
+- Use `overflow-y-auto overflow-x-hidden` (not just `overflow-y-auto`) on scrollable main content areas
+- Test dashboard pages **with the sidebar open** — that's the narrowest content width
+- For wide data tables, use `text-xs` and allow wrapping on text-heavy columns
+- Table wrappers with `overflow-auto` only work if their parent chain is width-constrained
 
 ## Files Changed
 
-- `src/app/layout.tsx` — `overflow-auto` → `overflow-y-auto`
-- `src/app/biochoco/overview/dashboard-shell.tsx` — removed redundant container/padding
-- `src/app/biochoco/overview/schedule-table.tsx` — `text-xs` on table, `whitespace-normal` on text cells
+- `src/app/layout.tsx` — `min-w-0` on `SidebarInset`, `overflow-x-hidden min-w-0` on `<main>`
+- `src/app/biochoco/overview/dashboard-shell.tsx` — `overflow-hidden` on root div
+- `src/app/biochoco/overview/schedule-table.tsx` — `text-xs` on table, `whitespace-normal` on text cells, shortened headers
 - `src/app/biochoco/overview/site-summary-table.tsx` — `text-xs` on table, `whitespace-normal` on siteName

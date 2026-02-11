@@ -15,6 +15,7 @@ import { BIOCHOCO_PROJECT_ID, BIOCHOCO_FORM_HABITAT } from "@/lib/odk-constants"
 import { HabitatMap } from "./habitat-map";
 import { HabitatCharts } from "./habitat-charts";
 import { HabitatSiteTable } from "./habitat-site-table";
+import { PhotoDownloadButton } from "@/components/photo-download-button";
 
 interface HabitatShellProps {
   data: {
@@ -69,12 +70,18 @@ function PhotoDialog({
         <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
           {photos.map((p) => (
             <div key={p.key} className="space-y-1">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={photoUrl(assessment.instanceId, p.filename)}
-                alt={PHOTO_LABELS[p.key] ?? p.key}
-                className="w-full h-80 object-cover rounded-md"
-              />
+              <div className="relative">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={photoUrl(assessment.instanceId, p.filename)}
+                  alt={PHOTO_LABELS[p.key] ?? p.key}
+                  className="w-full h-80 object-cover rounded-md"
+                />
+                <PhotoDownloadButton
+                  photoUrl={photoUrl(assessment.instanceId, p.filename)}
+                  filename={p.filename}
+                />
+              </div>
               <p className="text-xs text-center text-muted-foreground">
                 {PHOTO_LABELS[p.key] ?? p.key}
               </p>

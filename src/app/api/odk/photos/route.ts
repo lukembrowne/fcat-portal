@@ -79,12 +79,16 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "No photo data" }, { status: 404 });
     }
 
-    return new NextResponse(body, {
-      headers: {
-        "Content-Type": contentType,
-        "Cache-Control": "public, max-age=3600",
-      },
-    });
+    const headers: Record<string, string> = {
+      "Content-Type": contentType,
+      "Cache-Control": "public, max-age=3600",
+    };
+
+    if (searchParams.get("download") === "true") {
+      headers["Content-Disposition"] = `attachment; filename="${file}"`;
+    }
+
+    return new NextResponse(body, { headers });
   } catch {
     return NextResponse.json(
       { error: "Failed to fetch photo" },

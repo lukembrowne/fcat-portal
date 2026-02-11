@@ -8,6 +8,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { TreeRecord } from "@/lib/odk-types";
+import { PhotoDownloadButton } from "@/components/photo-download-button";
 
 interface PhotoViewerProps {
   tree: TreeRecord | null;
@@ -42,15 +43,20 @@ function PhotoImage({
     );
   }
 
+  const url = `/api/odk/photos?projectId=2&formId=siembra_arboles&id=${encodeURIComponent(instanceId)}&file=${encodeURIComponent(filename)}`;
+
   return (
     <div className="space-y-1">
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={`/api/odk/photos?projectId=2&formId=siembra_arboles&id=${encodeURIComponent(instanceId)}&file=${encodeURIComponent(filename)}`}
-        alt={label}
-        className="w-full h-72 object-cover rounded-md"
-        onError={() => setError(true)}
-      />
+      <div className="relative">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={url}
+          alt={label}
+          className="w-full h-72 object-cover rounded-md"
+          onError={() => setError(true)}
+        />
+        {!error && <PhotoDownloadButton photoUrl={url} filename={filename} />}
+      </div>
       <p className="text-xs text-center text-muted-foreground">{label}</p>
     </div>
   );

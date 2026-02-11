@@ -24,6 +24,7 @@
 .DS_Store
 *.pem
 .claude/
+docker-compose.override.yml
 
 # debug
 npm-debug.log*

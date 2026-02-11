@@ -2,7 +2,7 @@ services:
   portal:
     build: .
     ports:
-      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:3003:3000"
     env_file:
       - path: .env
         required: false
@@ -22,3 +22,24 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.6.0
+    ports:
+      - "127.0.0.1:4181:4180"
+    environment:
+      - OAUTH2_PROXY_PROVIDER=google
+      - OAUTH2_PROXY_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - OAUTH2_PROXY_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - OAUTH2_PROXY_COOKIE_SECRET=${PORTAL_OAUTH_COOKIE_SECRET}
+      - OAUTH2_PROXY_COOKIE_DOMAIN=portal.fcat-ecuador.org
+      - OAUTH2_PROXY_COOKIE_NAME=_fcat_portal_oauth2
+      - OAUTH2_PROXY_EMAIL_DOMAINS=fcat-ecuador.org
+      - OAUTH2_PROXY_AUTHENTICATED_EMAILS_FILE=/data/allowed_external_emails.txt
+      - OAUTH2_PROXY_SET_XAUTHREQUEST=true
+      - OAUTH2_PROXY_HTTP_ADDRESS=0.0.0.0:4180
+      - OAUTH2_PROXY_REVERSE_PROXY=true
+      - OAUTH2_PROXY_REDIRECT_URL=https://portal.fcat-ecuador.org/oauth2/callback
+    volumes:
+      - ./data:/data:ro
+    restart: unless-stopped

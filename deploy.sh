@@ -7,11 +7,18 @@
 #   ./deploy.sh --logs       # Deploy and tail logs
 #
 # First-time server setup:
-#   ssh digitalocean
-#   mkdir -p /root/opt/fcat-portal/data
-#   cd /root/opt && git clone https://github.com/lukembrowne/fcat-portal.git
-#   nano /root/opt/fcat-portal/.env   # add production secrets
-#   # Then run ./deploy.sh from your local machine
+#   1. ssh digitalocean
+#   2. mkdir -p /root/opt/fcat-portal/data
+#   3. cd /root/opt && git clone https://github.com/lukembrowne/fcat-portal.git
+#   4. nano /root/opt/fcat-portal/.env   # add production secrets (see .env.example)
+#   5. touch /root/opt/fcat-portal/data/allowed_external_emails.txt
+#   6. Google Cloud Console: add https://portal.fcat-ecuador.org/oauth2/callback as redirect URI
+#   7. DNS: add A record for portal.fcat-ecuador.org → droplet IP
+#   8. cp /root/opt/fcat-portal/nginx/portal.fcat-ecuador.org /etc/nginx/sites-available/
+#      ln -s /etc/nginx/sites-available/portal.fcat-ecuador.org /etc/nginx/sites-enabled/
+#      nginx -t && systemctl reload nginx
+#   9. certbot --nginx -d portal.fcat-ecuador.org
+#  10. ./deploy.sh from your local machine
 
 set -e
 

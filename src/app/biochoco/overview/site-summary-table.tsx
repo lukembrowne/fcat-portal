@@ -89,7 +89,7 @@ export function SiteSummaryTable({
       </h2>
 
       <div className="rounded-xl border overflow-auto">
-        <Table>
+        <Table className="text-xs">
           <TableHeader>
             <TableRow>
               <TableHead rowSpan={2}>ID Sitio</TableHead>
@@ -122,7 +122,7 @@ export function SiteSummaryTable({
               summaryRows.map((row) => (
                 <TableRow key={row.siteId}>
                   <TableCell className="font-mono text-xs">{row.siteId}</TableCell>
-                  <TableCell>{row.siteName}</TableCell>
+                  <TableCell className="whitespace-normal">{row.siteName}</TableCell>
                   <TableCell className="tabular-nums border-l">{row.v1.plan ?? "—"}</TableCell>
                   <TableCell className="tabular-nums">{row.v1.real ?? "—"}</TableCell>
                   <TableCell className="tabular-nums border-l">{row.v2.plan ?? "—"}</TableCell>

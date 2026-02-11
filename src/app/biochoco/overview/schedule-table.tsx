@@ -186,15 +186,23 @@ export function ScheduleTable({
       {
         accessorKey: "siteName",
         header: "Nombre",
+        cell: ({ getValue }) => (
+          <span className="whitespace-normal">{getValue<string>()}</span>
+        ),
       },
       {
         accessorKey: "habitat",
         header: "Hábitat",
+        cell: ({ getValue }) => (
+          <span className="whitespace-normal">{getValue<string>()}</span>
+        ),
       },
       {
         accessorKey: "habitatAssessed",
         header: "Habitat Evaluado",
-        cell: ({ getValue }) => getValue<string>() || "—",
+        cell: ({ getValue }) => (
+          <span className="whitespace-normal">{getValue<string>() || "—"}</span>
+        ),
       },
       {
         accessorKey: "deploymentId",
@@ -316,7 +324,7 @@ export function ScheduleTable({
         </div>
 
         <div className="rounded-xl border overflow-auto">
-          <Table>
+          <Table className="text-xs">
             <TableHeader>
               {table.getHeaderGroups().map((headerGroup) => (
                 <TableRow key={headerGroup.id}>

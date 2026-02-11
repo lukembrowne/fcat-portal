@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Home, TreePine, Leaf, Camera, Shield } from "lucide-react";
+import { Home, TreePine, Leaf, Camera, Shield, DollarSign } from "lucide-react";
 import type { AuthUser } from "@/lib/types";
 import type { IconName, NavItem, NavSection } from "@/components/sidebar-nav";
 import {
@@ -31,6 +31,7 @@ const ICONS: Record<IconName, React.ComponentType<{ className?: string }>> = {
   leaf: Leaf,
   camera: Camera,
   shield: Shield,
+  "dollar-sign": DollarSign,
 };
 
 function NavIcon({ name }: { name?: IconName }) {

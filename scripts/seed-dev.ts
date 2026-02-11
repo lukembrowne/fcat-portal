@@ -42,8 +42,13 @@ insertProject.run(
   "BioChoco",
   "Programa de monitoreo de biodiversidad BioChoco"
 );
+insertProject.run(
+  "finance",
+  "Finanzas",
+  "Dashboard financiero y gestión de presupuestos"
+);
 
-console.log("Seeded projects: camera-trap, giz, biochoco");
+console.log("Seeded projects: camera-trap, giz, biochoco, finance");
 
 // --- Super admin user ---
 const superAdminEmail =
@@ -64,6 +69,9 @@ db.prepare(
 db.prepare(
   "INSERT OR IGNORE INTO user_permissions (user_email, project_id, role) VALUES (?, ?, ?)"
 ).run(superAdminEmail, "biochoco", "admin");
+db.prepare(
+  "INSERT OR IGNORE INTO user_permissions (user_email, project_id, role) VALUES (?, ?, ?)"
+).run(superAdminEmail, "finance", "admin");
 
 console.log(`Seeded super admin: ${superAdminEmail}`);
 

@@ -40,6 +40,8 @@ services:
       - OAUTH2_PROXY_HTTP_ADDRESS=0.0.0.0:4180
       - OAUTH2_PROXY_REVERSE_PROXY=true
       - OAUTH2_PROXY_REDIRECT_URL=https://portal.fcat-ecuador.org/oauth2/callback
+      - OAUTH2_PROXY_CUSTOM_TEMPLATES_DIR=/templates
     volumes:
       - ./data:/data:ro
+      - ./oauth2-proxy-templates:/templates:ro
     restart: unless-stopped

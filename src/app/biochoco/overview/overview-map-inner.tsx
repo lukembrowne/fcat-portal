@@ -5,14 +5,23 @@ import {
   MapContainer,
   TileLayer,
   CircleMarker,
+  Marker,
   Popup,
   LayersControl,
   GeoJSON,
 } from "react-leaflet";
+import L from "leaflet";
 import type { ScheduleRow } from "@/lib/schedule-types";
 import type { SiteInfo } from "./types";
 import { useReserveBoundary } from "@/lib/use-reserve-boundary";
 import { getHabitatName } from "./types";
+
+const CAMERA_ICON = L.divIcon({
+  html: `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>`,
+  className: "",
+  iconSize: [20, 20],
+  iconAnchor: [10, 24],
+});
 
 interface OverviewMapInnerProps {
   validSites: SiteInfo[];
@@ -143,6 +152,17 @@ export default function OverviewMapInner({
             </CircleMarker>
           );
         })}
+
+        {validSites
+          .filter((site) => currentlyDeployedSiteIds.has(site.siteId))
+          .map((site) => (
+            <Marker
+              key={`camera-${site.siteId}`}
+              position={[site.lat!, site.lng!]}
+              icon={CAMERA_ICON}
+              interactive={false}
+            />
+          ))}
       </MapContainer>
 
       <div className="flex items-center gap-4 px-4 py-2 bg-card text-xs border-t flex-wrap">
@@ -158,6 +178,10 @@ export default function OverviewMapInner({
         <span className="flex items-center gap-1">
           <span className="inline-block w-3 h-3 rounded-full bg-gray-400" />
           Sin actividad
+        </span>
+        <span className="flex items-center gap-1">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>
+          Sensor instalado
         </span>
       </div>
     </div>

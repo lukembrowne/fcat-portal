@@ -9,8 +9,8 @@
 # First-time server setup:
 #   ssh digitalocean
 #   mkdir -p /root/opt/fcat-portal/data
-#   cd /root/opt && git clone git@github.com:fcat-ecuador/fcat-portal.git
-#   cp .env.production /root/opt/fcat-portal/.env.local   # copy secrets
+#   cd /root/opt && git clone https://github.com/lukembrowne/fcat-portal.git
+#   nano /root/opt/fcat-portal/.env   # add production secrets
 #   # Then run ./deploy.sh from your local machine
 
 set -e

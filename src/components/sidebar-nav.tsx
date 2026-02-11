@@ -12,7 +12,7 @@ import { hasProjectAccess } from "@/lib/auth";
 import type { AuthUser } from "@/lib/types";
 import { SidebarShell } from "@/components/sidebar-shell";
 
-export type IconName = "home" | "tree-pine" | "leaf" | "camera" | "shield" | "dollar-sign";
+export type IconName = "home" | "tree-pine" | "leaf" | "camera" | "shield" | "dollar-sign" | "bar-chart-3";
 
 export interface NavItem {
   label: string;
@@ -43,30 +43,20 @@ export function SidebarNav({ user }: SidebarNavProps) {
   const hasCameraTrap = hasProjectAccess(user, "camera-trap");
   const hasGiz = hasProjectAccess(user, "giz");
 
-  // Build BioChocó children (biochoco pages + camera trap sub-group)
+  // Build BioChocó children
   const biochocoChildren: NavItem[] = [];
 
   if (hasBiochoco) {
     biochocoChildren.push({ label: "Resumen", href: "/biochoco/overview" });
     biochocoChildren.push({ label: "Recursos", href: "/biochoco/recursos" });
+    biochocoChildren.push({ label: "Hábitat", href: "/biochoco/habitat" });
+    biochocoChildren.push({ label: "Datos", href: "/biochoco/data" });
     if (isBiochocoEditor) {
       biochocoChildren.push({
         label: "Herramientas",
         href: "/biochoco/tools",
       });
     }
-  }
-
-  if (hasCameraTrap) {
-    biochocoChildren.push({
-      label: "Cámaras Trampa",
-      icon: "camera",
-      children: [
-        { label: "Dashboard", href: "/camera-trap" },
-        { label: "Resultados", href: "/camera-trap/results" },
-        { label: "Anotaciones", href: "/camera-trap/annotate" },
-      ],
-    });
   }
 
   // Build projects section
@@ -83,7 +73,7 @@ export function SidebarNav({ user }: SidebarNavProps) {
     });
   }
 
-  if (hasBiochoco || hasCameraTrap) {
+  if (hasBiochoco) {
     projectItems.push({
       label: "BioChocó",
       icon: "leaf",
@@ -94,6 +84,25 @@ export function SidebarNav({ user }: SidebarNavProps) {
   const sections: NavSection[] = [
     { title: "Proyectos", items: projectItems },
   ];
+
+  // Análisis section — reusable analysis modules
+  const analysisItems: NavItem[] = [];
+
+  if (hasCameraTrap) {
+    analysisItems.push({
+      label: "Cámaras Trampa",
+      icon: "camera",
+      children: [
+        { label: "Dashboard", href: "/camera-trap" },
+        { label: "Resultados", href: "/camera-trap/results" },
+        { label: "Anotaciones", href: "/camera-trap/annotate" },
+      ],
+    });
+  }
+
+  if (analysisItems.length > 0) {
+    sections.push({ title: "Análisis", items: analysisItems });
+  }
 
   // Admin section
   if (user.globalRole === "super_admin") {

@@ -1,2 +1,4 @@
 // Vitest setup file
-// Add global test setup here as needed
+
+// Mock "server-only" so server modules can be imported in tests
+vi.mock("server-only", () => ({}));

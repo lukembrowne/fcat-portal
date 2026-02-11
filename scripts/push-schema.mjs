@@ -258,4 +258,25 @@ for (const t of tables) {
   console.log(`  - ${t.name}`);
 }
 
+// --- Seed core projects (idempotent) ---
+const coreProjects = [
+  ["camera-trap", "Cámaras Trampa", "Pipeline de procesamiento de imágenes de cámaras trampa con detección y clasificación de especies"],
+  ["giz", "GIZ", "Proyecto GIZ - Siembra de árboles y monitoreo de cacao"],
+  ["biochoco", "BioChoco", "Programa de monitoreo de biodiversidad BioChoco"],
+  ["finance", "Finanzas", "Dashboard financiero y gestión de presupuestos"],
+];
+
+const insertProject = db.prepare(
+  "INSERT OR IGNORE INTO projects (id, name, description) VALUES (?, ?, ?)"
+);
+
+let projectsAdded = 0;
+for (const [id, name, desc] of coreProjects) {
+  const result = insertProject.run(id, name, desc);
+  if (result.changes > 0) projectsAdded++;
+}
+
+const totalProjects = db.prepare("SELECT COUNT(*) as count FROM projects").get();
+console.log(`Projects: ${projectsAdded} new, ${totalProjects.count} total`);
+
 db.close();

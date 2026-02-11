@@ -15,3 +15,4 @@ export const BIOCHOCO_PROJECT_ID = "8";
 export const BIOCHOCO_DATASET_SITES = "monitoring_sites_v0_14";
 export const BIOCHOCO_FORM_DEPLOY = "instalar_sensores";
 export const BIOCHOCO_FORM_RETRIEVE = "retrieve_sensors";
+export const BIOCHOCO_FORM_HABITAT = "habitat_assessment";

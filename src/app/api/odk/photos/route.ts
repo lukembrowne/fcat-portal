@@ -4,6 +4,7 @@ import { getCurrentUser } from "@/lib/auth";
 import {
   GIZ_PROJECT_ID, GIZ_FORM_TREE_PLANTING, GIZ_FORM_CACAO_MONITORING,
   BIOCHOCO_PROJECT_ID, BIOCHOCO_FORM_DEPLOY, BIOCHOCO_FORM_RETRIEVE,
+  BIOCHOCO_FORM_HABITAT,
 } from "@/lib/odk-constants";
 
 // Map ODK project IDs to internal project IDs for permission checks
@@ -18,6 +19,7 @@ const ALLOWED_FORMS = new Set([
   GIZ_FORM_CACAO_MONITORING,
   BIOCHOCO_FORM_DEPLOY,
   BIOCHOCO_FORM_RETRIEVE,
+  BIOCHOCO_FORM_HABITAT,
 ]);
 
 // Validate that a parameter contains no path traversal characters

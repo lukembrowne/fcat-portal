@@ -234,10 +234,8 @@ const statements = [
   `CREATE INDEX IF NOT EXISTS idx_user_permissions_user_email ON user_permissions(user_email)`,
   `CREATE INDEX IF NOT EXISTS idx_user_permissions_project_id ON user_permissions(project_id)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_deployments_project_path ON deployments(project_id, path)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS idx_deployments_project_drive_folder ON deployments(project_id, drive_folder_id)`,
   `CREATE INDEX IF NOT EXISTS idx_images_deployment_id ON images(deployment_id)`,
   `CREATE INDEX IF NOT EXISTS idx_images_job_id ON images(job_id)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS idx_images_deployment_drive_file ON images(deployment_id, drive_file_id)`,
   `CREATE INDEX IF NOT EXISTS idx_detections_image_id ON detections(image_id)`,
   `CREATE INDEX IF NOT EXISTS idx_detections_job_id ON detections(job_id)`,
   `CREATE INDEX IF NOT EXISTS idx_identifications_detection_id ON identifications(detection_id)`,
@@ -310,6 +308,15 @@ const migrations = [
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }
+}
+
+// Indexes on new Drive columns (must run after ALTER TABLE adds them)
+const driveIndexes = [
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_deployments_project_drive_folder ON deployments(project_id, drive_folder_id)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_images_deployment_drive_file ON images(deployment_id, drive_file_id)`,
+];
+for (const idx of driveIndexes) {
+  try { db.exec(idx); } catch { /* index already exists or will be created by table recreation */ }
 }
 
 // --- Table recreation: make deployments.path nullable ---

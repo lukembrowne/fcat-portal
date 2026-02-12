@@ -1,8 +1,8 @@
-FROM node:22-alpine AS base
+FROM node:22-slim AS base
 
 # --- Dependencies ---
 FROM base AS deps
-RUN apk add --no-cache libc6-compat python3 make g++
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -20,14 +20,14 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 # System deps: python3 for ML, curl for uv install
-RUN apk add --no-cache python3 curl
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-venv curl wget && rm -rf /var/lib/apt/lists/*
 
 # Install uv (fast Python package manager) for ML venv setup
 RUN curl -LsSf https://astral.sh/uv/install.sh | env INSTALLER_NO_MODIFY_PATH=1 sh \
     && mv /root/.local/bin/uv /usr/local/bin/uv
 
 RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
+RUN adduser --system --uid 1001 --ingroup nodejs nextjs
 
 COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./

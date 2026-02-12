@@ -18,7 +18,7 @@ if [ -x "$ML_PYTHON" ]; then
 fi
 
 echo "[ml-setup] Creating ML venv at $ML_VENV_DIR..."
-uv venv "$ML_VENV_DIR"
+uv venv --allow-existing "$ML_VENV_DIR"
 
 ARCH=$(uname -m)
 echo "[ml-setup] Installing PyTorch (arch: $ARCH)..."

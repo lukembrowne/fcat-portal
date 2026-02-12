@@ -52,9 +52,14 @@ export default async function DeploymentDetailPage({ params }: PageProps) {
           <div className="flex items-center gap-4">
             <StatusBadge status={deployment.status} type="deployment" />
             {deployment.driveFolderId ? (
-              <span className="text-muted-foreground text-sm">
-                Google Drive
-              </span>
+              <a
+                href={`https://drive.google.com/drive/folders/${deployment.driveFolderId}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-muted-foreground text-sm hover:text-foreground"
+              >
+                Abrir carpeta en Drive ↗
+              </a>
             ) : deployment.path ? (
               <span className="text-muted-foreground text-sm">
                 {deployment.path}

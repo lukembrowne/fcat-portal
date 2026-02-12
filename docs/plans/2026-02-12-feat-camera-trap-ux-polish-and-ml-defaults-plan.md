@@ -359,9 +359,9 @@ COPY scripts/ensure-ml-venv.sh ./scripts/
 - [x] Verify BioChoco pages unchanged
 
 ### Phase 2: UI Improvements
-- [ ] Add Drive folder links (replace "Google Drive" text with clickable links)
-- [ ] Redesign main page: DB-first two-group layout, "Sincronizar con Drive" button
-- [ ] Ensure `loading="lazy"` on ImageGrid thumbnails
+- [x] Add Drive folder links (replace "Google Drive" text with clickable links)
+- [x] Redesign main page: DB-first two-group layout, "Sincronizar con Drive" button
+- [x] Ensure `loading="lazy"` on ImageGrid thumbnails
 
 ### Phase 3: ML Simplification
 - [ ] Remove ProcessButton dialog, hardcode defaults in shared constants

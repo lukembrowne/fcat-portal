@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,9 +13,9 @@ import {
 } from "./drive-actions";
 import type { DriveFolder } from "@/lib/drive-client";
 
-type Step = "idle" | "discovering" | "results" | "activating";
+type Step = "idle" | "syncing" | "results" | "activating";
 
-export function DeploymentDiscovery() {
+export function SyncAndActivate() {
   const router = useRouter();
   const [step, setStep] = useState<Step>("idle");
   const [discovered, setDiscovered] = useState<DriveFolder[]>([]);
@@ -32,15 +32,22 @@ export function DeploymentDiscovery() {
   const [dateStart, setDateStart] = useState("");
   const [dateEnd, setDateEnd] = useState("");
 
-  const handleDiscover = () => {
+  const handleSync = () => {
     setError(null);
-    setStep("discovering");
+    setStep("syncing");
 
     startTransition(async () => {
       const result = await discoverDeployments();
       if (!result.success) {
         setError(result.error);
         setStep("idle");
+        return;
+      }
+
+      if (result.data.discovered.length === 0) {
+        // No new folders — just refresh the page to show updated data
+        setStep("idle");
+        router.refresh();
         return;
       }
 
@@ -87,7 +94,7 @@ export function DeploymentDiscovery() {
     });
   };
 
-  const handleReset = () => {
+  const handleDismiss = () => {
     setStep("idle");
     setDiscovered([]);
     setSelectedFolder(null);
@@ -96,102 +103,73 @@ export function DeploymentDiscovery() {
   };
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-lg">
-          {step === "idle" && "Registrar Instalación"}
-          {step === "discovering" && "Buscando carpetas..."}
-          {step === "results" && "Carpetas Disponibles"}
-          {step === "activating" && "Detalles de la Instalación"}
-        </CardTitle>
-      </CardHeader>
-
-      <CardContent className="space-y-4">
-        {error && (
-          <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
-            {error}
-          </div>
+    <div className="mb-8">
+      {/* Sync button — always visible */}
+      <div className="flex items-center gap-3 mb-4">
+        <Button
+          onClick={handleSync}
+          disabled={isPending || step === "syncing"}
+          variant="outline"
+          size="sm"
+        >
+          {step === "syncing" ? "Sincronizando..." : "Sincronizar con Drive ↻"}
+        </Button>
+        {step === "results" && discovered.length > 0 && (
+          <span className="text-sm text-muted-foreground">
+            {discovered.length} carpeta{discovered.length !== 1 && "s"} nueva
+            {discovered.length !== 1 && "s"}
+          </span>
         )}
+      </div>
 
-        {/* Idle: Show discover button */}
-        {step === "idle" && (
-          <div className="space-y-3">
-            <p className="text-sm text-muted-foreground">
-              Busca nuevas carpetas de instalación en Google Drive para
-              registrarlas en el sistema.
-            </p>
-            <Button
-              onClick={handleDiscover}
-              disabled={isPending}
-              className="w-full"
-            >
-              Buscar Nuevas Carpetas
-            </Button>
-          </div>
-        )}
+      {error && (
+        <div className="p-3 mb-4 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+          {error}
+        </div>
+      )}
 
-        {/* Discovering: Loading state */}
-        {step === "discovering" && (
-          <div className="text-center py-6">
-            <div className="text-2xl animate-pulse mb-2">🔍</div>
-            <p className="text-sm text-muted-foreground">
-              Buscando carpetas en Google Drive...
-            </p>
-          </div>
-        )}
+      {/* Discovered folders */}
+      {step === "results" && discovered.length > 0 && (
+        <Card className="mb-4">
+          <CardContent className="py-4">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-medium">Carpetas Nuevas en Drive</h3>
+              <Button variant="ghost" size="sm" onClick={handleDismiss}>
+                Cerrar
+              </Button>
+            </div>
+            <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-3">
+              {discovered.map((folder) => (
+                <button
+                  key={folder.id}
+                  onClick={() => handleSelectFolder(folder)}
+                  className="text-left p-3 rounded-lg border hover:bg-muted/50 transition-colors"
+                >
+                  <p className="font-medium text-sm">{folder.name}</p>
+                  <a
+                    href={`https://drive.google.com/drive/folders/${folder.id}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-muted-foreground hover:text-foreground"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    Abrir en Drive ↗
+                  </a>
+                </button>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
-        {/* Results: Show discovered folders */}
-        {step === "results" && (
-          <div className="space-y-3">
-            {discovered.length === 0 ? (
-              <div className="text-center py-6">
-                <p className="text-sm text-muted-foreground">
-                  No se encontraron nuevas carpetas de instalación.
-                </p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Todas las carpetas en Drive ya están registradas.
-                </p>
-              </div>
-            ) : (
-              <>
-                <p className="text-sm text-muted-foreground">
-                  {discovered.length} carpeta{discovered.length !== 1 && "s"}{" "}
-                  nueva{discovered.length !== 1 && "s"} encontrada
-                  {discovered.length !== 1 && "s"}:
-                </p>
-                <div className="space-y-2 max-h-64 overflow-y-auto">
-                  {discovered.map((folder) => (
-                    <button
-                      key={folder.id}
-                      onClick={() => handleSelectFolder(folder)}
-                      className="w-full text-left p-3 rounded-lg border hover:bg-muted/50 transition-colors"
-                    >
-                      <p className="font-medium text-sm">{folder.name}</p>
-                      <a
-                        href={`https://drive.google.com/drive/folders/${folder.id}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-xs text-muted-foreground hover:text-foreground truncate"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        Abrir en Drive ↗
-                      </a>
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
-
-            <Button variant="outline" onClick={handleReset} className="w-full">
-              Volver
-            </Button>
-          </div>
-        )}
-
-        {/* Activating: Metadata form */}
-        {step === "activating" && selectedFolder && (
-          <div className="space-y-4">
-            <div className="p-3 bg-muted rounded-lg">
+      {/* Activation form */}
+      {step === "activating" && selectedFolder && (
+        <Card className="mb-4">
+          <CardContent className="py-4">
+            <h3 className="font-medium mb-4">
+              Activar Instalación
+            </h3>
+            <div className="p-3 bg-muted rounded-lg mb-4">
               <p className="text-sm font-medium">{selectedFolder.name}</p>
               <a
                 href={`https://drive.google.com/drive/folders/${selectedFolder.id}`}
@@ -261,7 +239,7 @@ export function DeploymentDiscovery() {
               </div>
             </div>
 
-            <div className="flex gap-2">
+            <div className="flex gap-2 mt-4">
               <Button
                 variant="outline"
                 onClick={() => setStep("results")}
@@ -278,9 +256,9 @@ export function DeploymentDiscovery() {
                 {isPending ? "Activando..." : "Activar Instalación"}
               </Button>
             </div>
-          </div>
-        )}
-      </CardContent>
-    </Card>
+          </CardContent>
+        </Card>
+      )}
+    </div>
   );
 }

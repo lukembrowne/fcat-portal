@@ -44,7 +44,23 @@ interface UserWithPermissions {
   isExternal: boolean;
   globalRole: string | null;
   createdAt: Date;
+  lastSeenAt: Date | null;
   permissions: { projectId: string; role: string }[];
+}
+
+function timeAgo(date: Date): string {
+  const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (seconds < 60) return "hace un momento";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `hace ${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `hace ${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `hace ${days}d`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `hace ${months} mes${months > 1 ? "es" : ""}`;
+  const years = Math.floor(days / 365);
+  return `hace ${years} año${years > 1 ? "s" : ""}`;
 }
 
 interface Project {
@@ -225,6 +241,7 @@ export function AdminClient({ users, projects }: AdminClientProps) {
                   <TableHead>Correo</TableHead>
                   <TableHead>Nombre</TableHead>
                   <TableHead>Tipo</TableHead>
+                  <TableHead>Último acceso</TableHead>
                   {projects.map((p) => (
                     <TableHead key={p.id}>{p.name}</TableHead>
                   ))}
@@ -249,6 +266,9 @@ export function AdminClient({ users, projects }: AdminClientProps) {
                       ) : (
                         <Badge variant="secondary" className="text-xs">FCAT</Badge>
                       )}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground text-xs whitespace-nowrap">
+                      {user.lastSeenAt ? timeAgo(user.lastSeenAt) : "—"}
                     </TableCell>
                     {projects.map((project) => {
                       const perm = user.permissions.find(

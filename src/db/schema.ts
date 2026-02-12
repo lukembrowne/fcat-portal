@@ -34,6 +34,7 @@ export const users = sqliteTable("users", {
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .default(sql`(unixepoch())`),
+  lastSeenAt: integer("last_seen_at", { mode: "timestamp" }),
 });
 
 // ---------------------------------------------------------------------------

@@ -251,6 +251,14 @@ for (const stmt of statements) {
   db.exec(stmt);
 }
 
+// --- Migrations (ALTER TABLE additions, idempotent) ---
+const migrations = [
+  `ALTER TABLE users ADD COLUMN last_seen_at INTEGER`,
+];
+for (const m of migrations) {
+  try { db.exec(m); } catch { /* column already exists */ }
+}
+
 console.log(`Schema pushed to ${fullPath}`);
 console.log("Tables created:");
 const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all();

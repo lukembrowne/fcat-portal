@@ -50,6 +50,9 @@ else
     ssh -A "$SERVER" "cd ${SERVER_PATH} && git pull && docker compose up -d && docker compose ps"
 fi
 
+# Ensure backup directory exists
+ssh "$SERVER" "mkdir -p ${SERVER_PATH}/data/backups"
+
 # Run schema migrations (idempotent — safe to run every deploy)
 echo ""
 echo "Running schema migrations..."

@@ -77,25 +77,26 @@ export async function commitLibroMayor(
       return { success: false, error: errors.join("; ") || "No se encontraron transacciones" };
     }
 
-    // Transaction: delete all old rows, insert new ones
-    db.run(sql`DELETE FROM finance_transactions`);
+    // Transaction: delete all old rows, insert new ones (atomic)
+    db.transaction((tx) => {
+      tx.run(sql`DELETE FROM finance_transactions`);
 
-    // Insert in batches of 500
-    for (let i = 0; i < rows.length; i += 500) {
-      const batch = rows.slice(i, i + 500);
-      db.insert(financeTransactions).values(batch).run();
-    }
+      for (let i = 0; i < rows.length; i += 500) {
+        const batch = rows.slice(i, i + 500);
+        tx.insert(financeTransactions).values(batch).run();
+      }
 
-    // Record upload metadata
-    db.insert(financeUploads)
-      .values({
-        fileType: "libro_mayor",
-        fileName: file.name,
-        rowCount: rows.length,
-        uploadedBy: user?.email || "unknown",
-      })
-      .run();
+      tx.insert(financeUploads)
+        .values({
+          fileType: "libro_mayor",
+          fileName: file.name,
+          rowCount: rows.length,
+          uploadedBy: user?.email || "unknown",
+        })
+        .run();
+    });
 
+    db.run(sql`PRAGMA wal_checkpoint(PASSIVE)`);
     revalidatePath("/finance");
     return { success: true, data: { rowCount: rows.length } };
   } catch (e) {
@@ -131,18 +132,21 @@ export async function commitBudget(
       };
     }
 
-    db.run(sql`DELETE FROM finance_budget_items`);
-    db.insert(financeBudgetItems).values(items).run();
+    db.transaction((tx) => {
+      tx.run(sql`DELETE FROM finance_budget_items`);
+      tx.insert(financeBudgetItems).values(items).run();
 
-    db.insert(financeUploads)
-      .values({
-        fileType: "budget",
-        fileName: file.name,
-        rowCount: items.length,
-        uploadedBy: user?.email || "unknown",
-      })
-      .run();
+      tx.insert(financeUploads)
+        .values({
+          fileType: "budget",
+          fileName: file.name,
+          rowCount: items.length,
+          uploadedBy: user?.email || "unknown",
+        })
+        .run();
+    });
 
+    db.run(sql`PRAGMA wal_checkpoint(PASSIVE)`);
     revalidatePath("/finance");
     return { success: true, data: { itemCount: items.length } };
   } catch (e) {
@@ -175,18 +179,21 @@ export async function commitCategoryLink(
       };
     }
 
-    db.run(sql`DELETE FROM finance_category_map`);
-    db.insert(financeCategoryMap).values(mappings).run();
+    db.transaction((tx) => {
+      tx.run(sql`DELETE FROM finance_category_map`);
+      tx.insert(financeCategoryMap).values(mappings).run();
 
-    db.insert(financeUploads)
-      .values({
-        fileType: "category_map",
-        fileName: file.name,
-        rowCount: mappings.length,
-        uploadedBy: user?.email || "unknown",
-      })
-      .run();
+      tx.insert(financeUploads)
+        .values({
+          fileType: "category_map",
+          fileName: file.name,
+          rowCount: mappings.length,
+          uploadedBy: user?.email || "unknown",
+        })
+        .run();
+    });
 
+    db.run(sql`PRAGMA wal_checkpoint(PASSIVE)`);
     revalidatePath("/finance");
     return { success: true, data: { mappingCount: mappings.length } };
   } catch (e) {
@@ -219,25 +226,28 @@ export async function commitSueldos(
       };
     }
 
-    db.run(sql`DELETE FROM finance_sueldos_grants`);
-    db.run(sql`DELETE FROM finance_sueldos_totals`);
+    db.transaction((tx) => {
+      tx.run(sql`DELETE FROM finance_sueldos_grants`);
+      tx.run(sql`DELETE FROM finance_sueldos_totals`);
 
-    if (grants.length > 0) {
-      db.insert(financeSueldosGrants).values(grants).run();
-    }
-    if (totals.length > 0) {
-      db.insert(financeSueldosTotals).values(totals).run();
-    }
+      if (grants.length > 0) {
+        tx.insert(financeSueldosGrants).values(grants).run();
+      }
+      if (totals.length > 0) {
+        tx.insert(financeSueldosTotals).values(totals).run();
+      }
 
-    db.insert(financeUploads)
-      .values({
-        fileType: "sueldos",
-        fileName: file.name,
-        rowCount: grants.length + totals.length,
-        uploadedBy: user?.email || "unknown",
-      })
-      .run();
+      tx.insert(financeUploads)
+        .values({
+          fileType: "sueldos",
+          fileName: file.name,
+          rowCount: grants.length + totals.length,
+          uploadedBy: user?.email || "unknown",
+        })
+        .run();
+    });
 
+    db.run(sql`PRAGMA wal_checkpoint(PASSIVE)`);
     revalidatePath("/finance");
     return {
       success: true,

@@ -195,9 +195,11 @@ export async function runMLPredictions(
 
           const resultDetections = msg.detections || [];
 
-          if (resultDetections.length > 0) {
+          // Batch all detection + identification inserts for this image
+          // in a single transaction to reduce corruption window
+          db.transaction((tx) => {
             for (const det of resultDetections) {
-              const [detection] = await db
+              const detection = tx
                 .insert(detections)
                 .values({
                   imageId,
@@ -210,26 +212,29 @@ export async function runMLPredictions(
                   detectionClass: det.detection_class,
                   modelVersion: config.detectorModel,
                 })
-                .returning();
+                .returning()
+                .get();
 
-              if (det.classification) {
-                await db.insert(identifications).values({
-                  detectionId: detection.id,
-                  species: det.classification.species,
-                  confidence: det.classification.confidence,
-                  modelVersion: config.classifierModel,
-                  verificationStatus: "unverified",
-                });
+              if (det.classification && detection) {
+                tx.insert(identifications)
+                  .values({
+                    detectionId: detection.id,
+                    species: det.classification.species,
+                    confidence: det.classification.confidence,
+                    modelVersion: config.classifierModel,
+                    verificationStatus: "unverified",
+                  })
+                  .run();
               }
 
               totalDetections++;
             }
-          }
 
-          await db
-            .update(images)
-            .set({ status: "processed" })
-            .where(eq(images.id, imageId));
+            tx.update(images)
+              .set({ status: "processed" })
+              .where(eq(images.id, imageId))
+              .run();
+          });
 
           processedCount++;
 

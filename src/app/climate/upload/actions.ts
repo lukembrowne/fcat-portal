@@ -1,7 +1,7 @@
 "use server";
 
 import { requirePermission } from "@/lib/auth";
-import { db, getRawDb } from "@/db";
+import { db, getDb } from "@/db";
 import { climateUploads } from "@/db/schema";
 import type { ClimateResolution } from "@/db/schema";
 import type { ActionResult } from "@/lib/types";
@@ -10,9 +10,6 @@ import { revalidatePath } from "next/cache";
 import { sql } from "drizzle-orm";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
-
-// SQLite has a 999 variable limit. With 25 columns per insert, max batch ~= 39
-const BATCH_SIZE = 39;
 
 export interface UploadPreview {
   resolution: ClimateResolution;
@@ -98,79 +95,66 @@ export async function commitDatFile(
       };
     }
 
-    // Use raw better-sqlite3 for proper transaction + prepared statement
-    const rawDb = getRawDb();
+    // Use getDb() directly (not the Proxy `db`) to avoid broken `this` binding
+    // inside Drizzle's session when calling .transaction()
+    const realDb = getDb();
 
-    const upsertStmt = rawDb.prepare(`
-      INSERT INTO climate_readings (
-        timestamp, resolution, record_num,
-        air_temp_avg, air_temp_max, air_temp_min,
-        humidity_avg, humidity_max, humidity_min,
-        pressure_avg, pressure_max, pressure_min,
-        rain_mm,
-        solar_avg, solar_max, solar_min,
-        wind_dir_avg, wind_dir_max, wind_dir_min,
-        wind_speed_avg, wind_speed_max, wind_speed_min,
-        mean_wind_speed, mean_wind_direction, std_wind_dir
-      ) VALUES (
-        @timestamp, @resolution, @recordNum,
-        @airTempAvg, @airTempMax, @airTempMin,
-        @humidityAvg, @humidityMax, @humidityMin,
-        @pressureAvg, @pressureMax, @pressureMin,
-        @rainMm,
-        @solarAvg, @solarMax, @solarMin,
-        @windDirAvg, @windDirMax, @windDirMin,
-        @windSpeedAvg, @windSpeedMax, @windSpeedMin,
-        @meanWindSpeed, @meanWindDirection, @stdWindDir
-      )
-      ON CONFLICT(timestamp, resolution) DO UPDATE SET
-        record_num = excluded.record_num,
-        air_temp_avg = excluded.air_temp_avg,
-        air_temp_max = excluded.air_temp_max,
-        air_temp_min = excluded.air_temp_min,
-        humidity_avg = excluded.humidity_avg,
-        humidity_max = excluded.humidity_max,
-        humidity_min = excluded.humidity_min,
-        pressure_avg = excluded.pressure_avg,
-        pressure_max = excluded.pressure_max,
-        pressure_min = excluded.pressure_min,
-        rain_mm = excluded.rain_mm,
-        solar_avg = excluded.solar_avg,
-        solar_max = excluded.solar_max,
-        solar_min = excluded.solar_min,
-        wind_dir_avg = excluded.wind_dir_avg,
-        wind_dir_max = excluded.wind_dir_max,
-        wind_dir_min = excluded.wind_dir_min,
-        wind_speed_avg = excluded.wind_speed_avg,
-        wind_speed_max = excluded.wind_speed_max,
-        wind_speed_min = excluded.wind_speed_min,
-        mean_wind_speed = excluded.mean_wind_speed,
-        mean_wind_direction = excluded.mean_wind_direction,
-        std_wind_dir = excluded.std_wind_dir
-    `);
-
-    const insertUploadStmt = rawDb.prepare(`
-      INSERT INTO climate_uploads (filename, resolution, rows_imported, date_range_start, date_range_end, uploaded_by)
-      VALUES (@filename, @resolution, @rowsImported, @dateRangeStart, @dateRangeEnd, @uploadedBy)
-    `);
-
-    // Run everything in a single transaction
-    const runTransaction = rawDb.transaction(() => {
+    realDb.transaction((tx) => {
       for (const row of result.rows) {
-        upsertStmt.run(row);
+        tx.run(sql`
+          INSERT INTO climate_readings (
+            timestamp, resolution, record_num,
+            air_temp_avg, air_temp_max, air_temp_min,
+            humidity_avg, humidity_max, humidity_min,
+            pressure_avg, pressure_max, pressure_min,
+            rain_mm,
+            solar_avg, solar_max, solar_min,
+            wind_dir_avg, wind_dir_max, wind_dir_min,
+            wind_speed_avg, wind_speed_max, wind_speed_min,
+            mean_wind_speed, mean_wind_direction, std_wind_dir
+          ) VALUES (
+            ${row.timestamp}, ${row.resolution}, ${row.recordNum},
+            ${row.airTempAvg}, ${row.airTempMax}, ${row.airTempMin},
+            ${row.humidityAvg}, ${row.humidityMax}, ${row.humidityMin},
+            ${row.pressureAvg}, ${row.pressureMax}, ${row.pressureMin},
+            ${row.rainMm},
+            ${row.solarAvg}, ${row.solarMax}, ${row.solarMin},
+            ${row.windDirAvg}, ${row.windDirMax}, ${row.windDirMin},
+            ${row.windSpeedAvg}, ${row.windSpeedMax}, ${row.windSpeedMin},
+            ${row.meanWindSpeed}, ${row.meanWindDirection}, ${row.stdWindDir}
+          )
+          ON CONFLICT(timestamp, resolution) DO UPDATE SET
+            record_num = excluded.record_num,
+            air_temp_avg = excluded.air_temp_avg,
+            air_temp_max = excluded.air_temp_max,
+            air_temp_min = excluded.air_temp_min,
+            humidity_avg = excluded.humidity_avg,
+            humidity_max = excluded.humidity_max,
+            humidity_min = excluded.humidity_min,
+            pressure_avg = excluded.pressure_avg,
+            pressure_max = excluded.pressure_max,
+            pressure_min = excluded.pressure_min,
+            rain_mm = excluded.rain_mm,
+            solar_avg = excluded.solar_avg,
+            solar_max = excluded.solar_max,
+            solar_min = excluded.solar_min,
+            wind_dir_avg = excluded.wind_dir_avg,
+            wind_dir_max = excluded.wind_dir_max,
+            wind_dir_min = excluded.wind_dir_min,
+            wind_speed_avg = excluded.wind_speed_avg,
+            wind_speed_max = excluded.wind_speed_max,
+            wind_speed_min = excluded.wind_speed_min,
+            mean_wind_speed = excluded.mean_wind_speed,
+            mean_wind_direction = excluded.mean_wind_direction,
+            std_wind_dir = excluded.std_wind_dir
+        `);
       }
 
-      insertUploadStmt.run({
-        filename: file.name,
-        resolution: result.resolution,
-        rowsImported: result.rows.length,
-        dateRangeStart: result.dateRange?.start ?? null,
-        dateRangeEnd: result.dateRange?.end ?? null,
-        uploadedBy: user.email,
-      });
+      tx.run(sql`
+        INSERT INTO climate_uploads (filename, resolution, rows_imported, date_range_start, date_range_end, uploaded_by)
+        VALUES (${file.name}, ${result.resolution}, ${result.rows.length}, ${result.dateRange?.start ?? null}, ${result.dateRange?.end ?? null}, ${user.email})
+      `);
     });
-
-    runTransaction();
 
     revalidatePath("/climate");
     return {

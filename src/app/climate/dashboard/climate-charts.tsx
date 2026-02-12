@@ -15,28 +15,40 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { ChartDataPoint } from "./actions";
-import type { AggregationLevel } from "./actions";
+
+export type ChartTab = "temperatura" | "humedad" | "precipitacion" | "solar" | "viento" | "presion";
 
 interface ClimateChartsProps {
   data: ChartDataPoint[];
   aggregation: string;
+  activeTab: ChartTab;
+  onTabChange: (tab: ChartTab) => void;
 }
 
+const VARIABLE_DESCRIPTIONS: Record<ChartTab, string> = {
+  temperatura: "Temperatura del aire medida por el sensor Campbell Scientific CR300. Promedio, máximo y mínimo por período de muestreo.",
+  humedad: "Humedad relativa del aire (0–100%). Promedio, máximo y mínimo.",
+  precipitacion: "Precipitación total acumulada por período (mm). Medida por pluviómetro.",
+  solar: "Radiación solar global (W/m²). Medida por piranómetro.",
+  viento: "Velocidad (m/s) y dirección (grados, 0°=Norte) del viento. La dirección no se agrega por ser dato circular.",
+  presion: "Presión atmosférica a nivel de la estación (hPa).",
+};
+
 function formatTimestamp(ts: string): string {
+  // For yearly: "2025" → "2025"
+  if (ts.length === 4) return ts;
+  const months = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
   // For monthly: "2025-03" → "Mar 25"
   if (ts.length === 7) {
-    const months = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
     const m = parseInt(ts.slice(5, 7), 10) - 1;
     return `${months[m]} ${ts.slice(2, 4)}`;
   }
   // For daily: "2025-03-01" → "01 Mar"
   if (ts.length === 10) {
-    const months = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
     const m = parseInt(ts.slice(5, 7), 10) - 1;
     return `${ts.slice(8, 10)} ${months[m]}`;
   }
   // For raw: "2025-03-01 11:00:00" → "01 Mar 11:00"
-  const months = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
   const m = parseInt(ts.slice(5, 7), 10) - 1;
   return `${ts.slice(8, 10)} ${months[m]} ${ts.slice(11, 16)}`;
 }
@@ -62,7 +74,7 @@ function ChartCard({
   );
 }
 
-export function ClimateCharts({ data, aggregation }: ClimateChartsProps) {
+export function ClimateCharts({ data, aggregation, activeTab, onTabChange }: ClimateChartsProps) {
   if (data.length === 0) {
     return (
       <div className="flex items-center justify-center rounded-lg border border-dashed p-12 text-muted-foreground">
@@ -79,8 +91,8 @@ export function ClimateCharts({ data, aggregation }: ClimateChartsProps) {
   const isAggregated = aggregation !== "raw";
 
   return (
-    <Tabs defaultValue="temperatura">
-      <TabsList className="mb-4">
+    <Tabs value={activeTab} onValueChange={(v) => onTabChange(v as ChartTab)}>
+      <TabsList className="mb-2">
         <TabsTrigger value="temperatura">Temperatura</TabsTrigger>
         <TabsTrigger value="humedad">Humedad</TabsTrigger>
         <TabsTrigger value="precipitacion">Precipitación</TabsTrigger>
@@ -88,6 +100,10 @@ export function ClimateCharts({ data, aggregation }: ClimateChartsProps) {
         <TabsTrigger value="viento">Viento</TabsTrigger>
         <TabsTrigger value="presion">Presión</TabsTrigger>
       </TabsList>
+
+      <p className="text-xs text-muted-foreground mb-4">
+        {VARIABLE_DESCRIPTIONS[activeTab]}
+      </p>
 
       <TabsContent value="temperatura">
         <ChartCard title="Temperatura (°C)">

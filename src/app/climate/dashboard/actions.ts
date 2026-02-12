@@ -2,7 +2,7 @@
 
 import { requirePermission } from "@/lib/auth";
 import { db } from "@/db";
-import { climateReadings, climateUploads } from "@/db/schema";
+import { climateReadings, climateUploads, climateEdits } from "@/db/schema";
 import type { ClimateResolution } from "@/db/schema";
 import type { ActionResult } from "@/lib/types";
 import { sql } from "drizzle-orm";
@@ -39,6 +39,7 @@ export interface ClimateSummary {
   totalRainMm: number | null;
   solarAvg: number | null;
   windSpeedAvg: number | null;
+  pressureAvg: number | null;
 }
 
 export interface ChartDataPoint {
@@ -61,9 +62,9 @@ export interface ChartDataPoint {
   windSpeedMax: number | null;
 }
 
-export type AggregationLevel = "raw" | "daily" | "monthly";
+export type AggregationLevel = "raw" | "daily" | "monthly" | "yearly";
 
-function getAggregationLevel(dateStart: string, dateEnd: string): AggregationLevel {
+function getAutoAggregation(dateStart: string, dateEnd: string): AggregationLevel {
   const start = new Date(dateStart);
   const end = new Date(dateEnd);
   const daysDiff = (end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24);
@@ -71,6 +72,55 @@ function getAggregationLevel(dateStart: string, dateEnd: string): AggregationLev
   if (daysDiff > 365) return "monthly";
   if (daysDiff > 90) return "daily";
   return "raw";
+}
+
+export async function fetchAvailableYears(
+  resolution: ClimateResolution
+): Promise<ActionResult<number[]>> {
+  await requirePermission("climate", "viewer");
+
+  try {
+    const rows = db
+      .select({
+        year: sql<string>`DISTINCT strftime('%Y', timestamp)`,
+      })
+      .from(climateReadings)
+      .where(sql`resolution = ${resolution}`)
+      .orderBy(sql`strftime('%Y', timestamp) ASC`)
+      .all();
+
+    const years = rows.map((r) => parseInt(r.year, 10)).filter((y) => !isNaN(y));
+    return { success: true, data: years };
+  } catch (e) {
+    return {
+      success: false,
+      error: `Error: ${e instanceof Error ? e.message : String(e)}`,
+    };
+  }
+}
+
+export async function fetchClimateReadingCount(
+  filters: ClimateFilters
+): Promise<ActionResult<number>> {
+  await requirePermission("climate", "viewer");
+
+  try {
+    const { dateStart, dateEnd, resolution } = filters;
+    const rows = db
+      .select({ count: sql<number>`COUNT(*)` })
+      .from(climateReadings)
+      .where(
+        sql`resolution = ${resolution} AND timestamp >= ${dateStart} AND timestamp <= ${dateEnd}`
+      )
+      .all();
+
+    return { success: true, data: rows[0]?.count ?? 0 };
+  } catch (e) {
+    return {
+      success: false,
+      error: `Error: ${e instanceof Error ? e.message : String(e)}`,
+    };
+  }
 }
 
 export async function fetchClimateSummary(
@@ -91,6 +141,7 @@ export async function fetchClimateSummary(
         totalRainMm: sql<number | null>`SUM(rain_mm)`,
         solarAvg: sql<number | null>`AVG(solar_avg)`,
         windSpeedAvg: sql<number | null>`AVG(wind_speed_avg)`,
+        pressureAvg: sql<number | null>`AVG(pressure_avg)`,
         latestTimestamp: sql<string | null>`MAX(timestamp)`,
       })
       .from(climateReadings)
@@ -120,6 +171,7 @@ export async function fetchClimateSummary(
         totalRainMm: summary.totalRainMm !== null ? Math.round(summary.totalRainMm * 10) / 10 : null,
         solarAvg: summary.solarAvg !== null ? Math.round(summary.solarAvg * 10) / 10 : null,
         windSpeedAvg: summary.windSpeedAvg !== null ? Math.round(summary.windSpeedAvg * 100) / 100 : null,
+        pressureAvg: summary.pressureAvg !== null ? Math.round(summary.pressureAvg * 10) / 10 : null,
         latestTimestamp: summary.latestTimestamp,
         latestUploadDate: latestUpload[0]?.dateRangeEnd ?? null,
       },
@@ -133,13 +185,14 @@ export async function fetchClimateSummary(
 }
 
 export async function fetchClimateChartData(
-  filters: ClimateFilters
+  filters: ClimateFilters,
+  requestedAggregation?: AggregationLevel
 ): Promise<ActionResult<{ data: ChartDataPoint[]; aggregation: AggregationLevel }>> {
   await requirePermission("climate", "viewer");
 
   try {
     const { dateStart, dateEnd, resolution } = filters;
-    const aggregation = getAggregationLevel(dateStart, dateEnd);
+    const aggregation = requestedAggregation ?? getAutoAggregation(dateStart, dateEnd);
 
     let data: ChartDataPoint[];
 
@@ -198,8 +251,7 @@ export async function fetchClimateChartData(
         .groupBy(sql`date(timestamp)`)
         .orderBy(sql`date(timestamp) ASC`)
         .all();
-    } else {
-      // monthly
+    } else if (aggregation === "monthly") {
       data = db
         .select({
           timestamp: sql<string>`strftime('%Y-%m', timestamp)`,
@@ -226,6 +278,35 @@ export async function fetchClimateChartData(
         )
         .groupBy(sql`strftime('%Y-%m', timestamp)`)
         .orderBy(sql`strftime('%Y-%m', timestamp) ASC`)
+        .all();
+    } else {
+      // yearly — exclude 2021 (incomplete year)
+      data = db
+        .select({
+          timestamp: sql<string>`strftime('%Y', timestamp)`,
+          airTempAvg: sql<number | null>`ROUND(AVG(air_temp_avg), 1)`,
+          airTempMax: sql<number | null>`ROUND(MAX(air_temp_max), 1)`,
+          airTempMin: sql<number | null>`ROUND(MIN(air_temp_min), 1)`,
+          humidityAvg: sql<number | null>`ROUND(AVG(humidity_avg), 1)`,
+          humidityMax: sql<number | null>`ROUND(MAX(humidity_max), 1)`,
+          humidityMin: sql<number | null>`ROUND(MIN(humidity_min), 1)`,
+          pressureAvg: sql<number | null>`ROUND(AVG(pressure_avg), 1)`,
+          pressureMax: sql<number | null>`ROUND(MAX(pressure_max), 1)`,
+          pressureMin: sql<number | null>`ROUND(MIN(pressure_min), 1)`,
+          rainMm: sql<number | null>`ROUND(SUM(rain_mm), 1)`,
+          solarAvg: sql<number | null>`ROUND(AVG(solar_avg), 1)`,
+          solarMax: sql<number | null>`ROUND(MAX(solar_max), 1)`,
+          solarMin: sql<number | null>`ROUND(MIN(solar_min), 1)`,
+          windDirAvg: sql<number | null>`NULL`,
+          windSpeedAvg: sql<number | null>`ROUND(AVG(wind_speed_avg), 2)`,
+          windSpeedMax: sql<number | null>`ROUND(MAX(wind_speed_max), 2)`,
+        })
+        .from(climateReadings)
+        .where(
+          sql`resolution = ${resolution} AND timestamp >= ${dateStart} AND timestamp <= ${dateEnd} AND strftime('%Y', timestamp) != '2021'`
+        )
+        .groupBy(sql`strftime('%Y', timestamp)`)
+        .orderBy(sql`strftime('%Y', timestamp) ASC`)
         .all();
     }
 
@@ -362,6 +443,73 @@ export async function fetchClimateExportData(
       .all();
 
     return { success: true, data: { rows: rows as Record<string, unknown>[], count: rows.length } };
+  } catch (e) {
+    return {
+      success: false,
+      error: `Error: ${e instanceof Error ? e.message : String(e)}`,
+    };
+  }
+}
+
+// Allowlist of columns that can be nulled via the data editor
+const EDITABLE_COLUMNS = [
+  "air_temp_avg", "air_temp_max", "air_temp_min",
+  "humidity_avg", "humidity_max", "humidity_min",
+  "pressure_avg", "pressure_max", "pressure_min",
+  "rain_mm",
+  "solar_avg", "solar_max", "solar_min",
+  "wind_dir_avg", "wind_dir_max", "wind_dir_min",
+  "wind_speed_avg", "wind_speed_max", "wind_speed_min",
+] as const;
+
+export type EditableColumn = (typeof EDITABLE_COLUMNS)[number];
+
+export async function nullClimateValue(params: {
+  timestamp: string;
+  resolution: ClimateResolution;
+  column: string;
+  reason?: string;
+}): Promise<ActionResult<{ oldValue: number | null }>> {
+  const user = await requirePermission("climate", "editor");
+
+  const { timestamp, resolution, column, reason } = params;
+
+  // Validate column against allowlist
+  if (!EDITABLE_COLUMNS.includes(column as EditableColumn)) {
+    return { success: false, error: "Columna no válida para edición" };
+  }
+
+  try {
+    // Get old value first
+    const rows = db
+      .select()
+      .from(climateReadings)
+      .where(sql`timestamp = ${timestamp} AND resolution = ${resolution}`)
+      .all();
+
+    if (rows.length === 0) {
+      return { success: false, error: "Registro no encontrado" };
+    }
+
+    const row = rows[0] as Record<string, unknown>;
+    // Map snake_case column name to camelCase field
+    const camelField = column.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+    const oldValue = (row[camelField] as number | null) ?? null;
+
+    db.transaction((tx) => {
+      // Set the value to NULL — column name is validated against allowlist above
+      tx.run(
+        sql`UPDATE climate_readings SET ${sql.raw(column)} = NULL WHERE timestamp = ${timestamp} AND resolution = ${resolution}`
+      );
+
+      // Record the edit in the audit trail
+      tx.run(sql`
+        INSERT INTO climate_edits (timestamp, resolution, column_name, old_value, edited_by, reason)
+        VALUES (${timestamp}, ${resolution}, ${column}, ${oldValue}, ${user.email}, ${reason ?? null})
+      `);
+    });
+
+    return { success: true, data: { oldValue } };
   } catch (e) {
     return {
       success: false,

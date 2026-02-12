@@ -127,31 +127,6 @@ export function AboutContent() {
         </CardContent>
       </Card>
 
-      {/* Data Usage */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Uso de Datos</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3 text-sm leading-relaxed">
-          <ul className="list-disc ml-4 space-y-1.5 text-muted-foreground">
-            <li>Los datos están disponibles para fines de investigación, educación y conservación.</li>
-            <li>Se requiere citación adecuada en todas las publicaciones que utilicen estos datos.</li>
-            <li>Para uso comercial o redistribución, se requiere autorización escrita de FCAT.</li>
-            <li>Los datos se proporcionan &quot;tal cual&quot; — FCAT no garantiza la completitud de los registros durante períodos de mantenimiento del equipo.</li>
-          </ul>
-
-          <div className="mt-4 pt-4 border-t">
-            <h4 className="font-medium mb-1">Contacto</h4>
-            <p className="text-muted-foreground">
-              Para solicitudes de acceso a datos, preguntas sobre la metodología o propuestas
-              de colaboración, contacte a FCAT a través de{" "}
-              <a href="https://fcat-ecuador.org" target="_blank" rel="noopener noreferrer" className="text-primary underline">
-                fcat-ecuador.org
-              </a>.
-            </p>
-          </div>
-        </CardContent>
-      </Card>
     </div>
   );
 }

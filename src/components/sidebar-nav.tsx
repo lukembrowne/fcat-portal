@@ -96,7 +96,6 @@ export function SidebarNav({ user }: SidebarNavProps) {
     if (isClimateEditor) {
       climateChildren.push({ label: "Cargar Datos", href: "/climate/upload" });
     }
-    climateChildren.push({ label: "Acerca de", href: "/climate/about" });
     projectItems.push({
       label: "Datos Climáticos",
       icon: "cloud-sun",

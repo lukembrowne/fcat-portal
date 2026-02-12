@@ -53,8 +53,8 @@ const statements = [
     PRIMARY KEY (user_email, project_id)
   )`,
 
-  // Deployments
-  `CREATE TABLE IF NOT EXISTS deployments (
+  // BioChoco — Deployments (camera trap installations)
+  `CREATE TABLE IF NOT EXISTS biochoco_deployments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     path TEXT,
@@ -71,10 +71,10 @@ const statements = [
     created_by TEXT
   )`,
 
-  // Processing Jobs
-  `CREATE TABLE IF NOT EXISTS processing_jobs (
+  // BioChoco — Processing Jobs
+  `CREATE TABLE IF NOT EXISTS biochoco_processing_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    deployment_id INTEGER NOT NULL REFERENCES deployments(id) ON DELETE CASCADE,
+    deployment_id INTEGER NOT NULL REFERENCES biochoco_deployments(id) ON DELETE CASCADE,
     detector_model TEXT,
     classifier_model TEXT,
     confidence_threshold REAL DEFAULT 0.1,
@@ -90,11 +90,11 @@ const statements = [
     created_by TEXT
   )`,
 
-  // Images
-  `CREATE TABLE IF NOT EXISTS images (
+  // BioChoco — Images
+  `CREATE TABLE IF NOT EXISTS biochoco_images (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    deployment_id INTEGER NOT NULL REFERENCES deployments(id) ON DELETE CASCADE,
-    job_id INTEGER REFERENCES processing_jobs(id) ON DELETE SET NULL,
+    deployment_id INTEGER NOT NULL REFERENCES biochoco_deployments(id) ON DELETE CASCADE,
+    job_id INTEGER REFERENCES biochoco_processing_jobs(id) ON DELETE SET NULL,
     filename TEXT NOT NULL,
     path TEXT,
     drive_file_id TEXT,
@@ -106,11 +106,11 @@ const statements = [
     thumbnail_path TEXT
   )`,
 
-  // Detections
-  `CREATE TABLE IF NOT EXISTS detections (
+  // BioChoco — Detections
+  `CREATE TABLE IF NOT EXISTS biochoco_detections (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
-    job_id INTEGER NOT NULL REFERENCES processing_jobs(id) ON DELETE CASCADE,
+    image_id INTEGER NOT NULL REFERENCES biochoco_images(id) ON DELETE CASCADE,
+    job_id INTEGER NOT NULL REFERENCES biochoco_processing_jobs(id) ON DELETE CASCADE,
     bbox_x REAL NOT NULL,
     bbox_y REAL NOT NULL,
     bbox_width REAL NOT NULL,
@@ -120,10 +120,10 @@ const statements = [
     model_version TEXT
   )`,
 
-  // Identifications
-  `CREATE TABLE IF NOT EXISTS identifications (
+  // BioChoco — Identifications
+  `CREATE TABLE IF NOT EXISTS biochoco_identifications (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    detection_id INTEGER NOT NULL REFERENCES detections(id) ON DELETE CASCADE,
+    detection_id INTEGER NOT NULL REFERENCES biochoco_detections(id) ON DELETE CASCADE,
     species TEXT NOT NULL,
     confidence REAL NOT NULL,
     model_version TEXT,
@@ -133,8 +133,8 @@ const statements = [
     verified_at INTEGER
   )`,
 
-  // Species
-  `CREATE TABLE IF NOT EXISTS species (
+  // BioChoco — Species
+  `CREATE TABLE IF NOT EXISTS biochoco_species (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     scientific_name TEXT NOT NULL UNIQUE,
     common_name TEXT NOT NULL,
@@ -233,12 +233,14 @@ const statements = [
   // Indexes
   `CREATE INDEX IF NOT EXISTS idx_user_permissions_user_email ON user_permissions(user_email)`,
   `CREATE INDEX IF NOT EXISTS idx_user_permissions_project_id ON user_permissions(project_id)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS idx_deployments_project_path ON deployments(project_id, path)`,
-  `CREATE INDEX IF NOT EXISTS idx_images_deployment_id ON images(deployment_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_images_job_id ON images(job_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_detections_image_id ON detections(image_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_detections_job_id ON detections(job_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_identifications_detection_id ON identifications(detection_id)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_biochoco_deployments_project_path ON biochoco_deployments(project_id, path)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_biochoco_deployments_project_drive_folder ON biochoco_deployments(project_id, drive_folder_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_biochoco_images_deployment_id ON biochoco_images(deployment_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_biochoco_images_job_id ON biochoco_images(job_id)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_biochoco_images_deployment_drive_file ON biochoco_images(deployment_id, drive_file_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_biochoco_detections_image_id ON biochoco_detections(image_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_biochoco_detections_job_id ON biochoco_detections(job_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_biochoco_identifications_detection_id ON biochoco_identifications(detection_id)`,
 
   // Finance indexes
   `CREATE INDEX IF NOT EXISTS idx_ft_fecha ON finance_transactions(fecha)`,
@@ -302,33 +304,24 @@ for (const stmt of statements) {
 // --- Migrations (ALTER TABLE additions, idempotent) ---
 const migrations = [
   `ALTER TABLE users ADD COLUMN last_seen_at INTEGER`,
-  // Google Drive camera trap columns
-  `ALTER TABLE deployments ADD COLUMN drive_folder_id TEXT`,
-  `ALTER TABLE images ADD COLUMN drive_file_id TEXT`,
+  // Google Drive camera trap columns (for DBs created before biochoco_ prefix)
+  `ALTER TABLE biochoco_deployments ADD COLUMN drive_folder_id TEXT`,
+  `ALTER TABLE biochoco_images ADD COLUMN drive_file_id TEXT`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }
 }
 
-// Indexes on new Drive columns (must run after ALTER TABLE adds them)
-const driveIndexes = [
-  `CREATE UNIQUE INDEX IF NOT EXISTS idx_deployments_project_drive_folder ON deployments(project_id, drive_folder_id)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS idx_images_deployment_drive_file ON images(deployment_id, drive_file_id)`,
-];
-for (const idx of driveIndexes) {
-  try { db.exec(idx); } catch { /* index already exists or will be created by table recreation */ }
-}
-
-// --- Table recreation: make deployments.path nullable ---
+// --- Table recreation: make biochoco_deployments.path nullable ---
 // SQLite cannot ALTER column constraints, so we recreate the table
 try {
   const hasNotNull = db
-    .prepare(`SELECT "notnull" FROM pragma_table_info('deployments') WHERE name = 'path'`)
+    .prepare(`SELECT "notnull" FROM pragma_table_info('biochoco_deployments') WHERE name = 'path'`)
     .get();
   if (hasNotNull && hasNotNull.notnull === 1) {
-    console.log("Migrating deployments table: making path nullable...");
+    console.log("Migrating biochoco_deployments table: making path nullable...");
     db.exec(`BEGIN TRANSACTION`);
-    db.exec(`CREATE TABLE deployments_new (
+    db.exec(`CREATE TABLE biochoco_deployments_new (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
       path TEXT,
@@ -344,31 +337,31 @@ try {
       updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
       created_by TEXT
     )`);
-    db.exec(`INSERT INTO deployments_new SELECT id, project_id, path, name, drive_folder_id, latitude, longitude, date_start, date_end, total_images, status, created_at, updated_at, created_by FROM deployments`);
-    db.exec(`DROP TABLE deployments`);
-    db.exec(`ALTER TABLE deployments_new RENAME TO deployments`);
-    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_deployments_project_path ON deployments(project_id, path)`);
-    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_deployments_project_drive_folder ON deployments(project_id, drive_folder_id)`);
+    db.exec(`INSERT INTO biochoco_deployments_new SELECT id, project_id, path, name, drive_folder_id, latitude, longitude, date_start, date_end, total_images, status, created_at, updated_at, created_by FROM biochoco_deployments`);
+    db.exec(`DROP TABLE biochoco_deployments`);
+    db.exec(`ALTER TABLE biochoco_deployments_new RENAME TO biochoco_deployments`);
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_biochoco_deployments_project_path ON biochoco_deployments(project_id, path)`);
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_biochoco_deployments_project_drive_folder ON biochoco_deployments(project_id, drive_folder_id)`);
     db.exec(`COMMIT`);
-    console.log("  deployments.path is now nullable");
+    console.log("  biochoco_deployments.path is now nullable");
   }
 } catch (err) {
   try { db.exec(`ROLLBACK`); } catch { /* no active tx */ }
-  console.error("Failed to migrate deployments table:", err.message);
+  console.error("Failed to migrate biochoco_deployments table:", err.message);
 }
 
-// --- Table recreation: make images.path nullable ---
+// --- Table recreation: make biochoco_images.path nullable ---
 try {
   const hasNotNull = db
-    .prepare(`SELECT "notnull" FROM pragma_table_info('images') WHERE name = 'path'`)
+    .prepare(`SELECT "notnull" FROM pragma_table_info('biochoco_images') WHERE name = 'path'`)
     .get();
   if (hasNotNull && hasNotNull.notnull === 1) {
-    console.log("Migrating images table: making path nullable...");
+    console.log("Migrating biochoco_images table: making path nullable...");
     db.exec(`BEGIN TRANSACTION`);
-    db.exec(`CREATE TABLE images_new (
+    db.exec(`CREATE TABLE biochoco_images_new (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      deployment_id INTEGER NOT NULL REFERENCES deployments(id) ON DELETE CASCADE,
-      job_id INTEGER REFERENCES processing_jobs(id) ON DELETE SET NULL,
+      deployment_id INTEGER NOT NULL REFERENCES biochoco_deployments(id) ON DELETE CASCADE,
+      job_id INTEGER REFERENCES biochoco_processing_jobs(id) ON DELETE SET NULL,
       filename TEXT NOT NULL,
       path TEXT,
       drive_file_id TEXT,
@@ -379,18 +372,18 @@ try {
       error_message TEXT,
       thumbnail_path TEXT
     )`);
-    db.exec(`INSERT INTO images_new SELECT id, deployment_id, job_id, filename, path, drive_file_id, file_size, file_modified, exif_timestamp, status, error_message, thumbnail_path FROM images`);
-    db.exec(`DROP TABLE images`);
-    db.exec(`ALTER TABLE images_new RENAME TO images`);
-    db.exec(`CREATE INDEX IF NOT EXISTS idx_images_deployment_id ON images(deployment_id)`);
-    db.exec(`CREATE INDEX IF NOT EXISTS idx_images_job_id ON images(job_id)`);
-    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_images_deployment_drive_file ON images(deployment_id, drive_file_id)`);
+    db.exec(`INSERT INTO biochoco_images_new SELECT id, deployment_id, job_id, filename, path, drive_file_id, file_size, file_modified, exif_timestamp, status, error_message, thumbnail_path FROM biochoco_images`);
+    db.exec(`DROP TABLE biochoco_images`);
+    db.exec(`ALTER TABLE biochoco_images_new RENAME TO biochoco_images`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_biochoco_images_deployment_id ON biochoco_images(deployment_id)`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_biochoco_images_job_id ON biochoco_images(job_id)`);
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_biochoco_images_deployment_drive_file ON biochoco_images(deployment_id, drive_file_id)`);
     db.exec(`COMMIT`);
-    console.log("  images.path is now nullable");
+    console.log("  biochoco_images.path is now nullable");
   }
 } catch (err) {
   try { db.exec(`ROLLBACK`); } catch { /* no active tx */ }
-  console.error("Failed to migrate images table:", err.message);
+  console.error("Failed to migrate biochoco_images table:", err.message);
 }
 
 console.log(`Schema pushed to ${fullPath}`);

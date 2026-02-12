@@ -99,10 +99,10 @@ export function DeploymentDiscovery() {
     <Card>
       <CardHeader>
         <CardTitle className="text-lg">
-          {step === "idle" && "Registrar Despliegue"}
+          {step === "idle" && "Registrar Instalación"}
           {step === "discovering" && "Buscando carpetas..."}
           {step === "results" && "Carpetas Disponibles"}
-          {step === "activating" && "Detalles del Despliegue"}
+          {step === "activating" && "Detalles de la Instalación"}
         </CardTitle>
       </CardHeader>
 
@@ -117,7 +117,7 @@ export function DeploymentDiscovery() {
         {step === "idle" && (
           <div className="space-y-3">
             <p className="text-sm text-muted-foreground">
-              Busca nuevas carpetas de despliegue en Google Drive para
+              Busca nuevas carpetas de instalación en Google Drive para
               registrarlas en el sistema.
             </p>
             <Button
@@ -146,7 +146,7 @@ export function DeploymentDiscovery() {
             {discovered.length === 0 ? (
               <div className="text-center py-6">
                 <p className="text-sm text-muted-foreground">
-                  No se encontraron nuevas carpetas de despliegue.
+                  No se encontraron nuevas carpetas de instalación.
                 </p>
                 <p className="text-xs text-muted-foreground mt-1">
                   Todas las carpetas en Drive ya están registradas.
@@ -194,7 +194,7 @@ export function DeploymentDiscovery() {
 
             <div className="space-y-3">
               <div>
-                <Label htmlFor="deployName">Nombre del despliegue</Label>
+                <Label htmlFor="deployName">Nombre de la instalación</Label>
                 <Input
                   id="deployName"
                   placeholder="ej. TP-001 Cámara Cresta"
@@ -264,7 +264,7 @@ export function DeploymentDiscovery() {
                 className="flex-1"
                 disabled={isPending}
               >
-                {isPending ? "Activando..." : "Activar Despliegue"}
+                {isPending ? "Activando..." : "Activar Instalación"}
               </Button>
             </div>
           </div>

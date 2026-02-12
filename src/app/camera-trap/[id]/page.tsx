@@ -88,7 +88,7 @@ export default async function DeploymentDetailPage({ params }: PageProps) {
       {(deployment.latitude || deployment.dateStart) && (
         <Card className="mb-8">
           <CardHeader>
-            <CardTitle className="text-lg">Metadatos del Despliegue</CardTitle>
+            <CardTitle className="text-lg">Metadatos de la Instalación</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="grid gap-4 md:grid-cols-2">

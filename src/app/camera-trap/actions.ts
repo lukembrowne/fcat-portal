@@ -43,7 +43,7 @@ export async function createProcessingJob(
       .where(eq(deployments.id, deploymentId));
 
     if (!deployment) {
-      return { success: false, error: "Despliegue no encontrado" };
+      return { success: false, error: "Instalación no encontrada" };
     }
 
     const deploymentImages = await db
@@ -132,7 +132,7 @@ export async function processJob(
       .where(eq(deployments.id, job.deploymentId));
 
     if (!deployment) {
-      return { success: false, error: "Despliegue no encontrado" };
+      return { success: false, error: "Instalación no encontrada" };
     }
 
     // For Drive deployments: download images to temp dir first

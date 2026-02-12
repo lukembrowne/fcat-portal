@@ -28,13 +28,13 @@ export default async function CameraTrapPage() {
       <div className="mb-8">
         <h1 className="text-3xl font-bold mb-2">Cámaras Trampa</h1>
         <p className="text-muted-foreground">
-          Gestiona despliegues de cámaras trampa, procesa imágenes con ML y
+          Gestiona instalaciones de cámaras trampa, procesa imágenes con ML y
           revisa identificaciones de especies.
         </p>
       </div>
 
       <div className="grid gap-4 md:grid-cols-4 mb-8">
-        <StatCard label="Despliegues" value={allDeployments.length} />
+        <StatCard label="Instalaciones" value={allDeployments.length} />
         <StatCard
           label="Total Imágenes"
           value={allDeployments.reduce(
@@ -43,7 +43,7 @@ export default async function CameraTrapPage() {
           )}
         />
         <StatCard
-          label="Procesados"
+          label="Procesadas"
           value={
             allDeployments.filter((d) =>
               ["processed", "verified"].includes(d.status)
@@ -63,7 +63,7 @@ export default async function CameraTrapPage() {
       <div className="grid gap-8 lg:grid-cols-3">
         <div className="lg:col-span-2 space-y-4">
           <div className="flex items-center justify-between">
-            <h2 className="text-xl font-semibold">Despliegues</h2>
+            <h2 className="text-xl font-semibold">Instalaciones</h2>
             <Button asChild variant="outline" size="sm">
               <Link href="/camera-trap/results">Todos los Resultados</Link>
             </Button>
@@ -73,10 +73,10 @@ export default async function CameraTrapPage() {
             <Card>
               <CardContent className="py-12 text-center">
                 <h3 className="text-lg font-medium mb-2">
-                  Sin despliegues registrados
+                  Sin instalaciones registradas
                 </h3>
                 <p className="text-muted-foreground">
-                  Registra una carpeta de despliegue para comenzar.
+                  Registra una carpeta de instalación para comenzar.
                 </p>
               </CardContent>
             </Card>

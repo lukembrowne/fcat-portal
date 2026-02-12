@@ -114,7 +114,7 @@ export async function activateDeployment(
     ) {
       return {
         success: false,
-        error: "Esta carpeta ya está registrada como despliegue",
+        error: "Esta carpeta ya está registrada como instalación",
       };
     }
 
@@ -122,7 +122,7 @@ export async function activateDeployment(
     return {
       success: false,
       error:
-        err instanceof Error ? err.message : "Error al activar despliegue",
+        err instanceof Error ? err.message : "Error al activar instalación",
     };
   }
 }
@@ -143,13 +143,13 @@ export async function scanDeploymentImages(
       .where(eq(deployments.id, deploymentId));
 
     if (!deployment) {
-      return { success: false, error: "Despliegue no encontrado" };
+      return { success: false, error: "Instalación no encontrada" };
     }
 
     if (!deployment.driveFolderId) {
       return {
         success: false,
-        error: "Este despliegue no tiene una carpeta de Drive asociada",
+        error: "Esta instalación no tiene una carpeta de Drive asociada",
       };
     }
 

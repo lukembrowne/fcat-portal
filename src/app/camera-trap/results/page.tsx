@@ -44,7 +44,7 @@ export default async function ResultsPage() {
                   <div className="space-y-1">
                     <div className="flex items-center gap-2">
                       <span className="font-medium">
-                        {job.deployment?.name || "Despliegue desconocido"}
+                        {job.deployment?.name || "Instalación desconocida"}
                       </span>
                       <StatusBadge status={job.status} type="job" />
                     </div>

@@ -107,6 +107,62 @@ export function parseCSVLine(line: string): string[] {
   return fields;
 }
 
+// Physically reasonable ranges for a tropical cloud forest weather station
+const ANOMALY_RANGES: Record<string, { min: number; max: number; label: string }> = {
+  airTempAvg: { min: -10, max: 50, label: "Temperatura (°C)" },
+  airTempMax: { min: -10, max: 50, label: "Temperatura máx (°C)" },
+  airTempMin: { min: -10, max: 50, label: "Temperatura mín (°C)" },
+  humidityAvg: { min: 0, max: 100, label: "Humedad (%)" },
+  humidityMax: { min: 0, max: 100, label: "Humedad máx (%)" },
+  humidityMin: { min: 0, max: 100, label: "Humedad mín (%)" },
+  pressureAvg: { min: 500, max: 1100, label: "Presión (hPa)" },
+  pressureMax: { min: 500, max: 1100, label: "Presión máx (hPa)" },
+  pressureMin: { min: 500, max: 1100, label: "Presión mín (hPa)" },
+  rainMm: { min: 0, max: 200, label: "Lluvia (mm)" },
+  solarAvg: { min: 0, max: 2000, label: "Solar (W/m²)" },
+  solarMax: { min: 0, max: 2000, label: "Solar máx (W/m²)" },
+  solarMin: { min: 0, max: 2000, label: "Solar mín (W/m²)" },
+  windSpeedAvg: { min: 0, max: 60, label: "Viento (m/s)" },
+  windSpeedMax: { min: 0, max: 60, label: "Viento máx (m/s)" },
+  windSpeedMin: { min: 0, max: 60, label: "Viento mín (m/s)" },
+};
+
+export interface Anomaly {
+  row: number;
+  column: string;
+  columnLabel: string;
+  value: number;
+  reason: string;
+}
+
+/**
+ * Detect values outside physically reasonable ranges.
+ * Returns a list of anomalies with row numbers (1-based data row index).
+ */
+export function detectAnomalies(rows: ParsedRow[]): Anomaly[] {
+  const anomalies: Anomaly[] = [];
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    for (const [field, range] of Object.entries(ANOMALY_RANGES)) {
+      const value = row[field as keyof ParsedRow] as number | null;
+      if (value === null || value === undefined) continue;
+
+      if (value < range.min || value > range.max) {
+        anomalies.push({
+          row: i + 1,
+          column: field,
+          columnLabel: range.label,
+          value,
+          reason: `${range.label}: ${value} fuera de rango [${range.min}, ${range.max}]`,
+        });
+      }
+    }
+  }
+
+  return anomalies;
+}
+
 /** Convert a string value to a number, returning null for NaN/"NAN"/empty. */
 function toNum(value: string): number | null {
   const trimmed = value.trim();

@@ -27,10 +27,13 @@ import {
   ChevronsRight,
   Download,
   Loader2,
+  Pencil,
+  X,
 } from "lucide-react";
 import {
   fetchClimateTablePage,
   fetchClimateExportData,
+  nullClimateValue,
   type ClimateFilters,
   type ClimateSortColumn,
 } from "./actions";
@@ -54,6 +57,19 @@ function fmtNum(val: number | null, decimals = 1): string {
 }
 
 const PAGE_SIZE = 50;
+
+// Map camelCase field → snake_case DB column for nullClimateValue
+const FIELD_TO_COLUMN: Record<string, string> = {
+  airTempAvg: "air_temp_avg",
+  airTempMax: "air_temp_max",
+  airTempMin: "air_temp_min",
+  humidityAvg: "humidity_avg",
+  rainMm: "rain_mm",
+  solarAvg: "solar_avg",
+  windSpeedAvg: "wind_speed_avg",
+  windDirAvg: "wind_dir_avg",
+  pressureAvg: "pressure_avg",
+};
 
 const columns: ColumnDef<TableRow_>[] = [
   {
@@ -151,11 +167,25 @@ const SORT_MAP: Record<string, ClimateSortColumn> = {
   pressure_avg: "pressure_avg",
 };
 
+// Map accessor key to the camelCase field on TableRow_
+const ACCESSOR_TO_FIELD: Record<string, keyof TableRow_> = {
+  air_temp_avg: "airTempAvg",
+  air_temp_max: "airTempMax",
+  air_temp_min: "airTempMin",
+  humidity_avg: "humidityAvg",
+  rain_mm: "rainMm",
+  solar_avg: "solarAvg",
+  wind_speed_avg: "windSpeedAvg",
+  wind_dir_avg: "windDirAvg",
+  pressure_avg: "pressureAvg",
+};
+
 interface ClimateTableProps {
   filters: ClimateFilters;
+  canEdit?: boolean;
 }
 
-export function ClimateTable({ filters }: ClimateTableProps) {
+export function ClimateTable({ filters, canEdit = false }: ClimateTableProps) {
   const [rows, setRows] = useState<TableRow_[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [page, setPage] = useState(1);
@@ -163,6 +193,8 @@ export function ClimateTable({ filters }: ClimateTableProps) {
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
+  const [editMode, setEditMode] = useState(false);
+  const [nulling, setNulling] = useState<string | null>(null); // "rowIdx:field" key of cell being nulled
 
   // Reset page when filters change
   useEffect(() => {
@@ -211,6 +243,36 @@ export function ClimateTable({ filters }: ClimateTableProps) {
       setSortDir("desc");
     }
     setPage(1);
+  }
+
+  async function handleNullCell(rowIdx: number, accessorKey: string) {
+    const field = ACCESSOR_TO_FIELD[accessorKey];
+    if (!field) return;
+
+    const row = rows[rowIdx];
+    if (!row || row[field] === null) return;
+
+    const dbColumn = FIELD_TO_COLUMN[field];
+    if (!dbColumn) return;
+
+    const cellKey = `${rowIdx}:${field}`;
+    setNulling(cellKey);
+
+    const result = await nullClimateValue({
+      timestamp: row.timestamp,
+      resolution: filters.resolution,
+      column: dbColumn,
+    });
+
+    if (result.success) {
+      // Update local state
+      setRows((prev) =>
+        prev.map((r, i) =>
+          i === rowIdx ? { ...r, [field]: null } : r
+        )
+      );
+    }
+    setNulling(null);
   }
 
   async function handleExportCsv() {
@@ -262,20 +324,46 @@ export function ClimateTable({ filters }: ClimateTableProps) {
       <CardHeader>
         <div className="flex items-center justify-between">
           <CardTitle className="text-base">Registros</CardTitle>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleExportCsv}
-            disabled={exporting || totalCount === 0}
-          >
-            {exporting ? (
-              <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-            ) : (
-              <Download className="h-4 w-4 mr-1" />
+          <div className="flex items-center gap-2">
+            {canEdit && (
+              <Button
+                variant={editMode ? "default" : "outline"}
+                size="sm"
+                onClick={() => setEditMode(!editMode)}
+              >
+                {editMode ? (
+                  <>
+                    <X className="h-4 w-4 mr-1" />
+                    Salir de edición
+                  </>
+                ) : (
+                  <>
+                    <Pencil className="h-4 w-4 mr-1" />
+                    Editar
+                  </>
+                )}
+              </Button>
             )}
-            CSV ({totalCount.toLocaleString()} filas)
-          </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleExportCsv}
+              disabled={exporting || totalCount === 0}
+            >
+              {exporting ? (
+                <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4 mr-1" />
+              )}
+              CSV ({totalCount.toLocaleString()} filas)
+            </Button>
+          </div>
         </div>
+        {editMode && (
+          <p className="text-xs text-muted-foreground mt-1">
+            Haz clic en un valor para convertirlo a NULL. Los cambios se registran en el historial de ediciones.
+          </p>
+        )}
       </CardHeader>
       <CardContent>
         <div className="rounded-md border overflow-x-auto">
@@ -321,11 +409,37 @@ export function ClimateTable({ filters }: ClimateTableProps) {
               ) : (
                 table.getRowModel().rows.map((row) => (
                   <TableRow key={row.id}>
-                    {row.getVisibleCells().map((cell) => (
-                      <TableCell key={cell.id} className="whitespace-nowrap">
-                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                      </TableCell>
-                    ))}
+                    {row.getVisibleCells().map((cell) => {
+                      const accessorKey = (cell.column.columnDef as { accessorKey?: string }).accessorKey;
+                      const field = accessorKey ? ACCESSOR_TO_FIELD[accessorKey] : undefined;
+                      const isEditable = editMode && field && accessorKey !== "timestamp";
+                      const cellValue = field ? row.original[field] : null;
+                      const cellKey = `${row.index}:${field}`;
+                      const isNulling = nulling === cellKey;
+
+                      return (
+                        <TableCell
+                          key={cell.id}
+                          className={`whitespace-nowrap ${
+                            isEditable && cellValue !== null
+                              ? "cursor-pointer hover:bg-destructive/10 transition-colors"
+                              : ""
+                          }`}
+                          onClick={
+                            isEditable && cellValue !== null && !isNulling
+                              ? () => handleNullCell(row.index, accessorKey!)
+                              : undefined
+                          }
+                          title={isEditable && cellValue !== null ? "Clic para convertir a NULL" : undefined}
+                        >
+                          {isNulling ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                          ) : (
+                            flexRender(cell.column.columnDef.cell, cell.getContext())
+                          )}
+                        </TableCell>
+                      );
+                    })}
                   </TableRow>
                 ))
               )}

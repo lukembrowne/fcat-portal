@@ -4,7 +4,7 @@ import { useState, useRef } from "react";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Upload, CheckCircle, AlertCircle, Loader2, FileText } from "lucide-react";
+import { Upload, CheckCircle, AlertCircle, Loader2, FileText, ChevronDown, ChevronUp, TriangleAlert } from "lucide-react";
 import { previewDatFile, commitDatFile } from "./actions";
 import type { UploadPreview } from "./actions";
 import type { ClimateResolution } from "@/db/schema";
@@ -36,6 +36,7 @@ function ClimateUploadCard({
   const [status, setStatus] = useState<"idle" | "previewing" | "previewed" | "uploading" | "success" | "error">("idle");
   const [message, setMessage] = useState("");
   const [preview, setPreview] = useState<UploadPreview | null>(null);
+  const [anomalyExpanded, setAnomalyExpanded] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   async function handlePreview() {
@@ -69,7 +70,7 @@ function ClimateUploadCard({
     setStatus("previewed");
   }
 
-  async function handleCommit() {
+  async function handleCommit(nullAnomalies: boolean) {
     const file = fileRef.current?.files?.[0];
     if (!file) return;
 
@@ -78,16 +79,19 @@ function ClimateUploadCard({
     const formData = new FormData();
     formData.set("file", file);
 
-    const result = await commitDatFile(formData);
+    const result = await commitDatFile(formData, nullAnomalies);
     if (!result.success) {
       setStatus("error");
       setMessage(result.error);
       return;
     }
 
+    const anomalyNote = nullAnomalies && preview?.anomalies.length
+      ? ` (${preview.anomalies.length} valores anómalos convertidos a NULL)`
+      : "";
     setStatus("success");
     setMessage(
-      `${result.data.rowCount.toLocaleString()} registros importados`
+      `${result.data.rowCount.toLocaleString()} registros importados${anomalyNote}`
     );
     setPreview(null);
     if (fileRef.current) fileRef.current.value = "";
@@ -150,9 +154,22 @@ function ClimateUploadCard({
               )}
               <span className="ml-1">Vista Previa</span>
             </Button>
+          ) : preview && preview.anomalies.length > 0 ? (
+            <div className="flex gap-1">
+              <Button onClick={() => handleCommit(true)} size="sm" variant="default">
+                <Upload className="h-4 w-4" />
+                <span className="ml-1">Convertir a NULL y subir</span>
+              </Button>
+              <Button onClick={() => handleCommit(false)} size="sm" variant="outline">
+                Mantener valores
+              </Button>
+              <Button onClick={handleReset} size="sm" variant="ghost">
+                Cancelar
+              </Button>
+            </div>
           ) : (
             <div className="flex gap-1">
-              <Button onClick={handleCommit} size="sm">
+              <Button onClick={() => handleCommit(false)} size="sm">
                 <Upload className="h-4 w-4" />
                 <span className="ml-1">Subir</span>
               </Button>
@@ -165,22 +182,70 @@ function ClimateUploadCard({
 
         {/* Preview info */}
         {preview && status === "previewed" && (
-          <div className="mt-3 rounded-md bg-muted p-3 text-sm space-y-1">
-            <p>
-              <span className="font-medium">{preview.rowCount.toLocaleString()}</span> registros encontrados
-            </p>
-            {preview.dateRange && (
+          <div className="mt-3 rounded-md bg-muted p-3 text-sm space-y-2">
+            <div className="space-y-1">
               <p>
-                Rango: {preview.dateRange.start} a {preview.dateRange.end}
+                <span className="font-medium">{preview.rowCount.toLocaleString()}</span> registros encontrados
               </p>
-            )}
-            <p>
-              Resolución: {preview.resolution === "hourly" ? "Por hora" : "Cada 15 minutos"}
-            </p>
-            {preview.errorCount > 0 && (
-              <p className="text-amber-600">
-                {preview.errorCount} fila(s) con errores (se omitirán)
+              {preview.dateRange && (
+                <p>
+                  Rango: {preview.dateRange.start} a {preview.dateRange.end}
+                </p>
+              )}
+              <p>
+                Resolución: {preview.resolution === "hourly" ? "Por hora" : "Cada 15 minutos"}
               </p>
+              {preview.errorCount > 0 && (
+                <p className="text-amber-600">
+                  {preview.errorCount} fila(s) con errores (se omitirán)
+                </p>
+              )}
+            </div>
+
+            {/* Anomaly section */}
+            {preview.anomalies.length > 0 && (
+              <div className="rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 p-2 space-y-1">
+                <button
+                  type="button"
+                  className="flex items-center gap-1 text-amber-800 dark:text-amber-200 font-medium w-full text-left"
+                  onClick={() => setAnomalyExpanded(!anomalyExpanded)}
+                >
+                  <TriangleAlert className="h-4 w-4 shrink-0" />
+                  <span>{preview.anomalies.length} valor(es) fuera de rango</span>
+                  {anomalyExpanded ? (
+                    <ChevronUp className="h-3.5 w-3.5 ml-auto" />
+                  ) : (
+                    <ChevronDown className="h-3.5 w-3.5 ml-auto" />
+                  )}
+                </button>
+                {anomalyExpanded && (
+                  <div className="max-h-48 overflow-y-auto mt-1">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="text-amber-700 dark:text-amber-300">
+                          <th className="text-left pr-2">Fila</th>
+                          <th className="text-left pr-2">Variable</th>
+                          <th className="text-right pr-2">Valor</th>
+                          <th className="text-left">Detalle</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {preview.anomalies.map((a, i) => (
+                          <tr key={i} className="text-amber-800 dark:text-amber-200">
+                            <td className="pr-2 tabular-nums">{a.row}</td>
+                            <td className="pr-2">{a.columnLabel}</td>
+                            <td className="text-right pr-2 tabular-nums font-mono">{a.value}</td>
+                            <td>{a.reason}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">
+                  Puedes &quot;Convertir a NULL&quot; para anular estos valores, o &quot;Mantener valores&quot; para importarlos tal cual.
+                </p>
+              </div>
             )}
           </div>
         )}

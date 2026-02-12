@@ -289,8 +289,21 @@ const statements = [
     uploaded_at INTEGER NOT NULL DEFAULT (unixepoch())
   )`,
 
+  // Climate — Edits (audit trail for manual data corrections)
+  `CREATE TABLE IF NOT EXISTS climate_edits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    resolution TEXT NOT NULL CHECK(resolution IN ('hourly', '15min')),
+    column_name TEXT NOT NULL,
+    old_value REAL,
+    edited_by TEXT NOT NULL,
+    edited_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    reason TEXT
+  )`,
+
   // Climate indexes
   `CREATE INDEX IF NOT EXISTS idx_climate_readings_res_ts ON climate_readings(resolution, timestamp)`,
+  `CREATE INDEX IF NOT EXISTS idx_climate_edits_ts_res ON climate_edits(timestamp, resolution)`,
 ];
 
 for (const stmt of statements) {

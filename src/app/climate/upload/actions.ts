@@ -5,7 +5,8 @@ import { db } from "@/db";
 import { climateUploads } from "@/db/schema";
 import type { ClimateResolution } from "@/db/schema";
 import type { ActionResult } from "@/lib/types";
-import { parseTOA5File } from "./parser";
+import { parseTOA5File, detectAnomalies } from "./parser";
+import type { Anomaly, ParsedRow } from "./parser";
 import { revalidatePath } from "next/cache";
 import { sql } from "drizzle-orm";
 
@@ -17,6 +18,7 @@ export interface UploadPreview {
   dateRange: { start: string; end: string } | null;
   errorCount: number;
   errors: { line: number; message: string }[];
+  anomalies: Anomaly[];
 }
 
 export async function previewDatFile(
@@ -52,6 +54,8 @@ export async function previewDatFile(
       };
     }
 
+    const anomalies = detectAnomalies(result.rows);
+
     return {
       success: true,
       data: {
@@ -60,6 +64,7 @@ export async function previewDatFile(
         dateRange: result.dateRange,
         errorCount: result.errors.length,
         errors: result.errors.slice(0, 10), // Show first 10 errors only
+        anomalies,
       },
     };
   } catch (e) {
@@ -70,8 +75,28 @@ export async function previewDatFile(
   }
 }
 
+/** Apply anomaly nulling: set flagged fields to null on matching rows. */
+function applyAnomalyNulling(rows: ParsedRow[], anomalies: Anomaly[]): void {
+  // Build a map: row index → set of fields to null
+  const nullMap = new Map<number, Set<string>>();
+  for (const a of anomalies) {
+    const idx = a.row - 1; // Convert 1-based to 0-based
+    if (!nullMap.has(idx)) nullMap.set(idx, new Set());
+    nullMap.get(idx)!.add(a.column);
+  }
+
+  for (const [idx, fields] of nullMap) {
+    if (idx < 0 || idx >= rows.length) continue;
+    for (const field of fields) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (rows[idx] as any)[field] = null;
+    }
+  }
+}
+
 export async function commitDatFile(
-  formData: FormData
+  formData: FormData,
+  nullAnomalies = false
 ): Promise<ActionResult<{ rowCount: number; resolution: ClimateResolution }>> {
   const user = await requirePermission("climate", "editor");
 
@@ -93,6 +118,12 @@ export async function commitDatFile(
           ? result.errors[0].message
           : "No se encontraron datos para importar",
       };
+    }
+
+    // If user chose to null anomalies, apply before inserting
+    if (nullAnomalies) {
+      const anomalies = detectAnomalies(result.rows);
+      applyAnomalyNulling(result.rows, anomalies);
     }
 
     db.transaction((tx) => {
@@ -152,6 +183,7 @@ export async function commitDatFile(
       `);
     });
 
+    db.run(sql`PRAGMA wal_checkpoint(PASSIVE)`);
     revalidatePath("/climate");
     return {
       success: true,

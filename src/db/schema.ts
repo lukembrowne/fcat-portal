@@ -456,6 +456,23 @@ export const climateUploads = sqliteTable("climate_uploads", {
 });
 
 // ---------------------------------------------------------------------------
+// Climate — Edits (audit trail for manual data corrections)
+// ---------------------------------------------------------------------------
+
+export const climateEdits = sqliteTable("climate_edits", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  timestamp: text("timestamp").notNull(),
+  resolution: text("resolution", { enum: ["hourly", "15min"] }).notNull(),
+  columnName: text("column_name").notNull(),
+  oldValue: real("old_value"),
+  editedBy: text("edited_by").notNull(),
+  editedAt: integer("edited_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+  reason: text("reason"),
+});
+
+// ---------------------------------------------------------------------------
 // Type Exports
 // ---------------------------------------------------------------------------
 
@@ -515,5 +532,8 @@ export type NewClimateReading = typeof climateReadings.$inferInsert;
 
 export type ClimateUpload = typeof climateUploads.$inferSelect;
 export type NewClimateUpload = typeof climateUploads.$inferInsert;
+
+export type ClimateEdit = typeof climateEdits.$inferSelect;
+export type NewClimateEdit = typeof climateEdits.$inferInsert;
 
 export type ClimateResolution = "hourly" | "15min";

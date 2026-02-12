@@ -5,7 +5,7 @@ import { sql } from "drizzle-orm";
 import { DashboardShell } from "./dashboard-shell";
 
 export default async function ClimateDashboardPage() {
-  await requirePermission("climate", "viewer");
+  const user = await requirePermission("climate", "viewer");
 
   // Check if there's any data to display
   const countResult = db
@@ -15,5 +15,11 @@ export default async function ClimateDashboardPage() {
 
   const hasData = (countResult[0]?.count ?? 0) > 0;
 
-  return <DashboardShell hasData={hasData} />;
+  // Check if user has editor+ access for data editing
+  const climatePermission = user.permissions.find((p) => p.projectId === "climate");
+  const canEdit =
+    user.globalRole === "super_admin" ||
+    (climatePermission && (climatePermission.role === "editor" || climatePermission.role === "admin"));
+
+  return <DashboardShell hasData={hasData} canEdit={!!canEdit} />;
 }

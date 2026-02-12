@@ -1,7 +1,7 @@
 "use server";
 
 import { requirePermission } from "@/lib/auth";
-import { db, getDb } from "@/db";
+import { db } from "@/db";
 import { climateUploads } from "@/db/schema";
 import type { ClimateResolution } from "@/db/schema";
 import type { ActionResult } from "@/lib/types";
@@ -95,11 +95,7 @@ export async function commitDatFile(
       };
     }
 
-    // Use getDb() directly (not the Proxy `db`) to avoid broken `this` binding
-    // inside Drizzle's session when calling .transaction()
-    const realDb = getDb();
-
-    realDb.transaction((tx) => {
+    db.transaction((tx) => {
       for (const row of result.rows) {
         tx.run(sql`
           INSERT INTO climate_readings (
@@ -121,7 +117,7 @@ export async function commitDatFile(
             ${row.solarAvg}, ${row.solarMax}, ${row.solarMin},
             ${row.windDirAvg}, ${row.windDirMax}, ${row.windDirMin},
             ${row.windSpeedAvg}, ${row.windSpeedMax}, ${row.windSpeedMin},
-            ${row.meanWindSpeed}, ${row.meanWindDirection}, ${row.stdWindDir}
+            ${row.meanWindSpeed ?? null}, ${row.meanWindDirection ?? null}, ${row.stdWindDir ?? null}
           )
           ON CONFLICT(timestamp, resolution) DO UPDATE SET
             record_num = excluded.record_num,

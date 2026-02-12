@@ -34,6 +34,13 @@ export function getDb(): BetterSQLite3Database<typeof schema> {
   sqlite.pragma("journal_mode = WAL");
   sqlite.pragma("foreign_keys = ON");
 
+  // Integrity check on startup — catch corruption before it spreads
+  const integrity = sqlite.pragma("integrity_check") as { integrity_check: string }[];
+  if (integrity[0]?.integrity_check !== "ok") {
+    console.error("[db] DATABASE INTEGRITY CHECK FAILED:", integrity);
+    throw new Error("Database integrity check failed — the database file may be corrupted");
+  }
+
   _db = drizzle(sqlite, { schema });
 
   // Recover stuck jobs on startup
@@ -44,7 +51,13 @@ export function getDb(): BetterSQLite3Database<typeof schema> {
 
 export const db = new Proxy({} as BetterSQLite3Database<typeof schema>, {
   get(_target, prop) {
-    return (getDb() as unknown as Record<string | symbol, unknown>)[prop];
+    const real = getDb();
+    const value = (real as unknown as Record<string | symbol, unknown>)[prop];
+    // Bind methods to the real Drizzle instance so `this` isn't the Proxy
+    if (typeof value === "function") {
+      return value.bind(real);
+    }
+    return value;
   },
 });
 

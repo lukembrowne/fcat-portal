@@ -25,7 +25,12 @@ set -e
 SERVER="digitalocean"
 SERVER_PATH="/root/opt/fcat-portal"
 
-echo "Deploying fcat-portal..."
+echo "Deploying fcat-portal to production..."
+read -p "Continue? [y/N] " confirm
+if [[ "$confirm" != [yY] ]]; then
+    echo "Aborted."
+    exit 0
+fi
 
 # Parse arguments
 REBUILD="--build"

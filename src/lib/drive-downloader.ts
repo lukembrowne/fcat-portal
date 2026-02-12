@@ -15,10 +15,7 @@ import sharp from "sharp";
 import { db } from "@/db";
 import { images } from "@/db/schema";
 import { eq } from "drizzle-orm";
-import {
-  listImagesRecursive,
-  downloadDeploymentImages,
-} from "./drive-client";
+import { downloadDeploymentImages } from "./drive-client";
 
 const TEMP_BASE = path.join(process.cwd(), "data", "tmp");
 const THUMBNAIL_DIR = path.join(process.cwd(), "data", "thumbnails");
@@ -33,8 +30,7 @@ const THUMBNAIL_QUALITY = 80;
  */
 export async function downloadDeploymentForProcessing(
   deploymentId: number,
-  jobId: number,
-  driveFolderId: string
+  jobId: number
 ): Promise<{ tempDir: string; downloaded: number; failed: number }> {
   const tempDir = path.join(TEMP_BASE, `ct-job-${jobId}`);
   await fs.mkdir(tempDir, { recursive: true });

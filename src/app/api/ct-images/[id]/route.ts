@@ -108,7 +108,7 @@ export async function GET(
     // Check cache
     try {
       const thumbData = await fs.readFile(thumbPath);
-      return new NextResponse(thumbData, {
+      return new NextResponse(new Uint8Array(thumbData), {
         headers: { ...headers, "Content-Type": "image/jpeg" },
       });
     } catch {
@@ -129,7 +129,7 @@ export async function GET(
           await fs.mkdir(path.dirname(thumbPath), { recursive: true });
           await fs.writeFile(thumbPath, thumb);
 
-          return new NextResponse(thumb, {
+          return new NextResponse(new Uint8Array(thumb), {
             headers: { ...headers, "Content-Type": "image/jpeg" },
           });
         } catch {
@@ -156,7 +156,7 @@ export async function GET(
       await fs.mkdir(path.dirname(thumbPath), { recursive: true });
       await fs.writeFile(thumbPath, thumb);
 
-      return new NextResponse(thumb, {
+      return new NextResponse(new Uint8Array(thumb), {
         headers: { ...headers, "Content-Type": "image/jpeg" },
       });
     } catch (err) {
@@ -175,7 +175,7 @@ export async function GET(
     if (image.path) {
       try {
         const data = await fs.readFile(image.path);
-        return new NextResponse(data, {
+        return new NextResponse(new Uint8Array(data), {
           headers: { ...headers, "Content-Type": contentType },
         });
       } catch {
@@ -190,7 +190,7 @@ export async function GET(
 
   try {
     const buffer = await downloadFileToBuffer(image.driveFileId);
-    return new NextResponse(buffer, {
+    return new NextResponse(new Uint8Array(buffer), {
       headers: {
         ...headers,
         "Content-Type": contentType,

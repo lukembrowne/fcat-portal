@@ -139,8 +139,7 @@ export async function processJob(
     if (deployment.driveFolderId) {
       const downloadResult = await downloadDeploymentForProcessing(
         deployment.id,
-        jobId,
-        deployment.driveFolderId
+        jobId
       );
       tempDir = downloadResult.tempDir;
 

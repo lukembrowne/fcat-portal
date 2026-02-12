@@ -34,7 +34,6 @@ vi.stubEnv("GOOGLE_SERVICE_ACCOUNT_KEY", Buffer.from(JSON.stringify({
 const {
   listDeploymentFolders,
   listImagesRecursive,
-  downloadDeploymentImages,
 } = await import("../drive-client");
 
 describe("extractFolderId", () => {

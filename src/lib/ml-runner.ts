@@ -143,7 +143,9 @@ export async function runMLPredictions(
 
   const imagePathToId = new Map<string, number>();
   for (const img of jobImages) {
-    imagePathToId.set(img.path, img.id);
+    if (img.path) {
+      imagePathToId.set(img.path, img.id);
+    }
   }
 
   const scriptPath = path.join(process.cwd(), "scripts", "predict.py");

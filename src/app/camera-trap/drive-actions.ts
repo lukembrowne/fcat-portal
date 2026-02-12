@@ -2,7 +2,7 @@
 
 import { db } from "@/db";
 import { deployments, images } from "@/db/schema";
-import { eq, and } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import {
   listDeploymentFolders,
   listImagesRecursive,
@@ -156,7 +156,6 @@ export async function scanDeploymentImages(
     const driveImages = await listImagesRecursive(deployment.driveFolderId);
 
     // INSERT OR IGNORE via onConflictDoNothing on (deploymentId, driveFileId)
-    let insertedCount = 0;
     for (const img of driveImages) {
       try {
         await db
@@ -172,7 +171,6 @@ export async function scanDeploymentImages(
             status: "pending",
           })
           .onConflictDoNothing();
-        insertedCount++;
       } catch {
         // Skip duplicates or other insert errors
       }

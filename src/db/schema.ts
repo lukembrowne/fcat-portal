@@ -86,8 +86,9 @@ export const deployments = sqliteTable(
     projectId: text("project_id")
       .notNull()
       .references(() => projects.id, { onDelete: "cascade" }),
-    path: text("path").notNull(),
+    path: text("path"),
     name: text("name").notNull(),
+    driveFolderId: text("drive_folder_id"),
     latitude: real("latitude"),
     longitude: real("longitude"),
     dateStart: text("date_start"),
@@ -110,6 +111,10 @@ export const deployments = sqliteTable(
     uniqueIndex("idx_deployments_project_path").on(
       table.projectId,
       table.path
+    ),
+    uniqueIndex("idx_deployments_project_drive_folder").on(
+      table.projectId,
+      table.driveFolderId
     ),
   ]
 );
@@ -159,7 +164,8 @@ export const images = sqliteTable(
       onDelete: "set null",
     }),
     filename: text("filename").notNull(),
-    path: text("path").notNull(),
+    path: text("path"),
+    driveFileId: text("drive_file_id"),
     fileSize: integer("file_size"),
     fileModified: integer("file_modified", { mode: "timestamp" }),
     exifTimestamp: text("exif_timestamp"),
@@ -174,6 +180,10 @@ export const images = sqliteTable(
   (table) => [
     index("idx_images_deployment_id").on(table.deploymentId),
     index("idx_images_job_id").on(table.jobId),
+    uniqueIndex("idx_images_deployment_drive_file").on(
+      table.deploymentId,
+      table.driveFileId
+    ),
   ]
 );
 

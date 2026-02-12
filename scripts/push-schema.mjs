@@ -57,8 +57,9 @@ const statements = [
   `CREATE TABLE IF NOT EXISTS deployments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    path TEXT NOT NULL,
+    path TEXT,
     name TEXT NOT NULL,
+    drive_folder_id TEXT,
     latitude REAL,
     longitude REAL,
     date_start TEXT,
@@ -95,7 +96,8 @@ const statements = [
     deployment_id INTEGER NOT NULL REFERENCES deployments(id) ON DELETE CASCADE,
     job_id INTEGER REFERENCES processing_jobs(id) ON DELETE SET NULL,
     filename TEXT NOT NULL,
-    path TEXT NOT NULL,
+    path TEXT,
+    drive_file_id TEXT,
     file_size INTEGER,
     file_modified INTEGER,
     exif_timestamp TEXT,
@@ -232,8 +234,10 @@ const statements = [
   `CREATE INDEX IF NOT EXISTS idx_user_permissions_user_email ON user_permissions(user_email)`,
   `CREATE INDEX IF NOT EXISTS idx_user_permissions_project_id ON user_permissions(project_id)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_deployments_project_path ON deployments(project_id, path)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_deployments_project_drive_folder ON deployments(project_id, drive_folder_id)`,
   `CREATE INDEX IF NOT EXISTS idx_images_deployment_id ON images(deployment_id)`,
   `CREATE INDEX IF NOT EXISTS idx_images_job_id ON images(job_id)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_images_deployment_drive_file ON images(deployment_id, drive_file_id)`,
   `CREATE INDEX IF NOT EXISTS idx_detections_image_id ON detections(image_id)`,
   `CREATE INDEX IF NOT EXISTS idx_detections_job_id ON detections(job_id)`,
   `CREATE INDEX IF NOT EXISTS idx_identifications_detection_id ON identifications(detection_id)`,
@@ -300,9 +304,86 @@ for (const stmt of statements) {
 // --- Migrations (ALTER TABLE additions, idempotent) ---
 const migrations = [
   `ALTER TABLE users ADD COLUMN last_seen_at INTEGER`,
+  // Google Drive camera trap columns
+  `ALTER TABLE deployments ADD COLUMN drive_folder_id TEXT`,
+  `ALTER TABLE images ADD COLUMN drive_file_id TEXT`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }
+}
+
+// --- Table recreation: make deployments.path nullable ---
+// SQLite cannot ALTER column constraints, so we recreate the table
+try {
+  const hasNotNull = db
+    .prepare(`SELECT "notnull" FROM pragma_table_info('deployments') WHERE name = 'path'`)
+    .get();
+  if (hasNotNull && hasNotNull.notnull === 1) {
+    console.log("Migrating deployments table: making path nullable...");
+    db.exec(`BEGIN TRANSACTION`);
+    db.exec(`CREATE TABLE deployments_new (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      path TEXT,
+      name TEXT NOT NULL,
+      drive_folder_id TEXT,
+      latitude REAL,
+      longitude REAL,
+      date_start TEXT,
+      date_end TEXT,
+      total_images INTEGER DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'unscanned' CHECK(status IN ('unscanned', 'scanned', 'processing', 'processed', 'verified')),
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      created_by TEXT
+    )`);
+    db.exec(`INSERT INTO deployments_new SELECT id, project_id, path, name, drive_folder_id, latitude, longitude, date_start, date_end, total_images, status, created_at, updated_at, created_by FROM deployments`);
+    db.exec(`DROP TABLE deployments`);
+    db.exec(`ALTER TABLE deployments_new RENAME TO deployments`);
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_deployments_project_path ON deployments(project_id, path)`);
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_deployments_project_drive_folder ON deployments(project_id, drive_folder_id)`);
+    db.exec(`COMMIT`);
+    console.log("  deployments.path is now nullable");
+  }
+} catch (err) {
+  try { db.exec(`ROLLBACK`); } catch { /* no active tx */ }
+  console.error("Failed to migrate deployments table:", err.message);
+}
+
+// --- Table recreation: make images.path nullable ---
+try {
+  const hasNotNull = db
+    .prepare(`SELECT "notnull" FROM pragma_table_info('images') WHERE name = 'path'`)
+    .get();
+  if (hasNotNull && hasNotNull.notnull === 1) {
+    console.log("Migrating images table: making path nullable...");
+    db.exec(`BEGIN TRANSACTION`);
+    db.exec(`CREATE TABLE images_new (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      deployment_id INTEGER NOT NULL REFERENCES deployments(id) ON DELETE CASCADE,
+      job_id INTEGER REFERENCES processing_jobs(id) ON DELETE SET NULL,
+      filename TEXT NOT NULL,
+      path TEXT,
+      drive_file_id TEXT,
+      file_size INTEGER,
+      file_modified INTEGER,
+      exif_timestamp TEXT,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'processed', 'failed')),
+      error_message TEXT,
+      thumbnail_path TEXT
+    )`);
+    db.exec(`INSERT INTO images_new SELECT id, deployment_id, job_id, filename, path, drive_file_id, file_size, file_modified, exif_timestamp, status, error_message, thumbnail_path FROM images`);
+    db.exec(`DROP TABLE images`);
+    db.exec(`ALTER TABLE images_new RENAME TO images`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_images_deployment_id ON images(deployment_id)`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_images_job_id ON images(job_id)`);
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_images_deployment_drive_file ON images(deployment_id, drive_file_id)`);
+    db.exec(`COMMIT`);
+    console.log("  images.path is now nullable");
+  }
+} catch (err) {
+  try { db.exec(`ROLLBACK`); } catch { /* no active tx */ }
+  console.error("Failed to migrate images table:", err.message);
 }
 
 console.log(`Schema pushed to ${fullPath}`);

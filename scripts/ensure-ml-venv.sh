@@ -4,7 +4,8 @@ set -e
 ML_VENV_DIR="${ML_VENV_DIR:-data/ml-venv}"
 ML_PYTHON="$ML_VENV_DIR/bin/python3"
 
-# Suppress hardlink warnings in Docker (different filesystems)
+# Docker: nextjs user home is /nonexistent, uv needs a writable cache dir
+export UV_CACHE_DIR="${UV_CACHE_DIR:-/tmp/uv-cache}"
 export UV_LINK_MODE=copy
 
 # Check if venv already exists and has pytorch-wildlife

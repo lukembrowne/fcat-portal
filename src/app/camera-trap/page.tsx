@@ -158,15 +158,17 @@ function DeploymentCard({
             </div>
 
             {deployment.driveFolderId && (
-              <a
-                href={`https://drive.google.com/drive/folders/${deployment.driveFolderId}`}
-                target="_blank"
-                rel="noopener noreferrer"
+              <span
                 className="text-xs text-muted-foreground hover:text-foreground inline-block"
-                onClick={(e) => e.stopPropagation()}
               >
-                Abrir en Drive ↗
-              </a>
+                <a
+                  href={`https://drive.google.com/drive/folders/${deployment.driveFolderId}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Abrir en Drive ↗
+                </a>
+              </span>
             )}
 
             {verificationStats && verificationStats.total > 0 && (

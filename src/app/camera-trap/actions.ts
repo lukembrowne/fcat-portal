@@ -19,6 +19,7 @@ import { requirePermission } from "@/lib/auth";
 import { revalidatePath } from "next/cache";
 import type { ActionResult, VerificationStats } from "@/lib/types";
 import type { Deployment, ProcessingJob } from "@/db/schema";
+import { ML_DEFAULTS } from "@/lib/ml-defaults";
 
 const CAMERA_TRAP_PATH = "/camera-trap";
 
@@ -55,9 +56,9 @@ export async function createProcessingJob(
       .insert(processingJobs)
       .values({
         deploymentId,
-        detectorModel: modelConfig?.detectorModel || "MDV6-yolov9-c",
-        classifierModel: modelConfig?.classifierModel || "AI4GAmazonRainforest",
-        confidenceThreshold: modelConfig?.confidenceThreshold ?? 0.1,
+        detectorModel: modelConfig?.detectorModel || ML_DEFAULTS.detectorModel,
+        classifierModel: modelConfig?.classifierModel || ML_DEFAULTS.classifierModel,
+        confidenceThreshold: modelConfig?.confidenceThreshold ?? ML_DEFAULTS.confidenceThreshold,
         status: "pending",
         totalImages: deploymentImages.length,
         processedImages: 0,
@@ -202,10 +203,10 @@ export async function processJob(
       imagePaths: jobImages
         .map((img) => img.path)
         .filter((p): p is string => p !== null),
-      detectorModel: job.detectorModel || "MDV6-yolov9-c",
-      classifierModel: job.classifierModel || "AI4GAmazonRainforest",
+      detectorModel: job.detectorModel || ML_DEFAULTS.detectorModel,
+      classifierModel: job.classifierModel || ML_DEFAULTS.classifierModel,
       device: "auto",
-      confidenceThreshold: job.confidenceThreshold ?? 0.1,
+      confidenceThreshold: job.confidenceThreshold ?? ML_DEFAULTS.confidenceThreshold,
       batchSize: 16,
     });
 

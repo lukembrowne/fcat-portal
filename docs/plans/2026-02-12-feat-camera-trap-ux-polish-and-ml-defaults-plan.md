@@ -364,8 +364,8 @@ COPY scripts/ensure-ml-venv.sh ./scripts/
 - [x] Ensure `loading="lazy"` on ImageGrid thumbnails
 
 ### Phase 3: ML Simplification
-- [ ] Remove ProcessButton dialog, hardcode defaults in shared constants
-- [ ] ML defaults as single source of truth (server action or constants file)
+- [x] Remove ProcessButton dialog, hardcode defaults in shared constants
+- [x] ML defaults as single source of truth (server action or constants file)
 
 ### Phase 4: Docker ML with uv
 - [ ] Create `scripts/ensure-ml-venv.sh`

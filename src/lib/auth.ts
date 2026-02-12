@@ -65,6 +65,16 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
 
   if (!user) return null;
 
+  // Update lastSeenAt (throttled: only if >5 min since last update)
+  const now = new Date();
+  const fiveMinutes = 5 * 60 * 1000;
+  if (!user.lastSeenAt || now.getTime() - user.lastSeenAt.getTime() > fiveMinutes) {
+    db.update(users)
+      .set({ lastSeenAt: now })
+      .where(eq(users.email, normalizedEmail))
+      .then(() => {});
+  }
+
   const perms = await db
     .select()
     .from(userPermissions)

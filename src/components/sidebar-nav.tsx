@@ -12,7 +12,7 @@ import { hasProjectAccess } from "@/lib/auth";
 import type { AuthUser } from "@/lib/types";
 import { SidebarShell } from "@/components/sidebar-shell";
 
-export type IconName = "home" | "tree-pine" | "leaf" | "camera" | "shield" | "dollar-sign" | "bar-chart-3";
+export type IconName = "home" | "tree-pine" | "leaf" | "camera" | "shield" | "dollar-sign" | "bar-chart-3" | "cloud-sun";
 
 export interface NavItem {
   label: string;
@@ -42,6 +42,14 @@ export function SidebarNav({ user }: SidebarNavProps) {
   const hasBiochoco = hasProjectAccess(user, "biochoco");
   const hasCameraTrap = hasProjectAccess(user, "camera-trap");
   const hasGiz = hasProjectAccess(user, "giz");
+  const hasClimate = hasProjectAccess(user, "climate");
+  const isClimateEditor =
+    user.globalRole === "super_admin" ||
+    user.permissions.some(
+      (p) =>
+        p.projectId === "climate" &&
+        (p.role === "editor" || p.role === "admin")
+    );
 
   // Build BioChocó children
   const biochocoChildren: NavItem[] = [];
@@ -78,6 +86,21 @@ export function SidebarNav({ user }: SidebarNavProps) {
       label: "BioChocó",
       icon: "leaf",
       children: biochocoChildren,
+    });
+  }
+
+  if (hasClimate) {
+    const climateChildren: NavItem[] = [
+      { label: "Panel", href: "/climate/dashboard" },
+    ];
+    if (isClimateEditor) {
+      climateChildren.push({ label: "Cargar Datos", href: "/climate/upload" });
+    }
+    climateChildren.push({ label: "Acerca de", href: "/climate/about" });
+    projectItems.push({
+      label: "Datos Climáticos",
+      icon: "cloud-sun",
+      children: climateChildren,
     });
   }
 

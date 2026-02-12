@@ -50,6 +50,11 @@ else
     ssh -A "$SERVER" "cd ${SERVER_PATH} && git pull && docker compose up -d && docker compose ps"
 fi
 
+# Run schema migrations (idempotent — safe to run every deploy)
+echo ""
+echo "Running schema migrations..."
+ssh "$SERVER" "cd ${SERVER_PATH} && docker compose exec portal node scripts/push-schema.mjs"
+
 echo ""
 echo "Deployed! https://portal.fcat-ecuador.org"
 

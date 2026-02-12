@@ -34,6 +34,7 @@ export const users = sqliteTable("users", {
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .default(sql`(unixepoch())`),
+  lastSeenAt: integer("last_seen_at", { mode: "timestamp" }),
 });
 
 // ---------------------------------------------------------------------------
@@ -395,6 +396,66 @@ export const financeUploads = sqliteTable("finance_uploads", {
 });
 
 // ---------------------------------------------------------------------------
+// Climate — Readings (hourly + 15-min weather station data)
+// ---------------------------------------------------------------------------
+
+export const climateReadings = sqliteTable(
+  "climate_readings",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    timestamp: text("timestamp").notNull(),
+    resolution: text("resolution", { enum: ["hourly", "15min"] }).notNull(),
+    recordNum: integer("record_num"),
+    airTempAvg: real("air_temp_avg"),
+    airTempMax: real("air_temp_max"),
+    airTempMin: real("air_temp_min"),
+    humidityAvg: real("humidity_avg"),
+    humidityMax: real("humidity_max"),
+    humidityMin: real("humidity_min"),
+    pressureAvg: real("pressure_avg"),
+    pressureMax: real("pressure_max"),
+    pressureMin: real("pressure_min"),
+    rainMm: real("rain_mm"),
+    solarAvg: real("solar_avg"),
+    solarMax: real("solar_max"),
+    solarMin: real("solar_min"),
+    windDirAvg: real("wind_dir_avg"),
+    windDirMax: real("wind_dir_max"),
+    windDirMin: real("wind_dir_min"),
+    windSpeedAvg: real("wind_speed_avg"),
+    windSpeedMax: real("wind_speed_max"),
+    windSpeedMin: real("wind_speed_min"),
+    meanWindSpeed: real("mean_wind_speed"),
+    meanWindDirection: real("mean_wind_direction"),
+    stdWindDir: real("std_wind_dir"),
+  },
+  (table) => [
+    uniqueIndex("idx_climate_readings_ts_res").on(
+      table.timestamp,
+      table.resolution
+    ),
+    index("idx_climate_readings_res_ts").on(table.resolution, table.timestamp),
+  ]
+);
+
+// ---------------------------------------------------------------------------
+// Climate — Uploads (tracking data imports)
+// ---------------------------------------------------------------------------
+
+export const climateUploads = sqliteTable("climate_uploads", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  filename: text("filename").notNull(),
+  resolution: text("resolution", { enum: ["hourly", "15min"] }).notNull(),
+  rowsImported: integer("rows_imported").notNull(),
+  dateRangeStart: text("date_range_start"),
+  dateRangeEnd: text("date_range_end"),
+  uploadedBy: text("uploaded_by").notNull(),
+  uploadedAt: integer("uploaded_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+
+// ---------------------------------------------------------------------------
 // Type Exports
 // ---------------------------------------------------------------------------
 
@@ -448,3 +509,11 @@ export type NewFinanceProjection = typeof financeProjections.$inferInsert;
 
 export type FinanceUpload = typeof financeUploads.$inferSelect;
 export type NewFinanceUpload = typeof financeUploads.$inferInsert;
+
+export type ClimateReading = typeof climateReadings.$inferSelect;
+export type NewClimateReading = typeof climateReadings.$inferInsert;
+
+export type ClimateUpload = typeof climateUploads.$inferSelect;
+export type NewClimateUpload = typeof climateUploads.$inferInsert;
+
+export type ClimateResolution = "hourly" | "15min";

@@ -2,7 +2,7 @@ import { getCurrentUser, hasProjectAccess } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Camera, Shield, TreePine, Leaf, DollarSign } from "lucide-react";
+import { Camera, Shield, TreePine, Leaf, DollarSign, CloudSun } from "lucide-react";
 
 interface ModuleCard {
   href: string;
@@ -45,6 +45,14 @@ export default async function HomePage() {
         "Cronograma de sensores acústicos y monitoreo de biodiversidad",
       icon: <Leaf className="h-6 w-6" />,
       show: hasProjectAccess(user, "biochoco"),
+    },
+    {
+      href: "/climate",
+      title: "Datos Climáticos",
+      description:
+        "Datos meteorológicos de la estación central FCAT — temperatura, precipitación, humedad, viento y más",
+      icon: <CloudSun className="h-6 w-6" />,
+      show: hasProjectAccess(user, "climate"),
     },
     {
       href: "/finance",

@@ -245,6 +245,52 @@ const statements = [
   `CREATE INDEX IF NOT EXISTS idx_ft_year_month ON finance_transactions(year_month)`,
   `CREATE INDEX IF NOT EXISTS idx_fcm_budget_cat ON finance_category_map(budget_category)`,
   `CREATE INDEX IF NOT EXISTS idx_fcm_link_cat ON finance_category_map(link_expense_category)`,
+
+  // Climate — Readings (hourly + 15-min weather station data)
+  `CREATE TABLE IF NOT EXISTS climate_readings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    resolution TEXT NOT NULL CHECK(resolution IN ('hourly', '15min')),
+    record_num INTEGER,
+    air_temp_avg REAL,
+    air_temp_max REAL,
+    air_temp_min REAL,
+    humidity_avg REAL,
+    humidity_max REAL,
+    humidity_min REAL,
+    pressure_avg REAL,
+    pressure_max REAL,
+    pressure_min REAL,
+    rain_mm REAL,
+    solar_avg REAL,
+    solar_max REAL,
+    solar_min REAL,
+    wind_dir_avg REAL,
+    wind_dir_max REAL,
+    wind_dir_min REAL,
+    wind_speed_avg REAL,
+    wind_speed_max REAL,
+    wind_speed_min REAL,
+    mean_wind_speed REAL,
+    mean_wind_direction REAL,
+    std_wind_dir REAL,
+    UNIQUE(timestamp, resolution)
+  )`,
+
+  // Climate — Uploads (tracking data imports)
+  `CREATE TABLE IF NOT EXISTS climate_uploads (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    filename TEXT NOT NULL,
+    resolution TEXT NOT NULL CHECK(resolution IN ('hourly', '15min')),
+    rows_imported INTEGER NOT NULL,
+    date_range_start TEXT,
+    date_range_end TEXT,
+    uploaded_by TEXT NOT NULL,
+    uploaded_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+
+  // Climate indexes
+  `CREATE INDEX IF NOT EXISTS idx_climate_readings_res_ts ON climate_readings(resolution, timestamp)`,
 ];
 
 for (const stmt of statements) {
@@ -272,6 +318,7 @@ const coreProjects = [
   ["giz", "GIZ", "Proyecto GIZ - Siembra de árboles y monitoreo de cacao"],
   ["biochoco", "BioChoco", "Programa de monitoreo de biodiversidad BioChoco"],
   ["finance", "Finanzas", "Dashboard financiero y gestión de presupuestos"],
+  ["climate", "Datos Climáticos", "Datos de la estación meteorológica central de FCAT"],
 ];
 
 const insertProject = db.prepare(

@@ -47,8 +47,13 @@ insertProject.run(
   "Finanzas",
   "Dashboard financiero y gestión de presupuestos"
 );
+insertProject.run(
+  "climate",
+  "Datos Climáticos",
+  "Datos de la estación meteorológica central de FCAT"
+);
 
-console.log("Seeded projects: camera-trap, giz, biochoco, finance");
+console.log("Seeded projects: camera-trap, giz, biochoco, finance, climate");
 
 // --- Super admin user ---
 const superAdminEmail =
@@ -72,6 +77,9 @@ db.prepare(
 db.prepare(
   "INSERT OR IGNORE INTO user_permissions (user_email, project_id, role) VALUES (?, ?, ?)"
 ).run(superAdminEmail, "finance", "admin");
+db.prepare(
+  "INSERT OR IGNORE INTO user_permissions (user_email, project_id, role) VALUES (?, ?, ?)"
+).run(superAdminEmail, "climate", "admin");
 
 console.log(`Seeded super admin: ${superAdminEmail}`);
 

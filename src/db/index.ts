@@ -13,6 +13,7 @@ import fs from "fs";
 import * as schema from "./schema";
 
 let _db: BetterSQLite3Database<typeof schema> | null = null;
+let _rawDb: InstanceType<typeof Database> | null = null;
 
 function getDbPath(): string {
   const dbPath = process.env.DB_PATH || "data/portal.db";
@@ -34,12 +35,19 @@ export function getDb(): BetterSQLite3Database<typeof schema> {
   sqlite.pragma("journal_mode = WAL");
   sqlite.pragma("foreign_keys = ON");
 
+  _rawDb = sqlite;
   _db = drizzle(sqlite, { schema });
 
   // Recover stuck jobs on startup
   recoverStuckJobs(_db);
 
   return _db;
+}
+
+/** Get the underlying better-sqlite3 Database instance */
+export function getRawDb(): InstanceType<typeof Database> {
+  if (!_rawDb) getDb(); // ensure initialized
+  return _rawDb!;
 }
 
 export const db = new Proxy({} as BetterSQLite3Database<typeof schema>, {

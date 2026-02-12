@@ -1,8 +1,8 @@
 "use server";
 
 import { requirePermission } from "@/lib/auth";
-import { db } from "@/db";
-import { climateReadings, climateUploads } from "@/db/schema";
+import { db, getRawDb } from "@/db";
+import { climateUploads } from "@/db/schema";
 import type { ClimateResolution } from "@/db/schema";
 import type { ActionResult } from "@/lib/types";
 import { parseTOA5File } from "./parser";
@@ -98,65 +98,8 @@ export async function commitDatFile(
       };
     }
 
-    // Use raw SQL for the upsert to handle ON CONFLICT properly
-    // Drizzle's onConflictDoUpdate requires explicit target which is tricky with composite unique
-    const insertStmt = db.run(sql`SELECT 1`); // dummy to get db reference
-
-    // Wrap everything in a transaction
-    const insertSql = sql`
-      INSERT INTO climate_readings (
-        timestamp, resolution, record_num,
-        air_temp_avg, air_temp_max, air_temp_min,
-        humidity_avg, humidity_max, humidity_min,
-        pressure_avg, pressure_max, pressure_min,
-        rain_mm,
-        solar_avg, solar_max, solar_min,
-        wind_dir_avg, wind_dir_max, wind_dir_min,
-        wind_speed_avg, wind_speed_max, wind_speed_min,
-        mean_wind_speed, mean_wind_direction, std_wind_dir
-      ) VALUES (
-        ${sql.placeholder("timestamp")}, ${sql.placeholder("resolution")}, ${sql.placeholder("recordNum")},
-        ${sql.placeholder("airTempAvg")}, ${sql.placeholder("airTempMax")}, ${sql.placeholder("airTempMin")},
-        ${sql.placeholder("humidityAvg")}, ${sql.placeholder("humidityMax")}, ${sql.placeholder("humidityMin")},
-        ${sql.placeholder("pressureAvg")}, ${sql.placeholder("pressureMax")}, ${sql.placeholder("pressureMin")},
-        ${sql.placeholder("rainMm")},
-        ${sql.placeholder("solarAvg")}, ${sql.placeholder("solarMax")}, ${sql.placeholder("solarMin")},
-        ${sql.placeholder("windDirAvg")}, ${sql.placeholder("windDirMax")}, ${sql.placeholder("windDirMin")},
-        ${sql.placeholder("windSpeedAvg")}, ${sql.placeholder("windSpeedMax")}, ${sql.placeholder("windSpeedMin")},
-        ${sql.placeholder("meanWindSpeed")}, ${sql.placeholder("meanWindDirection")}, ${sql.placeholder("stdWindDir")}
-      )
-      ON CONFLICT(timestamp, resolution) DO UPDATE SET
-        record_num = excluded.record_num,
-        air_temp_avg = excluded.air_temp_avg,
-        air_temp_max = excluded.air_temp_max,
-        air_temp_min = excluded.air_temp_min,
-        humidity_avg = excluded.humidity_avg,
-        humidity_max = excluded.humidity_max,
-        humidity_min = excluded.humidity_min,
-        pressure_avg = excluded.pressure_avg,
-        pressure_max = excluded.pressure_max,
-        pressure_min = excluded.pressure_min,
-        rain_mm = excluded.rain_mm,
-        solar_avg = excluded.solar_avg,
-        solar_max = excluded.solar_max,
-        solar_min = excluded.solar_min,
-        wind_dir_avg = excluded.wind_dir_avg,
-        wind_dir_max = excluded.wind_dir_max,
-        wind_dir_min = excluded.wind_dir_min,
-        wind_speed_avg = excluded.wind_speed_avg,
-        wind_speed_max = excluded.wind_speed_max,
-        wind_speed_min = excluded.wind_speed_min,
-        mean_wind_speed = excluded.mean_wind_speed,
-        mean_wind_direction = excluded.mean_wind_direction,
-        std_wind_dir = excluded.std_wind_dir
-    `;
-
-    // Access the underlying better-sqlite3 database for transactions
-    // Use Drizzle's transaction support
-    void insertStmt; // suppress unused
-
     // Use raw better-sqlite3 for proper transaction + prepared statement
-    const rawDb = (db as unknown as { _: { session: { client: import("better-sqlite3").Database } } })._.session.client;
+    const rawDb = getRawDb();
 
     const upsertStmt = rawDb.prepare(`
       INSERT INTO climate_readings (

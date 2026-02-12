@@ -12,6 +12,8 @@ import path from "path";
 import fs from "fs";
 import * as schema from "./schema";
 
+const TEMP_BASE = path.join(process.cwd(), "data", "tmp");
+
 let _db: BetterSQLite3Database<typeof schema> | null = null;
 
 function getDbPath(): string {
@@ -69,10 +71,43 @@ function recoverStuckJobs(database: BetterSQLite3Database<typeof schema>) {
         .set({ status: "scanned", updatedAt: new Date() })
         .where(eq(schema.deployments.id, job.deploymentId))
         .run();
+
+      // Clear temp paths from images belonging to failed jobs
+      const jobImages = database
+        .select()
+        .from(schema.images)
+        .where(eq(schema.images.jobId, job.id))
+        .all();
+
+      for (const img of jobImages) {
+        if (img.path && img.path.includes("/tmp/ct-job-")) {
+          database
+            .update(schema.images)
+            .set({ path: null })
+            .where(eq(schema.images.id, img.id))
+            .run();
+        }
+      }
     }
 
     if (stuckJobs.length > 0) {
       console.log(`[db] Recovered ${stuckJobs.length} stuck processing job(s)`);
+    }
+
+    // Clean up orphaned temp directories
+    try {
+      if (fs.existsSync(TEMP_BASE)) {
+        const entries = fs.readdirSync(TEMP_BASE);
+        for (const entry of entries) {
+          if (entry.startsWith("ct-job-")) {
+            const dirPath = path.join(TEMP_BASE, entry);
+            fs.rmSync(dirPath, { recursive: true, force: true });
+            console.log(`[db] Cleaned up orphaned temp dir: ${dirPath}`);
+          }
+        }
+      }
+    } catch {
+      // temp dir cleanup is best-effort
     }
   } catch {
     // Schema might not exist yet during first push

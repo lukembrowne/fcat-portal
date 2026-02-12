@@ -16,6 +16,10 @@ import {
   type ScannedImage,
 } from "@/lib/image-scanner";
 import { runMLPredictions, checkPytorchWildlife } from "@/lib/ml-runner";
+import {
+  downloadDeploymentForProcessing,
+  cleanupJobTempDir,
+} from "@/lib/drive-downloader";
 import { getCurrentUser, requirePermission } from "@/lib/auth";
 import { revalidatePath } from "next/cache";
 import path from "path";
@@ -218,11 +222,16 @@ export async function createProcessingJob(
 
 /**
  * Process a job. No mock fallback — ML works via ML_PYTHON_PATH or fails.
+ *
+ * For Drive-based deployments: downloads images to temp dir first,
+ * writes temp paths to images.path, runs ML, then cleans up.
  */
 export async function processJob(
   jobId: number
 ): Promise<ActionResult<{ job: ProcessingJob }>> {
   await requirePermission("camera-trap", "editor");
+
+  let tempDir: string | undefined;
 
   try {
     const [job] = await db
@@ -246,6 +255,50 @@ export async function processJob(
       .set({ status: "processing", startedAt: new Date() })
       .where(eq(processingJobs.id, jobId));
 
+    // Check if this is a Drive-based deployment
+    const [deployment] = await db
+      .select()
+      .from(deployments)
+      .where(eq(deployments.id, job.deploymentId));
+
+    if (!deployment) {
+      return { success: false, error: "Despliegue no encontrado" };
+    }
+
+    // For Drive deployments: download images to temp dir first
+    if (deployment.driveFolderId) {
+      const downloadResult = await downloadDeploymentForProcessing(
+        deployment.id,
+        jobId,
+        deployment.driveFolderId
+      );
+      tempDir = downloadResult.tempDir;
+
+      if (downloadResult.downloaded === 0) {
+        await cleanupJobTempDir(jobId, tempDir);
+        await db
+          .update(processingJobs)
+          .set({
+            status: "failed",
+            errorMessage: "No se pudieron descargar imágenes de Drive",
+            completedAt: new Date(),
+          })
+          .where(eq(processingJobs.id, jobId));
+
+        await db
+          .update(deployments)
+          .set({ status: "scanned", updatedAt: new Date() })
+          .where(eq(deployments.id, job.deploymentId));
+
+        revalidatePath(CAMERA_TRAP_PATH);
+        return {
+          success: false,
+          error: "No se pudieron descargar imágenes de Drive",
+        };
+      }
+    }
+
+    // Re-fetch job images (paths may have been updated by download)
     const jobImages = await db
       .select()
       .from(images)
@@ -255,6 +308,8 @@ export async function processJob(
     const mlCheck = await checkPytorchWildlife();
 
     if (!mlCheck.available) {
+      if (tempDir) await cleanupJobTempDir(jobId, tempDir);
+
       await db
         .update(processingJobs)
         .set({
@@ -275,13 +330,18 @@ export async function processJob(
     }
 
     const mlResult = await runMLPredictions(jobId, {
-      imagePaths: jobImages.map((img) => img.path),
+      imagePaths: jobImages
+        .map((img) => img.path)
+        .filter((p): p is string => p !== null),
       detectorModel: job.detectorModel || "MDV6-yolov9-c",
       classifierModel: job.classifierModel || "AI4GAmazonRainforest",
       device: "auto",
       confidenceThreshold: job.confidenceThreshold ?? 0.1,
       batchSize: 16,
     });
+
+    // Clean up temp directory after ML completes
+    if (tempDir) await cleanupJobTempDir(jobId, tempDir);
 
     const finalStatus = mlResult.success ? "completed" : "failed";
 
@@ -313,6 +373,15 @@ export async function processJob(
       ? { success: true, data: { job: updatedJob } }
       : { success: false, error: mlResult.error || "Procesamiento falló" };
   } catch (error) {
+    // Clean up temp directory on error
+    if (tempDir) {
+      try {
+        await cleanupJobTempDir(jobId, tempDir);
+      } catch {
+        // Best effort cleanup
+      }
+    }
+
     await db
       .update(processingJobs)
       .set({ status: "failed" })
@@ -356,6 +425,13 @@ export async function cancelJob(
       } catch {
         // Process may have already exited
       }
+    }
+
+    // Clean up temp directory for Drive-based jobs
+    try {
+      await cleanupJobTempDir(jobId);
+    } catch {
+      // Best effort cleanup
     }
 
     await db

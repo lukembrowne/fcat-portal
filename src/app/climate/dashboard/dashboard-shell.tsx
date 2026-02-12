@@ -8,6 +8,7 @@ import { MetricsRow } from "./metrics-row";
 import { FilterBar, getDateRange } from "./filter-bar";
 import type { DatePreset } from "./filter-bar";
 import { ClimateCharts } from "./climate-charts";
+import { ClimateTable } from "./climate-table";
 import {
   fetchClimateSummary,
   fetchClimateChartData,
@@ -140,6 +141,13 @@ export function DashboardShell({ hasData }: DashboardShellProps) {
           {summary && <MetricsRow summary={summary} />}
           <Separator />
           <ClimateCharts data={chartData} aggregation={aggregation} />
+          <ClimateTable
+            filters={{
+              dateStart: getDateRange(datePreset).start,
+              dateEnd: getDateRange(datePreset).end,
+              resolution,
+            }}
+          />
         </>
       )}
     </div>

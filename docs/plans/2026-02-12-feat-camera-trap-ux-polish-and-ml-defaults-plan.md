@@ -368,11 +368,11 @@ COPY scripts/ensure-ml-venv.sh ./scripts/
 - [x] ML defaults as single source of truth (server action or constants file)
 
 ### Phase 4: Docker ML with uv
-- [ ] Create `scripts/ensure-ml-venv.sh`
-- [ ] Update Dockerfile to install `uv`
-- [ ] Create `docker-entrypoint.sh` — run ML setup in background, start Node immediately
-- [ ] Update `docker-compose.yml` — remove host venv volume mount
-- [ ] Ensure `data/ml-venv/` is writable by container user
+- [x] Create `scripts/ensure-ml-venv.sh`
+- [x] Update Dockerfile to install `uv`
+- [x] Create `docker-entrypoint.sh` — run ML setup in background, start Node immediately
+- [x] Update `docker-compose.yml` — remove host venv volume mount
+- [x] Ensure `data/ml-venv/` is writable by container user
 
 ## References
 

@@ -51,9 +51,15 @@ export default async function DeploymentDetailPage({ params }: PageProps) {
           <h1 className="text-3xl font-bold mb-2">{deployment.name}</h1>
           <div className="flex items-center gap-4">
             <StatusBadge status={deployment.status} type="deployment" />
-            <span className="text-muted-foreground text-sm">
-              {deployment.path}
-            </span>
+            {deployment.driveFolderId ? (
+              <span className="text-muted-foreground text-sm">
+                Google Drive
+              </span>
+            ) : deployment.path ? (
+              <span className="text-muted-foreground text-sm">
+                {deployment.path}
+              </span>
+            ) : null}
           </div>
         </div>
         <div className="flex gap-2">

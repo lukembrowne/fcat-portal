@@ -91,7 +91,7 @@ export default async function AnnotatePage({ searchParams }: PageProps) {
     getJobVerificationStats(jobId),
   ]);
 
-  const fullImageUrl = `/api/images${imageData.image.path}?size=full`;
+  const fullImageUrl = `/api/ct-images/${imageData.image.id}?size=full`;
 
   const boxes = imageData.detections.map((det) => ({
     id: det.id,

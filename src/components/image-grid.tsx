@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 export interface ImageGridItem {
   id: number;
   filename: string;
-  path: string;
+  path: string | null;
   status: string;
   thumbnailPath: string | null;
   detections: {
@@ -64,7 +64,7 @@ function ImageCard({ image, jobId }: { image: ImageGridItem; jobId: number }) {
     return () => observer.disconnect();
   }, []);
 
-  const thumbUrl = `/api/images${image.path}?size=thumb`;
+  const thumbUrl = `/api/ct-images/${image.id}?size=thumb`;
   const topSpecies = image.detections[0];
 
   return (

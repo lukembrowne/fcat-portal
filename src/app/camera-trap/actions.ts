@@ -10,147 +10,17 @@ import {
   species,
 } from "@/db/schema";
 import { eq, desc, inArray, and, gte, sql } from "drizzle-orm";
-import {
-  scanDirectoryForImages,
-  generateThumbnails,
-  type ScannedImage,
-} from "@/lib/image-scanner";
 import { runMLPredictions, checkPytorchWildlife } from "@/lib/ml-runner";
 import {
   downloadDeploymentForProcessing,
   cleanupJobTempDir,
 } from "@/lib/drive-downloader";
-import { getCurrentUser, requirePermission } from "@/lib/auth";
+import { requirePermission } from "@/lib/auth";
 import { revalidatePath } from "next/cache";
-import path from "path";
 import type { ActionResult, VerificationStats } from "@/lib/types";
 import type { Deployment, ProcessingJob } from "@/db/schema";
 
 const CAMERA_TRAP_PATH = "/camera-trap";
-
-// ---------------------------------------------------------------------------
-// Scan + Create Deployment
-// ---------------------------------------------------------------------------
-
-export async function scanFolder(
-  _prevState: ActionResult<{ images: ScannedImage[]; totalSize: number }>,
-  formData: FormData
-): Promise<ActionResult<{ images: ScannedImage[]; totalSize: number }>> {
-  await requirePermission("camera-trap", "editor");
-
-  const folderPath = formData.get("path");
-  if (typeof folderPath !== "string" || !folderPath.trim()) {
-    return { success: false, error: "La ruta del directorio es requerida" };
-  }
-
-  const absolutePath = path.resolve(folderPath);
-  const result = await scanDirectoryForImages(absolutePath, true);
-
-  if (!result.success) {
-    return { success: false, error: result.error || "Error al escanear" };
-  }
-
-  if (result.images.length === 0) {
-    return {
-      success: false,
-      error: "No se encontraron imágenes. Formatos soportados: JPG, PNG, GIF, BMP, WebP, TIFF",
-    };
-  }
-
-  return {
-    success: true,
-    data: { images: result.images, totalSize: result.totalSize },
-  };
-}
-
-export async function createDeployment(
-  folderPath: string,
-  scannedImages: ScannedImage[],
-  options?: {
-    name?: string;
-    latitude?: number;
-    longitude?: number;
-    dateStart?: string;
-    dateEnd?: string;
-    generateThumbs?: boolean;
-  }
-): Promise<ActionResult<{ deploymentId: number }>> {
-  const user = await requirePermission("camera-trap", "editor");
-
-  try {
-    const absolutePath = path.resolve(folderPath);
-    const folderName = options?.name || path.basename(absolutePath);
-
-    // Check for duplicate path within project
-    const existing = await db
-      .select()
-      .from(deployments)
-      .where(
-        and(
-          eq(deployments.projectId, "camera-trap"),
-          eq(deployments.path, absolutePath)
-        )
-      );
-
-    if (existing.length > 0) {
-      return {
-        success: false,
-        error: "Ya existe un despliegue para esta ruta",
-      };
-    }
-
-    const [deployment] = await db
-      .insert(deployments)
-      .values({
-        projectId: "camera-trap",
-        path: absolutePath,
-        name: folderName,
-        latitude: options?.latitude,
-        longitude: options?.longitude,
-        dateStart: options?.dateStart,
-        dateEnd: options?.dateEnd,
-        totalImages: scannedImages.length,
-        status: "scanned",
-        createdBy: user.email,
-      })
-      .returning();
-
-    const imageValues = scannedImages.map((img) => ({
-      deploymentId: deployment.id,
-      filename: img.filename,
-      path: img.path,
-      fileSize: img.size,
-      fileModified: img.modifiedAt,
-      status: "pending" as const,
-    }));
-
-    await db.insert(images).values(imageValues);
-
-    // Generate thumbnails
-    if (options?.generateThumbs !== false) {
-      try {
-        const thumbMap = await generateThumbnails(scannedImages, deployment.id);
-        for (const [originalPath, thumbPath] of thumbMap) {
-          await db
-            .update(images)
-            .set({ thumbnailPath: thumbPath })
-            .where(eq(images.path, originalPath));
-        }
-      } catch {
-        // Don't fail deployment creation if thumbnails fail
-      }
-    }
-
-    revalidatePath(CAMERA_TRAP_PATH);
-
-    return { success: true, data: { deploymentId: deployment.id } };
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : "Error al crear despliegue",
-    };
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Processing
@@ -903,48 +773,3 @@ export async function getDeploymentVerificationStats(
   return stats;
 }
 
-// ---------------------------------------------------------------------------
-// Folder Browser
-// ---------------------------------------------------------------------------
-
-export async function listDirectory(
-  dirPath: string
-): Promise<ActionResult<{ entries: { name: string; isDir: boolean; imageCount: number }[] }>> {
-  await requirePermission("camera-trap", "editor");
-
-  const { promises: fs } = await import("fs");
-  const pathModule = await import("path");
-
-  try {
-    const entries = await fs.readdir(dirPath, { withFileTypes: true });
-    const result = [];
-
-    for (const entry of entries) {
-      if (entry.name.startsWith(".")) continue;
-
-      if (entry.isDirectory()) {
-        // Quick check for images in subdirectory
-        let imageCount = 0;
-        try {
-          const subEntries = await fs.readdir(
-            pathModule.join(dirPath, entry.name)
-          );
-          const imgExts = new Set([".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".tif"]);
-          imageCount = subEntries.filter((f) =>
-            imgExts.has(pathModule.extname(f).toLowerCase())
-          ).length;
-        } catch {
-          // Can't read subdirectory
-        }
-
-        result.push({ name: entry.name, isDir: true, imageCount });
-      }
-    }
-
-    result.sort((a, b) => a.name.localeCompare(b.name));
-    return { success: true, data: { entries: result } };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Error desconocido";
-    return { success: false, error: message };
-  }
-}

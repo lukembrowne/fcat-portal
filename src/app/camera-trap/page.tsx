@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/status-badge";
 import { getDeployments, getRecentJobs, getDeploymentVerificationStats } from "./actions";
-import { FolderScanner } from "./folder-scanner";
+import { DeploymentDiscovery } from "./deployment-discovery";
 
 export default async function CameraTrapPage() {
   const allDeployments = await getDeployments(50);
@@ -111,9 +111,15 @@ export default async function CameraTrapPage() {
                                 type="deployment"
                               />
                             </div>
-                            <p className="text-sm text-muted-foreground truncate">
-                              {deployment.path}
-                            </p>
+                            {deployment.driveFolderId ? (
+                              <p className="text-sm text-muted-foreground truncate">
+                                Google Drive
+                              </p>
+                            ) : deployment.path ? (
+                              <p className="text-sm text-muted-foreground truncate">
+                                {deployment.path}
+                              </p>
+                            ) : null}
                             <div className="flex gap-4 text-xs text-muted-foreground">
                               <span>{deployment.totalImages || 0} imágenes</span>
                               {deployment.latitude && deployment.longitude && (
@@ -161,7 +167,7 @@ export default async function CameraTrapPage() {
         </div>
 
         <div className="space-y-6">
-          <FolderScanner />
+          <DeploymentDiscovery />
 
           <Card>
             <CardHeader>

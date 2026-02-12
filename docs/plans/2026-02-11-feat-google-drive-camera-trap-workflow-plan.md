@@ -122,29 +122,29 @@ Extend the database schema, Drive client, and create server actions in one pass.
 **Tasks:**
 
 **Schema:**
-- [ ] Make `deployments.path` nullable in `scripts/push-schema.mjs` and `src/db/schema.ts`
-- [ ] Make `images.path` nullable in `scripts/push-schema.mjs` and `src/db/schema.ts`
-- [ ] Add `deployments.drive_folder_id TEXT` column
-- [ ] Add `images.drive_file_id TEXT` column
-- [ ] Add unique index on `(projectId, drive_folder_id)` for deployments
-- [ ] Add unique index on `(deploymentId, drive_file_id)` for images
-- [ ] Add `CAMERA_TRAP_ROOT_FOLDER_ID` to `.env.example` with documentation
+- [x]Make `deployments.path` nullable in `scripts/push-schema.mjs` and `src/db/schema.ts`
+- [x]Make `images.path` nullable in `scripts/push-schema.mjs` and `src/db/schema.ts`
+- [x]Add `deployments.drive_folder_id TEXT` column
+- [x]Add `images.drive_file_id TEXT` column
+- [x]Add unique index on `(projectId, drive_folder_id)` for deployments
+- [x]Add unique index on `(deploymentId, drive_file_id)` for images
+- [x]Add `CAMERA_TRAP_ROOT_FOLDER_ID` to `.env.example` with documentation
 
 **Drive client (`src/lib/drive-client.ts`):**
-- [ ] `listDeploymentFolders(rootFolderId)` — list top-level folders in root. Use `do...while` loop with `nextPageToken`. `pageSize: 1000`.
-- [ ] `listImagesRecursive(folderId)` — recursively list all image files with metadata. Filter by MIME type prefix `image/`, then post-filter by supported extensions. Handle pagination inline with `do...while` + `nextPageToken`.
-- [ ] `downloadFile(fileId, destPath)` — download a single file to a local path via `drive.files.get({ fileId, alt: 'media' })`. Retry once on failure.
-- [ ] `downloadDeploymentImages(folderId, destDir)` — download all images to destDir using batches of 10 with `Promise.all`. Retry once per file on failure; skip and log on second failure. Return `{ downloaded: number, failed: number, pathMap: Map<string, number> }`.
-- [ ] Validate folder ID format (`/^[a-zA-Z0-9_-]+$/`) before using in Drive API queries
-- [ ] All Drive API calls include `supportsAllDrives: true` and `includeItemsFromAllDrives: true`
+- [x]`listDeploymentFolders(rootFolderId)` — list top-level folders in root. Use `do...while` loop with `nextPageToken`. `pageSize: 1000`.
+- [x]`listImagesRecursive(folderId)` — recursively list all image files with metadata. Filter by MIME type prefix `image/`, then post-filter by supported extensions. Handle pagination inline with `do...while` + `nextPageToken`.
+- [x]`downloadFile(fileId, destPath)` — download a single file to a local path via `drive.files.get({ fileId, alt: 'media' })`. Retry once on failure.
+- [x]`downloadDeploymentImages(folderId, destDir)` — download all images to destDir using batches of 10 with `Promise.all`. Retry once per file on failure; skip and log on second failure. Return `{ downloaded: number, failed: number, pathMap: Map<string, number> }`.
+- [x]Validate folder ID format (`/^[a-zA-Z0-9_-]+$/`) before using in Drive API queries
+- [x]All Drive API calls include `supportsAllDrives: true` and `includeItemsFromAllDrives: true`
 
 **Server actions (`src/app/camera-trap/drive-actions.ts`):**
-- [ ] `discoverDeployments()` — calls `listDeploymentFolders()`, compares with DB by `driveFolderId`, returns `{ known: Deployment[], discovered: DriveFolder[] }`. Requires `requirePermission("camera-trap", "viewer")`.
-- [ ] `activateDeployment(folderId, folderName, metadata)` — validates folderId format, creates deployment row with `driveFolderId` and `name` set to folderName, status `unscanned`. Requires `"editor"`. Catches unique constraint violation → friendly Spanish error.
-- [ ] `scanDeploymentImages(deploymentId)` — calls `listImagesRecursive()`, inserts image rows with `driveFileId` + `filename` (use `INSERT OR IGNORE` on `(deploymentId, driveFileId)` for idempotency), updates deployment `totalImages` and status → `scanned`. Requires `"editor"`.
+- [x]`discoverDeployments()` — calls `listDeploymentFolders()`, compares with DB by `driveFolderId`, returns `{ known: Deployment[], discovered: DriveFolder[] }`. Requires `requirePermission("camera-trap", "viewer")`.
+- [x]`activateDeployment(folderId, folderName, metadata)` — validates folderId format, creates deployment row with `driveFolderId` and `name` set to folderName, status `unscanned`. Requires `"editor"`. Catches unique constraint violation → friendly Spanish error.
+- [x]`scanDeploymentImages(deploymentId)` — calls `listImagesRecursive()`, inserts image rows with `driveFileId` + `filename` (use `INSERT OR IGNORE` on `(deploymentId, driveFileId)` for idempotency), updates deployment `totalImages` and status → `scanned`. Requires `"editor"`.
 
 **Tests:**
-- [ ] Unit tests for Drive client functions (mock googleapis)
+- [x]Unit tests for Drive client functions (mock googleapis)
 
 **Key files:**
 - `scripts/push-schema.mjs` — ALTER TABLE statements
@@ -155,14 +155,14 @@ Extend the database schema, Drive client, and create server actions in one pass.
 - `.env.example` — new env var
 
 **Acceptance criteria:**
-- [ ] `push-schema.mjs` adds new columns and indexes idempotently
-- [ ] `path` columns are nullable (Drive deployments work without filesystem paths)
-- [ ] Drive client can list folders, list images recursively, download files
-- [ ] Pagination handles >1000 items per folder via `do...while` loop
-- [ ] All Shared Drive calls include `supportsAllDrives: true` and `includeItemsFromAllDrives: true`
-- [ ] Discovery correctly identifies new vs already-activated folders
-- [ ] Activation creates a deployment; duplicate activation returns friendly error
-- [ ] Scanning stores Drive file ID + filename for each image; idempotent on re-run
+- [x]`push-schema.mjs` adds new columns and indexes idempotently
+- [x]`path` columns are nullable (Drive deployments work without filesystem paths)
+- [x]Drive client can list folders, list images recursively, download files
+- [x]Pagination handles >1000 items per folder via `do...while` loop
+- [x]All Shared Drive calls include `supportsAllDrives: true` and `includeItemsFromAllDrives: true`
+- [x]Discovery correctly identifies new vs already-activated folders
+- [x]Activation creates a deployment; duplicate activation returns friendly error
+- [x]Scanning stores Drive file ID + filename for each image; idempotent on re-run
 
 ---
 
@@ -172,7 +172,7 @@ New API route for serving images from Google Drive with local thumbnail caching.
 
 **Tasks:**
 
-- [ ] Create `src/app/api/ct-images/[id]/route.ts` — image proxy route using DB image ID
+- [x]Create `src/app/api/ct-images/[id]/route.ts` — image proxy route using DB image ID
   - Query parameter: `?size=thumb|full` (default: full)
   - Auth: use `getCurrentUser()` + manual permission check (NOT `requirePermission()` which calls `redirect()`). Match the pattern in `src/app/api/odk/photos/route.ts`. Return `NextResponse.json({ error }, { status: 403 })` on failure.
   - Validate image ID exists in DB and belongs to a registered deployment (prevents open proxy)
@@ -180,21 +180,21 @@ New API route for serving images from Google Drive with local thumbnail caching.
   - For `size=full`: download from Google Drive and buffer in memory (images are <10MB; streaming adds complexity for no benefit at this scale). Serve with Content-Type inferred from filename extension in DB.
   - Set cache headers: `Cache-Control: public, max-age=31536000, immutable`
   - Support `?download=true` for `Content-Disposition: attachment`
-- [ ] Handle Drive errors gracefully: 404 if file deleted from Drive, 502 if Drive API error
-- [ ] Remove auth-less old image proxy at `src/app/api/images/[...path]/route.ts` (or add auth check if keeping for legacy)
+- [x]Handle Drive errors gracefully: 404 if file deleted from Drive, 502 if Drive API error
+- [x]Remove auth-less old image proxy at `src/app/api/images/[...path]/route.ts` (or add auth check if keeping for legacy)
 
 **Key files:**
 - `src/app/api/ct-images/[id]/route.ts` — new file
 - `src/app/api/images/[...path]/route.ts` — remove or patch
 
 **Acceptance criteria:**
-- [ ] Thumbnails are generated on first request and cached locally (keyed by imageId)
-- [ ] Subsequent thumbnail requests serve from cache (no Drive API call)
-- [ ] Full images served with correct Content-Type
-- [ ] Auth check prevents unauthorized access (returns 403, not redirect)
-- [ ] Image ID is validated against DB (prevents open proxy)
-- [ ] Appropriate cache headers are set
-- [ ] Drive errors return proper HTTP status codes
+- [x]Thumbnails are generated on first request and cached locally (keyed by imageId)
+- [x]Subsequent thumbnail requests serve from cache (no Drive API call)
+- [x]Full images served with correct Content-Type
+- [x]Auth check prevents unauthorized access (returns 403, not redirect)
+- [x]Image ID is validated against DB (prevents open proxy)
+- [x]Appropriate cache headers are set
+- [x]Drive errors return proper HTTP status codes
 
 ---
 
@@ -204,7 +204,7 @@ Modify the processing workflow to download images from Drive before running ML. 
 
 **Tasks:**
 
-- [ ] Create `src/lib/drive-downloader.ts` — extracted download module for testability:
+- [x]Create `src/lib/drive-downloader.ts` — extracted download module for testability:
   - `downloadDeploymentForProcessing(deploymentId, jobId)` → `Promise<{ tempDir: string, pathMap: Map<string, number> }>`
   - Creates temp directory at `data/tmp/ct-job-{jobId}/` (inside data volume — survives container restarts, same filesystem as DB)
   - Pre-flight check: estimate required space (sum of `file_size` from images table) and warn if disk space might be tight
@@ -212,15 +212,15 @@ Modify the processing workflow to download images from Drive before running ML. 
   - Generates thumbnails during download (images already in memory from download → resize with sharp → save to `data/thumbnails/{deploymentId}/{imageId}.jpg`)
   - Writes temp paths into `images.path` for each downloaded image (so ML runner picks them up unchanged)
   - Returns the temp dir path and a path→imageId map
-- [ ] Update `src/app/camera-trap/actions.ts` — `processJob()`:
+- [x]Update `src/app/camera-trap/actions.ts` — `processJob()`:
   1. Call `downloadDeploymentForProcessing()` (handles download + thumbnails)
   2. Pass temp file paths to `runMLPredictions()` — **zero changes to ml-runner.ts** (it reads `images.path` which now contains temp paths)
   3. On completion/failure: delete temp directory, clear `images.path` back to null
   4. On cancellation (`cancelJob`): also delete temp directory and clear paths
-- [ ] Add startup cleanup in `src/db/index.ts` `recoverStuckJobs()`:
+- [x]Add startup cleanup in `src/db/index.ts` `recoverStuckJobs()`:
   - After marking stuck jobs as failed, clean up any leftover `data/tmp/ct-job-*` directories
   - Clear `images.path` for images belonging to failed jobs
-- [ ] Show a simple "Preparando imagenes..." spinner during download phase (no granular download progress — downloads take <2 min at this scale)
+- [x]Show a simple "Preparando imagenes..." spinner during download phase (no granular download progress — downloads take <2 min at this scale)
 
 **Key files:**
 - `src/lib/drive-downloader.ts` — new file
@@ -228,15 +228,15 @@ Modify the processing workflow to download images from Drive before running ML. 
 - `src/db/index.ts` — extend `recoverStuckJobs()` for temp dir cleanup
 
 **Acceptance criteria:**
-- [ ] Images are downloaded from Drive to temp dir before ML starts
-- [ ] Thumbnails are generated during download (no separate pass)
-- [ ] `images.path` is set to temp paths before ML runs → ML runner works unchanged
-- [ ] `images.path` is cleared after processing completes
-- [ ] ML results are correctly matched back to image DB records
-- [ ] Temp directory is cleaned up on success, failure, and cancellation
-- [ ] Orphaned temp directories are cleaned up on server restart
-- [ ] Python `predict.py` is NOT modified
-- [ ] `ml-runner.ts` is NOT modified
+- [x]Images are downloaded from Drive to temp dir before ML starts
+- [x]Thumbnails are generated during download (no separate pass)
+- [x]`images.path` is set to temp paths before ML runs → ML runner works unchanged
+- [x]`images.path` is cleared after processing completes
+- [x]ML results are correctly matched back to image DB records
+- [x]Temp directory is cleaned up on success, failure, and cancellation
+- [x]Orphaned temp directories are cleaned up on server restart
+- [x]Python `predict.py` is NOT modified
+- [x]`ml-runner.ts` is NOT modified
 
 ---
 
@@ -246,28 +246,28 @@ Replace the folder-picker UI with Drive-aware deployment discovery and managemen
 
 **Tasks:**
 
-- [ ] Create `src/app/camera-trap/deployment-discovery.tsx` (Client Component):
+- [x]Create `src/app/camera-trap/deployment-discovery.tsx` (Client Component):
   - "Buscar Nuevas Carpetas" button triggers `discoverDeployments()` server action
   - Displays discovered (unregistered) folders as cards with folder name
   - Each card has an "Activar" button that opens a metadata form (name defaulted to folder name, lat/lon, date range)
   - After activation, auto-scan images and redirect to deployment detail page
   - Empty state when `CAMERA_TRAP_ROOT_FOLDER_ID` is not configured: clear message explaining setup required
   - Error state when service account can't access root folder: clear Spanish error
-- [ ] Update `src/app/camera-trap/page.tsx`:
+- [x]Update `src/app/camera-trap/page.tsx`:
   - Replace `FolderScanner` with `DeploymentDiscovery`
   - Keep existing deployments list
-- [ ] Update `src/app/camera-trap/[id]/page.tsx` (deployment detail):
+- [x]Update `src/app/camera-trap/[id]/page.tsx` (deployment detail):
   - Display deployment `name` (which is the Drive folder name) instead of filesystem path
   - Show "Preparando imagenes..." during download phase, then ML processing progress
-- [ ] Update `src/components/image-grid.tsx`:
+- [x]Update `src/components/image-grid.tsx`:
   - Change image `src` URLs from `/api/images${image.path}?size=thumb` to `/api/ct-images/${image.id}?size=thumb`
   - Update full-size image URLs too
-- [ ] Update annotation/verification UI image sources to use new proxy route
-- [ ] Remove `src/app/camera-trap/folder-scanner.tsx`
-- [ ] Remove `src/app/camera-trap/folder-browser.tsx`
-- [ ] Remove `scanFolder` server action from `actions.ts`
-- [ ] Update Docker compose env documentation
-- [ ] Update `.env.example` with all new env vars
+- [x]Update annotation/verification UI image sources to use new proxy route
+- [x]Remove `src/app/camera-trap/folder-scanner.tsx`
+- [x]Remove `src/app/camera-trap/folder-browser.tsx`
+- [x]Remove `scanFolder` server action from `actions.ts`
+- [x]Update Docker compose env documentation
+- [x]Update `.env.example` with all new env vars
 
 **Key files:**
 - `src/app/camera-trap/deployment-discovery.tsx` — new component
@@ -280,44 +280,44 @@ Replace the folder-picker UI with Drive-aware deployment discovery and managemen
 - `.env.example` — finalize
 
 **Acceptance criteria:**
-- [ ] Discovery button lists available Drive folders
-- [ ] Users can activate a folder with metadata (name defaults to folder name)
-- [ ] Activation triggers automatic image scanning
-- [ ] Deployment detail shows Drive folder name (not filesystem path)
-- [ ] Image grid loads thumbnails from new proxy route
-- [ ] Old folder picker components are removed
-- [ ] Clear error messages when Drive is not configured or inaccessible
-- [ ] `npm run build` passes
-- [ ] `npm run lint` passes
+- [x]Discovery button lists available Drive folders
+- [x]Users can activate a folder with metadata (name defaults to folder name)
+- [x]Activation triggers automatic image scanning
+- [x]Deployment detail shows Drive folder name (not filesystem path)
+- [x]Image grid loads thumbnails from new proxy route
+- [x]Old folder picker components are removed
+- [x]Clear error messages when Drive is not configured or inaccessible
+- [x]`npm run build` passes
+- [x]`npm run lint` passes
 
 ## Acceptance Criteria
 
 ### Functional Requirements
 
-- [ ] Auto-discovery lists all deployment folders from the configured Shared Drive root
-- [ ] Users can activate discovered folders as deployments with metadata
-- [ ] Image scanning recursively finds images in flat and nested folder layouts
-- [ ] ML processing downloads images, runs pipeline, stores results, cleans up temp files
-- [ ] Thumbnails are generated during the download pass (eager, not lazy)
-- [ ] Image proxy serves thumbnails (cached) and full images with auth
-- [ ] All server actions enforce `requirePermission()`; image proxy uses `getCurrentUser()`
+- [x]Auto-discovery lists all deployment folders from the configured Shared Drive root
+- [x]Users can activate discovered folders as deployments with metadata
+- [x]Image scanning recursively finds images in flat and nested folder layouts
+- [x]ML processing downloads images, runs pipeline, stores results, cleans up temp files
+- [x]Thumbnails are generated during the download pass (eager, not lazy)
+- [x]Image proxy serves thumbnails (cached) and full images with auth
+- [x]All server actions enforce `requirePermission()`; image proxy uses `getCurrentUser()`
 
 ### Non-Functional Requirements
 
-- [ ] No changes to Python `predict.py` script
-- [ ] No changes to `ml-runner.ts`
-- [ ] All Drive API calls include `supportsAllDrives: true` and `includeItemsFromAllDrives: true`
-- [ ] Folder IDs validated (`/^[a-zA-Z0-9_-]+$/`) before use in Drive API queries
-- [ ] Download concurrency: batches of 10 with `Promise.all`, retry once per file
-- [ ] Temp files cleaned up on success, failure, cancellation, and server restart
-- [ ] Image proxy validates image ID belongs to a registered deployment (prevents open proxy)
+- [x]No changes to Python `predict.py` script
+- [x]No changes to `ml-runner.ts`
+- [x]All Drive API calls include `supportsAllDrives: true` and `includeItemsFromAllDrives: true`
+- [x]Folder IDs validated (`/^[a-zA-Z0-9_-]+$/`) before use in Drive API queries
+- [x]Download concurrency: batches of 10 with `Promise.all`, retry once per file
+- [x]Temp files cleaned up on success, failure, cancellation, and server restart
+- [x]Image proxy validates image ID belongs to a registered deployment (prevents open proxy)
 
 ### Quality Gates
 
-- [ ] Unit tests for Drive client functions (pagination, error handling)
-- [ ] Manual test: end-to-end flow from discovery -> activation -> scan -> process -> verify
-- [ ] `npm run build` passes
-- [ ] `npm run lint` passes
+- [x]Unit tests for Drive client functions (pagination, error handling)
+- [x]Manual test: end-to-end flow from discovery -> activation -> scan -> process -> verify
+- [x]`npm run build` passes
+- [x]`npm run lint` passes
 
 ## Decisions (from brainstorm + review)
 

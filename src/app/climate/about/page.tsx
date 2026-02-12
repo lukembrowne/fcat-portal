@@ -1,4 +1,5 @@
 import { requirePermission } from "@/lib/auth";
+import { AboutContent } from "./about-content";
 
 export default async function ClimateAboutPage() {
   await requirePermission("climate", "viewer");
@@ -11,9 +12,7 @@ export default async function ClimateAboutPage() {
           Información sobre la estación, metodología y cómo citar los datos
         </p>
       </div>
-      <div className="flex items-center justify-center rounded-lg border border-dashed p-12 text-muted-foreground">
-        Información de la estación — próximamente
-      </div>
+      <AboutContent />
     </div>
   );
 }

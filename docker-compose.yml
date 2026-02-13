@@ -16,6 +16,7 @@ services:
       - ML_VENV_DIR=data/ml-venv
       - SUPER_ADMIN_EMAILS=lukebrowne@fcat-ecuador.org
       - ALLOWED_EMAILS_PATH=data/allowed_external_emails.txt
+      - TZ=America/New_York
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000"]

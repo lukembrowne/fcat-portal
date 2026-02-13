@@ -6,6 +6,12 @@ export HOME=/tmp/ml-home
 export MPLCONFIGDIR=/tmp/matplotlib-config
 export YOLO_CONFIG_DIR=/tmp/Ultralytics
 
+# Ensure backup directory exists
+mkdir -p /app/data/backups
+
+# Start cron daemon (Debian — auto-backgrounds, reads /etc/cron.d/)
+cron
+
 # Run ML venv setup in background so the app starts immediately
 # ML will become available once the setup completes (~2-5 min on first run)
 echo "[entrypoint] Starting ML venv setup in background..."

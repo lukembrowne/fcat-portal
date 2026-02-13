@@ -28,10 +28,14 @@ FROM base AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
-# System deps: python3 for ML, curl for uv, libgl1/libglib2 for OpenCV (used by PytorchWildlife)
+# System deps: python3 for ML, curl for uv, libgl1/libglib2 for OpenCV, cron for backups
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 python3-venv curl wget libgl1 libglib2.0-0 \
+    python3 python3-venv curl wget libgl1 libglib2.0-0 cron \
     && rm -rf /var/lib/apt/lists/*
+
+# Timezone: US Eastern (for backup filenames and cron logs)
+ENV TZ=America/New_York
+RUN ln -sf /usr/share/zoneinfo/America/New_York /etc/localtime
 
 # Install uv (fast Python package manager) for ML venv setup
 RUN curl -LsSf https://astral.sh/uv/install.sh | env INSTALLER_NO_MODIFY_PATH=1 sh \
@@ -46,10 +50,9 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --chown=nextjs:nodejs scripts ./scripts
 COPY --chown=nextjs:nodejs docker-entrypoint.sh ./docker-entrypoint.sh
 
-# Hourly backup cron — crond reads /etc/crontabs/nextjs and runs jobs as nextjs
-COPY scripts/crontab /etc/crontabs/nextjs
-COPY scripts/docker-entrypoint.sh /docker-entrypoint.sh
-RUN chmod +x /docker-entrypoint.sh
+# Hourly backup cron — Debian /etc/cron.d/ format (requires root user field)
+COPY scripts/crontab /etc/cron.d/portal-backup
+RUN chmod 0644 /etc/cron.d/portal-backup
 
 EXPOSE 3000
 ENV PORT=3000 HOSTNAME="0.0.0.0"

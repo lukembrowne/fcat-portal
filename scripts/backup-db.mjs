@@ -34,9 +34,12 @@ async function main() {
     process.exit(1);
   }
 
-  // Generate backup filename with ISO-ish timestamp
+  // Generate backup filename with Eastern time timestamp
   const now = new Date();
-  const timestamp = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const timestamp = now
+    .toLocaleString("sv-SE", { timeZone: "America/New_York" })
+    .replace(/[:.]/g, "-")
+    .replace(" ", "T");
   const backupFilename = `portal-${timestamp}.db`;
   const backupPath = path.join(backupDir, backupFilename);
 
@@ -99,7 +102,8 @@ function cleanupOldBackups() {
 
     // Keep one per day (newest) for 7 days
     if (age <= DAYS_7) {
-      const date = new Date(file.mtime).toISOString().slice(0, 10);
+      const date = new Date(file.mtime)
+        .toLocaleDateString("sv-SE", { timeZone: "America/New_York" });
       if (!dailyKept.has(date)) {
         dailyKept.add(date);
         continue;

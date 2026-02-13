@@ -78,7 +78,7 @@ docker compose exec -T portal node scripts/backup-db.mjs
 
 **Retention**: all hourly backups for 48h, one daily for 7 days, older deleted automatically.
 
-**Cron** runs inside the Docker container via Alpine's crond (started by `docker-entrypoint.sh`). Crontab at `scripts/crontab`, installed to `/etc/crontabs/nextjs`. To check logs: `cat data/backups/cron.log`.
+**Cron** runs inside the Docker container via Debian's cron daemon (started by `docker-entrypoint.sh`). Crontab at `scripts/crontab`, installed to `/etc/cron.d/portal-backup`. Timestamps are US Eastern (America/New_York). To check logs: `cat data/backups/cron.log`.
 
 **If restore fails** (portal won't start after restore), the pre-restore copy is at `data/portal.db.pre-restore`:
 ```bash

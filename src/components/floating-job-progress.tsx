@@ -2,9 +2,9 @@
 
 import { useEffect, useState, useRef, useCallback } from "react";
 import Link from "next/link";
-import { X, Minus, Square, ChevronUp } from "lucide-react";
+import { X, Minus, ChevronUp, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { cancelJob } from "@/app/camera-trap/actions";
+import { cancelJob, cancelQueue } from "@/app/camera-trap/actions";
 
 interface ActiveJob {
   jobId: number;
@@ -28,16 +28,28 @@ interface SSEData {
 const POLL_INTERVAL = 3000;
 
 export function FloatingJobProgress() {
-  const [activeJob, setActiveJob] = useState<ActiveJob | null>(null);
+  const [allJobs, setAllJobs] = useState<ActiveJob[]>([]);
   const [sseData, setSseData] = useState<SSEData | null>(null);
   const [minimized, setMinimized] = useState(false);
   const [dismissed, setDismissed] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [showQueue, setShowQueue] = useState(false);
 
   const eventSourceRef = useRef<EventSource | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastJobIdRef = useRef<number | null>(null);
+
+  // Derived state
+  const processingJob = allJobs.find((j) => j.status === "processing") ?? null;
+  const pendingJobs = allJobs.filter((j) => j.status === "pending");
+  const totalQueueSize = allJobs.length;
+  const currentQueuePosition =
+    processingJob && totalQueueSize > 1
+      ? totalQueueSize - pendingJobs.length
+      : 0;
+  const hasQueue = totalQueueSize > 1;
+  const activeJob = processingJob ?? allJobs[0] ?? null;
 
   // Poll /api/active-jobs for active jobs
   const pollActiveJobs = useCallback(async () => {
@@ -46,29 +58,29 @@ export function FloatingJobProgress() {
       if (!res.ok) return;
       const jobs: ActiveJob[] = await res.json();
 
-      if (jobs.length > 0) {
-        // Pick the most recent (highest ID)
-        const latest = jobs.reduce((a, b) => (a.jobId > b.jobId ? a : b));
-        setActiveJob(latest);
+      setAllJobs(jobs);
 
-        // New job discovered — reset dismissed state and show toast
-        if (latest.jobId !== lastJobIdRef.current) {
-          lastJobIdRef.current = latest.jobId;
+      if (jobs.length > 0) {
+        // Find the currently processing job (or highest ID)
+        const current =
+          jobs.find((j) => j.status === "processing") ??
+          jobs.reduce((a, b) => (a.jobId > b.jobId ? a : b));
+
+        // New job discovered — reset dismissed state
+        if (current.jobId !== lastJobIdRef.current) {
+          lastJobIdRef.current = current.jobId;
           setDismissed(false);
           setMinimized(false);
           setSseData(null);
           setCancelling(false);
         }
-      } else {
-        // No active jobs — keep showing last known state until auto-dismiss
-        setActiveJob(null);
       }
     } catch {
       // Silently ignore polling errors
     }
   }, []);
 
-  // Polling loop — runs when no SSE connection is active
+  // Polling loop
   useEffect(() => {
     const poll = () => {
       pollActiveJobs();
@@ -81,11 +93,10 @@ export function FloatingJobProgress() {
     };
   }, [pollActiveJobs]);
 
-  // SSE connection — connects when we have an active job
+  // SSE connection — connects when we have a processing job
   useEffect(() => {
-    const jobId = activeJob?.jobId;
+    const jobId = processingJob?.jobId;
     if (!jobId) {
-      // Close existing SSE if job went away
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
         eventSourceRef.current = null;
@@ -104,7 +115,6 @@ export function FloatingJobProgress() {
       return;
     }
 
-    // Close previous connection
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
     }
@@ -117,7 +127,6 @@ export function FloatingJobProgress() {
         const data: SSEData = JSON.parse(event.data);
         setSseData(data);
 
-        // Terminal state — close SSE, auto-dismiss after delay
         if (["completed", "failed", "cancelled"].includes(data.status)) {
           es.close();
           eventSourceRef.current = null;
@@ -136,12 +145,15 @@ export function FloatingJobProgress() {
       es.close();
       eventSourceRef.current = null;
     };
-  }, [activeJob?.jobId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [processingJob?.jobId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-dismiss after terminal state
+  // Auto-dismiss after terminal state (only when no pending jobs remain)
   const status = sseData?.status;
   useEffect(() => {
-    if (status === "completed" || status === "failed" || status === "cancelled") {
+    if (
+      (status === "completed" || status === "failed" || status === "cancelled") &&
+      pendingJobs.length === 0
+    ) {
       dismissTimerRef.current = setTimeout(() => {
         setDismissed(true);
       }, 8000);
@@ -149,7 +161,7 @@ export function FloatingJobProgress() {
     return () => {
       if (dismissTimerRef.current) clearTimeout(dismissTimerRef.current);
     };
-  }, [status]);
+  }, [status, pendingJobs.length]);
 
   // Nothing to show
   const hasJob = activeJob || (sseData && !dismissed);
@@ -157,7 +169,8 @@ export function FloatingJobProgress() {
 
   const jobId = sseData?.jobId || activeJob?.jobId;
   const deploymentName = activeJob?.deploymentName || "Instalación";
-  const isTerminal = status === "completed" || status === "failed" || status === "cancelled";
+  const isTerminal =
+    status === "completed" || status === "failed" || status === "cancelled";
   const isAnalyzing = status === "processing" && (sseData?.processed ?? 0) > 0;
   const processed = sseData?.processed ?? activeJob?.processedImages ?? 0;
   const total = sseData?.total ?? activeJob?.totalImages ?? 0;
@@ -190,10 +203,18 @@ export function FloatingJobProgress() {
   const handleCancel = async () => {
     if (!jobId || cancelling) return;
     setCancelling(true);
-    const result = await cancelJob(jobId);
-    if (!result.success) {
-      alert(`Error al cancelar: ${result.error}`);
-      setCancelling(false);
+    if (hasQueue) {
+      const result = await cancelQueue();
+      if (!result.success) {
+        alert(`Error al cancelar cola: ${result.error}`);
+        setCancelling(false);
+      }
+    } else {
+      const result = await cancelJob(jobId);
+      if (!result.success) {
+        alert(`Error al cancelar: ${result.error}`);
+        setCancelling(false);
+      }
     }
   };
 
@@ -223,7 +244,11 @@ export function FloatingJobProgress() {
                 : "bg-blue-500 animate-pulse"
             )}
           />
-          <span>Trabajo #{jobId}</span>
+          <span>
+            {hasQueue
+              ? `Procesando ${currentQueuePosition} de ${totalQueueSize}`
+              : `Trabajo #${jobId}`}
+          </span>
           <ChevronUp className="h-3 w-3" />
         </button>
       </div>
@@ -236,7 +261,11 @@ export function FloatingJobProgress() {
       <div className="flex items-center justify-between px-3 py-2 border-b">
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium truncate">{deploymentName}</p>
-          <p className="text-xs text-muted-foreground">Trabajo #{jobId}</p>
+          <p className="text-xs text-muted-foreground">
+            {hasQueue
+              ? `Procesando ${currentQueuePosition} de ${totalQueueSize}`
+              : `Trabajo #${jobId}`}
+          </p>
         </div>
         <div className="flex items-center gap-1 ml-2 shrink-0">
           <button
@@ -287,6 +316,36 @@ export function FloatingJobProgress() {
           )}
         </div>
 
+        {/* Queue list (collapsible) */}
+        {hasQueue && !isTerminal && (
+          <div>
+            <button
+              onClick={() => setShowQueue(!showQueue)}
+              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+            >
+              {showQueue ? (
+                <ChevronUp className="h-3 w-3" />
+              ) : (
+                <ChevronDown className="h-3 w-3" />
+              )}
+              {pendingJobs.length} en cola
+            </button>
+            {showQueue && (
+              <div className="mt-1 space-y-1">
+                {pendingJobs.map((job) => (
+                  <div
+                    key={job.jobId}
+                    className="text-xs text-muted-foreground flex items-center gap-1.5 pl-4"
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40" />
+                    {job.deploymentName}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Actions */}
         <div className="flex items-center gap-2">
           {!isTerminal && (
@@ -303,7 +362,11 @@ export function FloatingJobProgress() {
                 disabled={cancelling}
                 className="text-xs text-red-600 hover:underline disabled:opacity-50"
               >
-                {cancelling ? "Cancelando..." : "Cancelar"}
+                {cancelling
+                  ? "Cancelando..."
+                  : hasQueue
+                    ? "Cancelar Cola"
+                    : "Cancelar"}
               </button>
             </>
           )}

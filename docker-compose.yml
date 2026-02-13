@@ -7,13 +7,13 @@ services:
       - path: .env
         required: false
     volumes:
-      - ./data:/app/data                     # DB + thumbnails + allowed emails
+      - ./data:/app/data                     # DB + thumbnails + allowed emails + ML venv
       - ${GDRIVE_PATH:-./data/gdrive}:/mnt/gdrive:ro    # rclone mount (prod: /mnt/gdrive)
-      - ${ML_VENV_PATH:-./data/ml-venv}:/ml-venv:ro   # ML Python venv (prod: /root/opt/ml-venv)
     environment:
       - NODE_ENV=production
       - DB_PATH=data/portal.db
-      - ML_PYTHON_PATH=/ml-venv/bin/python3
+      - ML_PYTHON_PATH=data/ml-venv/bin/python3
+      - ML_VENV_DIR=data/ml-venv
       - SUPER_ADMIN_EMAILS=lukebrowne@fcat-ecuador.org
       - ALLOWED_EMAILS_PATH=data/allowed_external_emails.txt
     restart: unless-stopped

@@ -1,5 +1,5 @@
 /**
- * Google Drive client for checking BioChoco deployment upload status.
+ * Google Drive client for BioChoco upload status and Camera Trap workflows.
  *
  * Singleton Drive API client using the same service account as sheets-client.
  * Own copy of getServiceAccountKey() to avoid coupling the two modules.
@@ -8,6 +8,8 @@
 import "server-only";
 
 import { google, type drive_v3 } from "googleapis";
+import { promises as fs } from "fs";
+import path from "path";
 import type { ActionResult } from "./types";
 
 // --- Types ---
@@ -150,4 +152,216 @@ export async function checkDeploymentUploads(
       error: err instanceof Error ? err.message : "Failed to check Drive folder",
     };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Camera Trap — Types
+// ---------------------------------------------------------------------------
+
+export interface DriveFolder {
+  id: string;
+  name: string;
+}
+
+export interface DriveImageFile {
+  id: string;
+  name: string;
+  size: number;
+  modifiedTime: string;
+  /** Path relative to deployment root, e.g. "subfolder/IMG_001.jpg" */
+  relativePath: string;
+}
+
+const FOLDER_ID_REGEX = /^[a-zA-Z0-9_-]+$/;
+
+const IMAGE_EXTENSIONS = new Set([
+  ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".tif",
+]);
+
+// ---------------------------------------------------------------------------
+// Camera Trap — Public API
+// ---------------------------------------------------------------------------
+
+/** Validate a Drive folder ID format. */
+export function isValidFolderId(folderId: string): boolean {
+  return FOLDER_ID_REGEX.test(folderId);
+}
+
+/**
+ * List top-level folders in a root folder (each = one deployment).
+ * Uses do...while pagination with pageSize: 1000.
+ */
+export async function listDeploymentFolders(
+  rootFolderId: string
+): Promise<DriveFolder[]> {
+  if (!isValidFolderId(rootFolderId)) {
+    throw new Error(`Invalid folder ID format: ${rootFolderId}`);
+  }
+
+  const drive = getDrive();
+  const folders: DriveFolder[] = [];
+  let pageToken: string | undefined;
+
+  do {
+    const res = await drive.files.list({
+      q: `'${rootFolderId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+      fields: "nextPageToken, files(id, name)",
+      pageSize: 1000,
+      pageToken,
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
+    });
+
+    for (const file of res.data.files ?? []) {
+      if (file.id && file.name) {
+        folders.push({ id: file.id, name: file.name });
+      }
+    }
+
+    pageToken = res.data.nextPageToken ?? undefined;
+  } while (pageToken);
+
+  return folders.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * Recursively list all image files in a folder with metadata.
+ * Filters by MIME type prefix `image/`, then post-filters by supported extensions.
+ * Handles pagination with do...while + nextPageToken.
+ */
+export async function listImagesRecursive(
+  folderId: string,
+  pathPrefix = ""
+): Promise<DriveImageFile[]> {
+  if (!isValidFolderId(folderId)) {
+    throw new Error(`Invalid folder ID format: ${folderId}`);
+  }
+
+  const drive = getDrive();
+  const images: DriveImageFile[] = [];
+  const subfolders: { id: string; name: string }[] = [];
+
+  // List all files and subfolders in this folder
+  let pageToken: string | undefined;
+  do {
+    const res = await drive.files.list({
+      q: `'${folderId}' in parents and trashed = false`,
+      fields: "nextPageToken, files(id, name, mimeType, size, modifiedTime)",
+      pageSize: 1000,
+      pageToken,
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
+    });
+
+    for (const file of res.data.files ?? []) {
+      if (!file.id || !file.name) continue;
+
+      if (file.mimeType === "application/vnd.google-apps.folder") {
+        subfolders.push({ id: file.id, name: file.name });
+      } else if (file.mimeType?.startsWith("image/")) {
+        const ext = path.extname(file.name).toLowerCase();
+        if (IMAGE_EXTENSIONS.has(ext)) {
+          images.push({
+            id: file.id,
+            name: file.name,
+            size: parseInt(file.size || "0", 10),
+            modifiedTime: file.modifiedTime || "",
+            relativePath: pathPrefix ? `${pathPrefix}/${file.name}` : file.name,
+          });
+        }
+      }
+    }
+
+    pageToken = res.data.nextPageToken ?? undefined;
+  } while (pageToken);
+
+  // Recurse into subfolders
+  for (const sub of subfolders) {
+    const subPath = pathPrefix ? `${pathPrefix}/${sub.name}` : sub.name;
+    const subImages = await listImagesRecursive(sub.id, subPath);
+    images.push(...subImages);
+  }
+
+  return images;
+}
+
+/**
+ * Download a single file from Drive to a local path.
+ * Retries once on failure.
+ */
+export async function downloadFile(
+  fileId: string,
+  destPath: string
+): Promise<void> {
+  const drive = getDrive();
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await drive.files.get(
+        { fileId, alt: "media", supportsAllDrives: true },
+        { responseType: "arraybuffer" }
+      );
+
+      await fs.mkdir(path.dirname(destPath), { recursive: true });
+      await fs.writeFile(destPath, Buffer.from(res.data as ArrayBuffer));
+      return;
+    } catch (err) {
+      if (attempt === 0) {
+        console.warn(`[Drive] Download retry for ${fileId}:`, err instanceof Error ? err.message : err);
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+/**
+ * Download all images in a deployment folder to a local directory.
+ * Uses batches of 10 with Promise.all. Retries once per file; skips on second failure.
+ */
+export async function downloadDeploymentImages(
+  imageFiles: DriveImageFile[],
+  destDir: string
+): Promise<{ downloaded: number; failed: number; pathMap: Map<string, string> }> {
+  let downloaded = 0;
+  let failed = 0;
+  const pathMap = new Map<string, string>(); // driveFileId → local path
+
+  const BATCH_SIZE = 10;
+
+  for (let i = 0; i < imageFiles.length; i += BATCH_SIZE) {
+    const batch = imageFiles.slice(i, i + BATCH_SIZE);
+
+    await Promise.all(
+      batch.map(async (file) => {
+        const localPath = path.join(destDir, file.relativePath);
+        try {
+          await downloadFile(file.id, localPath);
+          pathMap.set(file.id, localPath);
+          downloaded++;
+        } catch (err) {
+          console.error(`[Drive] Failed to download ${file.name} (${file.id}):`, err instanceof Error ? err.message : err);
+          failed++;
+        }
+      })
+    );
+  }
+
+  return { downloaded, failed, pathMap };
+}
+
+/**
+ * Download a single file's content to a Buffer (for image proxy serving).
+ */
+export async function downloadFileToBuffer(
+  fileId: string
+): Promise<Buffer> {
+  const drive = getDrive();
+
+  const res = await drive.files.get(
+    { fileId, alt: "media", supportsAllDrives: true },
+    { responseType: "arraybuffer" }
+  );
+
+  return Buffer.from(res.data as ArrayBuffer);
 }

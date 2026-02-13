@@ -139,7 +139,7 @@ export default async function JobResultsPage({ params }: PageProps) {
       <div className="flex items-center justify-between mb-8">
         <div>
           <h1 className="text-3xl font-bold mb-2">
-            {deployment?.name || "Despliegue desconocido"}
+            {deployment?.name || "Instalación desconocida"}
           </h1>
           <div className="flex items-center gap-4">
             <StatusBadge status={job.status} type="job" />
@@ -152,17 +152,10 @@ export default async function JobResultsPage({ params }: PageProps) {
           </div>
         </div>
         <div className="flex gap-2">
-          {unverified > 0 && (
-            <Button asChild>
-              <Link href={`/camera-trap/annotate?jobId=${job.id}`}>
-                Anotar ({unverified} pendientes)
-              </Link>
-            </Button>
-          )}
           {deployment && (
             <Button asChild variant="outline">
               <Link href={`/camera-trap/${deployment.id}`}>
-                Despliegue
+                Instalación
               </Link>
             </Button>
           )}

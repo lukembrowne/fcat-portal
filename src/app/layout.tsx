@@ -5,6 +5,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar";
 import { SidebarNav } from "@/components/sidebar-nav";
 import { TopHeader } from "@/components/top-header";
+import { FloatingJobProgress } from "@/components/floating-job-progress";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -46,6 +47,7 @@ export default async function RootLayout({
                 <div className="mx-auto max-w-7xl">{children}</div>
               </main>
             </SidebarInset>
+            <FloatingJobProgress />
           </SidebarProvider>
         ) : (
           <main className="container mx-auto px-4 py-6">{children}</main>

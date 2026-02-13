@@ -3,7 +3,7 @@
  *
  * Tables:
  * - users, projects, user_permissions (auth/permissions)
- * - deployments, processing_jobs, images, detections, identifications, species (camera trap)
+ * - biochoco_deployments, biochoco_processing_jobs, biochoco_images, biochoco_detections, biochoco_identifications, biochoco_species (camera trap)
  * - finance_transactions, finance_budget_items, finance_category_map,
  *   finance_sueldos_grants, finance_sueldos_totals, finance_projections,
  *   finance_uploads (financial dashboard)
@@ -76,18 +76,19 @@ export const userPermissions = sqliteTable(
 );
 
 // ---------------------------------------------------------------------------
-// Deployments
+// Deployments (camera trap installations)
 // ---------------------------------------------------------------------------
 
 export const deployments = sqliteTable(
-  "deployments",
+  "biochoco_deployments",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
     projectId: text("project_id")
       .notNull()
       .references(() => projects.id, { onDelete: "cascade" }),
-    path: text("path").notNull(),
+    path: text("path"),
     name: text("name").notNull(),
+    driveFolderId: text("drive_folder_id"),
     latitude: real("latitude"),
     longitude: real("longitude"),
     dateStart: text("date_start"),
@@ -107,9 +108,13 @@ export const deployments = sqliteTable(
     createdBy: text("created_by"),
   },
   (table) => [
-    uniqueIndex("idx_deployments_project_path").on(
+    uniqueIndex("idx_biochoco_deployments_project_path").on(
       table.projectId,
       table.path
+    ),
+    uniqueIndex("idx_biochoco_deployments_project_drive_folder").on(
+      table.projectId,
+      table.driveFolderId
     ),
   ]
 );
@@ -118,7 +123,7 @@ export const deployments = sqliteTable(
 // Processing Jobs
 // ---------------------------------------------------------------------------
 
-export const processingJobs = sqliteTable("processing_jobs", {
+export const processingJobs = sqliteTable("biochoco_processing_jobs", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   deploymentId: integer("deployment_id")
     .notNull()
@@ -135,6 +140,7 @@ export const processingJobs = sqliteTable("processing_jobs", {
   totalImages: integer("total_images").notNull().default(0),
   processedImages: integer("processed_images").notNull().default(0),
   failedImages: integer("failed_images").notNull().default(0),
+  statusMessage: text("status_message"),
   errorMessage: text("error_message"),
   startedAt: integer("started_at", { mode: "timestamp" }),
   completedAt: integer("completed_at", { mode: "timestamp" }),
@@ -149,7 +155,7 @@ export const processingJobs = sqliteTable("processing_jobs", {
 // ---------------------------------------------------------------------------
 
 export const images = sqliteTable(
-  "images",
+  "biochoco_images",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
     deploymentId: integer("deployment_id")
@@ -159,7 +165,8 @@ export const images = sqliteTable(
       onDelete: "set null",
     }),
     filename: text("filename").notNull(),
-    path: text("path").notNull(),
+    path: text("path"),
+    driveFileId: text("drive_file_id"),
     fileSize: integer("file_size"),
     fileModified: integer("file_modified", { mode: "timestamp" }),
     exifTimestamp: text("exif_timestamp"),
@@ -172,8 +179,12 @@ export const images = sqliteTable(
     thumbnailPath: text("thumbnail_path"),
   },
   (table) => [
-    index("idx_images_deployment_id").on(table.deploymentId),
-    index("idx_images_job_id").on(table.jobId),
+    index("idx_biochoco_images_deployment_id").on(table.deploymentId),
+    index("idx_biochoco_images_job_id").on(table.jobId),
+    uniqueIndex("idx_biochoco_images_deployment_drive_file").on(
+      table.deploymentId,
+      table.driveFileId
+    ),
   ]
 );
 
@@ -182,7 +193,7 @@ export const images = sqliteTable(
 // ---------------------------------------------------------------------------
 
 export const detections = sqliteTable(
-  "detections",
+  "biochoco_detections",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
     imageId: integer("image_id")
@@ -200,8 +211,8 @@ export const detections = sqliteTable(
     modelVersion: text("model_version"),
   },
   (table) => [
-    index("idx_detections_image_id").on(table.imageId),
-    index("idx_detections_job_id").on(table.jobId),
+    index("idx_biochoco_detections_image_id").on(table.imageId),
+    index("idx_biochoco_detections_job_id").on(table.jobId),
   ]
 );
 
@@ -210,7 +221,7 @@ export const detections = sqliteTable(
 // ---------------------------------------------------------------------------
 
 export const identifications = sqliteTable(
-  "identifications",
+  "biochoco_identifications",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
     detectionId: integer("detection_id")
@@ -229,7 +240,7 @@ export const identifications = sqliteTable(
     verifiedAt: integer("verified_at", { mode: "timestamp" }),
   },
   (table) => [
-    index("idx_identifications_detection_id").on(table.detectionId),
+    index("idx_biochoco_identifications_detection_id").on(table.detectionId),
   ]
 );
 
@@ -237,7 +248,7 @@ export const identifications = sqliteTable(
 // Species Lookup Table
 // ---------------------------------------------------------------------------
 
-export const species = sqliteTable("species", {
+export const species = sqliteTable("biochoco_species", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   scientificName: text("scientific_name").notNull().unique(),
   commonName: text("common_name").notNull(),

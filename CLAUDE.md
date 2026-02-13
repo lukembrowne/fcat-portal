@@ -8,7 +8,7 @@ Internal web application for FCAT staff and collaborators. Replaces Streamlit da
 
 - **Node version**: 22 (required for `better-sqlite3` native module compatibility)
 - **Database**: SQLite at `data/portal.db`, WAL mode, singleton connection
-- **ML Python venv**: Lives on the HOST, not in Docker. Mounted as read-only volume. If the host is rebuilt, ML silently breaks.
+- **ML Python venv**: Auto-installed via `uv` at Docker startup into `data/ml-venv/`. Persists across container restarts. Delete `data/ml-venv/` to force reinstall.
 - **Dev auth**: Set `DEV_USER_EMAIL` env var — no oauth2-proxy needed locally
 - **Super admin**: `SUPER_ADMIN_EMAILS` env var (comma-separated)
 
@@ -48,9 +48,9 @@ docker compose -f docker-compose.yml up --build  # Production build
 ./deploy.sh                                 # Deploy to DigitalOcean
 ```
 
-CRITICAL: ML Python venv is mounted from the host as a read-only volume.
-It is NOT included in the Docker image. If the host is rebuilt without
-reinstalling the venv, the ML pipeline will silently fail.
+ML Python venv is auto-installed via `uv` on first startup into `data/ml-venv/`.
+The venv persists across container restarts. Delete `data/ml-venv/` to force reinstall.
+ML becomes available ~2-5 min after first boot (runs in background via `docker-entrypoint.sh`).
 
 ## Database
 

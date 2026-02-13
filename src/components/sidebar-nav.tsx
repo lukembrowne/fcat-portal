@@ -117,7 +117,6 @@ export function SidebarNav({ user }: SidebarNavProps) {
       children: [
         { label: "Dashboard", href: "/camera-trap" },
         { label: "Resultados", href: "/camera-trap/results" },
-        { label: "Anotaciones", href: "/camera-trap/annotate" },
       ],
     });
   }

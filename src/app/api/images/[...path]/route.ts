@@ -45,8 +45,8 @@ export async function GET(
 
   // Validate the path belongs to a registered deployment
   const allDeployments = await db.select().from(deployments);
-  const isRegistered = allDeployments.some((d) =>
-    resolved.startsWith(d.path)
+  const isRegistered = allDeployments.some(
+    (d) => d.path && resolved.startsWith(d.path)
   );
 
   if (!isRegistered) {
@@ -68,7 +68,7 @@ export async function GET(
     if (imageRecord?.thumbnailPath) {
       try {
         const thumbData = await fs.readFile(imageRecord.thumbnailPath);
-        return new NextResponse(thumbData, {
+        return new NextResponse(new Uint8Array(thumbData), {
           headers: {
             "Content-Type": "image/jpeg",
             "Cache-Control": "public, max-age=31536000, immutable",
@@ -90,7 +90,7 @@ export async function GET(
     const contentType = MIME_TYPES[ext] || "application/octet-stream";
 
     const data = await fs.readFile(resolved);
-    return new NextResponse(data, {
+    return new NextResponse(new Uint8Array(data), {
       headers: {
         "Content-Type": contentType,
         "Content-Length": stat.size.toString(),

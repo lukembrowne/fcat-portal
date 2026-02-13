@@ -51,9 +51,20 @@ export default async function DeploymentDetailPage({ params }: PageProps) {
           <h1 className="text-3xl font-bold mb-2">{deployment.name}</h1>
           <div className="flex items-center gap-4">
             <StatusBadge status={deployment.status} type="deployment" />
-            <span className="text-muted-foreground text-sm">
-              {deployment.path}
-            </span>
+            {deployment.driveFolderId ? (
+              <a
+                href={`https://drive.google.com/drive/folders/${deployment.driveFolderId}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-muted-foreground text-sm hover:text-foreground"
+              >
+                Abrir carpeta en Drive ↗
+              </a>
+            ) : deployment.path ? (
+              <span className="text-muted-foreground text-sm">
+                {deployment.path}
+              </span>
+            ) : null}
           </div>
         </div>
         <div className="flex gap-2">
@@ -82,7 +93,7 @@ export default async function DeploymentDetailPage({ params }: PageProps) {
       {(deployment.latitude || deployment.dateStart) && (
         <Card className="mb-8">
           <CardHeader>
-            <CardTitle className="text-lg">Metadatos del Despliegue</CardTitle>
+            <CardTitle className="text-lg">Metadatos de la Instalación</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="grid gap-4 md:grid-cols-2">

@@ -33,7 +33,7 @@ export default async function ImageDetailPage({ params }: PageProps) {
   const nextImageId =
     currentIndex < imageIds.length - 1 ? imageIds[currentIndex + 1] : null;
 
-  const fullImageUrl = `/api/images${image.path}?size=full`;
+  const fullImageUrl = `/api/ct-images/${image.id}?size=full`;
 
   const boxes = rawDetections.map((det) => ({
     id: det.id,

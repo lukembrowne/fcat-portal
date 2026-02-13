@@ -77,7 +77,7 @@ export function DeploymentsTable({
   const filteredData = useMemo(() => {
     let data = initialDeployments;
     if (projectFilter) {
-      data = data.filter((d) => d.ctProject === projectFilter);
+      data = data.filter((d) => d.projectLabel === projectFilter);
     }
     if (statusFilter) {
       data = data.filter((d) => d.status === statusFilter);
@@ -127,7 +127,7 @@ export function DeploymentsTable({
         ),
       },
       {
-        accessorKey: "ctProject",
+        accessorKey: "projectLabel",
         header: "Proyecto",
         cell: ({ getValue }) => getValue<string | null>() || "—",
       },

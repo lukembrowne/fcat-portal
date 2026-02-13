@@ -457,7 +457,7 @@ export interface DeploymentRow {
   name: string;
   status: string;
   driveFolderId: string | null;
-  ctProject: string | null;
+  projectLabel: string | null;
   siteName: string | null;
   latitude: number | null;
   longitude: number | null;
@@ -530,7 +530,7 @@ export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
       name: d.name,
       status: d.status,
       driveFolderId: d.driveFolderId,
-      ctProject: d.ctProject,
+      projectLabel: d.projectLabel,
       siteName: d.siteName,
       latitude: d.latitude,
       longitude: d.longitude,
@@ -569,7 +569,7 @@ export async function updateDeploymentMetadata(
   id: number,
   fields: {
     name?: string;
-    ctProject?: string | null;
+    projectLabel?: string | null;
     siteName?: string | null;
     latitude?: number | null;
     longitude?: number | null;
@@ -611,7 +611,7 @@ export async function updateDeploymentMetadata(
 export async function bulkUpdateMetadata(
   ids: number[],
   fields: {
-    ctProject?: string | null;
+    projectLabel?: string | null;
     siteName?: string | null;
     latitude?: number | null;
     longitude?: number | null;
@@ -628,7 +628,7 @@ export async function bulkUpdateMetadata(
 
     // Only include non-undefined fields (undefined = "do not change")
     const updates: Record<string, unknown> = { updatedAt: new Date(), metadataSource: "manual" };
-    if (fields.ctProject !== undefined) updates.ctProject = fields.ctProject;
+    if (fields.projectLabel !== undefined) updates.projectLabel = fields.projectLabel;
     if (fields.siteName !== undefined) updates.siteName = fields.siteName;
     if (fields.latitude !== undefined) updates.latitude = fields.latitude;
     if (fields.longitude !== undefined) updates.longitude = fields.longitude;
@@ -878,16 +878,16 @@ export async function cancelQueue(): Promise<ActionResult<{ cancelled: number }>
   }
 }
 
-/** Get distinct ctProject values for filter dropdown. */
+/** Get distinct project label values for filter dropdown. */
 export async function getDistinctProjects(): Promise<string[]> {
   await requirePermission("camera-trap", "viewer");
   const rows = await db
-    .select({ ctProject: deployments.ctProject })
+    .select({ projectLabel: deployments.projectLabel })
     .from(deployments)
     .where(eq(deployments.projectId, "camera-trap"))
-    .groupBy(deployments.ctProject);
+    .groupBy(deployments.projectLabel);
   return rows
-    .map((r) => r.ctProject)
+    .map((r) => r.projectLabel)
     .filter((p): p is string => p !== null)
     .sort();
 }

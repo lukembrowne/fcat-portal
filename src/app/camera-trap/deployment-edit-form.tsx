@@ -22,7 +22,7 @@ export function DeploymentEditForm({
   onSaved,
 }: DeploymentEditFormProps) {
   const [name, setName] = useState(deployment.name);
-  const [ctProject, setCtProject] = useState(deployment.ctProject ?? "");
+  const [projectLabel, setCtProject] = useState(deployment.projectLabel ?? "");
   const [siteName, setSiteName] = useState(deployment.siteName ?? "");
   const [latitude, setLatitude] = useState(
     deployment.latitude != null ? String(deployment.latitude) : ""
@@ -41,7 +41,7 @@ export function DeploymentEditForm({
       setError(null);
       const result = await updateDeploymentMetadata(deployment.id, {
         name: name.trim() || deployment.name,
-        ctProject: ctProject.trim() || null,
+        projectLabel: projectLabel.trim() || null,
         siteName: siteName.trim() || null,
         latitude: latitude ? parseFloat(latitude) : null,
         longitude: longitude ? parseFloat(longitude) : null,
@@ -71,7 +71,7 @@ export function DeploymentEditForm({
         <Label htmlFor="edit-project">Proyecto</Label>
         <Input
           id="edit-project"
-          value={ctProject}
+          value={projectLabel}
           onChange={(e) => setCtProject(e.target.value)}
           list="project-options"
           placeholder="Ej: BioChoco"

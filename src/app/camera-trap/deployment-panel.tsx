@@ -110,8 +110,8 @@ export function DeploymentPanel({
             <StatusBadge status={deployment.status} type="deployment" />
           </div>
           <SheetDescription>
-            {deployment.ctProject && `Proyecto: ${deployment.ctProject}`}
-            {deployment.ctProject && deployment.siteName && " · "}
+            {deployment.projectLabel && `Proyecto: ${deployment.projectLabel}`}
+            {deployment.projectLabel && deployment.siteName && " · "}
             {deployment.siteName && `Sitio: ${deployment.siteName}`}
           </SheetDescription>
         </SheetHeader>
@@ -129,7 +129,7 @@ export function DeploymentPanel({
             <>
               {/* Metadata grid */}
               <div className="grid grid-cols-2 gap-3 text-sm">
-                <MetaField label="Proyecto" value={deployment.ctProject} />
+                <MetaField label="Proyecto" value={deployment.projectLabel} />
                 <MetaField label="Sitio" value={deployment.siteName} />
                 <MetaField
                   label="Latitud"

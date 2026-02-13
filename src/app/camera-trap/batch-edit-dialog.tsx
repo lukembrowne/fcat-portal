@@ -37,7 +37,7 @@ export function BatchEditDialog({
   const [applyLocation, setApplyLocation] = useState(false);
   const [applyDates, setApplyDates] = useState(false);
   const [applySite, setApplySite] = useState(false);
-  const [ctProject, setCtProject] = useState("");
+  const [projectLabel, setCtProject] = useState("");
   const [siteName, setSiteName] = useState("");
   const [latitude, setLatitude] = useState("");
   const [longitude, setLongitude] = useState("");
@@ -50,7 +50,7 @@ export function BatchEditDialog({
     startSaving(async () => {
       setError(null);
       const fields: Record<string, unknown> = {};
-      if (applyProject) fields.ctProject = ctProject.trim() || null;
+      if (applyProject) fields.projectLabel = projectLabel.trim() || null;
       if (applySite) fields.siteName = siteName.trim() || null;
       if (applyLocation) {
         fields.latitude = latitude ? parseFloat(latitude) : null;
@@ -110,7 +110,7 @@ export function BatchEditDialog({
               <Label htmlFor="batch-project">Proyecto</Label>
               <Input
                 id="batch-project"
-                value={ctProject}
+                value={projectLabel}
                 onChange={(e) => setCtProject(e.target.value)}
                 disabled={!applyProject}
                 list="batch-project-options"

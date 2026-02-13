@@ -152,13 +152,6 @@ export default async function JobResultsPage({ params }: PageProps) {
           </div>
         </div>
         <div className="flex gap-2">
-          {unverified > 0 && (
-            <Button asChild>
-              <Link href={`/camera-trap/annotate?jobId=${job.id}`}>
-                Anotar ({unverified} pendientes)
-              </Link>
-            </Button>
-          )}
           {deployment && (
             <Button asChild variant="outline">
               <Link href={`/camera-trap/${deployment.id}`}>

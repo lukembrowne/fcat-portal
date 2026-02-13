@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { cookies } from "next/headers";
+import Script from "next/script";
 import { Geist, Geist_Mono } from "next/font/google";
 import { getCurrentUser } from "@/lib/auth";
 import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar";
@@ -52,6 +53,12 @@ export default async function RootLayout({
         ) : (
           <main className="container mx-auto px-4 py-6">{children}</main>
         )}
+        <Script
+          defer
+          src="https://analytics.fcat-ecuador.org/script.js"
+          data-website-id="897a93d9-04b4-4657-83d6-0923833d1811"
+          strategy="afterInteractive"
+        />
       </body>
     </html>
   );

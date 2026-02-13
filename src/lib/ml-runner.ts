@@ -15,6 +15,7 @@ import "server-only";
 import { ChildProcess, spawn, execFile } from "child_process";
 import { promisify } from "util";
 import path from "path";
+import fs from "fs";
 import { createInterface } from "readline";
 import { db } from "@/db";
 import {
@@ -87,6 +88,7 @@ let serverReadyReject: ((err: Error) => void) | null = null;
 let currentJob: JobContext | null = null;
 let idleTimer: ReturnType<typeof setTimeout> | null = null;
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+const PID_FILE = path.join(process.cwd(), "data", "model-server.pid");
 
 // ---------------------------------------------------------------------------
 // Python Discovery
@@ -163,6 +165,38 @@ export async function checkPytorchWildlife(): Promise<{
 // Model Server Lifecycle
 // ---------------------------------------------------------------------------
 
+function killStaleModelServer(): void {
+  try {
+    const pid = parseInt(fs.readFileSync(PID_FILE, "utf-8").trim(), 10);
+    if (pid && !isNaN(pid)) {
+      try {
+        process.kill(pid, "SIGTERM");
+        console.log(`[ml-runner] Killed stale model server (PID ${pid})`);
+      } catch {
+        // Process already dead — fine
+      }
+    }
+  } catch {
+    // No PID file — nothing to clean up
+  }
+}
+
+function writePidFile(pid: number): void {
+  try {
+    fs.writeFileSync(PID_FILE, String(pid), "utf-8");
+  } catch (err) {
+    console.error(`[ml-runner] Failed to write PID file: ${err}`);
+  }
+}
+
+function removePidFile(): void {
+  try {
+    fs.unlinkSync(PID_FILE);
+  } catch {
+    // Already gone
+  }
+}
+
 function resetIdleTimer(): void {
   if (idleTimer) {
     clearTimeout(idleTimer);
@@ -193,6 +227,7 @@ export function shutdownModelServer(): void {
     serverProc = null;
     serverStatus = "dead";
   }
+  removePidFile();
 }
 
 function spawnModelServer(): void {
@@ -205,6 +240,9 @@ function spawnModelServer(): void {
   const absolutePython = path.resolve(pythonPath);
 
   console.log(`[ml-runner] Spawning model server: ${absolutePython} ${scriptPath}`);
+
+  // Kill any orphaned model server from a previous Node.js process
+  killStaleModelServer();
 
   const proc = spawn(absolutePython, [scriptPath], {
     stdio: ["pipe", "pipe", "pipe"],
@@ -221,6 +259,10 @@ function spawnModelServer(): void {
 
   serverProc = proc;
   serverStatus = "starting";
+
+  if (proc.pid) {
+    writePidFile(proc.pid);
+  }
 
   // Route all stdout NDJSON through a single line handler
   const rl = createInterface({ input: proc.stdout! });
@@ -376,6 +418,7 @@ function spawnModelServer(): void {
     console.log(`[ml-runner] Model server exited with code ${code}`);
     serverProc = null;
     serverStatus = "dead";
+    removePidFile();
 
     // Reject pending ready promise
     if (serverReadyReject) {

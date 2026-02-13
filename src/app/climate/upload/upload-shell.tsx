@@ -1,9 +1,8 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useId } from "react";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Upload, CheckCircle, AlertCircle, Loader2, FileText, ChevronDown, ChevronUp, TriangleAlert } from "lucide-react";
 import { previewDatFile, commitDatFile } from "./actions";
 import type { UploadPreview } from "./actions";
@@ -37,7 +36,9 @@ function ClimateUploadCard({
   const [message, setMessage] = useState("");
   const [preview, setPreview] = useState<UploadPreview | null>(null);
   const [anomalyExpanded, setAnomalyExpanded] = useState(false);
+  const [fileName, setFileName] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const fileInputId = useId();
 
   async function handlePreview() {
     const file = fileRef.current?.files?.[0];
@@ -101,6 +102,7 @@ function ClimateUploadCard({
     setStatus("idle");
     setMessage("");
     setPreview(null);
+    setFileName(null);
     if (fileRef.current) fileRef.current.value = "";
   }
 
@@ -127,13 +129,14 @@ function ClimateUploadCard({
         )}
 
         <div className="flex items-center gap-2 mt-3">
-          <Input
+          <input
             ref={fileRef}
             type="file"
             accept=".dat"
-            className="flex-1"
-            onChange={() => {
-              // Reset preview when file changes
+            className="sr-only"
+            id={fileInputId}
+            onChange={(e) => {
+              setFileName(e.target.files?.[0]?.name ?? null);
               if (status === "previewed" || status === "error" || status === "success") {
                 setStatus("idle");
                 setMessage("");
@@ -141,6 +144,15 @@ function ClimateUploadCard({
               }
             }}
           />
+          <label
+            htmlFor={fileInputId}
+            className="flex-1 flex items-center gap-2 px-3 h-9 rounded-md border border-input border-dashed cursor-pointer hover:bg-accent/50 transition-colors text-sm"
+          >
+            <Upload className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <span className={fileName ? "truncate" : "text-muted-foreground"}>
+              {fileName || "Seleccionar archivo .dat"}
+            </span>
+          </label>
           {status !== "previewed" ? (
             <Button
               onClick={handlePreview}

@@ -1,9 +1,8 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useId } from "react";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Upload, CheckCircle, AlertCircle, Loader2 } from "lucide-react";
 import {
   commitLibroMayor,
@@ -39,7 +38,9 @@ function UploadCard({
 }) {
   const [status, setStatus] = useState<"idle" | "uploading" | "success" | "error">("idle");
   const [message, setMessage] = useState("");
+  const [fileName, setFileName] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const fileInputId = useId();
 
   async function handleSubmit() {
     const file = fileRef.current?.files?.[0];
@@ -56,6 +57,7 @@ function UploadCard({
     setMessage(result.message);
 
     // Reset file input
+    setFileName(null);
     if (fileRef.current) fileRef.current.value = "";
   }
 
@@ -81,7 +83,23 @@ function UploadCard({
         )}
 
         <div className="flex items-center gap-2 mt-3">
-          <Input ref={fileRef} type="file" accept={accept} className="flex-1" />
+          <input
+            ref={fileRef}
+            type="file"
+            accept={accept}
+            className="sr-only"
+            id={fileInputId}
+            onChange={(e) => setFileName(e.target.files?.[0]?.name ?? null)}
+          />
+          <label
+            htmlFor={fileInputId}
+            className="flex-1 flex items-center gap-2 px-3 h-9 rounded-md border border-input border-dashed cursor-pointer hover:bg-accent/50 transition-colors text-sm"
+          >
+            <Upload className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <span className={fileName ? "truncate" : "text-muted-foreground"}>
+              {fileName || `Seleccionar archivo ${accept}`}
+            </span>
+          </label>
           <Button
             onClick={handleSubmit}
             disabled={status === "uploading"}

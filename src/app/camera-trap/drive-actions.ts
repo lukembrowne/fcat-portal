@@ -7,7 +7,6 @@ import {
   listDeploymentFolders,
   listImagesRecursive,
   isValidFolderId,
-  type DriveFolder,
 } from "@/lib/drive-client";
 import { requirePermission } from "@/lib/auth";
 import { revalidatePath } from "next/cache";
@@ -17,13 +16,13 @@ import type { Deployment } from "@/db/schema";
 const CAMERA_TRAP_PATH = "/camera-trap";
 
 // ---------------------------------------------------------------------------
-// Discover deployment folders from Google Drive
+// Sync with Google Drive — auto-create deployment rows for new folders
 // ---------------------------------------------------------------------------
 
-export async function discoverDeployments(): Promise<
-  ActionResult<{ known: Deployment[]; discovered: DriveFolder[] }>
+export async function syncWithDrive(): Promise<
+  ActionResult<{ created: Deployment[]; existing: Deployment[]; errors: string[] }>
 > {
-  await requirePermission("camera-trap", "viewer");
+  const user = await requirePermission("camera-trap", "editor");
 
   const rootFolderId = process.env.CAMERA_TRAP_ROOT_FOLDER_ID;
   if (!rootFolderId) {
@@ -49,81 +48,57 @@ export async function discoverDeployments(): Promise<
         .map((d) => d.driveFolderId!)
     );
 
-    const known = existingDeployments.filter(
+    const existing = existingDeployments.filter(
       (d) => d.driveFolderId && knownFolderIds.has(d.driveFolderId)
     );
-    const discovered = driveFolders.filter((f) => !knownFolderIds.has(f.id));
+    const newFolders = driveFolders.filter((f) => !knownFolderIds.has(f.id));
 
-    return { success: true, data: { known, discovered } };
-  } catch (err) {
-    console.error("[Drive] Discovery failed:", err);
-    const message =
-      err instanceof Error ? err.message : "Error al buscar carpetas en Drive";
-    return { success: false, error: message };
-  }
-}
+    // Auto-create deployment rows for new folders
+    const created: Deployment[] = [];
+    const errors: string[] = [];
 
-// ---------------------------------------------------------------------------
-// Activate a Drive folder as a deployment
-// ---------------------------------------------------------------------------
+    for (const folder of newFolders) {
+      if (!isValidFolderId(folder.id)) {
+        errors.push(`ID de carpeta inválido: ${folder.name}`);
+        continue;
+      }
 
-export async function activateDeployment(
-  folderId: string,
-  folderName: string,
-  metadata?: {
-    latitude?: number;
-    longitude?: number;
-    dateStart?: string;
-    dateEnd?: string;
-  }
-): Promise<ActionResult<{ deploymentId: number }>> {
-  const user = await requirePermission("camera-trap", "editor");
+      try {
+        const [deployment] = await db
+          .insert(deployments)
+          .values({
+            projectId: "camera-trap",
+            name: folder.name.trim(),
+            driveFolderId: folder.id,
+            totalImages: 0,
+            status: "unscanned",
+            metadataSource: "drive",
+            createdBy: user.email,
+          })
+          .returning();
 
-  if (!isValidFolderId(folderId)) {
-    return { success: false, error: "ID de carpeta inválido" };
-  }
-
-  if (!folderName.trim()) {
-    return { success: false, error: "El nombre es requerido" };
-  }
-
-  try {
-    const [deployment] = await db
-      .insert(deployments)
-      .values({
-        projectId: "camera-trap",
-        name: folderName.trim(),
-        driveFolderId: folderId,
-        latitude: metadata?.latitude,
-        longitude: metadata?.longitude,
-        dateStart: metadata?.dateStart,
-        dateEnd: metadata?.dateEnd,
-        totalImages: 0,
-        status: "unscanned",
-        createdBy: user.email,
-      })
-      .returning();
-
-    revalidatePath(CAMERA_TRAP_PATH);
-    return { success: true, data: { deploymentId: deployment.id } };
-  } catch (err) {
-    // Catch unique constraint violation
-    if (
-      err instanceof Error &&
-      err.message.includes("UNIQUE constraint failed")
-    ) {
-      return {
-        success: false,
-        error: "Esta carpeta ya está registrada como instalación",
-      };
+        created.push(deployment);
+      } catch (err) {
+        // Unique constraint = already exists (race condition with another sync)
+        if (
+          err instanceof Error &&
+          err.message.includes("UNIQUE constraint failed")
+        ) {
+          continue;
+        }
+        errors.push(
+          `Error al crear ${folder.name}: ${err instanceof Error ? err.message : "Error desconocido"}`
+        );
+      }
     }
 
-    console.error("[Drive] Activation failed:", err);
-    return {
-      success: false,
-      error:
-        err instanceof Error ? err.message : "Error al activar instalación",
-    };
+    revalidatePath(CAMERA_TRAP_PATH);
+    return { success: true, data: { created, existing, errors } };
+  } catch (err) {
+    console.error("[Drive] Sync failed:", err);
+    const message =
+      err instanceof Error ? err.message : "Error al sincronizar con Drive";
+    return { success: false, error: message };
   }
 }
 

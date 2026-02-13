@@ -106,6 +106,12 @@ export const deployments = sqliteTable(
       .notNull()
       .default(sql`(unixepoch())`),
     createdBy: text("created_by"),
+    ctProject: text("ct_project"),
+    siteName: text("site_name"),
+    odkSubmissionId: text("odk_submission_id"),
+    metadataSource: text("metadata_source", {
+      enum: ["manual", "odk", "drive"],
+    }),
   },
   (table) => [
     uniqueIndex("idx_biochoco_deployments_project_path").on(

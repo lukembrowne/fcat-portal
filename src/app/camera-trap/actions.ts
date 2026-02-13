@@ -269,6 +269,9 @@ export async function processJob(
 
     revalidatePath(CAMERA_TRAP_PATH);
 
+    // Auto-advance queue
+    processNextInQueue();
+
     const [updatedJob] = await db
       .select()
       .from(processingJobs)
@@ -296,6 +299,9 @@ export async function processJob(
         statusMessage: null,
       })
       .where(eq(processingJobs.id, jobId));
+
+    // Auto-advance queue even on failure
+    processNextInQueue();
 
     return {
       success: false,
@@ -445,6 +451,104 @@ export async function deleteJob(
 // Query Functions
 // ---------------------------------------------------------------------------
 
+/** Row shape returned to the table UI (deployment + computed stats). */
+export interface DeploymentRow {
+  id: number;
+  name: string;
+  status: string;
+  driveFolderId: string | null;
+  ctProject: string | null;
+  siteName: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  dateStart: string | null;
+  dateEnd: string | null;
+  totalImages: number | null;
+  odkSubmissionId: string | null;
+  metadataSource: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  createdBy: string | null;
+  lastProcessedAt: Date | null;
+  lastJobStatus: string | null;
+  jobCount: number;
+}
+
+export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
+  await requirePermission("camera-trap", "viewer");
+
+  const allDeployments = await db
+    .select()
+    .from(deployments)
+    .where(eq(deployments.projectId, "camera-trap"))
+    .orderBy(desc(deployments.updatedAt));
+
+  if (allDeployments.length === 0) return [];
+
+  const deploymentIds = allDeployments.map((d) => d.id);
+
+  // Batch: latest job per deployment
+  const latestJobs = await db
+    .select({
+      deploymentId: processingJobs.deploymentId,
+      completedAt: sql<number>`MAX(${processingJobs.completedAt})`.as("completed_at_max"),
+      status: processingJobs.status,
+      cnt: count(),
+    })
+    .from(processingJobs)
+    .where(inArray(processingJobs.deploymentId, deploymentIds))
+    .groupBy(processingJobs.deploymentId);
+
+  const jobMap = new Map(latestJobs.map((j) => [j.deploymentId, j]));
+
+  // For each deployment that has jobs, get the actual latest job to get its status
+  const latestJobStatuses = await db
+    .select({
+      deploymentId: processingJobs.deploymentId,
+      status: processingJobs.status,
+      completedAt: processingJobs.completedAt,
+    })
+    .from(processingJobs)
+    .where(inArray(processingJobs.deploymentId, deploymentIds))
+    .orderBy(desc(processingJobs.createdAt));
+
+  const latestStatusMap = new Map<number, { status: string; completedAt: Date | null }>();
+  for (const row of latestJobStatuses) {
+    if (!latestStatusMap.has(row.deploymentId)) {
+      latestStatusMap.set(row.deploymentId, {
+        status: row.status,
+        completedAt: row.completedAt,
+      });
+    }
+  }
+
+  return allDeployments.map((d) => {
+    const jobInfo = jobMap.get(d.id);
+    const latestStatus = latestStatusMap.get(d.id);
+    return {
+      id: d.id,
+      name: d.name,
+      status: d.status,
+      driveFolderId: d.driveFolderId,
+      ctProject: d.ctProject,
+      siteName: d.siteName,
+      latitude: d.latitude,
+      longitude: d.longitude,
+      dateStart: d.dateStart,
+      dateEnd: d.dateEnd,
+      totalImages: d.totalImages,
+      odkSubmissionId: d.odkSubmissionId,
+      metadataSource: d.metadataSource,
+      createdAt: d.createdAt,
+      updatedAt: d.updatedAt,
+      createdBy: d.createdBy,
+      lastProcessedAt: latestStatus?.completedAt ?? null,
+      lastJobStatus: latestStatus?.status ?? null,
+      jobCount: jobInfo?.cnt ?? 0,
+    };
+  });
+}
+
 export async function getDeployments(
   limit: number = 50
 ): Promise<Deployment[]> {
@@ -455,6 +559,337 @@ export async function getDeployments(
     .where(eq(deployments.projectId, "camera-trap"))
     .orderBy(desc(deployments.updatedAt))
     .limit(limit);
+}
+
+// ---------------------------------------------------------------------------
+// Deployment Metadata CRUD
+// ---------------------------------------------------------------------------
+
+export async function updateDeploymentMetadata(
+  id: number,
+  fields: {
+    name?: string;
+    ctProject?: string | null;
+    siteName?: string | null;
+    latitude?: number | null;
+    longitude?: number | null;
+    dateStart?: string | null;
+    dateEnd?: string | null;
+  }
+): Promise<ActionResult> {
+  await requirePermission("camera-trap", "editor");
+
+  try {
+    const [existing] = await db
+      .select()
+      .from(deployments)
+      .where(eq(deployments.id, id));
+
+    if (!existing) {
+      return { success: false, error: "Instalación no encontrada" };
+    }
+
+    await db
+      .update(deployments)
+      .set({
+        ...fields,
+        metadataSource: "manual",
+        updatedAt: new Date(),
+      })
+      .where(eq(deployments.id, id));
+
+    revalidatePath(CAMERA_TRAP_PATH);
+    return { success: true, data: undefined };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Error al actualizar",
+    };
+  }
+}
+
+export async function bulkUpdateMetadata(
+  ids: number[],
+  fields: {
+    ctProject?: string | null;
+    siteName?: string | null;
+    latitude?: number | null;
+    longitude?: number | null;
+    dateStart?: string | null;
+    dateEnd?: string | null;
+  }
+): Promise<ActionResult<{ count: number }>> {
+  await requirePermission("camera-trap", "editor");
+
+  try {
+    if (ids.length === 0) {
+      return { success: true, data: { count: 0 } };
+    }
+
+    // Only include non-undefined fields (undefined = "do not change")
+    const updates: Record<string, unknown> = { updatedAt: new Date(), metadataSource: "manual" };
+    if (fields.ctProject !== undefined) updates.ctProject = fields.ctProject;
+    if (fields.siteName !== undefined) updates.siteName = fields.siteName;
+    if (fields.latitude !== undefined) updates.latitude = fields.latitude;
+    if (fields.longitude !== undefined) updates.longitude = fields.longitude;
+    if (fields.dateStart !== undefined) updates.dateStart = fields.dateStart;
+    if (fields.dateEnd !== undefined) updates.dateEnd = fields.dateEnd;
+
+    await db
+      .update(deployments)
+      .set(updates)
+      .where(inArray(deployments.id, ids));
+
+    revalidatePath(CAMERA_TRAP_PATH);
+    return { success: true, data: { count: ids.length } };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Error al actualizar en lote",
+    };
+  }
+}
+
+export async function deleteDeployments(
+  ids: number[]
+): Promise<ActionResult<{ count: number }>> {
+  await requirePermission("camera-trap", "editor");
+
+  try {
+    if (ids.length === 0) {
+      return { success: true, data: { count: 0 } };
+    }
+
+    // Cancel any active jobs on these deployments
+    const activeJobs = await db
+      .select()
+      .from(processingJobs)
+      .where(
+        and(
+          inArray(processingJobs.deploymentId, ids),
+          inArray(processingJobs.status, ["pending", "processing"])
+        )
+      );
+
+    for (const job of activeJobs) {
+      if (job.status === "processing") {
+        cancelModelServerJob();
+        if (job.pid) {
+          try {
+            process.kill(job.pid, "SIGTERM");
+          } catch {
+            // Process may have already exited
+          }
+        }
+        try {
+          await cleanupJobTempDir(job.id);
+        } catch {
+          // Best effort cleanup
+        }
+      }
+    }
+
+    // Cascade delete: deployments → images, jobs → detections → identifications
+    await db
+      .delete(deployments)
+      .where(inArray(deployments.id, ids));
+
+    revalidatePath(CAMERA_TRAP_PATH);
+    revalidatePath("/camera-trap/results");
+    return { success: true, data: { count: ids.length } };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Error al eliminar",
+    };
+  }
+}
+
+/** Get cascade stats for a set of deployments (for delete confirmation). */
+export async function getDeploymentsCascadeStats(
+  ids: number[]
+): Promise<{ totalImages: number; totalDetections: number; totalVerified: number }> {
+  await requirePermission("camera-trap", "viewer");
+
+  if (ids.length === 0) return { totalImages: 0, totalDetections: 0, totalVerified: 0 };
+
+  const [imgStats] = await db
+    .select({ cnt: count() })
+    .from(images)
+    .where(inArray(images.deploymentId, ids));
+
+  const jobRows = await db
+    .select({ id: processingJobs.id })
+    .from(processingJobs)
+    .where(inArray(processingJobs.deploymentId, ids));
+
+  if (jobRows.length === 0) {
+    return { totalImages: imgStats?.cnt ?? 0, totalDetections: 0, totalVerified: 0 };
+  }
+
+  const jobIds = jobRows.map((j) => j.id);
+
+  const [detStats] = await db
+    .select({ cnt: count() })
+    .from(detections)
+    .where(inArray(detections.jobId, jobIds));
+
+  const detectionIds = (
+    await db
+      .select({ id: detections.id })
+      .from(detections)
+      .where(inArray(detections.jobId, jobIds))
+  ).map((d) => d.id);
+
+  let totalVerified = 0;
+  if (detectionIds.length > 0) {
+    const [verStats] = await db
+      .select({ cnt: count() })
+      .from(identifications)
+      .where(
+        and(
+          inArray(identifications.detectionId, detectionIds),
+          ne(identifications.verificationStatus, "unverified")
+        )
+      );
+    totalVerified = verStats?.cnt ?? 0;
+  }
+
+  return {
+    totalImages: imgStats?.cnt ?? 0,
+    totalDetections: detStats?.cnt ?? 0,
+    totalVerified,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Processing Queue
+// ---------------------------------------------------------------------------
+
+export async function queueProcessing(
+  deploymentIds: number[]
+): Promise<ActionResult<{ jobIds: number[] }>> {
+  await requirePermission("camera-trap", "editor");
+
+  try {
+    if (deploymentIds.length === 0) {
+      return { success: true, data: { jobIds: [] } };
+    }
+
+    const jobIds: number[] = [];
+
+    for (const depId of deploymentIds) {
+      const [deployment] = await db
+        .select()
+        .from(deployments)
+        .where(eq(deployments.id, depId));
+
+      if (!deployment) continue;
+
+      // Skip if already processing
+      if (deployment.status === "processing") continue;
+
+      // Auto-scan if unscanned
+      if (deployment.status === "unscanned" && deployment.driveFolderId) {
+        const { scanDeploymentImages } = await import("./drive-actions");
+        await scanDeploymentImages(depId);
+      }
+
+      // Create job
+      const result = await createProcessingJob(depId);
+      if (result.success) {
+        jobIds.push(result.data.jobId);
+      }
+    }
+
+    // Start the first job (fire-and-forget)
+    if (jobIds.length > 0) {
+      processJob(jobIds[0]);
+    }
+
+    revalidatePath(CAMERA_TRAP_PATH);
+    return { success: true, data: { jobIds } };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Error al encolar procesamiento",
+    };
+  }
+}
+
+/** Called at end of processJob to auto-advance the queue. */
+async function processNextInQueue(): Promise<void> {
+  const [nextJob] = await db
+    .select()
+    .from(processingJobs)
+    .where(eq(processingJobs.status, "pending"))
+    .orderBy(processingJobs.createdAt)
+    .limit(1);
+
+  if (nextJob) {
+    console.log(`[Queue] Auto-advancing to job ${nextJob.id} for deployment ${nextJob.deploymentId}`);
+    processJob(nextJob.id);
+  }
+}
+
+/** Cancel all pending jobs in the queue. */
+export async function cancelQueue(): Promise<ActionResult<{ cancelled: number }>> {
+  await requirePermission("camera-trap", "editor");
+
+  try {
+    // Cancel the currently running job
+    const [activeJob] = await db
+      .select()
+      .from(processingJobs)
+      .where(eq(processingJobs.status, "processing"))
+      .limit(1);
+
+    if (activeJob) {
+      await cancelJob(activeJob.id);
+    }
+
+    // Mark all pending jobs as cancelled
+    const pendingJobs = await db
+      .select({ id: processingJobs.id, deploymentId: processingJobs.deploymentId })
+      .from(processingJobs)
+      .where(eq(processingJobs.status, "pending"));
+
+    if (pendingJobs.length > 0) {
+      await db
+        .update(processingJobs)
+        .set({ status: "cancelled", completedAt: new Date(), statusMessage: null })
+        .where(inArray(processingJobs.id, pendingJobs.map((j) => j.id)));
+
+      // Revert deployment statuses
+      const depIds = [...new Set(pendingJobs.map((j) => j.deploymentId))];
+      await db
+        .update(deployments)
+        .set({ status: "scanned", updatedAt: new Date() })
+        .where(inArray(deployments.id, depIds));
+    }
+
+    revalidatePath(CAMERA_TRAP_PATH);
+    return { success: true, data: { cancelled: pendingJobs.length + (activeJob ? 1 : 0) } };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Error al cancelar cola",
+    };
+  }
+}
+
+/** Get distinct ctProject values for filter dropdown. */
+export async function getDistinctProjects(): Promise<string[]> {
+  await requirePermission("camera-trap", "viewer");
+  const rows = await db
+    .select({ ctProject: deployments.ctProject })
+    .from(deployments)
+    .where(eq(deployments.projectId, "camera-trap"))
+    .groupBy(deployments.ctProject);
+  return rows
+    .map((r) => r.ctProject)
+    .filter((p): p is string => p !== null)
+    .sort();
 }
 
 export async function getDeployment(id: number) {

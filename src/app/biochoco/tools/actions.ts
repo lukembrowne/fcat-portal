@@ -311,8 +311,9 @@ async function deriveSyncUpdates(): Promise<SyncUpdate[]> {
   const deployedMap = new Map<string, string>();
   for (const sub of rawDeploys) {
     const sel = sub.site_selection as Record<string, unknown> | undefined;
+    const depInfo = sub.deployment_info as Record<string, unknown> | undefined;
     const depId = (sel?.deployment_id as string) ?? (sub.deployment_id as string) ?? "";
-    const date = (sel?.fecha_instalacion as string) ?? (sub.fecha_instalacion as string) ?? "";
+    const date = (depInfo?.deploy_date as string) ?? (sel?.fecha_instalacion as string) ?? (sub.fecha_instalacion as string) ?? "";
     if (depId) deployedMap.set(depId, date.slice(0, 10));
   }
 

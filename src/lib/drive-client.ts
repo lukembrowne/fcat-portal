@@ -45,7 +45,7 @@ function getDrive(): drive_v3.Drive {
   const key = getServiceAccountKey();
   const auth = new google.auth.GoogleAuth({
     credentials: key,
-    scopes: ["https://www.googleapis.com/auth/drive.readonly"],
+    scopes: ["https://www.googleapis.com/auth/drive"],
   });
 
   driveClient = google.drive({ version: "v3", auth });
@@ -80,6 +80,20 @@ export async function checkDeploymentUploads(
 ): Promise<ActionResult<UploadStatus>> {
   try {
     const drive = getDrive();
+
+    // Verify the folder still exists and isn't trashed
+    try {
+      const folderMeta = await drive.files.get({
+        fileId: folderId,
+        fields: "id, trashed",
+        supportsAllDrives: true,
+      });
+      if (folderMeta.data.trashed) {
+        return { success: false, error: "Carpeta en la papelera de Drive" };
+      }
+    } catch {
+      return { success: false, error: "Carpeta eliminada de Drive" };
+    }
 
     // Step 1: List subfolders of the deployment folder
     console.log(`[Drive] Checking folder ${folderId}`);
@@ -364,4 +378,100 @@ export async function downloadFileToBuffer(
   );
 
   return Buffer.from(res.data as ArrayBuffer);
+}
+
+// ---------------------------------------------------------------------------
+// Create Deployment Folder (with subfolders)
+// ---------------------------------------------------------------------------
+
+export interface CreatedFolder {
+  id: string;
+  name: string;
+  webViewLink: string;
+}
+
+/**
+ * Create a deployment folder under a parent, plus the 3 data-type subfolders.
+ * If a folder with the same name already exists, reuses it.
+ * All API calls include supportsAllDrives for Shared Drive compatibility.
+ */
+export async function createDeploymentFolder(
+  parentFolderId: string,
+  deploymentName: string
+): Promise<CreatedFolder> {
+  if (!isValidFolderId(parentFolderId)) {
+    throw new Error(`Invalid parent folder ID: ${parentFolderId}`);
+  }
+
+  const drive = getDrive();
+  const FOLDER_MIME = "application/vnd.google-apps.folder";
+
+  // Check if folder already exists under parent
+  const existingRes = await drive.files.list({
+    q: `'${parentFolderId}' in parents and name = '${deploymentName.replace(/'/g, "\\'")}' and mimeType = '${FOLDER_MIME}' and trashed = false`,
+    fields: "files(id, name, webViewLink)",
+    pageSize: 1,
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
+  });
+
+  let folderId: string;
+  let webViewLink: string;
+
+  const existing = existingRes.data.files?.[0];
+  if (existing?.id) {
+    console.log(`[Drive] Reusing existing folder: ${deploymentName} (${existing.id})`);
+    folderId = existing.id;
+    webViewLink = existing.webViewLink ?? `https://drive.google.com/drive/folders/${folderId}`;
+  } else {
+    // Create the deployment folder
+    const createRes = await drive.files.create({
+      requestBody: {
+        name: deploymentName,
+        mimeType: FOLDER_MIME,
+        parents: [parentFolderId],
+      },
+      fields: "id, name, webViewLink",
+      supportsAllDrives: true,
+    });
+
+    folderId = createRes.data.id!;
+    webViewLink = createRes.data.webViewLink ?? `https://drive.google.com/drive/folders/${folderId}`;
+    console.log(`[Drive] Created folder: ${deploymentName} (${folderId})`);
+  }
+
+  // List existing subfolders to avoid duplicates
+  const subfoldersRes = await drive.files.list({
+    q: `'${folderId}' in parents and mimeType = '${FOLDER_MIME}' and trashed = false`,
+    fields: "files(id, name)",
+    pageSize: 20,
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
+  });
+
+  const existingSubfolders = new Set(
+    (subfoldersRes.data.files ?? []).map((f) => f.name)
+  );
+
+  // Create missing subfolders
+  const subfolderNames = Object.values(DATA_TYPE_FOLDERS);
+  for (const subName of subfolderNames) {
+    if (existingSubfolders.has(subName)) {
+      console.log(`[Drive] Subfolder already exists: ${subName}`);
+      continue;
+    }
+
+    await drive.files.create({
+      requestBody: {
+        name: subName,
+        mimeType: FOLDER_MIME,
+        parents: [folderId],
+      },
+      fields: "id",
+      supportsAllDrives: true,
+    });
+    console.log(`[Drive] Created subfolder: ${subName}`);
+  }
+
+  return { id: folderId, name: deploymentName, webViewLink };
 }

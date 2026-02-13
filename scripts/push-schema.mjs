@@ -321,6 +321,11 @@ const migrations = [
   `ALTER TABLE biochoco_deployments ADD COLUMN drive_folder_id TEXT`,
   `ALTER TABLE biochoco_images ADD COLUMN drive_file_id TEXT`,
   `ALTER TABLE biochoco_processing_jobs ADD COLUMN status_message TEXT`,
+  // Camera trap redesign columns
+  `ALTER TABLE biochoco_deployments ADD COLUMN project_label TEXT`,
+  `ALTER TABLE biochoco_deployments ADD COLUMN site_name TEXT`,
+  `ALTER TABLE biochoco_deployments ADD COLUMN odk_submission_id TEXT`,
+  `ALTER TABLE biochoco_deployments ADD COLUMN metadata_source TEXT`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }

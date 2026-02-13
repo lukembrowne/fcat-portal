@@ -12,6 +12,7 @@ import {
   ChevronDown,
   RefreshCw,
   Loader2,
+  FolderPlus,
 } from "lucide-react";
 import {
   Table,
@@ -25,7 +26,8 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import type { ScheduleRow, ScheduleStatus } from "@/lib/schedule-types";
 import type { UploadStatus } from "@/lib/drive-client";
-import { checkDriveForDeployments, type DriveStatusResult } from "./actions";
+import { checkDriveForDeployments, checkSingleDeployment, type DriveStatusResult } from "./actions";
+import { recreateDriveFolder } from "./drive-folder-actions";
 
 // --- Status display components ---
 
@@ -131,6 +133,7 @@ export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
   const [page, setPage] = useState(0);
   const [driveCache, setDriveCache] = useState<Map<string, DriveStatusResult>>(new Map());
   const [checking, startCheck] = useTransition();
+  const [progress, setProgress] = useState<{ current: number; total: number; action: "verify" | "recreate" } | null>(null);
 
   const handleSort = useCallback((field: SortField) => {
     setSortField((prev) => {
@@ -188,27 +191,58 @@ export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
     checkVisibleRows();
   }, [page, sortField, sortDir, search]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Force re-check visible rows (ignore cache)
-  const refreshVisible = useCallback(() => {
+  // Force re-check visible rows (ignore cache) — sequential with progress
+  const refreshVisible = useCallback(async () => {
     const toCheck = pageRows
       .filter((r) => r.driveFolderLink)
       .map((r) => ({ deploymentId: r.deploymentId, driveFolderLink: r.driveFolderLink }));
 
     if (toCheck.length === 0) return;
 
-    startCheck(async () => {
-      const result = await checkDriveForDeployments(toCheck);
-      if (result.success) {
+    setProgress({ current: 0, total: toCheck.length, action: "verify" });
+    try {
+      for (let i = 0; i < toCheck.length; i++) {
+        const { deploymentId, driveFolderLink } = toCheck[i];
+        const result = await checkSingleDeployment(deploymentId, driveFolderLink);
         setDriveCache((prev) => {
           const next = new Map(prev);
-          for (const row of result.data) {
-            next.set(row.deploymentId, row);
-          }
+          next.set(result.deploymentId, result);
           return next;
         });
+        setProgress({ current: i + 1, total: toCheck.length, action: "verify" });
       }
-    });
+    } finally {
+      setProgress(null);
+    }
   }, [pageRows]);
+
+  // Recreate Drive folders for deployments with errors
+  const handleRecreate = useCallback(async () => {
+    const failedIds = pageRows
+      .filter((r) => driveCache.get(r.deploymentId)?.error)
+      .map((r) => r.deploymentId);
+
+    if (failedIds.length === 0) return;
+
+    setProgress({ current: 0, total: failedIds.length, action: "recreate" });
+    try {
+      for (let i = 0; i < failedIds.length; i++) {
+        const result = await recreateDriveFolder(failedIds[i]);
+        if (result.success) {
+          setDriveCache((prev) => {
+            const next = new Map(prev);
+            next.delete(failedIds[i]);
+            return next;
+          });
+        }
+        setProgress({ current: i + 1, total: failedIds.length, action: "recreate" });
+      }
+    } finally {
+      setProgress(null);
+    }
+    // Re-verify to show fresh counts
+    refreshVisible();
+  }, [pageRows, driveCache, refreshVisible]);
 
   const failedCount = pageRows.filter((r) => driveCache.get(r.deploymentId)?.error).length;
 
@@ -217,7 +251,7 @@ export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
       <div className="mb-6">
         <h1 className="text-2xl font-bold">Estado de Datos</h1>
         <p className="text-muted-foreground mt-1">
-          Estado de carga de datos en Google Drive por despliegue.
+          Estado de carga de datos en Google Drive por instalación.
         </p>
       </div>
 
@@ -226,7 +260,7 @@ export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
           <Input
-            placeholder="Buscar por despliegue o sitio..."
+            placeholder="Buscar por instalación o sitio..."
             value={search}
             onChange={(e) => { setSearch(e.target.value); setPage(0); }}
             className="pl-9"
@@ -236,27 +270,38 @@ export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
           variant="outline"
           size="sm"
           onClick={refreshVisible}
-          disabled={checking}
+          disabled={checking || progress !== null}
         >
-          {checking ? <Loader2 className="size-4 animate-spin mr-1.5" /> : <RefreshCw className="size-4 mr-1.5" />}
-          Verificar Drive
+          {checking || progress?.action === "verify" ? <Loader2 className="size-4 animate-spin mr-1.5" /> : <RefreshCw className="size-4 mr-1.5" />}
+          {progress?.action === "verify" ? `Verificando ${progress.current}/${progress.total}...` : "Verificar Drive"}
         </Button>
         <span className="text-sm text-muted-foreground">
-          {filtered.length} despliegue{filtered.length !== 1 ? "s" : ""}
+          {filtered.length} instalaci{filtered.length !== 1 ? "ones" : "ón"}
         </span>
       </div>
 
       {failedCount > 0 && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 p-3 mb-4">
-          <p className="text-sm text-amber-800 dark:text-amber-200">
-            {failedCount} despliegue{failedCount > 1 ? "s" : ""} no se pudo{failedCount > 1 ? "ieron" : ""} verificar en Google Drive.
-          </p>
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-amber-800 dark:text-amber-200">
+              {failedCount} instalaci{failedCount > 1 ? "ones" : "ón"} no se pudo{failedCount > 1 ? "ieron" : ""} verificar en Google Drive.
+            </p>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleRecreate}
+              disabled={checking || progress !== null}
+            >
+              {progress?.action === "recreate" ? <Loader2 className="size-4 animate-spin mr-1.5" /> : <FolderPlus className="size-4 mr-1.5" />}
+              {progress?.action === "recreate" ? `Recreando ${progress.current}/${progress.total}...` : "Recrear Carpetas"}
+            </Button>
+          </div>
         </div>
       )}
 
       {filtered.length === 0 ? (
         <div className="rounded-lg border p-8 text-center text-muted-foreground">
-          {search ? "No se encontraron despliegues." : "No hay despliegues en el cronograma."}
+          {search ? "No se encontraron instalaciones." : "No hay instalaciones en el cronograma."}
         </div>
       ) : (
         <>
@@ -266,7 +311,7 @@ export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
                 <TableRow>
                   <TableHead>
                     <span className="inline-flex items-center gap-1">
-                      Despliegue
+                      Instalación
                       <SortButton field="deploymentId" current={sortField} dir={sortDir} onSort={handleSort} />
                     </span>
                   </TableHead>

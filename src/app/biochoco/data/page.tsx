@@ -1,9 +1,10 @@
 import { requirePermission } from "@/lib/auth";
 import { fetchSchedule } from "./actions";
 import { UploadStatusTable } from "./upload-status-table";
+import { CreateFoldersPanel } from "./create-folders-panel";
 
 export default async function BiochocoDataPage() {
-  await requirePermission("biochoco", "viewer");
+  const user = await requirePermission("biochoco", "viewer");
 
   const result = await fetchSchedule();
 
@@ -21,5 +22,16 @@ export default async function BiochocoDataPage() {
     );
   }
 
-  return <UploadStatusTable schedule={result.data} />;
+  const isEditor =
+    user.globalRole === "super_admin" ||
+    user.permissions.some(
+      (p) => p.projectId === "biochoco" && (p.role === "editor" || p.role === "admin")
+    );
+
+  return (
+    <div className="space-y-6">
+      {isEditor && <CreateFoldersPanel />}
+      <UploadStatusTable schedule={result.data} />
+    </div>
+  );
 }

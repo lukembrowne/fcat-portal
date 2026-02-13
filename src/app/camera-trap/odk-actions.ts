@@ -96,7 +96,9 @@ export async function matchOdkDeployments(
           "";
         const siteId =
           (sel?.site_id as string) ?? (sub.site_id as string) ?? "";
+        const depInfo = sub.deployment_info as Record<string, unknown> | undefined;
         const dateInstalled =
+          (depInfo?.deploy_date as string) ??
           (sel?.fecha_instalacion as string) ??
           (sub.fecha_instalacion as string) ??
           null;

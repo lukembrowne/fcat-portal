@@ -5,6 +5,9 @@ import { loadSchedule } from "@/lib/sheets-client";
 import { checkDeploymentUploads, extractFolderId, type UploadStatus } from "@/lib/drive-client";
 import type { ScheduleRow } from "@/lib/schedule-types";
 import type { ActionResult } from "@/lib/types";
+import { db } from "@/db";
+import { deployments } from "@/db/schema";
+import { isNotNull } from "drizzle-orm";
 
 export interface DriveStatusResult {
   deploymentId: string;
@@ -13,13 +16,48 @@ export interface DriveStatusResult {
 }
 
 /**
- * Load all BioChoco deployments from Google Sheets (no Drive checks).
+ * Check Drive upload status for a single deployment.
+ * Called sequentially from the client so progress can be shown per-item.
+ */
+export async function checkSingleDeployment(
+  deploymentId: string,
+  driveFolderLink: string
+): Promise<DriveStatusResult> {
+  await requirePermission("biochoco", "viewer");
+  const folderId = extractFolderId(driveFolderLink);
+  if (!folderId) return { deploymentId, uploads: null };
+  const result = await checkDeploymentUploads(folderId);
+  if (!result.success) return { deploymentId, uploads: null, error: result.error };
+  return { deploymentId, uploads: result.data };
+}
+
+/**
+ * Load BioChoco deployments from Google Sheets, filtered to only those
+ * that have a Drive folder created (DB driveFolderId is source of truth).
  */
 export async function fetchSchedule(): Promise<ActionResult<ScheduleRow[]>> {
   try {
     await requirePermission("biochoco", "viewer");
     const schedule = await loadSchedule();
-    return { success: true, data: schedule };
+
+    // Only show deployments that have actual Drive folders (DB is source of truth)
+    const dbWithFolders = await db
+      .select({ name: deployments.name, driveFolderId: deployments.driveFolderId })
+      .from(deployments)
+      .where(isNotNull(deployments.driveFolderId));
+
+    const folderMap = new Map(
+      dbWithFolders.map((d) => [d.name, d.driveFolderId!])
+    );
+
+    const filtered = schedule
+      .filter((r) => folderMap.has(r.deploymentId))
+      .map((r) => ({
+        ...r,
+        driveFolderLink: `https://drive.google.com/drive/folders/${folderMap.get(r.deploymentId)}`,
+      }));
+
+    return { success: true, data: filtered };
   } catch (err) {
     console.error("Failed to load schedule:", err);
     return {

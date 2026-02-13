@@ -7,6 +7,9 @@ import { loadSchedule } from "@/lib/sheets-client";
 import type { OdkSiteEntity } from "@/lib/odk-types";
 import type { ActionResult } from "@/lib/types";
 import type { BiochocoOverviewData, SiteInfo } from "./types";
+import { db } from "@/db";
+import { deployments } from "@/db/schema";
+import { isNotNull } from "drizzle-orm";
 
 export async function fetchBiochocoData(): Promise<ActionResult<BiochocoOverviewData>> {
   try {
@@ -17,6 +20,23 @@ export async function fetchBiochocoData(): Promise<ActionResult<BiochocoOverview
       fetchSubmissions<Record<string, unknown>>(BIOCHOCO_PROJECT_ID, BIOCHOCO_FORM_DEPLOY),
       fetchSubmissions<Record<string, unknown>>(BIOCHOCO_PROJECT_ID, BIOCHOCO_FORM_RETRIEVE),
     ]);
+
+    // Enrich schedule with DB Drive folder links (DB is source of truth)
+    const dbWithFolders = await db
+      .select({ name: deployments.name, driveFolderId: deployments.driveFolderId })
+      .from(deployments)
+      .where(isNotNull(deployments.driveFolderId));
+
+    const folderMap = new Map(
+      dbWithFolders.map((d) => [d.name, d.driveFolderId!])
+    );
+
+    for (const row of schedule) {
+      const folderId = folderMap.get(row.deploymentId);
+      if (folderId) {
+        row.driveFolderLink = `https://drive.google.com/drive/folders/${folderId}`;
+      }
+    }
 
     // Transform sites
     const sites: SiteInfo[] = rawSites.map((s) => ({

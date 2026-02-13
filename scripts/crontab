@@ -1,2 +1,2 @@
 # Hourly database backup using SQLite online backup API
-0 * * * * cd /app && node scripts/backup-db.mjs >> /app/data/backups/cron.log 2>&1
+0 * * * * cd /app && /usr/local/bin/node scripts/backup-db.mjs >> /app/data/backups/cron.log 2>&1

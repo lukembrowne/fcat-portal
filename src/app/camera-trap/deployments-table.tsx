@@ -36,12 +36,13 @@ import {
   Search,
   RefreshCw,
   Loader2,
+  ScanSearch,
 } from "lucide-react";
 import type { DeploymentRow } from "./actions";
 import { DeploymentPanel } from "./deployment-panel";
 import { BatchEditDialog } from "./batch-edit-dialog";
 import { BatchDeleteDialog } from "./batch-delete-dialog";
-import { syncWithDrive } from "./drive-actions";
+import { syncWithDrive, scanDeploymentImages } from "./drive-actions";
 import { matchOdkDeployments } from "./odk-actions";
 import { queueProcessing } from "./actions";
 
@@ -72,6 +73,10 @@ export function DeploymentsTable({
   const [batchEditOpen, setBatchEditOpen] = useState(false);
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
   const [processing, startProcessing] = useTransition();
+  const [scanProgress, setScanProgress] = useState<{
+    current: number;
+    total: number;
+  } | null>(null);
 
   // Apply dropdown filters
   const filteredData = useMemo(() => {
@@ -281,6 +286,33 @@ export function DeploymentsTable({
     });
   };
 
+  const handleBatchScan = async () => {
+    const unscanned = initialDeployments.filter(
+      (d) => d.status === "unscanned"
+    );
+    if (unscanned.length === 0) {
+      setSyncMessage("No hay instalaciones sin escanear.");
+      return;
+    }
+    setScanProgress({ current: 0, total: unscanned.length });
+    setSyncMessage(null);
+    let successCount = 0;
+    let errorCount = 0;
+    for (let i = 0; i < unscanned.length; i++) {
+      setScanProgress({ current: i + 1, total: unscanned.length });
+      const result = await scanDeploymentImages(unscanned[i].id);
+      if (result.success) {
+        successCount++;
+      } else {
+        errorCount++;
+      }
+    }
+    setScanProgress(null);
+    setSyncMessage(
+      `Escaneo completo: ${successCount} instalación(es) escaneada(s).${errorCount > 0 ? ` ${errorCount} error(es).` : ""}`
+    );
+  };
+
   return (
     <div className="space-y-4">
       {/* Toolbar */}
@@ -328,19 +360,36 @@ export function DeploymentsTable({
         </select>
 
         {canEdit && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleSync}
-            disabled={syncing}
-          >
-            {syncing ? (
-              <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
-            ) : (
-              <RefreshCw className="h-4 w-4 mr-1.5" />
-            )}
-            Sincronizar con Drive
-          </Button>
+          <>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleSync}
+              disabled={syncing || scanProgress !== null}
+            >
+              {syncing ? (
+                <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4 mr-1.5" />
+              )}
+              Sincronizar con Drive
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleBatchScan}
+              disabled={syncing || scanProgress !== null}
+            >
+              {scanProgress ? (
+                <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+              ) : (
+                <ScanSearch className="h-4 w-4 mr-1.5" />
+              )}
+              {scanProgress
+                ? `Escaneando ${scanProgress.current}/${scanProgress.total}...`
+                : "Escanear Todo"}
+            </Button>
+          </>
         )}
       </div>
 

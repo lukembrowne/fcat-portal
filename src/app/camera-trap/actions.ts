@@ -92,16 +92,15 @@ export async function createProcessingJob(
 }
 
 /**
- * Process a job. No mock fallback — ML works via ML_PYTHON_PATH or fails.
+ * Internal processing logic — no auth check, safe revalidatePath.
  *
- * For Drive-based deployments: downloads images to temp dir first,
- * writes temp paths to images.path, runs ML, then cleans up.
+ * Called by the exported `processJob` server action (which adds auth)
+ * and by `processNextInQueue` / batch processing (which run outside
+ * a request context where requirePermission/revalidatePath would fail).
  */
-export async function processJob(
+async function processJobInternal(
   jobId: number
 ): Promise<ActionResult<{ job: ProcessingJob }>> {
-  await requirePermission("camera-trap", "editor");
-
   let tempDir: string | undefined;
 
   try {
@@ -178,7 +177,7 @@ export async function processJob(
           .set({ status: "scanned", updatedAt: new Date() })
           .where(eq(deployments.id, job.deploymentId));
 
-        revalidatePath(CAMERA_TRAP_PATH);
+        safeRevalidate();
         return {
           success: false,
           error: "No se pudieron descargar imágenes de Drive",
@@ -220,7 +219,7 @@ export async function processJob(
         .set({ status: "scanned", updatedAt: new Date() })
         .where(eq(deployments.id, job.deploymentId));
 
-      revalidatePath(CAMERA_TRAP_PATH);
+      safeRevalidate();
 
       return { success: false, error: mlCheck.message };
     }
@@ -267,7 +266,7 @@ export async function processJob(
       })
       .where(eq(deployments.id, job.deploymentId));
 
-    revalidatePath(CAMERA_TRAP_PATH);
+    safeRevalidate();
 
     // Auto-advance queue
     processNextInQueue();
@@ -308,6 +307,28 @@ export async function processJob(
       error: error instanceof Error ? error.message : "Procesamiento falló",
     };
   }
+}
+
+/** Safe revalidatePath — silently ignores errors when called outside a request context. */
+function safeRevalidate(): void {
+  try {
+    revalidatePath(CAMERA_TRAP_PATH);
+  } catch {
+    // Called outside request context (e.g. fire-and-forget queue) — client polls for updates
+  }
+}
+
+/**
+ * Process a job. No mock fallback — ML works via ML_PYTHON_PATH or fails.
+ *
+ * For Drive-based deployments: downloads images to temp dir first,
+ * writes temp paths to images.path, runs ML, then cleans up.
+ */
+export async function processJob(
+  jobId: number
+): Promise<ActionResult<{ job: ProcessingJob }>> {
+  await requirePermission("camera-trap", "editor");
+  return processJobInternal(jobId);
 }
 
 export async function getMLStatus() {
@@ -802,9 +823,9 @@ export async function queueProcessing(
       }
     }
 
-    // Start the first job (fire-and-forget)
+    // Start the first job (fire-and-forget, no auth needed — already verified above)
     if (jobIds.length > 0) {
-      processJob(jobIds[0]);
+      processJobInternal(jobIds[0]);
     }
 
     revalidatePath(CAMERA_TRAP_PATH);
@@ -828,7 +849,7 @@ async function processNextInQueue(): Promise<void> {
 
   if (nextJob) {
     console.log(`[Queue] Auto-advancing to job ${nextJob.id} for deployment ${nextJob.deploymentId}`);
-    processJob(nextJob.id);
+    processJobInternal(nextJob.id);
   }
 }
 

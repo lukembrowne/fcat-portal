@@ -85,6 +85,7 @@ let serverProc: ChildProcess | null = null;
 let serverStatus: "starting" | "ready" | "busy" | "dead" = "dead";
 let serverReadyResolve: (() => void) | null = null;
 let serverReadyReject: ((err: Error) => void) | null = null;
+let serverReadyPromise: Promise<void> | null = null;
 let currentJob: JobContext | null = null;
 let idleTimer: ReturnType<typeof setTimeout> | null = null;
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
@@ -473,26 +474,14 @@ async function ensureModelServer(): Promise<void> {
     return;
   }
 
-  // Already starting — wait for it
-  if (serverStatus === "starting" && serverProc) {
-    return new Promise<void>((resolve, reject) => {
-      // Chain onto existing promise
-      const prevResolve = serverReadyResolve;
-      const prevReject = serverReadyReject;
-      serverReadyResolve = () => {
-        prevResolve?.();
-        resolve();
-      };
-      serverReadyReject = (err) => {
-        prevReject?.(err);
-        reject(err);
-      };
-    });
-  }
-
   // Busy — can't start another job
   if (serverStatus === "busy") {
     throw new Error("Model server is busy with another job");
+  }
+
+  // Already starting (or another caller is spawning) — share the same promise
+  if (serverReadyPromise) {
+    return serverReadyPromise;
   }
 
   // Dead — validate Python and spawn
@@ -501,11 +490,28 @@ async function ensureModelServer(): Promise<void> {
     throw new Error("Python 3 no encontrado");
   }
 
-  return new Promise<void>((resolve, reject) => {
+  // Re-check after async gap (another caller may have started while we awaited findPython)
+  if (serverReadyPromise) {
+    return serverReadyPromise;
+  }
+  if (serverStatus === "ready" && serverProc) {
+    clearIdleTimer();
+    return;
+  }
+
+  serverReadyPromise = new Promise<void>((resolve, reject) => {
     serverReadyResolve = resolve;
     serverReadyReject = reject;
     spawnModelServer();
   });
+
+  // Clean up the shared promise when it settles
+  serverReadyPromise.then(
+    () => { serverReadyPromise = null; },
+    () => { serverReadyPromise = null; },
+  );
+
+  return serverReadyPromise;
 }
 
 // ---------------------------------------------------------------------------

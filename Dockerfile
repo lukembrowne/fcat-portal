@@ -7,6 +7,14 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
+# --- Dev (deps + ML tooling for development) ---
+FROM deps AS dev
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-venv curl libgl1 libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+RUN curl -LsSf https://astral.sh/uv/install.sh | env INSTALLER_NO_MODIFY_PATH=1 sh \
+    && mv /root/.local/bin/uv /usr/local/bin/uv
+
 # --- Builder ---
 FROM base AS builder
 WORKDIR /app

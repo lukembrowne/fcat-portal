@@ -307,6 +307,7 @@ const migrations = [
   // Google Drive camera trap columns (for DBs created before biochoco_ prefix)
   `ALTER TABLE biochoco_deployments ADD COLUMN drive_folder_id TEXT`,
   `ALTER TABLE biochoco_images ADD COLUMN drive_file_id TEXT`,
+  `ALTER TABLE biochoco_processing_jobs ADD COLUMN status_message TEXT`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }

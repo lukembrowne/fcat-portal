@@ -45,6 +45,7 @@ export function ImageGrid({ images, jobId }: ImageGridProps) {
 function ImageCard({ image, jobId }: { image: ImageGridItem; jobId: number }) {
   const ref = useRef<HTMLDivElement>(null);
   const [isVisible, setIsVisible] = useState(false);
+  const [loadError, setLoadError] = useState(false);
 
   useEffect(() => {
     const el = ref.current;
@@ -73,13 +74,21 @@ function ImageCard({ image, jobId }: { image: ImageGridItem; jobId: number }) {
         ref={ref}
         className="group relative aspect-[4/3] rounded-lg overflow-hidden border bg-muted cursor-pointer hover:ring-2 hover:ring-primary transition-all"
       >
-        {isVisible ? (
+        {isVisible && !loadError ? (
           <img
             src={thumbUrl}
             alt={image.filename}
             className="w-full h-full object-cover"
             loading="lazy"
+            onError={() => setLoadError(true)}
           />
+        ) : loadError ? (
+          <div className="w-full h-full flex flex-col items-center justify-center gap-1 text-muted-foreground">
+            <svg className="size-8 opacity-40" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909M3.75 21h16.5A2.25 2.25 0 0 0 22.5 18.75V5.25A2.25 2.25 0 0 0 20.25 3H3.75A2.25 2.25 0 0 0 1.5 5.25v13.5A2.25 2.25 0 0 0 3.75 21Z" />
+            </svg>
+            <span className="text-[10px]">Sin vista previa</span>
+          </div>
         ) : (
           <div className="w-full h-full bg-muted animate-pulse" />
         )}

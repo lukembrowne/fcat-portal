@@ -9,8 +9,8 @@ import {
   identifications,
   species,
 } from "@/db/schema";
-import { eq, desc, inArray, and, gte, sql } from "drizzle-orm";
-import { runMLPredictions, checkPytorchWildlife } from "@/lib/ml-runner";
+import { eq, desc, inArray, and, gte, ne, sql, count, countDistinct, sum } from "drizzle-orm";
+import { runMLPredictions, checkPytorchWildlife, cancelModelServerJob } from "@/lib/ml-runner";
 import {
   downloadDeploymentForProcessing,
   cleanupJobTempDir,
@@ -123,7 +123,11 @@ export async function processJob(
 
     await db
       .update(processingJobs)
-      .set({ status: "processing", startedAt: new Date() })
+      .set({
+        status: "processing",
+        startedAt: new Date(),
+        statusMessage: "Iniciando procesamiento...",
+      })
       .where(eq(processingJobs.id, jobId));
 
     // Check if this is a Drive-based deployment
@@ -138,9 +142,22 @@ export async function processJob(
 
     // For Drive deployments: download images to temp dir first
     if (deployment.driveFolderId) {
+      await db
+        .update(processingJobs)
+        .set({ statusMessage: "Descargando imágenes de Drive..." })
+        .where(eq(processingJobs.id, jobId));
+
       const downloadResult = await downloadDeploymentForProcessing(
         deployment.id,
-        jobId
+        jobId,
+        async (downloaded, total) => {
+          await db
+            .update(processingJobs)
+            .set({
+              statusMessage: `Descargando imágenes... (${downloaded} de ${total})`,
+            })
+            .where(eq(processingJobs.id, jobId));
+        }
       );
       tempDir = downloadResult.tempDir;
 
@@ -151,6 +168,7 @@ export async function processJob(
           .set({
             status: "failed",
             errorMessage: "No se pudieron descargar imágenes de Drive",
+            statusMessage: null,
             completedAt: new Date(),
           })
           .where(eq(processingJobs.id, jobId));
@@ -175,7 +193,14 @@ export async function processJob(
       .where(eq(images.jobId, jobId));
 
     // No mock fallback — ML must work
+    console.log(`[processJob] Checking ML availability...`);
+    await db
+      .update(processingJobs)
+      .set({ statusMessage: "Verificando disponibilidad ML..." })
+      .where(eq(processingJobs.id, jobId));
+
     const mlCheck = await checkPytorchWildlife();
+    console.log(`[processJob] ML check: available=${mlCheck.available}, message=${mlCheck.message}`);
 
     if (!mlCheck.available) {
       if (tempDir) await cleanupJobTempDir(jobId, tempDir);
@@ -185,6 +210,7 @@ export async function processJob(
         .set({
           status: "failed",
           errorMessage: mlCheck.message,
+          statusMessage: null,
           completedAt: new Date(),
         })
         .where(eq(processingJobs.id, jobId));
@@ -199,6 +225,12 @@ export async function processJob(
       return { success: false, error: mlCheck.message };
     }
 
+    console.log(`[processJob] Starting ML predictions for ${jobImages.length} images (${jobImages.filter(i => i.path).length} with paths)`);
+    await db
+      .update(processingJobs)
+      .set({ statusMessage: "Cargando modelos ML..." })
+      .where(eq(processingJobs.id, jobId));
+
     const mlResult = await runMLPredictions(jobId, {
       imagePaths: jobImages
         .map((img) => img.path)
@@ -209,6 +241,8 @@ export async function processJob(
       confidenceThreshold: job.confidenceThreshold ?? ML_DEFAULTS.confidenceThreshold,
       batchSize: 16,
     });
+
+    console.log(`[processJob] ML result: success=${mlResult.success}, processed=${mlResult.totalProcessed}, detections=${mlResult.totalDetections}, error=${mlResult.error || "none"}`);
 
     // Clean up temp directory after ML completes
     if (tempDir) await cleanupJobTempDir(jobId, tempDir);
@@ -221,6 +255,7 @@ export async function processJob(
         status: finalStatus,
         completedAt: new Date(),
         errorMessage: mlResult.error || null,
+        statusMessage: null,
       })
       .where(eq(processingJobs.id, jobId));
 
@@ -243,6 +278,7 @@ export async function processJob(
       ? { success: true, data: { job: updatedJob } }
       : { success: false, error: mlResult.error || "Procesamiento falló" };
   } catch (error) {
+    console.error(`[processJob] Unhandled error:`, error);
     // Clean up temp directory on error
     if (tempDir) {
       try {
@@ -254,7 +290,11 @@ export async function processJob(
 
     await db
       .update(processingJobs)
-      .set({ status: "failed" })
+      .set({
+        status: "failed",
+        errorMessage: error instanceof Error ? error.message : "Procesamiento falló",
+        statusMessage: null,
+      })
       .where(eq(processingJobs.id, jobId));
 
     return {
@@ -288,7 +328,10 @@ export async function cancelJob(
       return { success: false, error: "Trabajo no encontrado" };
     }
 
-    // Actually kill the subprocess if PID is stored
+    // Graceful cancel via stdin (model server stays alive)
+    cancelModelServerJob();
+
+    // Fallback: kill the subprocess if PID is stored
     if (job.pid) {
       try {
         process.kill(job.pid, "SIGTERM");
@@ -306,7 +349,7 @@ export async function cancelJob(
 
     await db
       .update(processingJobs)
-      .set({ status: "cancelled", completedAt: new Date() })
+      .set({ status: "cancelled", completedAt: new Date(), statusMessage: null })
       .where(eq(processingJobs.id, jobId));
 
     await db
@@ -320,6 +363,80 @@ export async function cancelJob(
     return {
       success: false,
       error: error instanceof Error ? error.message : "Error al cancelar",
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Delete Job — Auto-cancels active jobs, cascades detections/identifications
+// ---------------------------------------------------------------------------
+
+export async function deleteJob(
+  jobId: number
+): Promise<ActionResult> {
+  await requirePermission("camera-trap", "editor");
+
+  try {
+    const [job] = await db
+      .select()
+      .from(processingJobs)
+      .where(eq(processingJobs.id, jobId));
+
+    if (!job) {
+      return { success: false, error: "Trabajo no encontrado" };
+    }
+
+    // Auto-cancel if active (graceful cancel + kill subprocess, clean up temp dir)
+    if (job.status === "processing" || job.status === "pending") {
+      cancelModelServerJob();
+      if (job.pid) {
+        try {
+          process.kill(job.pid, "SIGTERM");
+        } catch {
+          // Process may have already exited
+        }
+      }
+      try {
+        await cleanupJobTempDir(jobId);
+      } catch {
+        // Best effort cleanup
+      }
+    }
+
+    // 1. Reset images that belonged to this job (before cascade nulls jobId)
+    await db
+      .update(images)
+      .set({ status: "pending", jobId: null })
+      .where(eq(images.jobId, jobId));
+
+    // 2. Delete the job (cascades: detections → identifications)
+    await db.delete(processingJobs).where(eq(processingJobs.id, jobId));
+
+    // 3. If no completed jobs remain, revert deployment to "scanned"
+    const remainingJobs = await db
+      .select({ id: processingJobs.id })
+      .from(processingJobs)
+      .where(
+        and(
+          eq(processingJobs.deploymentId, job.deploymentId),
+          eq(processingJobs.status, "completed")
+        )
+      );
+
+    if (remainingJobs.length === 0) {
+      await db
+        .update(deployments)
+        .set({ status: "scanned", updatedAt: new Date() })
+        .where(eq(deployments.id, job.deploymentId));
+    }
+
+    revalidatePath("/camera-trap/results");
+    revalidatePath(CAMERA_TRAP_PATH);
+    return { success: true, data: undefined };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Error al eliminar trabajo",
     };
   }
 }
@@ -364,7 +481,7 @@ export async function getDeployment(id: number) {
   return { deployment, images: deploymentImages, jobs };
 }
 
-export async function getRecentJobs(limit: number = 10) {
+export async function getRecentJobs(limit: number = 50) {
   await requirePermission("camera-trap", "viewer");
 
   const jobs = await db
@@ -375,18 +492,83 @@ export async function getRecentJobs(limit: number = 10) {
 
   if (jobs.length === 0) return [];
 
+  const jobIds = jobs.map((j) => j.id);
+
+  // Batch: deployments
   const deploymentIds = [...new Set(jobs.map((j) => j.deploymentId))];
   const deploymentRows = await db
     .select()
     .from(deployments)
     .where(inArray(deployments.id, deploymentIds));
-
   const deploymentMap = new Map(deploymentRows.map((d) => [d.id, d]));
+
+  // Batch: detection counts per job
+  const detectionCounts = await db
+    .select({ jobId: detections.jobId, cnt: count() })
+    .from(detections)
+    .where(inArray(detections.jobId, jobIds))
+    .groupBy(detections.jobId);
+  const detCountMap = new Map(detectionCounts.map((r) => [r.jobId, r.cnt]));
+
+  // Batch: distinct species counts per job
+  const speciesCounts = await db
+    .select({
+      jobId: detections.jobId,
+      cnt: countDistinct(identifications.species),
+    })
+    .from(identifications)
+    .innerJoin(detections, eq(identifications.detectionId, detections.id))
+    .where(inArray(detections.jobId, jobIds))
+    .groupBy(detections.jobId);
+  const specCountMap = new Map(speciesCounts.map((r) => [r.jobId, r.cnt]));
+
+  // Batch: verified/corrected/rejected identification counts per job
+  const verifiedCounts = await db
+    .select({ jobId: detections.jobId, cnt: count() })
+    .from(identifications)
+    .innerJoin(detections, eq(identifications.detectionId, detections.id))
+    .where(
+      and(
+        inArray(detections.jobId, jobIds),
+        ne(identifications.verificationStatus, "unverified")
+      )
+    )
+    .groupBy(detections.jobId);
+  const verCountMap = new Map(verifiedCounts.map((r) => [r.jobId, r.cnt]));
 
   return jobs.map((job) => ({
     ...job,
-    deployment: deploymentMap.get(job.deploymentId),
+    deployment: deploymentMap.get(job.deploymentId) || null,
+    detectionsCount: detCountMap.get(job.id) || 0,
+    speciesCount: specCountMap.get(job.id) || 0,
+    verifiedCount: verCountMap.get(job.id) || 0,
   }));
+}
+
+export async function getResultsStats() {
+  await requirePermission("camera-trap", "viewer");
+
+  const [jobStats] = await db
+    .select({
+      totalJobs: count(),
+      totalProcessed: sum(processingJobs.processedImages),
+    })
+    .from(processingJobs);
+
+  const [detStats] = await db
+    .select({ totalDetections: count() })
+    .from(detections);
+
+  const [specStats] = await db
+    .select({ totalSpecies: countDistinct(identifications.species) })
+    .from(identifications);
+
+  return {
+    totalJobs: jobStats?.totalJobs || 0,
+    totalImagesProcessed: Number(jobStats?.totalProcessed) || 0,
+    totalDetections: detStats?.totalDetections || 0,
+    uniqueSpecies: specStats?.totalSpecies || 0,
+  };
 }
 
 export async function getJobWithDetails(jobId: number) {

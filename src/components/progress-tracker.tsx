@@ -12,6 +12,7 @@ interface ProgressData {
   total: number;
   failed: number;
   error?: string;
+  statusMessage?: string;
 }
 
 interface ProgressTrackerProps {
@@ -109,16 +110,21 @@ export function ProgressTracker({
   };
 
   const percentage = progress
-    ? Math.round((progress.processed / progress.total) * 100)
+    ? Math.round((progress.processed / Math.max(progress.total, 1)) * 100)
     : 0;
 
-  const statusLabel = {
-    pending: "Esperando inicio...",
-    processing: "Procesando imágenes...",
+  // Use statusMessage from backend during active processing, static labels for terminal states
+  const terminalLabels: Record<string, string> = {
     completed: "Completado",
     failed: "Fallido",
     cancelled: "Cancelado",
-  }[progress?.status || "pending"];
+  };
+  const status = progress?.status || "pending";
+  const isTerminal = status in terminalLabels;
+  const isAnalyzing = status === "processing" && progress?.processed !== undefined && progress.processed > 0;
+  const statusLabel = isTerminal
+    ? terminalLabels[status]
+    : progress?.statusMessage || (status === "pending" ? "Esperando inicio..." : "Procesando imágenes...");
 
   const statusColor = {
     pending: "text-muted-foreground",
@@ -126,7 +132,7 @@ export function ProgressTracker({
     completed: "text-green-600",
     failed: "text-red-600",
     cancelled: "text-orange-600",
-  }[progress?.status || "pending"];
+  }[status];
 
   return (
     <Card>
@@ -144,26 +150,45 @@ export function ProgressTracker({
 
         <div className="space-y-2">
           <div className="h-4 bg-muted rounded-full overflow-hidden">
-            <div
-              className={cn(
-                "h-full transition-all duration-300 rounded-full",
-                progress?.status === "completed"
-                  ? "bg-green-500"
-                  : progress?.status === "failed"
-                    ? "bg-red-500"
-                    : progress?.status === "cancelled"
-                      ? "bg-orange-500"
-                      : "bg-primary"
-              )}
-              style={{ width: `${percentage}%` }}
-            />
+            {status === "processing" && !isAnalyzing ? (
+              <div className="h-full w-full bg-primary/30 rounded-full relative overflow-hidden">
+                <div className="absolute inset-0 bg-primary/60 rounded-full animate-pulse" />
+              </div>
+            ) : (
+              <div
+                className={cn(
+                  "h-full transition-all duration-300 rounded-full",
+                  status === "completed"
+                    ? "bg-green-500"
+                    : status === "failed"
+                      ? "bg-red-500"
+                      : status === "cancelled"
+                        ? "bg-orange-500"
+                        : "bg-primary"
+                )}
+                style={{ width: `${percentage}%` }}
+              />
+            )}
           </div>
-          <div className="flex justify-between text-sm text-muted-foreground">
-            <span>
-              {progress?.processed || 0} de {progress?.total || 0} imágenes
-            </span>
-            <span>{percentage}%</span>
-          </div>
+          {isAnalyzing || isTerminal ? (
+            <div className="flex justify-between text-sm text-muted-foreground">
+              <span>
+                {progress?.processed || 0} de {progress?.total || 0} imágenes
+              </span>
+              <span>{percentage}%</span>
+            </div>
+          ) : status === "processing" ? (
+            <div className="text-sm text-muted-foreground">
+              Preparando...
+            </div>
+          ) : (
+            <div className="flex justify-between text-sm text-muted-foreground">
+              <span>
+                {progress?.processed || 0} de {progress?.total || 0} imágenes
+              </span>
+              <span>{percentage}%</span>
+            </div>
+          )}
         </div>
 
         {progress && progress.failed > 0 && (

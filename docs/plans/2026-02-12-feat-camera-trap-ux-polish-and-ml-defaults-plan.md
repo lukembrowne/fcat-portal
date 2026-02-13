@@ -352,9 +352,9 @@ COPY scripts/ensure-ml-venv.sh ./scripts/
 ## Implementation Phases
 
 ### Phase 1: Table Prefix + Terminology (schema + strings)
-- [ ] Update `src/db/schema.ts` table names to `biochoco_*` prefix
-- [ ] Update `scripts/push-schema.mjs` CREATE TABLE/INDEX statements (DBs are empty — no migration needed, just update the statements)
-- [ ] Run `npm run build` to verify Drizzle resolves correctly
+- [x] Update `src/db/schema.ts` table names to `biochoco_*` prefix
+- [x] Update `scripts/push-schema.mjs` CREATE TABLE/INDEX statements (DBs are empty — no migration needed, just update the statements)
+- [x] Run `npm run build` to verify Drizzle resolves correctly
 - [x] Replace "despliegue" → "instalación" in all camera trap UI files
 - [x] Verify BioChoco pages unchanged
 

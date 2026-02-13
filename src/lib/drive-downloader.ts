@@ -30,7 +30,8 @@ const THUMBNAIL_QUALITY = 80;
  */
 export async function downloadDeploymentForProcessing(
   deploymentId: number,
-  jobId: number
+  jobId: number,
+  onProgress?: (downloaded: number, total: number) => Promise<void>
 ): Promise<{ tempDir: string; downloaded: number; failed: number }> {
   const tempDir = path.join(TEMP_BASE, `ct-job-${jobId}`);
   await fs.mkdir(tempDir, { recursive: true });
@@ -71,6 +72,7 @@ export async function downloadDeploymentForProcessing(
   const thumbDir = path.join(THUMBNAIL_DIR, String(deploymentId));
   await fs.mkdir(thumbDir, { recursive: true });
 
+  let progressCount = 0;
   for (const img of driveImages) {
     const localPath = pathMap.get(img.driveFileId!);
     if (!localPath) continue;
@@ -80,6 +82,11 @@ export async function downloadDeploymentForProcessing(
       .update(images)
       .set({ path: localPath })
       .where(eq(images.id, img.id));
+
+    progressCount++;
+    if (onProgress) {
+      await onProgress(progressCount, driveImages.length);
+    }
 
     // Generate thumbnail if it doesn't exist
     const thumbPath = path.join(thumbDir, `${img.id}.jpg`);

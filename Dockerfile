@@ -19,8 +19,10 @@ FROM base AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
-# System deps: python3 for ML, curl for uv install
-RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-venv curl wget && rm -rf /var/lib/apt/lists/*
+# System deps: python3 for ML, curl for uv, libgl1/libglib2 for OpenCV (used by PytorchWildlife)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-venv curl wget libgl1 libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install uv (fast Python package manager) for ML venv setup
 RUN curl -LsSf https://astral.sh/uv/install.sh | env INSTALLER_NO_MODIFY_PATH=1 sh \

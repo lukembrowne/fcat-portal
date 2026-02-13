@@ -140,6 +140,7 @@ export const processingJobs = sqliteTable("biochoco_processing_jobs", {
   totalImages: integer("total_images").notNull().default(0),
   processedImages: integer("processed_images").notNull().default(0),
   failedImages: integer("failed_images").notNull().default(0),
+  statusMessage: text("status_message"),
   errorMessage: text("error_message"),
   startedAt: integer("started_at", { mode: "timestamp" }),
   completedAt: integer("completed_at", { mode: "timestamp" }),

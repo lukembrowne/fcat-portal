@@ -1,12 +1,12 @@
 "use client";
 
 import { useSearchParams, useRouter } from "next/navigation";
-import { useState, useTransition, useEffect, useRef, Suspense } from "react";
+import { useState, useTransition, Suspense } from "react";
 import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ProgressTracker } from "@/components/progress-tracker";
-import { cancelJob, processJob } from "../actions";
+import { cancelJob } from "../actions";
 
 function ProcessingContent() {
   const searchParams = useSearchParams();
@@ -14,17 +14,6 @@ function ProcessingContent() {
   const jobId = searchParams.get("jobId");
   const [isPending, startTransition] = useTransition();
   const [cancelled, setCancelled] = useState(false);
-  const startedRef = useRef(false);
-
-  useEffect(() => {
-    if (!jobId || startedRef.current) return;
-    startedRef.current = true;
-
-    const jobIdNum = parseInt(jobId, 10);
-    if (isNaN(jobIdNum)) return;
-
-    processJob(jobIdNum);
-  }, [jobId]);
 
   if (!jobId) {
     return (

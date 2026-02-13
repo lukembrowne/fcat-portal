@@ -63,6 +63,7 @@ export async function GET(request: Request) {
             processed: job.processedImages,
             total: job.totalImages,
             failed: job.failedImages,
+            statusMessage: job.statusMessage,
           });
 
           if (["completed", "failed", "cancelled"].includes(job.status)) {

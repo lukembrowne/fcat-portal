@@ -1,14 +1,13 @@
 "use client";
 
 import { useState, useTransition, useEffect } from "react";
-import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { createProcessingJob, getMLStatus } from "../actions";
+import { createProcessingJob, processJob, getMLStatus } from "../actions";
 import { ML_DEFAULTS } from "@/lib/ml-defaults";
 
 export function ProcessButton({ deploymentId }: { deploymentId: number }) {
-  const router = useRouter();
   const [isPending, startTransition] = useTransition();
+  const [started, setStarted] = useState(false);
   const [mlStatus, setMlStatus] = useState<{
     available: boolean;
     message: string;
@@ -27,7 +26,10 @@ export function ProcessButton({ deploymentId }: { deploymentId: number }) {
         return;
       }
 
-      router.push(`/camera-trap/process?jobId=${result.data.jobId}`);
+      // Fire-and-forget: processJob runs in background,
+      // FloatingJobProgress picks it up via polling
+      processJob(result.data.jobId);
+      setStarted(true);
     });
   };
 
@@ -37,10 +39,15 @@ export function ProcessButton({ deploymentId }: { deploymentId: number }) {
     <div className="flex items-center gap-3">
       <Button
         onClick={handleProcess}
-        disabled={isPending || mlUnavailable}
+        disabled={isPending || mlUnavailable || started}
       >
-        {isPending ? "Iniciando..." : "Procesar Imágenes"}
+        {isPending ? "Iniciando..." : started ? "Procesando..." : "Procesar Imágenes"}
       </Button>
+      {started && (
+        <p className="text-sm text-muted-foreground">
+          Progreso visible en el widget flotante
+        </p>
+      )}
       {mlUnavailable && (
         <p className="text-sm text-amber-600 max-w-xs">
           ML no disponible: {mlStatus.message}

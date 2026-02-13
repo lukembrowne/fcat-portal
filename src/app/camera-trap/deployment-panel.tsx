@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useTransition } from "react";
+import { useState, useEffect, useTransition, useRef } from "react";
 import Link from "next/link";
 import {
   Sheet,
@@ -48,31 +48,41 @@ export function DeploymentPanel({
   const [loadingJobs, setLoadingJobs] = useState(false);
   const [scanning, startScanning] = useTransition();
   const [processingAction, startProcessing] = useTransition();
+  const prevKeyRef = useRef<string | null>(null);
+
+  // Reset state when deployment changes or panel opens
+  const deploymentId = deployment?.id ?? null;
+  const key = deploymentId && open ? `${deploymentId}-${open}` : null;
+  if (key !== prevKeyRef.current) {
+    prevKeyRef.current = key;
+    setEditing(false);
+    if (key) setLoadingJobs(true);
+  }
 
   // Load jobs when deployment changes
   useEffect(() => {
-    if (deployment && open) {
-      setEditing(false);
-      setLoadingJobs(true);
-      getDeployment(deployment.id).then((data) => {
-        if (data) {
-          setJobs(
-            data.jobs.map((j) => ({
-              id: j.id,
-              status: j.status,
-              detectorModel: j.detectorModel,
-              classifierModel: j.classifierModel,
-              totalImages: j.totalImages,
-              processedImages: j.processedImages,
-              createdAt: j.createdAt,
-              completedAt: j.completedAt,
-            }))
-          );
-        }
-        setLoadingJobs(false);
-      });
-    }
-  }, [deployment?.id, open]);
+    if (!deploymentId || !open) return;
+    let cancelled = false;
+    getDeployment(deploymentId).then((data) => {
+      if (cancelled) return;
+      if (data) {
+        setJobs(
+          data.jobs.map((j) => ({
+            id: j.id,
+            status: j.status,
+            detectorModel: j.detectorModel,
+            classifierModel: j.classifierModel,
+            totalImages: j.totalImages,
+            processedImages: j.processedImages,
+            createdAt: j.createdAt,
+            completedAt: j.completedAt,
+          }))
+        );
+      }
+      setLoadingJobs(false);
+    });
+    return () => { cancelled = true; };
+  }, [deploymentId, open]);
 
   if (!deployment) return null;
 

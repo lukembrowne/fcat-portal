@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useTransition } from "react";
+import { useState, useEffect, useTransition, useRef } from "react";
 import {
   Dialog,
   DialogContent,
@@ -35,11 +35,20 @@ export function BatchDeleteDialog({
   } | null>(null);
   const [deleting, startDeleting] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const prevSelectedKeyRef = useRef<string | null>(null);
+
+  // Reset state when dialog opens with new selection
+  const selectedKey = open ? selectedIds.join(",") : null;
+  if (selectedKey !== prevSelectedKeyRef.current) {
+    prevSelectedKeyRef.current = selectedKey;
+    if (selectedKey) {
+      setStats(null);
+      setError(null);
+    }
+  }
 
   useEffect(() => {
     if (open && selectedIds.length > 0) {
-      setStats(null);
-      setError(null);
       getDeploymentsCascadeStats(selectedIds).then(setStats);
     }
   }, [open, selectedIds]);

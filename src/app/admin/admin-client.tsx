@@ -76,9 +76,9 @@ interface AdminClientProps {
 }
 
 const ROLES = [
-  { value: "viewer", label: "Visor" },
-  { value: "editor", label: "Editor" },
-  { value: "admin", label: "Admin" },
+  { value: "viewer", label: "Visor", description: "Solo lectura — puede ver datos del proyecto" },
+  { value: "editor", label: "Editor", description: "Puede ver y modificar datos del proyecto" },
+  { value: "admin", label: "Admin", description: "Control total — puede gestionar configuración del proyecto" },
 ];
 
 export function AdminClient({ users, projects }: AdminClientProps) {
@@ -222,6 +222,16 @@ export function AdminClient({ users, projects }: AdminClientProps) {
             </DialogContent>
           </Dialog>
         </div>
+      </div>
+
+      {/* Role Legend */}
+      <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+        <span className="font-medium">Roles:</span>
+        {ROLES.map((r) => (
+          <span key={r.value}>
+            <span className="font-medium">{r.label}</span> — {r.description}
+          </span>
+        ))}
       </div>
 
       {/* Users Table */}

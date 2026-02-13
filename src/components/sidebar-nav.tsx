@@ -50,6 +50,14 @@ export function SidebarNav({ user }: SidebarNavProps) {
         p.projectId === "climate" &&
         (p.role === "editor" || p.role === "admin")
     );
+  const hasFinance = hasProjectAccess(user, "finance");
+  const isFinanceEditor =
+    user.globalRole === "super_admin" ||
+    user.permissions.some(
+      (p) =>
+        p.projectId === "finance" &&
+        (p.role === "editor" || p.role === "admin")
+    );
 
   // Build BioChocó children
   const biochocoChildren: NavItem[] = [];
@@ -126,26 +134,33 @@ export function SidebarNav({ user }: SidebarNavProps) {
   }
 
   // Admin section
-  if (user.globalRole === "super_admin") {
-    sections.push({
-      title: "Administración",
-      items: [
-        {
-          label: "Finanzas",
-          icon: "dollar-sign",
-          children: [
-            { label: "Flujo de Caja", href: "/finance/cashflow" },
-            { label: "Ingresos", href: "/finance/revenue" },
-            { label: "Gastos", href: "/finance/expenses" },
-            { label: "Sueldos", href: "/finance/sueldos" },
-            { label: "Presupuesto", href: "/finance/budget" },
-            { label: "Comparación Anual", href: "/finance/annual" },
-            { label: "Cargar Datos", href: "/finance/data" },
-          ],
-        },
-        { label: "Panel de Admin", href: "/admin", icon: "shield" },
-      ],
+  const adminItems: NavItem[] = [];
+
+  if (hasFinance) {
+    const financeChildren: NavItem[] = [
+      { label: "Flujo de Caja", href: "/finance/cashflow" },
+      { label: "Ingresos", href: "/finance/revenue" },
+      { label: "Gastos", href: "/finance/expenses" },
+      { label: "Sueldos", href: "/finance/sueldos" },
+      { label: "Presupuesto", href: "/finance/budget" },
+      { label: "Comparación Anual", href: "/finance/annual" },
+    ];
+    if (isFinanceEditor) {
+      financeChildren.push({ label: "Cargar Datos", href: "/finance/data" });
+    }
+    adminItems.push({
+      label: "Finanzas",
+      icon: "dollar-sign",
+      children: financeChildren,
     });
+  }
+
+  if (user.globalRole === "super_admin") {
+    adminItems.push({ label: "Panel de Admin", href: "/admin", icon: "shield" });
+  }
+
+  if (adminItems.length > 0) {
+    sections.push({ title: "Administración", items: adminItems });
   }
 
   return <SidebarShell sections={sections} user={user} />;

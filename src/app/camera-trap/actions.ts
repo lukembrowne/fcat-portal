@@ -524,6 +524,121 @@ export async function getJobDeleteStats(
   return { detectionsCount, verifiedCount: verStats?.cnt ?? 0 };
 }
 
+/** Get aggregated deletion stats for multiple jobs. */
+export async function getJobsDeleteStats(
+  jobIds: number[]
+): Promise<{ totalDetections: number; totalVerified: number }> {
+  await requirePermission("camera-trap", "viewer");
+
+  if (jobIds.length === 0) return { totalDetections: 0, totalVerified: 0 };
+
+  const [detStats] = await db
+    .select({ cnt: count() })
+    .from(detections)
+    .where(inArray(detections.jobId, jobIds));
+
+  const totalDetections = detStats?.cnt ?? 0;
+  if (totalDetections === 0) return { totalDetections: 0, totalVerified: 0 };
+
+  const detectionIds = (
+    await db
+      .select({ id: detections.id })
+      .from(detections)
+      .where(inArray(detections.jobId, jobIds))
+  ).map((d) => d.id);
+
+  let totalVerified = 0;
+  if (detectionIds.length > 0) {
+    const [verStats] = await db
+      .select({ cnt: count() })
+      .from(identifications)
+      .where(
+        and(
+          inArray(identifications.detectionId, detectionIds),
+          ne(identifications.verificationStatus, "unverified")
+        )
+      );
+    totalVerified = verStats?.cnt ?? 0;
+  }
+
+  return { totalDetections, totalVerified };
+}
+
+/** Batch delete multiple jobs. Reuses deleteJob logic for each. */
+export async function deleteJobs(
+  jobIds: number[]
+): Promise<ActionResult<{ count: number }>> {
+  await requirePermission("camera-trap", "editor");
+
+  if (jobIds.length === 0) {
+    return { success: true, data: { count: 0 } };
+  }
+
+  try {
+    for (const jobId of jobIds) {
+      const [job] = await db
+        .select()
+        .from(processingJobs)
+        .where(eq(processingJobs.id, jobId));
+
+      if (!job) continue;
+
+      // Auto-cancel if active
+      if (job.status === "processing" || job.status === "pending") {
+        cancelModelServerJob();
+        if (job.pid) {
+          try {
+            process.kill(job.pid, "SIGTERM");
+          } catch {
+            // Process may have already exited
+          }
+        }
+        try {
+          await cleanupJobTempDir(jobId);
+        } catch {
+          // Best effort cleanup
+        }
+      }
+
+      // Reset images
+      await db
+        .update(images)
+        .set({ status: "pending", jobId: null })
+        .where(eq(images.jobId, jobId));
+
+      // Delete job (cascades: detections → identifications)
+      await db.delete(processingJobs).where(eq(processingJobs.id, jobId));
+
+      // If no completed jobs remain, revert deployment to "scanned"
+      const remainingJobs = await db
+        .select({ id: processingJobs.id })
+        .from(processingJobs)
+        .where(
+          and(
+            eq(processingJobs.deploymentId, job.deploymentId),
+            eq(processingJobs.status, "completed")
+          )
+        );
+
+      if (remainingJobs.length === 0) {
+        await db
+          .update(deployments)
+          .set({ status: "scanned", updatedAt: new Date() })
+          .where(eq(deployments.id, job.deploymentId));
+      }
+    }
+
+    revalidatePath("/camera-trap/results");
+    revalidatePath(CAMERA_TRAP_PATH);
+    return { success: true, data: { count: jobIds.length } };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Error al eliminar trabajos",
+    };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Query Functions
 // ---------------------------------------------------------------------------

@@ -3,6 +3,7 @@
 import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { StatusBadge } from "@/components/status-badge";
 import {
   Table,
@@ -13,6 +14,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { DeleteJobDialog } from "../delete-job-dialog";
+import { BatchDeleteJobsDialog } from "../batch-delete-jobs-dialog";
 
 type SortKey =
   | "deployment"
@@ -48,6 +50,8 @@ export function ResultsTable({ jobs, canDelete }: Props) {
   const [sortKey, setSortKey] = useState<SortKey>("date");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [deleteJobId, setDeleteJobId] = useState<number | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
 
   const sorted = useMemo(() => {
     return [...jobs].sort((a, b) => {
@@ -111,12 +115,66 @@ export function ResultsTable({ jobs, canDelete }: Props) {
     });
   }
 
+  const allSelected =
+    sorted.length > 0 && sorted.every((j) => selectedIds.has(j.id));
+
+  function toggleAll() {
+    if (allSelected) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(sorted.map((j) => j.id)));
+    }
+  }
+
+  function toggleOne(id: number) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }
+
   return (
     <>
+      {canDelete && selectedIds.size > 0 && (
+        <div className="flex items-center gap-3 rounded-lg border bg-muted/50 px-4 py-2 mb-3">
+          <span className="text-sm font-medium">
+            {selectedIds.size} seleccionado{selectedIds.size > 1 ? "s" : ""}
+          </span>
+          <Button
+            size="sm"
+            variant="destructive"
+            onClick={() => setBatchDeleteOpen(true)}
+          >
+            Eliminar
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setSelectedIds(new Set())}
+          >
+            Deseleccionar
+          </Button>
+        </div>
+      )}
+
       <div className="border rounded-lg overflow-hidden">
         <Table>
           <TableHeader>
             <TableRow>
+              {canDelete && (
+                <TableHead className="w-10">
+                  <Checkbox
+                    checked={allSelected}
+                    onCheckedChange={toggleAll}
+                    aria-label="Seleccionar todos"
+                  />
+                </TableHead>
+              )}
               <SortHeader label="Instalación" col="deployment" />
               <SortHeader label="Estado" col="status" />
               <SortHeader label="Imágenes" col="images" />
@@ -132,8 +190,18 @@ export function ResultsTable({ jobs, canDelete }: Props) {
               <TableRow
                 key={job.id}
                 className="cursor-pointer"
+                data-state={selectedIds.has(job.id) ? "selected" : undefined}
                 onClick={() => router.push(`/camera-trap/results/${job.id}`)}
               >
+                {canDelete && (
+                  <TableCell onClick={(e) => e.stopPropagation()}>
+                    <Checkbox
+                      checked={selectedIds.has(job.id)}
+                      onCheckedChange={() => toggleOne(job.id)}
+                      aria-label={`Seleccionar trabajo #${job.id}`}
+                    />
+                  </TableCell>
+                )}
                 <TableCell className="font-medium">
                   {job.deployment?.name || "Instalación desconocida"}
                 </TableCell>
@@ -182,6 +250,14 @@ export function ResultsTable({ jobs, canDelete }: Props) {
         jobId={deleteJobId}
         onClose={() => setDeleteJobId(null)}
         onDeleted={() => setDeleteJobId(null)}
+      />
+
+      <BatchDeleteJobsDialog
+        open={batchDeleteOpen}
+        onOpenChange={setBatchDeleteOpen}
+        selectedIds={[...selectedIds]}
+        selectedCount={selectedIds.size}
+        onComplete={() => setSelectedIds(new Set())}
       />
     </>
   );

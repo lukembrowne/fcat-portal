@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/status-badge";
 import { requirePermission } from "@/lib/auth";
@@ -136,7 +135,7 @@ export default async function JobResultsPage({ params }: PageProps) {
       </div>
 
       {/* Header */}
-      <div className="flex items-center justify-between mb-8">
+      <div className="flex items-center justify-between mb-4">
         <div>
           <h1 className="text-3xl font-bold mb-2">
             {deployment?.name || "Instalación desconocida"}
@@ -147,7 +146,8 @@ export default async function JobResultsPage({ params }: PageProps) {
               {job.processedImages} / {job.totalImages} imágenes procesadas
             </span>
             <span className="text-muted-foreground text-sm">
-              Modelo: {job.detectorModel}
+              Detector: {job.detectorModel}
+              {job.classifierModel && <> · Clasificador: {job.classifierModel}</>}
             </span>
           </div>
         </div>
@@ -165,82 +165,29 @@ export default async function JobResultsPage({ params }: PageProps) {
         </div>
       </div>
 
-      {/* Stats Grid */}
-      <div className="grid gap-4 md:grid-cols-5 mb-8">
-        <StatCard label="Total Imágenes" value={job.totalImages} />
-        <StatCard label="Procesadas" value={job.processedImages} />
-        <StatCard label="Fallidas" value={job.failedImages} />
-        <StatCard label="Detecciones" value={jobDetections.length} />
-        <StatCard
-          label="Especies"
-          value={Object.keys(speciesCount).length}
-        />
+      {/* Compact Summary */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground mb-4">
+        <span><strong className="text-foreground">{jobDetections.length}</strong> detecciones</span>
+        <span>·</span>
+        <span><strong className="text-foreground">{Object.keys(speciesCount).length}</strong> especies</span>
+        {jobIdentifications.length > 0 && (
+          <>
+            <span>·</span>
+            <span>
+              <strong className="text-foreground">{verified}</strong> de {jobIdentifications.length} verificadas
+              {unverified > 0 && <span className="ml-1">({unverified} pendientes)</span>}
+            </span>
+          </>
+        )}
+        {job.failedImages > 0 && (
+          <>
+            <span>·</span>
+            <span className="text-destructive">
+              <strong>{job.failedImages}</strong> fallidas
+            </span>
+          </>
+        )}
       </div>
-
-      {/* Verification Progress */}
-      {jobIdentifications.length > 0 && (
-        <Card className="mb-8">
-          <CardHeader>
-            <CardTitle className="text-lg">Progreso de Verificación</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center gap-4 mb-2">
-              <span className="text-sm">
-                {verified} de {jobIdentifications.length} verificadas
-              </span>
-              <span className="text-xs text-muted-foreground">
-                ({unverified} pendientes)
-              </span>
-            </div>
-            <div className="h-2 bg-muted rounded-full overflow-hidden">
-              <div
-                className="h-full bg-green-600 rounded-full"
-                style={{
-                  width: `${
-                    (verified / jobIdentifications.length) * 100
-                  }%`,
-                }}
-              />
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Species Distribution */}
-      {sortedSpecies.length > 0 && (
-        <Card className="mb-8">
-          <CardHeader>
-            <CardTitle>Distribución de Especies</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-3">
-              {sortedSpecies.slice(0, 10).map(([species, count]) => {
-                const total = Object.values(speciesCount).reduce(
-                  (a, b) => a + b,
-                  0
-                );
-                const percentage = ((count / total) * 100).toFixed(1);
-                return (
-                  <div key={species} className="space-y-1">
-                    <div className="flex justify-between text-sm">
-                      <span className="font-medium">{species}</span>
-                      <span className="text-muted-foreground">
-                        {count} ({percentage}%)
-                      </span>
-                    </div>
-                    <div className="h-2 bg-muted rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-primary rounded-full"
-                        style={{ width: `${percentage}%` }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </CardContent>
-        </Card>
-      )}
 
       {/* Image Grid with Filter Sidebar */}
       <ResultsClient
@@ -249,16 +196,5 @@ export default async function JobResultsPage({ params }: PageProps) {
         speciesList={sortedSpecies}
       />
     </div>
-  );
-}
-
-function StatCard({ label, value }: { label: string; value: number }) {
-  return (
-    <Card>
-      <CardContent className="pt-6">
-        <p className="text-sm text-muted-foreground">{label}</p>
-        <p className="text-3xl font-bold">{value}</p>
-      </CardContent>
-    </Card>
   );
 }

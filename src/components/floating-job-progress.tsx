@@ -26,6 +26,7 @@ interface SSEData {
 }
 
 const POLL_INTERVAL = 3000;
+const EMPTY_POLLS_BEFORE_STOP = 2;
 
 export function FloatingJobProgress() {
   const [allJobs, setAllJobs] = useState<ActiveJob[]>([]);
@@ -34,11 +35,13 @@ export function FloatingJobProgress() {
   const [dismissed, setDismissed] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [showQueue, setShowQueue] = useState(false);
+  const [polling, setPolling] = useState(false);
 
   const eventSourceRef = useRef<EventSource | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastJobIdRef = useRef<number | null>(null);
+  const emptyPollCountRef = useRef(0);
 
   // Derived state
   const processingJob = allJobs.find((j) => j.status === "processing") ?? null;
@@ -51,6 +54,12 @@ export function FloatingJobProgress() {
   const hasQueue = totalQueueSize > 1;
   const activeJob = processingJob ?? allJobs[0] ?? null;
 
+  // Start polling (called by job-started event or on mount check)
+  const startPolling = useCallback(() => {
+    emptyPollCountRef.current = 0;
+    setPolling(true);
+  }, []);
+
   // Poll /api/active-jobs for active jobs
   const pollActiveJobs = useCallback(async () => {
     try {
@@ -61,6 +70,8 @@ export function FloatingJobProgress() {
       setAllJobs(jobs);
 
       if (jobs.length > 0) {
+        emptyPollCountRef.current = 0;
+
         // Find the currently processing job (or highest ID)
         const current =
           jobs.find((j) => j.status === "processing") ??
@@ -74,14 +85,58 @@ export function FloatingJobProgress() {
           setSseData(null);
           setCancelling(false);
         }
+      } else {
+        emptyPollCountRef.current++;
+        if (emptyPollCountRef.current >= EMPTY_POLLS_BEFORE_STOP) {
+          setPolling(false);
+        }
       }
     } catch {
       // Silently ignore polling errors
     }
   }, []);
 
-  // Polling loop
+  // Listen for job-started events to begin polling
   useEffect(() => {
+    const handleJobStarted = () => startPolling();
+    window.addEventListener("job-started", handleJobStarted);
+    return () => window.removeEventListener("job-started", handleJobStarted);
+  }, [startPolling]);
+
+  // One-time check on mount to catch jobs already running (e.g. page refresh)
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/active-jobs");
+        if (!res.ok) return;
+        const jobs: ActiveJob[] = await res.json();
+        if (jobs.length > 0) startPolling();
+      } catch {
+        // ignore
+      }
+    })();
+  }, [startPolling]);
+
+  // Pause polling when tab is hidden, resume when visible
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.hidden && pollTimerRef.current) {
+        clearTimeout(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () =>
+      document.removeEventListener("visibilitychange", handleVisibility);
+  }, []);
+
+  // Polling loop — only runs when `polling` is true
+  useEffect(() => {
+    if (!polling) {
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+      return;
+    }
+
     const poll = () => {
       pollActiveJobs();
       pollTimerRef.current = setTimeout(poll, POLL_INTERVAL);
@@ -91,7 +146,7 @@ export function FloatingJobProgress() {
     return () => {
       if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
     };
-  }, [pollActiveJobs]);
+  }, [polling, pollActiveJobs]);
 
   // SSE connection — connects when we have a processing job
   useEffect(() => {

@@ -26,10 +26,10 @@ export function ProcessButton({ deploymentId }: { deploymentId: number }) {
         return;
       }
 
-      // Fire-and-forget: processJob runs in background,
-      // FloatingJobProgress picks it up via polling
+      // Fire-and-forget: processJob runs in background
       processJob(result.data.jobId);
       setStarted(true);
+      window.dispatchEvent(new Event("job-started"));
     });
   };
 

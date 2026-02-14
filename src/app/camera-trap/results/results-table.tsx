@@ -5,14 +5,6 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/status-badge";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
   Table,
   TableBody,
   TableCell,
@@ -20,7 +12,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { deleteJob } from "../actions";
+import { DeleteJobDialog } from "../delete-job-dialog";
 
 type SortKey =
   | "deployment"
@@ -55,8 +47,7 @@ export function ResultsTable({ jobs, canDelete }: Props) {
   const router = useRouter();
   const [sortKey, setSortKey] = useState<SortKey>("date");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
-  const [deleteTarget, setDeleteTarget] = useState<ResultsJob | null>(null);
-  const [deleting, setDeleting] = useState(false);
+  const [deleteJobId, setDeleteJobId] = useState<number | null>(null);
 
   const sorted = useMemo(() => {
     return [...jobs].sort((a, b) => {
@@ -96,17 +87,6 @@ export function ResultsTable({ jobs, canDelete }: Props) {
     } else {
       setSortKey(key);
       setSortDir("desc");
-    }
-  }
-
-  async function handleDelete() {
-    if (!deleteTarget) return;
-    setDeleting(true);
-    const result = await deleteJob(deleteTarget.id);
-    setDeleting(false);
-    setDeleteTarget(null);
-    if (!result.success) {
-      alert(result.error);
     }
   }
 
@@ -186,7 +166,7 @@ export function ResultsTable({ jobs, canDelete }: Props) {
                       size="sm"
                       variant="ghost"
                       className="text-destructive hover:text-destructive"
-                      onClick={() => setDeleteTarget(job)}
+                      onClick={() => setDeleteJobId(job.id)}
                     >
                       Eliminar
                     </Button>
@@ -198,43 +178,11 @@ export function ResultsTable({ jobs, canDelete }: Props) {
         </Table>
       </div>
 
-      {/* Delete Confirmation Dialog */}
-      <Dialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>¿Eliminar trabajo #{deleteTarget?.id}?</DialogTitle>
-            <DialogDescription>
-              Se eliminarán{" "}
-              <strong>
-                {deleteTarget?.detectionsCount} detecciones
-              </strong>{" "}
-              y sus identificaciones
-              {(deleteTarget?.verifiedCount || 0) > 0 && (
-                <>
-                  {" "}
-                  (<strong>{deleteTarget?.verifiedCount} verificadas</strong>)
-                </>
-              )}
-              . Las imágenes se conservarán pero perderán sus resultados.
-            </DialogDescription>
-          </DialogHeader>
-          <p className="text-sm text-destructive font-medium">
-            Esta acción no se puede deshacer.
-          </p>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleteTarget(null)}>
-              Cancelar
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={handleDelete}
-              disabled={deleting}
-            >
-              {deleting ? "Eliminando..." : "Eliminar"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <DeleteJobDialog
+        jobId={deleteJobId}
+        onClose={() => setDeleteJobId(null)}
+        onDeleted={() => setDeleteJobId(null)}
+      />
     </>
   );
 }

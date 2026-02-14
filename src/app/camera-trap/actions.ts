@@ -490,6 +490,40 @@ export async function deleteJob(
   }
 }
 
+/** Get deletion stats for a single job (detection + verified counts). */
+export async function getJobDeleteStats(
+  jobId: number
+): Promise<{ detectionsCount: number; verifiedCount: number }> {
+  await requirePermission("camera-trap", "viewer");
+
+  const [detStats] = await db
+    .select({ cnt: count() })
+    .from(detections)
+    .where(eq(detections.jobId, jobId));
+
+  const detectionsCount = detStats?.cnt ?? 0;
+  if (detectionsCount === 0) return { detectionsCount: 0, verifiedCount: 0 };
+
+  const jobDetectionIds = (
+    await db
+      .select({ id: detections.id })
+      .from(detections)
+      .where(eq(detections.jobId, jobId))
+  ).map((d) => d.id);
+
+  const [verStats] = await db
+    .select({ cnt: count() })
+    .from(identifications)
+    .where(
+      and(
+        inArray(identifications.detectionId, jobDetectionIds),
+        ne(identifications.verificationStatus, "unverified")
+      )
+    );
+
+  return { detectionsCount, verifiedCount: verStats?.cnt ?? 0 };
+}
+
 // ---------------------------------------------------------------------------
 // Query Functions
 // ---------------------------------------------------------------------------
@@ -516,6 +550,8 @@ export interface DeploymentRow {
   lastJobStatus: string | null;
   lastCompletedJobId: number | null;
   jobCount: number;
+  totalDetections: number | null;
+  distinctSpecies: number | null;
 }
 
 export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
@@ -588,9 +624,39 @@ export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
     }
   }
 
+  // Batch: detection counts and species counts per latest completed job
+  const completedJobIds = [...completedJobMap.values()];
+  const detCountMap = new Map<number, number>();
+  const specCountMap = new Map<number, number>();
+
+  if (completedJobIds.length > 0) {
+    const detectionCounts = await db
+      .select({ jobId: detections.jobId, cnt: count() })
+      .from(detections)
+      .where(inArray(detections.jobId, completedJobIds))
+      .groupBy(detections.jobId);
+    for (const r of detectionCounts) {
+      detCountMap.set(r.jobId, r.cnt);
+    }
+
+    const speciesCounts = await db
+      .select({
+        jobId: detections.jobId,
+        cnt: countDistinct(identifications.species),
+      })
+      .from(identifications)
+      .innerJoin(detections, eq(identifications.detectionId, detections.id))
+      .where(inArray(detections.jobId, completedJobIds))
+      .groupBy(detections.jobId);
+    for (const r of speciesCounts) {
+      specCountMap.set(r.jobId, r.cnt);
+    }
+  }
+
   return allDeployments.map((d) => {
     const jobInfo = jobMap.get(d.id);
     const latestStatus = latestStatusMap.get(d.id);
+    const completedJobId = completedJobMap.get(d.id);
     return {
       id: d.id,
       name: d.name,
@@ -610,8 +676,10 @@ export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
       createdBy: d.createdBy,
       lastProcessedAt: latestStatus?.completedAt ?? null,
       lastJobStatus: latestStatus?.status ?? null,
-      lastCompletedJobId: completedJobMap.get(d.id) ?? null,
+      lastCompletedJobId: completedJobId ?? null,
       jobCount: jobInfo?.cnt ?? 0,
+      totalDetections: completedJobId != null ? (detCountMap.get(completedJobId) ?? 0) : null,
+      distinctSpecies: completedJobId != null ? (specCountMap.get(completedJobId) ?? 0) : null,
     };
   });
 }

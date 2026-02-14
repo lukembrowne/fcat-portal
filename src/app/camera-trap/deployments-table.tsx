@@ -39,7 +39,6 @@ import {
   Search,
   RefreshCw,
   Loader2,
-  ScanSearch,
   Eye,
 } from "lucide-react";
 import type { DeploymentRow } from "./actions";
@@ -87,10 +86,6 @@ export function DeploymentsTable({
   const [batchEditOpen, setBatchEditOpen] = useState(false);
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
   const [processing, startProcessing] = useTransition();
-  const [scanProgress, setScanProgress] = useState<{
-    current: number;
-    total: number;
-  } | null>(null);
 
   // Cache for loaded job data per deployment
   const jobsCacheRef = useRef<Map<number, JobInfo[]>>(new Map());
@@ -186,6 +181,34 @@ export function DeploymentsTable({
         enableGlobalFilter: false,
       },
       {
+        accessorKey: "totalDetections",
+        header: "Detecciones",
+        cell: ({ getValue }) => {
+          const v = getValue<number | null>();
+          if (v == null) return "—";
+          return (
+            <span className="tabular-nums">
+              {v > 0 ? v.toLocaleString() : "0"}
+            </span>
+          );
+        },
+        enableGlobalFilter: false,
+      },
+      {
+        accessorKey: "distinctSpecies",
+        header: "Especies",
+        cell: ({ getValue }) => {
+          const v = getValue<number | null>();
+          if (v == null) return "—";
+          return (
+            <span className="tabular-nums">
+              {v > 0 ? v.toLocaleString() : "0"}
+            </span>
+          );
+        },
+        enableGlobalFilter: false,
+      },
+      {
         accessorKey: "lastProcessedAt",
         header: "Último Proceso",
         cell: ({ getValue }) => {
@@ -240,22 +263,6 @@ export function DeploymentsTable({
         enableGlobalFilter: false,
       },
       {
-        id: "location",
-        header: "Ubicación",
-        accessorFn: (row) =>
-          row.latitude != null ? `${row.latitude},${row.longitude}` : "",
-        cell: ({ row }) => {
-          const { latitude, longitude } = row.original;
-          if (latitude == null || longitude == null) return "—";
-          return (
-            <span className="tabular-nums text-muted-foreground whitespace-nowrap">
-              {latitude.toFixed(4)}, {longitude.toFixed(4)}
-            </span>
-          );
-        },
-        enableGlobalFilter: false,
-      },
-      {
         id: "expand",
         header: "",
         cell: ({ row }) => (
@@ -303,6 +310,7 @@ export function DeploymentsTable({
     getFilteredRowModel: getFilteredRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
     getExpandedRowModel: getExpandedRowModel(),
+    autoResetExpanded: false,
     enableRowSelection: canEdit,
     getRowCanExpand: () => true,
     getRowId: (row) => String(row.id),
@@ -314,26 +322,63 @@ export function DeploymentsTable({
   const handleSync = () => {
     startSync(async () => {
       setSyncMessage(null);
+      const messages: string[] = [];
+
+      // Step 1: Sync with Drive (discovers new folders, auto-scans them)
       const result = await syncWithDrive();
-      if (result.success) {
-        const { created, errors } = result.data;
-        // Auto-match new deployments with ODK
-        if (created.length > 0) {
-          const odkResult = await matchOdkDeployments(
-            created.map((d) => d.id)
-          );
-          const matchCount = odkResult.success
-            ? odkResult.data.matched.length
-            : 0;
-          setSyncMessage(
-            `${created.length} nueva(s) instalación(es) encontrada(s). ${matchCount} vinculada(s) con ODK.${errors.length > 0 ? ` ${errors.length} error(es).` : ""}`
-          );
-        } else {
-          setSyncMessage("No se encontraron nuevas carpetas en Drive.");
-        }
-      } else {
+      if (!result.success) {
         setSyncMessage(`Error: ${result.error}`);
+        return;
       }
+
+      const { created, errors } = result.data;
+      if (created.length > 0) {
+        // Step 2: Auto-match new deployments with ODK
+        const odkResult = await matchOdkDeployments(
+          created.map((d) => d.id)
+        );
+        const matchCount = odkResult.success
+          ? odkResult.data.matched.length
+          : 0;
+        messages.push(
+          `${created.length} nueva(s) instalación(es). ${matchCount} vinculada(s) con ODK.`
+        );
+        if (errors.length > 0) {
+          messages.push(`${errors.length} error(es) de sincronización.`);
+        }
+      }
+
+      // Step 3: Scan remaining unscanned and 0-image deployments
+      const needsScan = initialDeployments.filter(
+        (d) =>
+          d.status === "unscanned" ||
+          (d.status === "scanned" && (d.totalImages == null || d.totalImages === 0))
+      );
+
+      if (needsScan.length > 0) {
+        let scanned = 0;
+        let scanErrors = 0;
+        for (let i = 0; i < needsScan.length; i++) {
+          setSyncMessage(
+            `Buscando imágenes ${i + 1}/${needsScan.length}...`
+          );
+          const scanResult = await scanDeploymentImages(needsScan[i].id);
+          if (scanResult.success) {
+            scanned++;
+          } else {
+            scanErrors++;
+          }
+        }
+        messages.push(
+          `${scanned} instalación(es) escaneada(s).${scanErrors > 0 ? ` ${scanErrors} error(es).` : ""}`
+        );
+      }
+
+      setSyncMessage(
+        messages.length > 0
+          ? messages.join(" ")
+          : "Todo sincronizado. No hay cambios."
+      );
     });
   };
 
@@ -342,35 +387,9 @@ export function DeploymentsTable({
       const result = await queueProcessing(selectedIds);
       if (result.success) {
         setRowSelection({});
+        window.dispatchEvent(new Event("job-started"));
       }
     });
-  };
-
-  const handleBatchScan = async () => {
-    const unscanned = initialDeployments.filter(
-      (d) => d.status === "unscanned"
-    );
-    if (unscanned.length === 0) {
-      setSyncMessage("No hay instalaciones sin escanear.");
-      return;
-    }
-    setScanProgress({ current: 0, total: unscanned.length });
-    setSyncMessage(null);
-    let successCount = 0;
-    let errorCount = 0;
-    for (let i = 0; i < unscanned.length; i++) {
-      setScanProgress({ current: i + 1, total: unscanned.length });
-      const result = await scanDeploymentImages(unscanned[i].id);
-      if (result.success) {
-        successCount++;
-      } else {
-        errorCount++;
-      }
-    }
-    setScanProgress(null);
-    setSyncMessage(
-      `Escaneo completo: ${successCount} instalación(es) escaneada(s).${errorCount > 0 ? ` ${errorCount} error(es).` : ""}`
-    );
   };
 
   return (
@@ -425,7 +444,7 @@ export function DeploymentsTable({
               variant="outline"
               size="sm"
               onClick={handleSync}
-              disabled={syncing || scanProgress !== null}
+              disabled={syncing}
             >
               {syncing ? (
                 <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
@@ -434,23 +453,17 @@ export function DeploymentsTable({
               )}
               Sincronizar con Drive
             </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleBatchScan}
-              disabled={syncing || scanProgress !== null}
-            >
-              {scanProgress ? (
-                <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
-              ) : (
-                <ScanSearch className="h-4 w-4 mr-1.5" />
-              )}
-              {scanProgress
-                ? `Escaneando ${scanProgress.current}/${scanProgress.total}...`
-                : "Escanear Todo"}
-            </Button>
           </>
         )}
+      </div>
+
+      {/* Status legend */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground bg-muted/30 px-3 py-2 rounded-md">
+        <span className="inline-flex items-center gap-1.5"><StatusBadge status="unscanned" type="deployment" /> Carpeta importada, imágenes no buscadas</span>
+        <span className="inline-flex items-center gap-1.5"><StatusBadge status="scanned" type="deployment" /> Imágenes contadas, lista para procesar</span>
+        <span className="inline-flex items-center gap-1.5"><StatusBadge status="processing" type="deployment" /> Modelo ML analizando</span>
+        <span className="inline-flex items-center gap-1.5"><StatusBadge status="processed" type="deployment" /> Análisis ML completado</span>
+        <span className="inline-flex items-center gap-1.5"><StatusBadge status="verified" type="deployment" /> Revisada por investigador</span>
       </div>
 
       {/* Sync message */}

@@ -10,10 +10,12 @@ import {
   Play,
   ScanSearch,
   Loader2,
+  Trash2,
 } from "lucide-react";
 import type { DeploymentRow } from "./actions";
 import { DeploymentEditForm } from "./deployment-edit-form";
 import { getDeployment, queueProcessing } from "./actions";
+import { DeleteJobDialog } from "./delete-job-dialog";
 import { scanDeploymentImages } from "./drive-actions";
 
 interface JobInfo {
@@ -48,6 +50,7 @@ export function DeploymentExpandedRow({
   const [jobsError, setJobsError] = useState(false);
   const [scanning, startScanning] = useTransition();
   const [processingAction, startProcessing] = useTransition();
+  const [deleteJobId, setDeleteJobId] = useState<number | null>(null);
 
   useEffect(() => {
     if (cachedJobs) return;
@@ -90,7 +93,14 @@ export function DeploymentExpandedRow({
   const handleProcess = () => {
     startProcessing(async () => {
       await queueProcessing([deployment.id]);
+      window.dispatchEvent(new Event("job-started"));
     });
+  };
+
+  const handleJobDeleted = (jobId: number) => {
+    const updated = jobs.filter((j) => j.id !== jobId);
+    setJobs(updated);
+    onCacheJobs(deployment.id, updated);
   };
 
   return (
@@ -166,7 +176,7 @@ export function DeploymentExpandedRow({
                     <Pencil className="h-3 w-3 mr-1" />
                     Editar
                   </Button>
-                  {deployment.status === "unscanned" && (
+                  {(deployment.status === "unscanned" || deployment.status === "scanned") && (
                     <Button
                       variant="outline"
                       size="sm"
@@ -179,7 +189,7 @@ export function DeploymentExpandedRow({
                       ) : (
                         <ScanSearch className="h-3 w-3 mr-1" />
                       )}
-                      Escanear
+                      Buscar imágenes
                     </Button>
                   )}
                   {deployment.status !== "processing" && (
@@ -242,13 +252,25 @@ export function DeploymentExpandedRow({
                         {job.processedImages}/{job.totalImages} imagenes
                       </div>
                     </div>
-                    {job.status === "completed" && (
-                      <Button variant="ghost" size="sm" asChild>
-                        <Link href={`/camera-trap/results/${job.id}`}>
-                          Ver Resultados
-                        </Link>
-                      </Button>
-                    )}
+                    <div className="flex items-center gap-1">
+                      {job.status === "completed" && (
+                        <Button variant="ghost" size="sm" asChild>
+                          <Link href={`/camera-trap/results/${job.id}`}>
+                            Ver Resultados
+                          </Link>
+                        </Button>
+                      )}
+                      {canEdit && job.status !== "processing" && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setDeleteJobId(job.id)}
+                          className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -256,6 +278,11 @@ export function DeploymentExpandedRow({
           </div>
         </div>
       )}
+      <DeleteJobDialog
+        jobId={deleteJobId}
+        onClose={() => setDeleteJobId(null)}
+        onDeleted={handleJobDeleted}
+      />
     </div>
   );
 }

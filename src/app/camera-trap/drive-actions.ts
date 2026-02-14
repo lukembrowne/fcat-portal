@@ -92,6 +92,16 @@ export async function syncWithDrive(): Promise<
       }
     }
 
+    // Auto-scan new deployments to eliminate the manual scan step
+    for (const dep of created) {
+      try {
+        await scanDeploymentImages(dep.id);
+      } catch (err) {
+        console.error(`[Drive] Auto-scan failed for ${dep.name}:`, err);
+        errors.push(`Error al escanear ${dep.name}: ${err instanceof Error ? err.message : "Error desconocido"}`);
+      }
+    }
+
     revalidatePath(CAMERA_TRAP_PATH);
     return { success: true, data: { created, existing, errors } };
   } catch (err) {

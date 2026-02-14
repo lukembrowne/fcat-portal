@@ -52,6 +52,13 @@ export async function createProcessingJob(
       .from(images)
       .where(eq(images.deploymentId, deploymentId));
 
+    if (deploymentImages.length === 0) {
+      return {
+        success: false,
+        error: "No hay imágenes para procesar. Escanee o vuelva a escanear la carpeta.",
+      };
+    }
+
     const [job] = await db
       .insert(processingJobs)
       .values({
@@ -101,7 +108,7 @@ export async function createProcessingJob(
 async function processJobInternal(
   jobId: number
 ): Promise<ActionResult<{ job: ProcessingJob }>> {
-  let tempDir: string | undefined;
+  let cacheDir: string | undefined;
 
   try {
     const [job] = await db
@@ -139,7 +146,7 @@ async function processJobInternal(
       return { success: false, error: "Instalación no encontrada" };
     }
 
-    // For Drive deployments: download images to temp dir first
+    // For Drive deployments: download to persistent cache (skips already-cached images)
     if (deployment.driveFolderId) {
       await db
         .update(processingJobs)
@@ -158,10 +165,10 @@ async function processJobInternal(
             .where(eq(processingJobs.id, jobId));
         }
       );
-      tempDir = downloadResult.tempDir;
+      cacheDir = downloadResult.cacheDir;
 
-      if (downloadResult.downloaded === 0) {
-        await cleanupJobTempDir(jobId, tempDir);
+      // Fail only if nothing was downloaded AND nothing was cached
+      if (downloadResult.downloaded === 0 && downloadResult.skipped === 0) {
         await db
           .update(processingJobs)
           .set({
@@ -202,7 +209,7 @@ async function processJobInternal(
     console.log(`[processJob] ML check: available=${mlCheck.available}, message=${mlCheck.message}`);
 
     if (!mlCheck.available) {
-      if (tempDir) await cleanupJobTempDir(jobId, tempDir);
+      if (cacheDir) await cleanupJobTempDir(jobId, cacheDir);
 
       await db
         .update(processingJobs)
@@ -243,8 +250,7 @@ async function processJobInternal(
 
     console.log(`[processJob] ML result: success=${mlResult.success}, processed=${mlResult.totalProcessed}, detections=${mlResult.totalDetections}, error=${mlResult.error || "none"}`);
 
-    // Clean up temp directory after ML completes
-    if (tempDir) await cleanupJobTempDir(jobId, tempDir);
+    // Cache persists after processing — no cleanup on success
 
     const finalStatus = mlResult.success ? "completed" : "failed";
 
@@ -281,10 +287,10 @@ async function processJobInternal(
       : { success: false, error: mlResult.error || "Procesamiento falló" };
   } catch (error) {
     console.error(`[processJob] Unhandled error:`, error);
-    // Clean up temp directory on error
-    if (tempDir) {
+    // cleanupJobTempDir is cache-aware — only cleans legacy temp dirs
+    if (cacheDir) {
       try {
-        await cleanupJobTempDir(jobId, tempDir);
+        await cleanupJobTempDir(jobId, cacheDir);
       } catch {
         // Best effort cleanup
       }
@@ -296,8 +302,23 @@ async function processJobInternal(
         status: "failed",
         errorMessage: error instanceof Error ? error.message : "Procesamiento falló",
         statusMessage: null,
+        completedAt: new Date(),
       })
       .where(eq(processingJobs.id, jobId));
+
+    // Revert deployment status from "processing" to "scanned"
+    const [failedJob] = await db
+      .select()
+      .from(processingJobs)
+      .where(eq(processingJobs.id, jobId));
+    if (failedJob) {
+      await db
+        .update(deployments)
+        .set({ status: "scanned", updatedAt: new Date() })
+        .where(eq(deployments.id, failedJob.deploymentId));
+    }
+
+    safeRevalidate();
 
     // Auto-advance queue even on failure
     processNextInQueue();
@@ -321,8 +342,9 @@ function safeRevalidate(): void {
 /**
  * Process a job. No mock fallback — ML works via ML_PYTHON_PATH or fails.
  *
- * For Drive-based deployments: downloads images to temp dir first,
- * writes temp paths to images.path, runs ML, then cleans up.
+ * For Drive-based deployments: downloads images to persistent cache,
+ * skips already-cached files, writes cache paths to images.path, runs ML.
+ * Cache persists after processing for annotation and re-processing.
  */
 export async function processJob(
   jobId: number

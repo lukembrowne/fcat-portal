@@ -170,18 +170,20 @@ export async function GET(
   }
 
   // --- Full image ---
-  if (!image.driveFileId) {
-    // Fallback: serve from local path if available
-    if (image.path) {
-      try {
-        const data = await fs.readFile(image.path);
-        return new NextResponse(new Uint8Array(data), {
-          headers: { ...headers, "Content-Type": contentType },
-        });
-      } catch {
-        return NextResponse.json({ error: "File not found" }, { status: 404 });
-      }
+  // Check cache first (images.path may point to cached file on disk)
+  if (image.path) {
+    try {
+      const data = await fs.readFile(image.path);
+      return new NextResponse(new Uint8Array(data), {
+        headers: { ...headers, "Content-Type": contentType },
+      });
+    } catch {
+      // Cache miss (file deleted by eviction or not found) — fall through to Drive
     }
+  }
+
+  // Fall back to Drive API
+  if (!image.driveFileId) {
     return NextResponse.json(
       { error: "No image source available" },
       { status: 404 }

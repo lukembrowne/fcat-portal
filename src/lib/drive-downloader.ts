@@ -1,8 +1,11 @@
 /**
  * Drive Downloader — Downloads deployment images from Drive for ML processing.
  *
- * Downloads to data/tmp/ct-job-{jobId}/, writes temp paths into images.path,
- * and generates thumbnails during the download pass.
+ * Downloads to data/cache/ct-images/{deploymentId}/ with persistent caching.
+ * Skips images already in cache. Writes cache paths into images.path so
+ * both the ML runner and image proxy can use them.
+ *
+ * LRU eviction at the deployment level keeps total cache under CT_IMAGE_CACHE_MAX_GB.
  *
  * Server-only module — never import in Client Components.
  */
@@ -18,23 +21,34 @@ import { eq } from "drizzle-orm";
 import { downloadDeploymentImages } from "./drive-client";
 
 const TEMP_BASE = path.join(process.cwd(), "data", "tmp");
+const CACHE_BASE = path.join(process.cwd(), "data", "cache", "ct-images");
 const THUMBNAIL_DIR = path.join(process.cwd(), "data", "thumbnails");
 const THUMBNAIL_WIDTH = 400;
 const THUMBNAIL_QUALITY = 80;
+const CT_CACHE_MAX_BYTES =
+  parseInt(process.env.CT_IMAGE_CACHE_MAX_GB || "30", 10) * 1024 * 1024 * 1024;
 
 /**
- * Download all images for a deployment from Drive to a temp directory.
- * Also generates thumbnails during the download pass.
+ * Download all images for a deployment from Drive to a persistent cache directory.
+ * Skips images that already exist in cache. Also generates thumbnails.
  *
- * Writes temp file paths into images.path so ML runner picks them up unchanged.
+ * Writes cache file paths into images.path so ML runner and image proxy use them.
  */
 export async function downloadDeploymentForProcessing(
   deploymentId: number,
   jobId: number,
   onProgress?: (downloaded: number, total: number) => Promise<void>
-): Promise<{ tempDir: string; downloaded: number; failed: number }> {
-  const tempDir = path.join(TEMP_BASE, `ct-job-${jobId}`);
-  await fs.mkdir(tempDir, { recursive: true });
+): Promise<{
+  cacheDir: string;
+  downloaded: number;
+  skipped: number;
+  failed: number;
+}> {
+  // Evict oldest cached deployments if over size limit
+  await evictIfOverLimit(deploymentId);
+
+  const cacheDir = path.join(CACHE_BASE, String(deploymentId));
+  await fs.mkdir(cacheDir, { recursive: true });
 
   // Get all images for this deployment that have Drive file IDs
   const deploymentImages = await db
@@ -45,30 +59,61 @@ export async function downloadDeploymentForProcessing(
   const driveImages = deploymentImages.filter((img) => img.driveFileId);
 
   if (driveImages.length === 0) {
-    return { tempDir, downloaded: 0, failed: 0 };
+    return { cacheDir, downloaded: 0, skipped: 0, failed: 0 };
   }
 
-  // Pre-flight: estimate required space
-  const totalSize = driveImages.reduce((sum, img) => sum + (img.fileSize || 0), 0);
+  // Check which images are already cached
+  const toDownload: Array<{
+    id: string;
+    name: string;
+    size: number;
+    modifiedTime: string;
+    relativePath: string;
+  }> = [];
+  const alreadyCached = new Map<string, string>(); // driveFileId → local path
+
+  for (const img of driveImages) {
+    const localPath = path.join(cacheDir, img.filename);
+    try {
+      await fs.access(localPath);
+      alreadyCached.set(img.driveFileId!, localPath);
+    } catch {
+      toDownload.push({
+        id: img.driveFileId!,
+        name: img.filename,
+        size: img.fileSize || 0,
+        modifiedTime: "",
+        relativePath: img.filename,
+      });
+    }
+  }
+
+  // Pre-flight: estimate download size
+  const downloadSize = toDownload.reduce((sum, f) => sum + f.size, 0);
   console.log(
-    `[drive-downloader] Downloading ${driveImages.length} images (~${(totalSize / 1024 / 1024).toFixed(1)} MB) for job ${jobId}`
+    `[drive-downloader] Job ${jobId}: ${alreadyCached.size} cached, ${toDownload.length} to download (~${(downloadSize / 1024 / 1024).toFixed(1)} MB)`
   );
 
-  // Map DB images to DriveImageFile format for downloadDeploymentImages
-  const driveImageFiles = driveImages.map((img) => ({
-    id: img.driveFileId!,
-    name: img.filename,
-    size: img.fileSize || 0,
-    modifiedTime: "",
-    relativePath: img.filename,
-  }));
+  // Download only missing images
+  let downloaded = 0;
+  let failed = 0;
+  const pathMap = new Map<string, string>();
 
-  const { downloaded, failed, pathMap } = await downloadDeploymentImages(
-    driveImageFiles,
-    tempDir
-  );
+  if (toDownload.length > 0) {
+    const result = await downloadDeploymentImages(toDownload, cacheDir);
+    downloaded = result.downloaded;
+    failed = result.failed;
+    for (const [fileId, localPath] of result.pathMap) {
+      pathMap.set(fileId, localPath);
+    }
+  }
 
-  // Write temp paths into images.path and generate thumbnails
+  // Merge cached paths into the map
+  for (const [fileId, localPath] of alreadyCached) {
+    pathMap.set(fileId, localPath);
+  }
+
+  // Write cache paths into images.path and generate thumbnails
   const thumbDir = path.join(THUMBNAIL_DIR, String(deploymentId));
   await fs.mkdir(thumbDir, { recursive: true });
 
@@ -77,7 +122,7 @@ export async function downloadDeploymentForProcessing(
     const localPath = pathMap.get(img.driveFileId!);
     if (!localPath) continue;
 
-    // Write temp path so ML runner picks it up
+    // Write cache path so ML runner and image proxy can use it
     await db
       .update(images)
       .set({ path: localPath })
@@ -93,7 +138,7 @@ export async function downloadDeploymentForProcessing(
     try {
       await fs.access(thumbPath);
     } catch {
-      // Thumbnail doesn't exist — generate from downloaded image
+      // Thumbnail doesn't exist — generate from downloaded/cached image
       try {
         const imgData = await fs.readFile(localPath);
         const thumb = await sharp(imgData)
@@ -111,27 +156,28 @@ export async function downloadDeploymentForProcessing(
   }
 
   console.log(
-    `[drive-downloader] Job ${jobId}: ${downloaded} downloaded, ${failed} failed`
+    `[drive-downloader] Job ${jobId}: ${alreadyCached.size} cached, ${downloaded} downloaded, ${failed} failed`
   );
 
-  return { tempDir, downloaded, failed };
+  return { cacheDir, downloaded, skipped: alreadyCached.size, failed };
 }
 
 /**
  * Clean up a temp directory and clear images.path for a job's images.
+ * Only cleans legacy temp dirs (data/tmp/), never cache dirs (data/cache/).
  */
 export async function cleanupJobTempDir(
   jobId: number,
   tempDir?: string
 ): Promise<void> {
-  // Clear images.path for all images linked to this job
+  // Clear images.path only for images with temp (non-cache) paths
   const jobImages = await db
     .select()
     .from(images)
     .where(eq(images.jobId, jobId));
 
   for (const img of jobImages) {
-    if (img.path && img.path.startsWith(TEMP_BASE)) {
+    if (img.path && img.path.includes("/tmp/ct-job-")) {
       await db
         .update(images)
         .set({ path: null })
@@ -139,19 +185,22 @@ export async function cleanupJobTempDir(
     }
   }
 
-  // Remove temp directory
+  // Only remove temp directories, not cache directories
   const dirToRemove = tempDir || path.join(TEMP_BASE, `ct-job-${jobId}`);
-  try {
-    await fs.rm(dirToRemove, { recursive: true, force: true });
-    console.log(`[drive-downloader] Cleaned up ${dirToRemove}`);
-  } catch {
-    // Directory may not exist
+  if (dirToRemove.includes("/tmp/")) {
+    try {
+      await fs.rm(dirToRemove, { recursive: true, force: true });
+      console.log(`[drive-downloader] Cleaned up ${dirToRemove}`);
+    } catch {
+      // Directory may not exist
+    }
   }
 }
 
 /**
  * Clean up any orphaned temp directories from interrupted jobs.
  * Called during server startup via recoverStuckJobs().
+ * Does NOT touch cache directories.
  */
 export async function cleanupOrphanedTempDirs(): Promise<void> {
   try {
@@ -165,5 +214,87 @@ export async function cleanupOrphanedTempDirs(): Promise<void> {
     }
   } catch {
     // TEMP_BASE may not exist
+  }
+}
+
+/**
+ * Evict oldest cached deployment directories when total cache exceeds the limit.
+ * Skips the deployment currently being processed.
+ * Nulls out images.path for evicted deployments so the proxy falls back to Drive.
+ */
+async function evictIfOverLimit(currentDeploymentId: number): Promise<void> {
+  try {
+    let entries: string[];
+    try {
+      entries = await fs.readdir(CACHE_BASE);
+    } catch {
+      return; // Cache directory doesn't exist yet
+    }
+
+    const dirStats: Array<{ name: string; size: number; mtime: Date }> = [];
+
+    for (const entry of entries) {
+      const dirPath = path.join(CACHE_BASE, entry);
+      const stat = await fs.stat(dirPath);
+      if (!stat.isDirectory()) continue;
+
+      // Calculate directory size
+      let dirSize = 0;
+      const files = await fs.readdir(dirPath);
+      for (const file of files) {
+        try {
+          const fileStat = await fs.stat(path.join(dirPath, file));
+          dirSize += fileStat.size;
+        } catch {
+          // File may have been removed
+        }
+      }
+
+      dirStats.push({ name: entry, size: dirSize, mtime: stat.mtime });
+    }
+
+    let totalSize = dirStats.reduce((sum, d) => sum + d.size, 0);
+
+    if (totalSize <= CT_CACHE_MAX_BYTES) return;
+
+    // Sort by mtime ascending (oldest first)
+    dirStats.sort((a, b) => a.mtime.getTime() - b.mtime.getTime());
+
+    // Evict oldest until under limit
+    for (const dir of dirStats) {
+      if (totalSize <= CT_CACHE_MAX_BYTES) break;
+      if (dir.name === String(currentDeploymentId)) continue;
+
+      const deploymentId = parseInt(dir.name, 10);
+      if (isNaN(deploymentId)) continue;
+
+      // Null out images.path for this deployment
+      const depImages = await db
+        .select()
+        .from(images)
+        .where(eq(images.deploymentId, deploymentId));
+
+      for (const img of depImages) {
+        if (img.path && img.path.includes("/cache/ct-images/")) {
+          await db
+            .update(images)
+            .set({ path: null })
+            .where(eq(images.id, img.id));
+        }
+      }
+
+      // Delete the directory
+      await fs.rm(path.join(CACHE_BASE, dir.name), {
+        recursive: true,
+        force: true,
+      });
+      totalSize -= dir.size;
+
+      console.log(
+        `[drive-downloader] Evicted cache for deployment ${deploymentId} (${(dir.size / 1024 / 1024).toFixed(1)} MB)`
+      );
+    }
+  } catch {
+    // Cache eviction is best-effort
   }
 }

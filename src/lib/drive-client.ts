@@ -18,6 +18,11 @@ export interface UploadStatus {
   camarasTrampas: number | null; // file count, null = subfolder not found or check failed
   grabadoresDeAudio: number | null;
   ibutton: number | null;
+  subfolderIds: {
+    camarasTrampas: string | null;
+    grabadoresDeAudio: string | null;
+    ibutton: string | null;
+  };
 }
 
 // Subfolder names on Google Drive (must match exactly)
@@ -121,6 +126,11 @@ export async function checkDeploymentUploads(
       camarasTrampas: null,
       grabadoresDeAudio: null,
       ibutton: null,
+      subfolderIds: {
+        camarasTrampas: subfolderMap.get(DATA_TYPE_FOLDERS.camarasTrampas) ?? null,
+        grabadoresDeAudio: subfolderMap.get(DATA_TYPE_FOLDERS.grabadoresDeAudio) ?? null,
+        ibutton: subfolderMap.get(DATA_TYPE_FOLDERS.ibutton) ?? null,
+      },
     };
 
     const countPromises = Object.entries(DATA_TYPE_FOLDERS).map(
@@ -154,7 +164,8 @@ export async function checkDeploymentUploads(
     for (const result of results) {
       if (result.status === "fulfilled") {
         const { key, count } = result.value;
-        status[key as keyof UploadStatus] = count;
+        const k = key as keyof typeof DATA_TYPE_FOLDERS;
+        status[k] = count;
       }
     }
 

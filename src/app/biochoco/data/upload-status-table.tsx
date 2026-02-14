@@ -6,13 +6,13 @@ import {
   XCircle,
   AlertTriangle,
   Minus,
-  ExternalLink,
   Search,
   ChevronUp,
   ChevronDown,
   RefreshCw,
   Loader2,
   FolderPlus,
+  Upload,
 } from "lucide-react";
 import {
   Table,
@@ -29,6 +29,21 @@ import type { UploadStatus } from "@/lib/drive-client";
 import { checkDriveForDeployments, checkSingleDeployment, type DriveStatusResult } from "./actions";
 import { recreateDriveFolder } from "./drive-folder-actions";
 
+// --- Helpers ---
+
+const SHORT_MONTHS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+
+function formatShortDate(dateStr: string | null): string {
+  if (!dateStr) return "—";
+  const d = new Date(dateStr + "T00:00:00");
+  if (isNaN(d.getTime())) return "—";
+  return `${d.getDate()} ${SHORT_MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+}
+
+function driveLink(folderId: string): string {
+  return `https://drive.google.com/drive/folders/${folderId}`;
+}
+
 // --- Status display components ---
 
 const STATUS_LABELS: Record<ScheduleStatus, { label: string; className: string }> = {
@@ -42,60 +57,74 @@ function StatusBadge({ status }: { status: ScheduleStatus }) {
   return <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${config.className}`}>{config.label}</span>;
 }
 
-function UploadCell({ count, error }: { count: number | null; error?: string }) {
-  if (error || count === null) {
+/** Cell for a data type column: shows file count (if verified) + "Subir" link to subfolder */
+function DataTypeCell({
+  parentFolderLink,
+  driveStatus,
+  dataTypeKey,
+}: {
+  parentFolderLink: string | null;
+  driveStatus: DriveStatusResult | undefined;
+  dataTypeKey: keyof Omit<UploadStatus, "subfolderIds">;
+}) {
+  if (!parentFolderLink) {
     return (
-      <span className="inline-flex items-center gap-1 text-amber-600" title={error ?? "No se pudo verificar"}>
-        <AlertTriangle className="size-4" />
-        <span className="text-xs">Error</span>
+      <span className="inline-flex items-center gap-1 text-muted-foreground">
+        <Minus className="size-4" />
       </span>
     );
   }
-  if (count > 0) {
-    return (
-      <span className="inline-flex items-center gap-1 text-emerald-600">
-        <CheckCircle2 className="size-4" />
-        <span className="text-xs">{count}</span>
-      </span>
-    );
-  }
-  return (
-    <span className="inline-flex items-center gap-1 text-red-500">
-      <XCircle className="size-4" />
-      <span className="text-xs">0</span>
-    </span>
-  );
-}
 
-function NoLinkCell() {
-  return (
-    <span className="inline-flex items-center gap-1 text-muted-foreground">
-      <Minus className="size-4" />
-    </span>
-  );
-}
+  const uploads = driveStatus?.uploads;
+  const error = driveStatus?.error;
+  const count = uploads ? uploads[dataTypeKey] : undefined;
+  const subfolderId = uploads?.subfolderIds?.[dataTypeKey];
+  const href = subfolderId ? driveLink(subfolderId) : parentFolderLink;
 
-function NotCheckedCell() {
   return (
-    <span className="inline-flex items-center gap-1 text-muted-foreground">
-      <span className="text-xs">—</span>
-    </span>
+    <div className="inline-flex items-center gap-1.5">
+      {/* Count indicator (only after verification) */}
+      {driveStatus && (
+        error || count === null || count === undefined ? (
+          <span className="inline-flex items-center gap-0.5 text-amber-600" title={error ?? "No se pudo verificar"}>
+            <AlertTriangle className="size-3.5" />
+          </span>
+        ) : count > 0 ? (
+          <span className="inline-flex items-center gap-0.5 text-emerald-600" title={`${count} archivo${count !== 1 ? "s" : ""}`}>
+            <CheckCircle2 className="size-3.5" />
+            <span className="text-xs">{count}</span>
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-0.5 text-red-500" title="Sin archivos">
+            <XCircle className="size-3.5" />
+            <span className="text-xs">0</span>
+          </span>
+        )
+      )}
+
+      {/* "Subir" link */}
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-xs font-medium text-blue-600 hover:text-blue-800 hover:bg-blue-50 dark:text-blue-400 dark:hover:text-blue-300 dark:hover:bg-blue-950/30 transition-colors"
+        title="Abrir carpeta en Google Drive para subir datos"
+      >
+        <Upload className="size-3" />
+        Subir
+      </a>
+    </div>
   );
 }
 
 // --- Sorting ---
 
-type SortField = "deploymentId" | "siteId" | "visitNumber" | "status";
+type SortField = "deploymentId" | "siteId" | "status";
 type SortDir = "asc" | "desc";
 
 function sortRows(rows: ScheduleRow[], field: SortField, dir: SortDir): ScheduleRow[] {
   return [...rows].sort((a, b) => {
-    let cmp = 0;
-    if (field === "visitNumber") {
-      cmp = a.visitNumber - b.visitNumber;
-    } else {
-      cmp = (a[field] ?? "").localeCompare(b[field] ?? "");
-    }
+    const cmp = (a[field] ?? "").localeCompare(b[field] ?? "");
     return dir === "asc" ? cmp : -cmp;
   });
 }
@@ -251,7 +280,7 @@ export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
       <div className="mb-6">
         <h1 className="text-2xl font-bold">Estado de Datos</h1>
         <p className="text-muted-foreground mt-1">
-          Estado de carga de datos en Google Drive por instalación.
+          Usa los botones <span className="font-medium text-blue-600 dark:text-blue-400">&ldquo;Subir&rdquo;</span> para abrir la carpeta de Google Drive donde debes subir cada tipo de dato.
         </p>
       </div>
 
@@ -271,9 +300,10 @@ export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
           size="sm"
           onClick={refreshVisible}
           disabled={checking || progress !== null}
+          title="Consulta Google Drive para contar cuántos archivos hay en cada carpeta. Ejecutar después de subir nuevos datos."
         >
           {checking || progress?.action === "verify" ? <Loader2 className="size-4 animate-spin mr-1.5" /> : <RefreshCw className="size-4 mr-1.5" />}
-          {progress?.action === "verify" ? `Verificando ${progress.current}/${progress.total}...` : "Verificar Drive"}
+          {progress?.action === "verify" ? `Actualizando ${progress.current}/${progress.total}...` : "Actualizar Conteo"}
         </Button>
         <span className="text-sm text-muted-foreground">
           {filtered.length} instalaci{filtered.length !== 1 ? "ones" : "ón"}
@@ -305,7 +335,7 @@ export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
         </div>
       ) : (
         <>
-          <div className="rounded-lg border">
+          <div className="rounded-lg border overflow-auto">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -323,70 +353,55 @@ export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
                   </TableHead>
                   <TableHead className="text-center">
                     <span className="inline-flex items-center gap-1">
-                      Visita
-                      <SortButton field="visitNumber" current={sortField} dir={sortDir} onSort={handleSort} />
-                    </span>
-                  </TableHead>
-                  <TableHead className="text-center">
-                    <span className="inline-flex items-center gap-1">
                       Estado
                       <SortButton field="status" current={sortField} dir={sortDir} onSort={handleSort} />
                     </span>
                   </TableHead>
+                  <TableHead className="text-center whitespace-nowrap">F. Instalación</TableHead>
+                  <TableHead className="text-center whitespace-nowrap">F. Recuperación</TableHead>
                   <TableHead className="text-center">Cámaras</TableHead>
                   <TableHead className="text-center">Audio</TableHead>
                   <TableHead className="text-center">iButton</TableHead>
-                  <TableHead className="w-8"></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {pageRows.map((row) => {
                   const driveStatus = driveCache.get(row.deploymentId);
-                  const hasLink = !!row.driveFolderLink;
-                  const uploads = driveStatus?.uploads;
-                  const error = driveStatus?.error;
+                  const parentLink = row.driveFolderLink || null;
 
                   return (
                     <TableRow key={row.deploymentId}>
                       <TableCell className="font-medium">{row.deploymentId}</TableCell>
                       <TableCell>{row.siteName || row.siteId}</TableCell>
-                      <TableCell className="text-center">{row.visitNumber}</TableCell>
                       <TableCell className="text-center">
                         <StatusBadge status={row.status} />
                       </TableCell>
-                      <TableCell className="text-center">
-                        {!hasLink ? <NoLinkCell /> : !driveStatus ? <NotCheckedCell /> : uploads ? (
-                          <UploadCell count={uploads.camarasTrampas} error={error} />
-                        ) : (
-                          <UploadCell count={null} error={error} />
-                        )}
+                      <TableCell className="text-center text-sm whitespace-nowrap">
+                        {formatShortDate(row.actualDeployDate)}
+                      </TableCell>
+                      <TableCell className="text-center text-sm whitespace-nowrap">
+                        {formatShortDate(row.actualRetrieveDate)}
                       </TableCell>
                       <TableCell className="text-center">
-                        {!hasLink ? <NoLinkCell /> : !driveStatus ? <NotCheckedCell /> : uploads ? (
-                          <UploadCell count={uploads.grabadoresDeAudio} error={error} />
-                        ) : (
-                          <UploadCell count={null} error={error} />
-                        )}
+                        <DataTypeCell
+                          parentFolderLink={parentLink}
+                          driveStatus={driveStatus}
+                          dataTypeKey="camarasTrampas"
+                        />
                       </TableCell>
                       <TableCell className="text-center">
-                        {!hasLink ? <NoLinkCell /> : !driveStatus ? <NotCheckedCell /> : uploads ? (
-                          <UploadCell count={uploads.ibutton} error={error} />
-                        ) : (
-                          <UploadCell count={null} error={error} />
-                        )}
+                        <DataTypeCell
+                          parentFolderLink={parentLink}
+                          driveStatus={driveStatus}
+                          dataTypeKey="grabadoresDeAudio"
+                        />
                       </TableCell>
-                      <TableCell>
-                        {row.driveFolderLink && (
-                          <a
-                            href={row.driveFolderLink}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-muted-foreground hover:text-foreground"
-                            title="Abrir carpeta en Drive"
-                          >
-                            <ExternalLink className="size-4" />
-                          </a>
-                        )}
+                      <TableCell className="text-center">
+                        <DataTypeCell
+                          parentFolderLink={parentLink}
+                          driveStatus={driveStatus}
+                          dataTypeKey="ibutton"
+                        />
                       </TableCell>
                     </TableRow>
                   );

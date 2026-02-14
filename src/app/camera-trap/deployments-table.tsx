@@ -1,17 +1,20 @@
 "use client";
 
-import { useState, useMemo, useCallback, useTransition } from "react";
+import { useState, useMemo, useCallback, useRef, useTransition, Fragment } from "react";
+import Link from "next/link";
 import {
   useReactTable,
   getCoreRowModel,
   getSortedRowModel,
   getPaginationRowModel,
   getFilteredRowModel,
+  getExpandedRowModel,
   flexRender,
   type ColumnDef,
   type SortingState,
   type PaginationState,
   type RowSelectionState,
+  type ExpandedState,
 } from "@tanstack/react-table";
 import {
   Table,
@@ -37,14 +40,26 @@ import {
   RefreshCw,
   Loader2,
   ScanSearch,
+  Eye,
 } from "lucide-react";
 import type { DeploymentRow } from "./actions";
-import { DeploymentPanel } from "./deployment-panel";
+import { DeploymentExpandedRow } from "./deployment-expanded-row";
 import { BatchEditDialog } from "./batch-edit-dialog";
 import { BatchDeleteDialog } from "./batch-delete-dialog";
 import { syncWithDrive, scanDeploymentImages } from "./drive-actions";
 import { matchOdkDeployments } from "./odk-actions";
 import { queueProcessing } from "./actions";
+
+interface JobInfo {
+  id: number;
+  status: string;
+  detectorModel: string | null;
+  classifierModel: string | null;
+  totalImages: number;
+  processedImages: number;
+  createdAt: Date;
+  completedAt: Date | null;
+}
 
 interface DeploymentsTableProps {
   deployments: DeploymentRow[];
@@ -64,8 +79,7 @@ export function DeploymentsTable({
     pageSize: 25,
   });
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
-  const [selectedDeployment, setSelectedDeployment] = useState<DeploymentRow | null>(null);
-  const [panelOpen, setPanelOpen] = useState(false);
+  const [expanded, setExpanded] = useState<ExpandedState>({});
   const [projectFilter, setProjectFilter] = useState<string>("");
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [syncing, startSync] = useTransition();
@@ -77,6 +91,12 @@ export function DeploymentsTable({
     current: number;
     total: number;
   } | null>(null);
+
+  // Cache for loaded job data per deployment
+  const jobsCacheRef = useRef<Map<number, JobInfo[]>>(new Map());
+  const handleCacheJobs = useCallback((deploymentId: number, jobs: JobInfo[]) => {
+    jobsCacheRef.current.set(deploymentId, jobs);
+  }, []);
 
   // Apply dropdown filters
   const filteredData = useMemo(() => {
@@ -184,6 +204,26 @@ export function DeploymentsTable({
         enableGlobalFilter: false,
       },
       {
+        id: "results",
+        header: "",
+        cell: ({ row }) => {
+          const jobId = row.original.lastCompletedJobId;
+          if (!jobId) return null;
+          return (
+            <Link
+              href={`/camera-trap/results/${jobId}`}
+              onClick={(e) => e.stopPropagation()}
+              className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 hover:underline whitespace-nowrap"
+            >
+              <Eye className="h-3.5 w-3.5" />
+              Resultados
+            </Link>
+          );
+        },
+        enableSorting: false,
+        enableGlobalFilter: false,
+      },
+      {
         id: "dates",
         header: "Fechas",
         accessorFn: (row) => row.dateStart || "",
@@ -214,42 +254,62 @@ export function DeploymentsTable({
           );
         },
         enableGlobalFilter: false,
+      },
+      {
+        id: "expand",
+        header: "",
+        cell: ({ row }) => (
+          <ChevronRight className={`h-4 w-4 text-muted-foreground transition-transform ${row.getIsExpanded() ? "rotate-90" : ""}`} />
+        ),
+        enableSorting: false,
+        enableGlobalFilter: false,
       }
     );
 
     return cols;
   }, [canEdit]);
 
+  // Accordion behavior: only allow one expanded row at a time
+  const handleExpandedChange = useCallback((updater: ExpandedState | ((old: ExpandedState) => ExpandedState)) => {
+    setExpanded((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      if (next === true) return next;
+      // Find newly expanded rows (keys that are true in next but not in prev)
+      const prevKeys = prev === true ? [] : Object.keys(prev).filter((k) => prev[k]);
+      const nextKeys = Object.keys(next).filter((k) => next[k]);
+      const newlyExpanded = nextKeys.filter((k) => !prevKeys.includes(k));
+      // If a new row was expanded, collapse all others (accordion)
+      if (newlyExpanded.length > 0) {
+        return { [newlyExpanded[newlyExpanded.length - 1]]: true };
+      }
+      return next;
+    });
+  }, []);
+
   const table = useReactTable({
     data: filteredData,
     columns,
-    state: { sorting, globalFilter, pagination, rowSelection },
+    state: { sorting, globalFilter, pagination, rowSelection, expanded },
     onSortingChange: setSorting,
     onGlobalFilterChange: setGlobalFilter,
-    onPaginationChange: setPagination,
+    onPaginationChange: (updater) => {
+      setPagination(updater);
+      setExpanded({}); // Collapse on page change
+    },
     onRowSelectionChange: setRowSelection,
+    onExpandedChange: handleExpandedChange,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
+    getExpandedRowModel: getExpandedRowModel(),
     enableRowSelection: canEdit,
+    getRowCanExpand: () => true,
     getRowId: (row) => String(row.id),
   });
 
   const selectedRows = table.getFilteredSelectedRowModel().rows;
   const selectedIds = selectedRows.map((r) => r.original.id);
-
-  const handleRowClick = useCallback(
-    (row: DeploymentRow) => {
-      setSelectedDeployment(row);
-      setPanelOpen(true);
-      // Clear selection when opening panel
-      if (Object.keys(rowSelection).length > 0) {
-        setRowSelection({});
-      }
-    },
-    [rowSelection]
-  );
 
   const handleSync = () => {
     startSync(async () => {
@@ -499,21 +559,38 @@ export function DeploymentsTable({
               </TableRow>
             ) : (
               table.getRowModel().rows.map((row) => (
-                <TableRow
-                  key={row.id}
-                  className="cursor-pointer hover:bg-muted/50"
-                  data-state={row.getIsSelected() ? "selected" : undefined}
-                  onClick={() => handleRowClick(row.original)}
-                >
-                  {row.getVisibleCells().map((cell) => (
-                    <TableCell key={cell.id}>
-                      {flexRender(
-                        cell.column.columnDef.cell,
-                        cell.getContext()
-                      )}
-                    </TableCell>
-                  ))}
-                </TableRow>
+                <Fragment key={row.id}>
+                  <TableRow
+                    className={`cursor-pointer hover:bg-muted/50 ${row.getIsExpanded() ? "bg-primary/10 border-b-0" : ""}`}
+                    data-state={row.getIsSelected() ? "selected" : undefined}
+                    onClick={() => row.toggleExpanded()}
+                  >
+                    {row.getVisibleCells().map((cell) => (
+                      <TableCell key={cell.id}>
+                        {flexRender(
+                          cell.column.columnDef.cell,
+                          cell.getContext()
+                        )}
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                  {row.getIsExpanded() && (
+                    <TableRow className="hover:bg-transparent">
+                      <TableCell
+                        colSpan={columns.length}
+                        className="p-0"
+                      >
+                        <DeploymentExpandedRow
+                          deployment={row.original}
+                          canEdit={canEdit}
+                          distinctProjects={distinctProjects}
+                          cachedJobs={jobsCacheRef.current.get(row.original.id)}
+                          onCacheJobs={handleCacheJobs}
+                        />
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </Fragment>
               ))
             )}
           </TableBody>
@@ -569,15 +646,6 @@ export function DeploymentsTable({
           </Button>
         </div>
       </div>
-
-      {/* Side panel */}
-      <DeploymentPanel
-        deployment={selectedDeployment}
-        open={panelOpen}
-        onOpenChange={setPanelOpen}
-        canEdit={canEdit}
-        distinctProjects={distinctProjects}
-      />
 
       {/* Batch dialogs */}
       {canEdit && (

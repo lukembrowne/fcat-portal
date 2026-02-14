@@ -492,6 +492,7 @@ export interface DeploymentRow {
   createdBy: string | null;
   lastProcessedAt: Date | null;
   lastJobStatus: string | null;
+  lastCompletedJobId: number | null;
   jobCount: number;
 }
 
@@ -543,6 +544,28 @@ export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
     }
   }
 
+  // Latest completed job ID per deployment (for direct "Ver Resultados" link)
+  const completedJobs = await db
+    .select({
+      id: processingJobs.id,
+      deploymentId: processingJobs.deploymentId,
+    })
+    .from(processingJobs)
+    .where(
+      and(
+        inArray(processingJobs.deploymentId, deploymentIds),
+        eq(processingJobs.status, "completed")
+      )
+    )
+    .orderBy(desc(processingJobs.completedAt));
+
+  const completedJobMap = new Map<number, number>();
+  for (const row of completedJobs) {
+    if (!completedJobMap.has(row.deploymentId)) {
+      completedJobMap.set(row.deploymentId, row.id);
+    }
+  }
+
   return allDeployments.map((d) => {
     const jobInfo = jobMap.get(d.id);
     const latestStatus = latestStatusMap.get(d.id);
@@ -565,6 +588,7 @@ export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
       createdBy: d.createdBy,
       lastProcessedAt: latestStatus?.completedAt ?? null,
       lastJobStatus: latestStatus?.status ?? null,
+      lastCompletedJobId: completedJobMap.get(d.id) ?? null,
       jobCount: jobInfo?.cnt ?? 0,
     };
   });

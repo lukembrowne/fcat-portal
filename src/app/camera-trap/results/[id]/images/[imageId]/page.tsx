@@ -1,7 +1,11 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { getImageWithDetections, getJobImageIds, getJobSpecies } from "@/app/camera-trap/actions";
+import { requirePermission } from "@/lib/auth";
+import { getImageWithDetections, getJobImageIds, getSpeciesList } from "@/app/camera-trap/actions";
+import { db } from "@/db";
+import { videos } from "@/db/schema";
+import { eq } from "drizzle-orm";
 import { ImageDetailClient } from "./image-detail-client";
 
 interface PageProps {
@@ -9,6 +13,7 @@ interface PageProps {
 }
 
 export default async function ImageDetailPage({ params }: PageProps) {
+  await requirePermission("camera-trap", "viewer");
   const { id, imageId } = await params;
   const jobId = parseInt(id, 10);
   const imgId = parseInt(imageId, 10);
@@ -26,7 +31,7 @@ export default async function ImageDetailPage({ params }: PageProps) {
 
   const [imageIds, speciesList] = await Promise.all([
     getJobImageIds(jobId),
-    getJobSpecies(jobId),
+    getSpeciesList(),
   ]);
   const currentIndex = imageIds.indexOf(imgId);
   const prevImageId = currentIndex > 0 ? imageIds[currentIndex - 1] : null;
@@ -84,7 +89,12 @@ export default async function ImageDetailPage({ params }: PageProps) {
 
       {/* Header with navigation */}
       <div className="flex items-center justify-between mb-4">
-        <h1 className="text-xl font-bold truncate">{image.filename}</h1>
+        <div className="min-w-0">
+          <h1 className="text-xl font-bold truncate">{image.filename}</h1>
+          {image.videoId && (
+            <VideoFrameLabel videoId={image.videoId} frameIndex={image.frameIndex} />
+          )}
+        </div>
         <div className="flex items-center gap-2">
           <span className="text-sm text-muted-foreground">
             {currentIndex + 1} de {imageIds.length}
@@ -117,9 +127,26 @@ export default async function ImageDetailPage({ params }: PageProps) {
         detections={annotationDetections}
         speciesList={speciesList}
         jobId={jobId}
+        imageId={imgId}
         prevImageId={prevImageId}
         nextImageId={nextImageId}
       />
     </div>
+  );
+}
+
+async function VideoFrameLabel({ videoId, frameIndex }: { videoId: number; frameIndex: number | null }) {
+  const [video] = await db
+    .select({ filename: videos.filename })
+    .from(videos)
+    .where(eq(videos.id, videoId));
+
+  if (!video) return null;
+
+  return (
+    <p className="text-sm text-muted-foreground mt-0.5">
+      Cuadro {(frameIndex ?? 0) + 1} de{" "}
+      <span className="font-medium">{video.filename}</span>
+    </p>
   );
 }

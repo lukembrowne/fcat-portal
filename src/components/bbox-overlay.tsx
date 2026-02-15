@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 
 export interface BBoxData {
   id: number;
@@ -21,6 +21,8 @@ interface BBoxOverlayProps {
   boxes: BBoxData[];
   selectedBoxId?: number | null;
   onBoxClick?: (box: BBoxData) => void;
+  editable?: boolean;
+  onDrawComplete?: (bbox: { x: number; y: number; width: number; height: number }) => void;
 }
 
 const SPECIES_COLORS: Record<string, string> = {};
@@ -44,16 +46,47 @@ const CLASS_COLORS: Record<number, string> = {
   2: "#3b82f6",
 };
 
+const DRAG_THRESHOLD = 5;
+const MIN_BOX_PX = 10;
+
+interface DragState {
+  startX: number;
+  startY: number;
+  currentX: number;
+  currentY: number;
+  hasDragged: boolean;
+}
+
+function normalizeRect(
+  startX: number,
+  startY: number,
+  endX: number,
+  endY: number
+) {
+  return {
+    x: Math.min(startX, endX),
+    y: Math.min(startY, endY),
+    width: Math.abs(endX - startX),
+    height: Math.abs(endY - startY),
+  };
+}
+
 export function BBoxOverlay({
   src,
   alt,
   boxes,
   selectedBoxId,
   onBoxClick,
+  editable = false,
+  onDrawComplete,
 }: BBoxOverlayProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
   const [imgSize, setImgSize] = useState({ width: 0, height: 0 });
   const [hoveredId, setHoveredId] = useState<number | null>(null);
+  const dragRef = useRef<DragState | null>(null);
+  const [preview, setPreview] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
 
   useEffect(() => {
     function updateSize() {
@@ -71,29 +104,132 @@ export function BBoxOverlay({
       img.addEventListener("load", updateSize);
     }
 
-    window.addEventListener("resize", updateSize);
+    const container = containerRef.current;
+    let observer: ResizeObserver | undefined;
+    if (container) {
+      observer = new ResizeObserver(updateSize);
+      observer.observe(container);
+    }
+
     return () => {
       if (img) img.removeEventListener("load", updateSize);
-      window.removeEventListener("resize", updateSize);
+      observer?.disconnect();
     };
   }, [src]);
 
+  const toNormalized = useCallback(
+    (clientX: number, clientY: number) => {
+      const svg = svgRef.current;
+      if (!svg || imgSize.width === 0) return { nx: 0, ny: 0 };
+      const rect = svg.getBoundingClientRect();
+      const nx = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+      const ny = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
+      return { nx, ny };
+    },
+    [imgSize]
+  );
+
+  const handlePointerDown = useCallback(
+    (e: React.PointerEvent<SVGSVGElement>) => {
+      if (!editable || !onDrawComplete) return;
+      // Only start drawing if clicking on the SVG background, not on a box
+      if ((e.target as SVGElement).closest("[data-bbox]")) return;
+
+      const { nx, ny } = toNormalized(e.clientX, e.clientY);
+      dragRef.current = {
+        startX: nx,
+        startY: ny,
+        currentX: nx,
+        currentY: ny,
+        hasDragged: false,
+      };
+
+      (e.target as SVGElement).setPointerCapture(e.pointerId);
+    },
+    [editable, onDrawComplete, toNormalized]
+  );
+
+  const handlePointerMove = useCallback(
+    (e: React.PointerEvent<SVGSVGElement>) => {
+      if (!dragRef.current) return;
+
+      const { nx, ny } = toNormalized(e.clientX, e.clientY);
+      dragRef.current.currentX = nx;
+      dragRef.current.currentY = ny;
+
+      const dx = Math.abs(nx - dragRef.current.startX) * imgSize.width;
+      const dy = Math.abs(ny - dragRef.current.startY) * imgSize.height;
+
+      if (!dragRef.current.hasDragged && Math.sqrt(dx * dx + dy * dy) > DRAG_THRESHOLD) {
+        dragRef.current.hasDragged = true;
+      }
+
+      if (dragRef.current.hasDragged) {
+        setPreview(
+          normalizeRect(
+            dragRef.current.startX,
+            dragRef.current.startY,
+            nx,
+            ny
+          )
+        );
+      }
+    },
+    [toNormalized, imgSize]
+  );
+
+  const handlePointerUp = useCallback(
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    (_e: React.PointerEvent<SVGSVGElement>) => {
+      const drag = dragRef.current;
+      dragRef.current = null;
+      setPreview(null);
+
+      if (!drag || !drag.hasDragged || !onDrawComplete) return;
+
+      const rect = normalizeRect(
+        drag.startX,
+        drag.startY,
+        drag.currentX,
+        drag.currentY
+      );
+
+      // Check minimum size in pixels
+      if (
+        rect.width * imgSize.width < MIN_BOX_PX ||
+        rect.height * imgSize.height < MIN_BOX_PX
+      ) {
+        return;
+      }
+
+      onDrawComplete(rect);
+    },
+    [onDrawComplete, imgSize]
+  );
+
   return (
-    <div className="relative inline-block w-full">
+    <div ref={containerRef} className="relative inline-block w-full">
       <img
         ref={imgRef}
         src={src}
         alt={alt}
         className="w-full h-auto block"
+        draggable={false}
       />
 
       {imgSize.width > 0 && (
         <svg
-          className="absolute inset-0 w-full h-full pointer-events-none"
+          ref={svgRef}
+          className={`absolute inset-0 w-full h-full ${
+            editable ? "pointer-events-auto cursor-crosshair" : "pointer-events-none"
+          }`}
           viewBox={`0 0 ${imgSize.width} ${imgSize.height}`}
           preserveAspectRatio="none"
+          onPointerDown={editable ? handlePointerDown : undefined}
+          onPointerMove={editable ? handlePointerMove : undefined}
+          onPointerUp={editable ? handlePointerUp : undefined}
         >
-          {boxes.map((box) => {
+          {boxes.map((box, index) => {
             const color = box.species
               ? getSpeciesColor(box.species)
               : CLASS_COLORS[box.detectionClass] || "#22c55e";
@@ -107,13 +243,19 @@ export function BBoxOverlay({
             const pw = box.width * imgSize.width;
             const ph = box.height * imgSize.height;
 
+            const num = index + 1;
+
             return (
               <g
                 key={box.id}
+                data-bbox
                 className="pointer-events-auto cursor-pointer"
                 onMouseEnter={() => setHoveredId(box.id)}
                 onMouseLeave={() => setHoveredId(null)}
-                onClick={() => onBoxClick?.(box)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onBoxClick?.(box);
+                }}
               >
                 <rect
                   x={px} y={py} width={pw} height={ph}
@@ -121,6 +263,27 @@ export function BBoxOverlay({
                   strokeWidth={highlight ? 3 : 2}
                   strokeOpacity={highlight ? 1 : 0.8}
                 />
+
+                {/* Number badge */}
+                <circle
+                  cx={px + 10}
+                  cy={py + 10}
+                  r={9}
+                  fill={isSelected ? color : "rgba(0,0,0,0.7)"}
+                  stroke={color}
+                  strokeWidth={1.5}
+                />
+                <text
+                  x={px + 10}
+                  y={py + 14}
+                  fill="white"
+                  fontSize={11}
+                  fontFamily="system-ui, sans-serif"
+                  fontWeight={600}
+                  textAnchor="middle"
+                >
+                  {num}
+                </text>
 
                 {(highlight || isSelected) && box.species && (
                   <>
@@ -144,11 +307,11 @@ export function BBoxOverlay({
                 {!highlight && (
                   <>
                     <rect
-                      x={px} y={py} width={36} height={16}
+                      x={px + 22} y={py} width={36} height={16}
                       fill={color} fillOpacity={0.85} rx={2}
                     />
                     <text
-                      x={px + 3} y={py + 12}
+                      x={px + 25} y={py + 12}
                       fill="white" fontSize={10}
                       fontFamily="system-ui, sans-serif"
                     >
@@ -159,6 +322,20 @@ export function BBoxOverlay({
               </g>
             );
           })}
+
+          {/* Drawing preview */}
+          {preview && (
+            <rect
+              x={preview.x * imgSize.width}
+              y={preview.y * imgSize.height}
+              width={preview.width * imgSize.width}
+              height={preview.height * imgSize.height}
+              fill="rgba(59, 130, 246, 0.15)"
+              stroke="#3b82f6"
+              strokeWidth={2}
+              strokeDasharray="6 3"
+            />
+          )}
         </svg>
       )}
     </div>

@@ -94,6 +94,7 @@ export const deployments = sqliteTable(
     dateStart: text("date_start"),
     dateEnd: text("date_end"),
     totalImages: integer("total_images").default(0),
+    totalVideos: integer("total_videos").default(0),
     status: text("status", {
       enum: ["unscanned", "scanned", "processing", "processed", "verified"],
     })
@@ -154,6 +155,9 @@ export const processingJobs = sqliteTable("biochoco_processing_jobs", {
     .notNull()
     .default(sql`(unixepoch())`),
   createdBy: text("created_by"),
+  frameExtractionRate: real("frame_extraction_rate").default(1.0),
+  totalVideos: integer("total_videos").default(0),
+  extractedFrames: integer("extracted_frames").default(0),
 });
 
 // ---------------------------------------------------------------------------
@@ -183,11 +187,48 @@ export const images = sqliteTable(
       .default("pending"),
     errorMessage: text("error_message"),
     thumbnailPath: text("thumbnail_path"),
+    videoId: integer("video_id").references(() => videos.id, {
+      onDelete: "cascade",
+    }),
+    frameIndex: integer("frame_index"),
   },
   (table) => [
     index("idx_biochoco_images_deployment_id").on(table.deploymentId),
     index("idx_biochoco_images_job_id").on(table.jobId),
     uniqueIndex("idx_biochoco_images_deployment_drive_file").on(
+      table.deploymentId,
+      table.driveFileId
+    ),
+  ]
+);
+
+// ---------------------------------------------------------------------------
+// Videos (camera trap video files)
+// ---------------------------------------------------------------------------
+
+export const videos = sqliteTable(
+  "biochoco_videos",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    deploymentId: integer("deployment_id")
+      .notNull()
+      .references(() => deployments.id, { onDelete: "cascade" }),
+    filename: text("filename").notNull(),
+    driveFileId: text("drive_file_id"),
+    fileSize: integer("file_size"),
+    fileModified: integer("file_modified", { mode: "timestamp" }),
+    path: text("path"),
+    duration: real("duration"),
+    status: text("status", {
+      enum: ["pending", "processed", "failed"],
+    })
+      .notNull()
+      .default("pending"),
+    errorMessage: text("error_message"),
+  },
+  (table) => [
+    index("idx_biochoco_videos_deployment_id").on(table.deploymentId),
+    uniqueIndex("idx_biochoco_videos_deployment_drive_file").on(
       table.deploymentId,
       table.driveFileId
     ),
@@ -206,8 +247,7 @@ export const detections = sqliteTable(
       .notNull()
       .references(() => images.id, { onDelete: "cascade" }),
     jobId: integer("job_id")
-      .notNull()
-      .references(() => processingJobs.id, { onDelete: "cascade" }),
+      .references(() => processingJobs.id, { onDelete: "set null" }),
     bboxX: real("bbox_x").notNull(),
     bboxY: real("bbox_y").notNull(),
     bboxWidth: real("bbox_width").notNull(),
@@ -258,6 +298,12 @@ export const species = sqliteTable("biochoco_species", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   scientificName: text("scientific_name").notNull().unique(),
   commonName: text("common_name").notNull(),
+  spanishName: text("spanish_name"),
+  taxonomicRank: text("taxonomic_rank", {
+    enum: ["class", "order", "family", "genus", "species"],
+  })
+    .notNull()
+    .default("species"),
   type: text("type", {
     enum: ["mammal", "bird", "reptile", "amphibian", "insect", "system"],
   })
@@ -510,6 +556,9 @@ export type NewProcessingJob = typeof processingJobs.$inferInsert;
 
 export type Image = typeof images.$inferSelect;
 export type NewImage = typeof images.$inferInsert;
+
+export type Video = typeof videos.$inferSelect;
+export type NewVideo = typeof videos.$inferInsert;
 
 export type Detection = typeof detections.$inferSelect;
 export type NewDetection = typeof detections.$inferInsert;

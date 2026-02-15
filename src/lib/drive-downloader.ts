@@ -16,7 +16,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import sharp from "sharp";
 import { db } from "@/db";
-import { images } from "@/db/schema";
+import { images, videos } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { downloadDeploymentImages } from "./drive-client";
 
@@ -157,6 +157,109 @@ export async function downloadDeploymentForProcessing(
 
   console.log(
     `[drive-downloader] Job ${jobId}: ${alreadyCached.size} cached, ${downloaded} downloaded, ${failed} failed`
+  );
+
+  return { cacheDir, downloaded, skipped: alreadyCached.size, failed };
+}
+
+/**
+ * Download all videos for a deployment from Drive to a persistent cache directory.
+ * Skips videos that already exist in cache. Writes cache paths into videos.path.
+ */
+export async function downloadVideosForProcessing(
+  deploymentId: number,
+  jobId: number,
+  onProgress?: (downloaded: number, total: number) => Promise<void>
+): Promise<{
+  cacheDir: string;
+  downloaded: number;
+  skipped: number;
+  failed: number;
+}> {
+  const cacheDir = path.join(CACHE_BASE, String(deploymentId));
+  await fs.mkdir(cacheDir, { recursive: true });
+
+  // Get all videos for this deployment that have Drive file IDs
+  const deploymentVideos = await db
+    .select()
+    .from(videos)
+    .where(eq(videos.deploymentId, deploymentId));
+
+  const driveVideos = deploymentVideos.filter((v) => v.driveFileId);
+
+  if (driveVideos.length === 0) {
+    return { cacheDir, downloaded: 0, skipped: 0, failed: 0 };
+  }
+
+  // Check which videos are already cached
+  const toDownload: Array<{
+    id: string;
+    name: string;
+    size: number;
+    modifiedTime: string;
+    relativePath: string;
+  }> = [];
+  const alreadyCached = new Map<string, string>();
+
+  for (const vid of driveVideos) {
+    const localPath = path.join(cacheDir, vid.filename);
+    try {
+      await fs.access(localPath);
+      alreadyCached.set(vid.driveFileId!, localPath);
+    } catch {
+      toDownload.push({
+        id: vid.driveFileId!,
+        name: vid.filename,
+        size: vid.fileSize || 0,
+        modifiedTime: "",
+        relativePath: vid.filename,
+      });
+    }
+  }
+
+  const downloadSize = toDownload.reduce((sum, f) => sum + f.size, 0);
+  console.log(
+    `[drive-downloader] Job ${jobId} videos: ${alreadyCached.size} cached, ${toDownload.length} to download (~${(downloadSize / 1024 / 1024).toFixed(1)} MB)`
+  );
+
+  // Download missing videos (lower parallelism — videos are larger)
+  let downloaded = 0;
+  let failed = 0;
+  const pathMap = new Map<string, string>();
+
+  if (toDownload.length > 0) {
+    const result = await downloadDeploymentImages(toDownload, cacheDir);
+    downloaded = result.downloaded;
+    failed = result.failed;
+    for (const [fileId, localPath] of result.pathMap) {
+      pathMap.set(fileId, localPath);
+    }
+  }
+
+  // Merge cached paths
+  for (const [fileId, localPath] of alreadyCached) {
+    pathMap.set(fileId, localPath);
+  }
+
+  // Write cache paths into videos.path
+  let progressCount = 0;
+  for (const vid of driveVideos) {
+    const localPath = pathMap.get(vid.driveFileId!);
+    if (!localPath) continue;
+
+    await db
+      .update(videos)
+      .set({ path: localPath })
+      .where(eq(videos.id, vid.id));
+
+    progressCount++;
+    if (onProgress) {
+      await onProgress(progressCount, driveVideos.length);
+    }
+  }
+
+  console.log(
+    `[drive-downloader] Job ${jobId} videos: ${alreadyCached.size} cached, ${downloaded} downloaded, ${failed} failed`
   );
 
   return { cacheDir, downloaded, skipped: alreadyCached.size, failed };

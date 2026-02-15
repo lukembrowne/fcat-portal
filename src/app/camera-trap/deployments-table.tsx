@@ -169,12 +169,18 @@ export function DeploymentsTable({
       },
       {
         accessorKey: "totalImages",
-        header: "Imágenes",
-        cell: ({ getValue }) => {
-          const v = getValue<number | null>();
+        header: "Archivos",
+        cell: ({ row }) => {
+          const imgs = row.original.totalImages;
+          const vids = row.original.totalVideos;
+          const hasImgs = imgs != null && imgs > 0;
+          const hasVids = vids != null && vids > 0;
+          if (!hasImgs && !hasVids) return "—";
           return (
             <span className="tabular-nums">
-              {v != null && v > 0 ? v.toLocaleString() : "—"}
+              {hasImgs ? `${imgs.toLocaleString()} img` : ""}
+              {hasImgs && hasVids ? ", " : ""}
+              {hasVids ? `${vids.toLocaleString()} vid` : ""}
             </span>
           );
         },

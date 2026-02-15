@@ -118,14 +118,26 @@ export function SidebarNav({ user }: SidebarNavProps) {
   // Análisis section — reusable analysis modules
   const analysisItems: NavItem[] = [];
 
+  const isCameraTrapEditor =
+    user.globalRole === "super_admin" ||
+    user.permissions.some(
+      (p) =>
+        p.projectId === "camera-trap" &&
+        (p.role === "editor" || p.role === "admin")
+    );
+
   if (hasCameraTrap) {
+    const cameraTrapChildren: NavItem[] = [
+      { label: "Dashboard", href: "/camera-trap" },
+      { label: "Resultados", href: "/camera-trap/results" },
+    ];
+    if (isCameraTrapEditor) {
+      cameraTrapChildren.push({ label: "Especies", href: "/camera-trap/species" });
+    }
     analysisItems.push({
       label: "Cámaras Trampa",
       icon: "camera",
-      children: [
-        { label: "Dashboard", href: "/camera-trap" },
-        { label: "Resultados", href: "/camera-trap/results" },
-      ],
+      children: cameraTrapChildren,
     });
   }
 

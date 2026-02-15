@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/status-badge";
+import { requirePermission } from "@/lib/auth";
 import { getDeployment } from "../actions";
 import { ProcessButton } from "./process-button";
 
@@ -11,6 +12,7 @@ interface PageProps {
 }
 
 export default async function DeploymentDetailPage({ params }: PageProps) {
+  await requirePermission("camera-trap", "viewer");
   const { id } = await params;
   const deploymentId = parseInt(id, 10);
 

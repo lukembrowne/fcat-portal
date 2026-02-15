@@ -110,7 +110,7 @@ const statements = [
   `CREATE TABLE IF NOT EXISTS biochoco_detections (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     image_id INTEGER NOT NULL REFERENCES biochoco_images(id) ON DELETE CASCADE,
-    job_id INTEGER NOT NULL REFERENCES biochoco_processing_jobs(id) ON DELETE CASCADE,
+    job_id INTEGER REFERENCES biochoco_processing_jobs(id) ON DELETE SET NULL,
     bbox_x REAL NOT NULL,
     bbox_y REAL NOT NULL,
     bbox_width REAL NOT NULL,
@@ -131,6 +131,20 @@ const statements = [
     corrected_species TEXT,
     verified_by TEXT,
     verified_at INTEGER
+  )`,
+
+  // BioChoco — Videos (camera trap video files)
+  `CREATE TABLE IF NOT EXISTS biochoco_videos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    deployment_id INTEGER NOT NULL REFERENCES biochoco_deployments(id) ON DELETE CASCADE,
+    filename TEXT NOT NULL,
+    drive_file_id TEXT,
+    file_size INTEGER,
+    file_modified INTEGER,
+    path TEXT,
+    duration REAL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'processed', 'failed')),
+    error_message TEXT
   )`,
 
   // BioChoco — Species
@@ -241,6 +255,8 @@ const statements = [
   `CREATE INDEX IF NOT EXISTS idx_biochoco_detections_image_id ON biochoco_detections(image_id)`,
   `CREATE INDEX IF NOT EXISTS idx_biochoco_detections_job_id ON biochoco_detections(job_id)`,
   `CREATE INDEX IF NOT EXISTS idx_biochoco_identifications_detection_id ON biochoco_identifications(detection_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_biochoco_videos_deployment_id ON biochoco_videos(deployment_id)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_biochoco_videos_deployment_drive_file ON biochoco_videos(deployment_id, drive_file_id)`,
 
   // Finance indexes
   `CREATE INDEX IF NOT EXISTS idx_ft_fecha ON finance_transactions(fecha)`,
@@ -326,6 +342,16 @@ const migrations = [
   `ALTER TABLE biochoco_deployments ADD COLUMN site_name TEXT`,
   `ALTER TABLE biochoco_deployments ADD COLUMN odk_submission_id TEXT`,
   `ALTER TABLE biochoco_deployments ADD COLUMN metadata_source TEXT`,
+  // Species table enhancements
+  `ALTER TABLE biochoco_species ADD COLUMN spanish_name TEXT`,
+  `ALTER TABLE biochoco_species ADD COLUMN taxonomic_rank TEXT NOT NULL DEFAULT 'species'`,
+  // Video processing support
+  `ALTER TABLE biochoco_deployments ADD COLUMN total_videos INTEGER DEFAULT 0`,
+  `ALTER TABLE biochoco_images ADD COLUMN video_id INTEGER REFERENCES biochoco_videos(id) ON DELETE CASCADE`,
+  `ALTER TABLE biochoco_images ADD COLUMN frame_index INTEGER`,
+  `ALTER TABLE biochoco_processing_jobs ADD COLUMN frame_extraction_rate REAL DEFAULT 1.0`,
+  `ALTER TABLE biochoco_processing_jobs ADD COLUMN total_videos INTEGER DEFAULT 0`,
+  `ALTER TABLE biochoco_processing_jobs ADD COLUMN extracted_frames INTEGER DEFAULT 0`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }
@@ -403,6 +429,39 @@ try {
 } catch (err) {
   try { db.exec(`ROLLBACK`); } catch { /* no active tx */ }
   console.error("Failed to migrate biochoco_images table:", err.message);
+}
+
+// --- Table recreation: make biochoco_detections.job_id nullable with ON DELETE SET NULL ---
+try {
+  const jobIdInfo = db
+    .prepare(`SELECT "notnull" FROM pragma_table_info('biochoco_detections') WHERE name = 'job_id'`)
+    .get();
+  if (jobIdInfo && jobIdInfo.notnull === 1) {
+    console.log("Migrating biochoco_detections table: making job_id nullable with ON DELETE SET NULL...");
+    db.exec(`BEGIN TRANSACTION`);
+    db.exec(`CREATE TABLE biochoco_detections_new (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      image_id INTEGER NOT NULL REFERENCES biochoco_images(id) ON DELETE CASCADE,
+      job_id INTEGER REFERENCES biochoco_processing_jobs(id) ON DELETE SET NULL,
+      bbox_x REAL NOT NULL,
+      bbox_y REAL NOT NULL,
+      bbox_width REAL NOT NULL,
+      bbox_height REAL NOT NULL,
+      detection_confidence REAL NOT NULL,
+      detection_class INTEGER NOT NULL DEFAULT 0,
+      model_version TEXT
+    )`);
+    db.exec(`INSERT INTO biochoco_detections_new SELECT id, image_id, job_id, bbox_x, bbox_y, bbox_width, bbox_height, detection_confidence, detection_class, model_version FROM biochoco_detections`);
+    db.exec(`DROP TABLE biochoco_detections`);
+    db.exec(`ALTER TABLE biochoco_detections_new RENAME TO biochoco_detections`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_biochoco_detections_image_id ON biochoco_detections(image_id)`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_biochoco_detections_job_id ON biochoco_detections(job_id)`);
+    db.exec(`COMMIT`);
+    console.log("  biochoco_detections.job_id is now nullable with ON DELETE SET NULL");
+  }
+} catch (err) {
+  try { db.exec(`ROLLBACK`); } catch { /* no active tx */ }
+  console.error("Failed to migrate biochoco_detections table:", err.message);
 }
 
 console.log(`Schema pushed to ${fullPath}`);

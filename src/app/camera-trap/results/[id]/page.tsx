@@ -8,6 +8,7 @@ import {
   processingJobs,
   deployments,
   images,
+  videos,
   detections,
   identifications,
 } from "@/db/schema";
@@ -98,14 +99,27 @@ export default async function JobResultsPage({ params }: PageProps) {
     (i) => i.verificationStatus === "unverified"
   ).length;
 
+  // Query videos for this deployment to build a name map
+  const jobVideos = deployment
+    ? await db
+        .select()
+        .from(videos)
+        .where(eq(videos.deploymentId, deployment.id))
+    : [];
+  const videoMap = new Map(jobVideos.map((v) => [v.id, v]));
+
   const gridImages = jobImages.map((img) => {
     const imgDets = detectionsByImage.get(img.id) || [];
+    const vid = img.videoId ? videoMap.get(img.videoId) : null;
     return {
       id: img.id,
       filename: img.filename,
       path: img.path,
       status: img.status,
       thumbnailPath: img.thumbnailPath,
+      videoId: img.videoId ?? null,
+      frameIndex: img.frameIndex ?? null,
+      videoFilename: vid?.filename ?? null,
       detections: imgDets.map((det) => {
         const ident = identByDetection.get(det.id);
         return {

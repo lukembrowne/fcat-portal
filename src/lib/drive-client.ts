@@ -197,11 +197,27 @@ export interface DriveImageFile {
   relativePath: string;
 }
 
+export interface DriveVideoFile {
+  id: string;
+  name: string;
+  size: number;
+  modifiedTime: string;
+  /** Path relative to deployment root */
+  relativePath: string;
+}
+
+export interface DriveMediaResult {
+  images: DriveImageFile[];
+  videos: DriveVideoFile[];
+}
+
 const FOLDER_ID_REGEX = /^[a-zA-Z0-9_-]+$/;
 
 const IMAGE_EXTENSIONS = new Set([
   ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".tif",
 ]);
+
+const VIDEO_EXTENSIONS = new Set([".mp4", ".avi", ".mov"]);
 
 // ---------------------------------------------------------------------------
 // Camera Trap — Public API
@@ -258,12 +274,26 @@ export async function listImagesRecursive(
   folderId: string,
   pathPrefix = ""
 ): Promise<DriveImageFile[]> {
+  const result = await listMediaRecursive(folderId, pathPrefix);
+  return result.images;
+}
+
+/**
+ * Recursively list all media files (images + videos) in a folder.
+ * Filters by MIME type prefix, then post-filters by supported extensions.
+ * Handles pagination with do...while + nextPageToken.
+ */
+export async function listMediaRecursive(
+  folderId: string,
+  pathPrefix = ""
+): Promise<DriveMediaResult> {
   if (!isValidFolderId(folderId)) {
     throw new Error(`Invalid folder ID format: ${folderId}`);
   }
 
   const drive = getDrive();
-  const images: DriveImageFile[] = [];
+  const imageFiles: DriveImageFile[] = [];
+  const videoFiles: DriveVideoFile[] = [];
   const subfolders: { id: string; name: string }[] = [];
 
   // List all files and subfolders in this folder
@@ -281,17 +311,32 @@ export async function listImagesRecursive(
     for (const file of res.data.files ?? []) {
       if (!file.id || !file.name) continue;
 
+      const relativePath = pathPrefix
+        ? `${pathPrefix}/${file.name}`
+        : file.name;
+
       if (file.mimeType === "application/vnd.google-apps.folder") {
         subfolders.push({ id: file.id, name: file.name });
       } else if (file.mimeType?.startsWith("image/")) {
         const ext = path.extname(file.name).toLowerCase();
         if (IMAGE_EXTENSIONS.has(ext)) {
-          images.push({
+          imageFiles.push({
             id: file.id,
             name: file.name,
             size: parseInt(file.size || "0", 10),
             modifiedTime: file.modifiedTime || "",
-            relativePath: pathPrefix ? `${pathPrefix}/${file.name}` : file.name,
+            relativePath,
+          });
+        }
+      } else if (file.mimeType?.startsWith("video/")) {
+        const ext = path.extname(file.name).toLowerCase();
+        if (VIDEO_EXTENSIONS.has(ext)) {
+          videoFiles.push({
+            id: file.id,
+            name: file.name,
+            size: parseInt(file.size || "0", 10),
+            modifiedTime: file.modifiedTime || "",
+            relativePath,
           });
         }
       }
@@ -303,11 +348,12 @@ export async function listImagesRecursive(
   // Recurse into subfolders
   for (const sub of subfolders) {
     const subPath = pathPrefix ? `${pathPrefix}/${sub.name}` : sub.name;
-    const subImages = await listImagesRecursive(sub.id, subPath);
-    images.push(...subImages);
+    const subResult = await listMediaRecursive(sub.id, subPath);
+    imageFiles.push(...subResult.images);
+    videoFiles.push(...subResult.videos);
   }
 
-  return images;
+  return { images: imageFiles, videos: videoFiles };
 }
 
 /**

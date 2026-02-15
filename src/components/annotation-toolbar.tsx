@@ -1,20 +1,15 @@
 "use client";
 
-import { useState, useTransition, useEffect, useCallback } from "react";
+import { useState, useTransition, useEffect, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { SpeciesCombobox } from "@/components/species-combobox";
 import {
   verifyIdentification,
   rejectIdentification,
   correctIdentification,
 } from "@/app/camera-trap/actions";
+import type { Species } from "@/db/schema";
 
 export interface DetectionWithIdentification {
   id: number;
@@ -35,11 +30,11 @@ export interface DetectionWithIdentification {
 
 interface AnnotationToolbarProps {
   detections: DetectionWithIdentification[];
-  speciesList: string[];
+  speciesList: Species[];
+  recentSpecies?: Species[];
   selectedDetectionId?: number | null;
   onDetectionSelect?: (detectionId: number) => void;
   onActionComplete?: () => void;
-  enableKeyboardShortcuts?: boolean;
 }
 
 const CLASS_LABELS: Record<number, string> = {
@@ -58,15 +53,14 @@ const VERIFICATION_STYLES: Record<string, { variant: "default" | "secondary" | "
 export function AnnotationToolbar({
   detections,
   speciesList,
+  recentSpecies = [],
   selectedDetectionId,
   onDetectionSelect,
   onActionComplete,
-  enableKeyboardShortcuts = true,
 }: AnnotationToolbarProps) {
   const [isPending, startTransition] = useTransition();
   const [correctingId, setCorrectingId] = useState<number | null>(null);
-
-  const selectedDetection = detections.find((d) => d.id === selectedDetectionId) || detections[0];
+  const cardRefs = useRef<Map<number, HTMLDivElement>>(new Map());
 
   const handleVerify = useCallback(
     (identificationId: number) => {
@@ -89,40 +83,24 @@ export function AnnotationToolbar({
   );
 
   const handleCorrect = (identificationId: number, newSpecies: string) => {
+    setCorrectingId(null); // Optimistic close
     startTransition(async () => {
-      await correctIdentification(identificationId, newSpecies);
-      setCorrectingId(null);
+      const result = await correctIdentification(identificationId, newSpecies);
+      if (!result.success) {
+        // Re-open if failed
+        setCorrectingId(identificationId);
+      }
       onActionComplete?.();
     });
   };
 
+  // Scroll selected card into view
   useEffect(() => {
-    if (!enableKeyboardShortcuts) return;
-
-    function handleKeyDown(e: KeyboardEvent) {
-      if (
-        e.target instanceof HTMLInputElement ||
-        e.target instanceof HTMLTextAreaElement ||
-        e.target instanceof HTMLSelectElement
-      ) {
-        return;
-      }
-
-      const det = selectedDetection;
-      if (!det?.identification) return;
-
-      if (e.key === "v" && !e.metaKey && !e.ctrlKey) {
-        e.preventDefault();
-        handleVerify(det.identification.id);
-      } else if (e.key === "r" && !e.metaKey && !e.ctrlKey) {
-        e.preventDefault();
-        handleReject(det.identification.id);
-      }
+    if (selectedDetectionId != null) {
+      const el = cardRefs.current.get(selectedDetectionId);
+      el?.scrollIntoView({ block: "nearest", behavior: "instant" });
     }
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [enableKeyboardShortcuts, selectedDetection, handleVerify, handleReject]);
+  }, [selectedDetectionId]);
 
   if (detections.length === 0) {
     return (
@@ -134,7 +112,7 @@ export function AnnotationToolbar({
 
   return (
     <div className="space-y-3">
-      {detections.map((det) => {
+      {detections.map((det, index) => {
         const ident = det.identification;
         if (!ident) return null;
 
@@ -146,30 +124,37 @@ export function AnnotationToolbar({
         return (
           <div
             key={det.id}
+            ref={(el) => {
+              if (el) cardRefs.current.set(det.id, el);
+              else cardRefs.current.delete(det.id);
+            }}
             className={`p-3 border rounded-lg space-y-2 transition-colors cursor-pointer ${
-              isSelected ? "border-primary bg-accent/50" : "hover:bg-accent/30"
+              isSelected ? "ring-2 ring-primary border-primary bg-accent/50" : "hover:bg-accent/30"
             }`}
             onClick={() => onDetectionSelect?.(det.id)}
           >
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium">
+            <div className="flex items-center justify-between min-w-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <Badge variant="outline" className="text-xs flex-shrink-0 font-mono w-5 h-5 p-0 flex items-center justify-center">
+                  {index + 1}
+                </Badge>
+                <span className="text-sm font-medium truncate">
                   {CLASS_LABELS[det.detectionClass] || "Desconocido"}
                 </span>
-                <Badge variant="outline" className="text-xs">
+                <Badge variant="outline" className="text-xs flex-shrink-0">
                   {(det.detectionConfidence * 100).toFixed(0)}%
                 </Badge>
               </div>
-              <Badge variant={status.variant} className="text-xs">
+              <Badge variant={status.variant} className="text-xs flex-shrink-0 ml-2">
                 {status.label}
               </Badge>
             </div>
 
-            <div className="flex items-center gap-2">
-              <Badge variant="secondary" className="text-xs">
+            <div className="flex items-center gap-2 min-w-0">
+              <Badge variant="secondary" className="text-xs truncate max-w-[200px]" title={displaySpecies}>
                 {displaySpecies}
               </Badge>
-              <span className="text-xs text-muted-foreground">
+              <span className="text-xs text-muted-foreground flex-shrink-0">
                 {(ident.confidence * 100).toFixed(0)}%
               </span>
             </div>
@@ -181,14 +166,14 @@ export function AnnotationToolbar({
                   onClick={(e) => { e.stopPropagation(); handleVerify(ident.id); }}
                   className="h-7 text-xs"
                 >
-                  Verificar (v)
+                  Verificar
                 </Button>
                 <Button
                   size="sm" variant="destructive" disabled={isPending}
                   onClick={(e) => { e.stopPropagation(); handleReject(ident.id); }}
                   className="h-7 text-xs"
                 >
-                  Rechazar (r)
+                  Rechazar
                 </Button>
                 <Button
                   size="sm" variant="outline" disabled={isPending}
@@ -202,24 +187,18 @@ export function AnnotationToolbar({
 
             {isCorrecting && (
               <div className="pt-1" onClick={(e) => e.stopPropagation()}>
-                <Select onValueChange={(value) => handleCorrect(ident.id, value)}>
-                  <SelectTrigger className="h-8 text-xs">
-                    <SelectValue placeholder="Seleccionar especie correcta..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {speciesList.map((sp) => (
-                      <SelectItem key={sp} value={sp} className="text-xs">
-                        {sp}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <SpeciesCombobox
+                  species={speciesList}
+                  recentSpecies={recentSpecies}
+                  onSelect={(scientificName) => handleCorrect(ident.id, scientificName)}
+                  disabled={isPending}
+                />
               </div>
             )}
 
             {ident.verificationStatus !== "unverified" && (
               <div className="flex items-center gap-2 pt-1">
-                <span className="text-xs text-muted-foreground">
+                <span className="text-xs text-muted-foreground truncate">
                   {ident.verificationStatus === "corrected" && ident.correctedSpecies
                     ? `Corregido a: ${ident.correctedSpecies}`
                     : `Marcado como ${status.label.toLowerCase()}`}
@@ -230,12 +209,13 @@ export function AnnotationToolbar({
         );
       })}
 
-      {enableKeyboardShortcuts && (
-        <div className="text-xs text-muted-foreground text-center pt-2 border-t">
-          <span className="font-mono">v</span> verificar &middot;{" "}
-          <span className="font-mono">r</span> rechazar
-        </div>
-      )}
+      <div className="text-xs text-muted-foreground text-center pt-2 border-t">
+        <span className="font-mono">v</span> verificar &middot;{" "}
+        <span className="font-mono">r</span> rechazar &middot;{" "}
+        <span className="font-mono">Enter</span> verificar todo &middot;{" "}
+        <span className="font-mono">1-9</span> seleccionar &middot;{" "}
+        <span className="font-mono">Esc</span> deseleccionar
+      </div>
     </div>
   );
 }

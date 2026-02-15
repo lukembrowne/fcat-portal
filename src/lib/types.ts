@@ -28,6 +28,10 @@ export interface ActionError {
 
 export type ActionResult<T = void> = ActionSuccess<T> | ActionError;
 
+// Camera trap types
+export type VerificationStatus = "unverified" | "verified" | "rejected" | "corrected";
+export type TaxonomicRank = "class" | "order" | "family" | "genus" | "species";
+
 // Verification stats
 export interface VerificationStats {
   total: number;

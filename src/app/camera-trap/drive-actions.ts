@@ -1,11 +1,11 @@
 "use server";
 
 import { db } from "@/db";
-import { deployments, images } from "@/db/schema";
+import { deployments, images, videos } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import {
   listDeploymentFolders,
-  listImagesRecursive,
+  listMediaRecursive,
   isValidFolderId,
 } from "@/lib/drive-client";
 import { requirePermission } from "@/lib/auth";
@@ -138,10 +138,10 @@ export async function scanDeploymentImages(
       };
     }
 
-    const driveImages = await listImagesRecursive(deployment.driveFolderId);
+    const media = await listMediaRecursive(deployment.driveFolderId);
 
     // INSERT OR IGNORE via onConflictDoNothing on (deploymentId, driveFileId)
-    for (const img of driveImages) {
+    for (const img of media.images) {
       try {
         await db
           .insert(images)
@@ -161,23 +161,50 @@ export async function scanDeploymentImages(
       }
     }
 
+    // Insert video rows
+    for (const vid of media.videos) {
+      try {
+        await db
+          .insert(videos)
+          .values({
+            deploymentId,
+            filename: vid.name,
+            driveFileId: vid.id,
+            fileSize: vid.size,
+            fileModified: vid.modifiedTime
+              ? new Date(vid.modifiedTime)
+              : undefined,
+            status: "pending",
+          })
+          .onConflictDoNothing();
+      } catch {
+        // Skip duplicates or other insert errors
+      }
+    }
+
     // Update deployment totals and status
-    const totalImages = await db
+    const totalImageRows = await db
       .select({ id: images.id })
       .from(images)
       .where(eq(images.deploymentId, deploymentId));
 
+    const totalVideoRows = await db
+      .select({ id: videos.id })
+      .from(videos)
+      .where(eq(videos.deploymentId, deploymentId));
+
     await db
       .update(deployments)
       .set({
-        totalImages: totalImages.length,
+        totalImages: totalImageRows.length,
+        totalVideos: totalVideoRows.length,
         status: "scanned",
         updatedAt: new Date(),
       })
       .where(eq(deployments.id, deploymentId));
 
     revalidatePath(CAMERA_TRAP_PATH);
-    return { success: true, data: { imageCount: totalImages.length } };
+    return { success: true, data: { imageCount: totalImageRows.length } };
   } catch (err) {
     console.error("[Drive] Scan failed:", err);
     return {

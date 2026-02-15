@@ -2,21 +2,22 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { getDeploymentsWithStats, getDistinctProjects } from "./actions";
 import { DeploymentsTable } from "./deployments-table";
-import { getCurrentUser } from "@/lib/auth";
+import { requirePermission } from "@/lib/auth";
 
 export default async function CameraTrapPage() {
-  const [allDeployments, distinctProjects, user] = await Promise.all([
+  const user = await requirePermission("camera-trap", "viewer");
+
+  const [allDeployments, distinctProjects] = await Promise.all([
     getDeploymentsWithStats(),
     getDistinctProjects(),
-    getCurrentUser(),
   ]);
 
   // Determine if user has editor permissions for camera-trap
   const canEdit =
-    user?.globalRole === "super_admin" ||
-    user?.permissions.some(
+    user.globalRole === "super_admin" ||
+    user.permissions.some(
       (p) => p.projectId === "camera-trap" && (p.role === "editor" || p.role === "admin")
-    ) === true;
+    );
 
   return (
     <div className="max-w-7xl mx-auto min-w-0">

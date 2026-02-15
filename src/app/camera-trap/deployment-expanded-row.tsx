@@ -132,10 +132,18 @@ export function DeploymentExpandedRow({
               <MetaField label="Fecha inicio" value={deployment.dateStart} />
               <MetaField label="Fecha fin" value={deployment.dateEnd} />
               <MetaField
-                label="Imagenes"
+                label="Imágenes"
                 value={
                   deployment.totalImages != null && deployment.totalImages > 0
                     ? deployment.totalImages.toLocaleString()
+                    : null
+                }
+              />
+              <MetaField
+                label="Videos"
+                value={
+                  deployment.totalVideos != null && deployment.totalVideos > 0
+                    ? deployment.totalVideos.toLocaleString()
                     : null
                 }
               />

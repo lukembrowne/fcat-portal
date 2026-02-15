@@ -8,16 +8,25 @@ import {
 } from "@/components/annotation-toolbar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback, useRef, useTransition } from "react";
 import Link from "next/link";
+import { useAnnotationShortcuts } from "@/hooks/use-annotation-shortcuts";
+import {
+  verifyIdentification,
+  rejectIdentification,
+  verifyAndAdvance,
+  createManualDetection,
+} from "@/app/camera-trap/actions";
+import type { Species } from "@/db/schema";
 
 interface ImageDetailClientProps {
   src: string;
   alt: string;
   boxes: BBoxData[];
   detections: DetectionWithIdentification[];
-  speciesList: string[];
+  speciesList: Species[];
   jobId: number;
+  imageId: number;
   prevImageId: number | null;
   nextImageId: number | null;
 }
@@ -29,38 +38,102 @@ export function ImageDetailClient({
   detections,
   speciesList,
   jobId,
+  imageId,
   prevImageId,
   nextImageId,
 }: ImageDetailClientProps) {
   const router = useRouter();
   const [selectedBoxId, setSelectedBoxId] = useState<number | null>(null);
+  const [, startTransition] = useTransition();
+  const isVerifyingRef = useRef(false);
+
+  const selectedDetection =
+    detections.find((d) => d.id === selectedBoxId) || detections[0];
 
   const handleActionComplete = useCallback(() => {
     router.refresh();
   }, [router]);
 
-  useEffect(() => {
-    function handleKeyDown(e: KeyboardEvent) {
-      if (
-        e.target instanceof HTMLInputElement ||
-        e.target instanceof HTMLTextAreaElement ||
-        e.target instanceof HTMLSelectElement
-      ) {
-        return;
-      }
+  const handleQuickVerifyAll = useCallback(() => {
+    if (isVerifyingRef.current) return;
 
-      if (e.key === "ArrowLeft" && prevImageId) {
-        e.preventDefault();
-        router.push(`/camera-trap/results/${jobId}/images/${prevImageId}`);
-      } else if (e.key === "ArrowRight" && nextImageId) {
-        e.preventDefault();
+    const unverifiedIds = detections
+      .filter((d) => d.identification?.verificationStatus === "unverified")
+      .map((d) => d.identification!.id);
+
+    if (unverifiedIds.length === 0) return;
+
+    isVerifyingRef.current = true;
+    startTransition(async () => {
+      try {
+        const result = await verifyAndAdvance(unverifiedIds, jobId, imageId);
+        if (result.success && result.data.nextImageId) {
+          router.push(
+            `/camera-trap/results/${jobId}/images/${result.data.nextImageId}`
+          );
+        } else if (result.success) {
+          router.refresh();
+        }
+      } finally {
+        isVerifyingRef.current = false;
+      }
+    });
+  }, [detections, jobId, imageId, router]);
+
+  const handleVerifySelected = useCallback(() => {
+    if (!selectedDetection?.identification) return;
+    if (selectedDetection.identification.verificationStatus !== "unverified") return;
+    startTransition(async () => {
+      await verifyIdentification(selectedDetection.identification!.id);
+      router.refresh();
+    });
+  }, [selectedDetection, router]);
+
+  const handleRejectSelected = useCallback(() => {
+    if (!selectedDetection?.identification) return;
+    if (selectedDetection.identification.verificationStatus !== "unverified") return;
+    startTransition(async () => {
+      await rejectIdentification(selectedDetection.identification!.id);
+      router.refresh();
+    });
+  }, [selectedDetection, router]);
+
+  const handleDrawComplete = useCallback(
+    (bbox: { x: number; y: number; width: number; height: number }) => {
+      startTransition(async () => {
+        const result = await createManualDetection(imageId, bbox);
+        if (result.success) {
+          setSelectedBoxId(result.data.detectionId);
+          router.refresh();
+        }
+      });
+    },
+    [imageId, router]
+  );
+
+  useAnnotationShortcuts({
+    enabled: true,
+    onVerify: handleVerifySelected,
+    onReject: handleRejectSelected,
+    onQuickVerifyAll: handleQuickVerifyAll,
+    onNext: () => {
+      if (nextImageId) {
         router.push(`/camera-trap/results/${jobId}/images/${nextImageId}`);
       }
-    }
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [router, jobId, prevImageId, nextImageId]);
+    },
+    onPrev: () => {
+      if (prevImageId) {
+        router.push(`/camera-trap/results/${jobId}/images/${prevImageId}`);
+      }
+    },
+    onSelectDetection: (index) => {
+      if (index < detections.length) {
+        setSelectedBoxId(detections[index].id);
+      }
+    },
+    onDeselect: () => setSelectedBoxId(null),
+    detectionCount: detections.length,
+  });
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
@@ -74,25 +147,26 @@ export function ImageDetailClient({
             onBoxClick={(box) =>
               setSelectedBoxId((prev) => (prev === box.id ? null : box.id))
             }
+            editable
+            onDrawComplete={handleDrawComplete}
           />
         </div>
       </div>
 
-      <div className="space-y-4">
+      <div className="space-y-4 min-w-0">
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-base">
               Anotaciones ({detections.length})
             </CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="min-w-0 overflow-hidden">
             <AnnotationToolbar
               detections={detections}
               speciesList={speciesList}
               selectedDetectionId={selectedBoxId}
               onDetectionSelect={(id) => setSelectedBoxId(id)}
               onActionComplete={handleActionComplete}
-              enableKeyboardShortcuts
             />
           </CardContent>
         </Card>

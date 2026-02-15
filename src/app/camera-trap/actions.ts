@@ -1,24 +1,30 @@
 "use server";
 
+import { promises as fs } from "fs";
+import path from "path";
 import { db } from "@/db";
 import {
   deployments,
   processingJobs,
   images,
+  videos,
   detections,
   identifications,
   species,
+  activityLog,
 } from "@/db/schema";
-import { eq, desc, inArray, and, gte, ne, sql, count, countDistinct, sum } from "drizzle-orm";
+import { eq, desc, inArray, and, gte, ne, sql, count, countDistinct, sum, isNotNull } from "drizzle-orm";
 import { runMLPredictions, checkPytorchWildlife, cancelModelServerJob } from "@/lib/ml-runner";
 import {
   downloadDeploymentForProcessing,
+  downloadVideosForProcessing,
   cleanupJobTempDir,
 } from "@/lib/drive-downloader";
+import { extractFrames, cancelFrameExtraction } from "@/lib/frame-extractor";
 import { requirePermission } from "@/lib/auth";
 import { revalidatePath } from "next/cache";
-import type { ActionResult, VerificationStats } from "@/lib/types";
-import type { Deployment, ProcessingJob } from "@/db/schema";
+import type { ActionResult, VerificationStats, TaxonomicRank } from "@/lib/types";
+import type { Deployment, ProcessingJob, Species, NewSpecies } from "@/db/schema";
 import { ML_DEFAULTS } from "@/lib/ml-defaults";
 
 const CAMERA_TRAP_PATH = "/camera-trap";
@@ -33,6 +39,7 @@ export async function createProcessingJob(
     detectorModel?: string;
     classifierModel?: string;
     confidenceThreshold?: number;
+    frameExtractionRate?: number;
   }
 ): Promise<ActionResult<{ jobId: number }>> {
   const user = await requirePermission("camera-trap", "editor");
@@ -47,15 +54,21 @@ export async function createProcessingJob(
       return { success: false, error: "Instalación no encontrada" };
     }
 
+    // Check for images OR videos (deployments with only videos are valid)
     const deploymentImages = await db
       .select()
       .from(images)
       .where(eq(images.deploymentId, deploymentId));
 
-    if (deploymentImages.length === 0) {
+    const deploymentVideos = await db
+      .select()
+      .from(videos)
+      .where(eq(videos.deploymentId, deploymentId));
+
+    if (deploymentImages.length === 0 && deploymentVideos.length === 0) {
       return {
         success: false,
-        error: "No hay imágenes para procesar. Escanee o vuelva a escanear la carpeta.",
+        error: "No hay imágenes ni videos para procesar. Escanee o vuelva a escanear la carpeta.",
       };
     }
 
@@ -66,15 +79,17 @@ export async function createProcessingJob(
         detectorModel: modelConfig?.detectorModel || ML_DEFAULTS.detectorModel,
         classifierModel: modelConfig?.classifierModel || ML_DEFAULTS.classifierModel,
         confidenceThreshold: modelConfig?.confidenceThreshold ?? ML_DEFAULTS.confidenceThreshold,
+        frameExtractionRate: modelConfig?.frameExtractionRate ?? 1.0,
         status: "pending",
         totalImages: deploymentImages.length,
+        totalVideos: deploymentVideos.length,
         processedImages: 0,
         failedImages: 0,
         createdBy: user.email,
       })
       .returning();
 
-    // Link images to this job and reset status
+    // Link existing images to this job and reset status
     for (const img of deploymentImages) {
       await db
         .update(images)
@@ -146,8 +161,9 @@ async function processJobInternal(
       return { success: false, error: "Instalación no encontrada" };
     }
 
-    // For Drive deployments: download to persistent cache (skips already-cached images)
+    // For Drive deployments: download images + videos to persistent cache
     if (deployment.driveFolderId) {
+      // --- Download images ---
       await db
         .update(processingJobs)
         .set({ statusMessage: "Descargando imágenes de Drive..." })
@@ -167,13 +183,41 @@ async function processJobInternal(
       );
       cacheDir = downloadResult.cacheDir;
 
-      // Fail only if nothing was downloaded AND nothing was cached
-      if (downloadResult.downloaded === 0 && downloadResult.skipped === 0) {
+      // --- Download videos ---
+      const deploymentVideos = await db
+        .select()
+        .from(videos)
+        .where(eq(videos.deploymentId, deployment.id));
+
+      if (deploymentVideos.length > 0) {
+        await db
+          .update(processingJobs)
+          .set({ statusMessage: "Descargando videos de Drive..." })
+          .where(eq(processingJobs.id, jobId));
+
+        await downloadVideosForProcessing(
+          deployment.id,
+          jobId,
+          async (downloaded, total) => {
+            await db
+              .update(processingJobs)
+              .set({
+                statusMessage: `Descargando videos... (${downloaded} de ${total})`,
+              })
+              .where(eq(processingJobs.id, jobId));
+          }
+        );
+      }
+
+      // Fail only if nothing was downloaded/cached for both images AND videos
+      const hasImages = downloadResult.downloaded > 0 || downloadResult.skipped > 0;
+      const hasVideos = deploymentVideos.some((v) => v.path || v.driveFileId);
+      if (!hasImages && !hasVideos) {
         await db
           .update(processingJobs)
           .set({
             status: "failed",
-            errorMessage: "No se pudieron descargar imágenes de Drive",
+            errorMessage: "No se pudieron descargar archivos de Drive",
             statusMessage: null,
             completedAt: new Date(),
           })
@@ -187,12 +231,106 @@ async function processJobInternal(
         safeRevalidate();
         return {
           success: false,
-          error: "No se pudieron descargar imágenes de Drive",
+          error: "No se pudieron descargar archivos de Drive",
         };
+      }
+
+      // --- Extract frames from videos ---
+      const videosWithPaths = await db
+        .select()
+        .from(videos)
+        .where(eq(videos.deploymentId, deployment.id));
+
+      const videosToExtract = videosWithPaths.filter((v) => v.path);
+
+      if (videosToExtract.length > 0) {
+        const fps = job.frameExtractionRate ?? 1.0;
+        let totalExtractedFrames = 0;
+
+        for (let i = 0; i < videosToExtract.length; i++) {
+          const vid = videosToExtract[i];
+          await db
+            .update(processingJobs)
+            .set({
+              statusMessage: `Extrayendo cuadros de video... (${i + 1} de ${videosToExtract.length})`,
+            })
+            .where(eq(processingJobs.id, jobId));
+
+          const baseName = vid.filename.replace(/\.[^.]+$/, "");
+          const result = await extractFrames(
+            vid.path!,
+            cacheDir,
+            baseName,
+            fps
+          );
+
+          // Update video status and duration
+          await db
+            .update(videos)
+            .set({
+              status: result.error && result.frames.length === 0 ? "failed" : "processed",
+              duration: result.duration || null,
+              errorMessage: result.error ?? null,
+            })
+            .where(eq(videos.id, vid.id));
+
+          // Create image rows for each extracted frame
+          const thumbDir = path.join(
+            process.cwd(),
+            "data",
+            "thumbnails",
+            String(deployment.id)
+          );
+          await fs.mkdir(thumbDir, { recursive: true });
+
+          for (const frame of result.frames) {
+            const frameName = path.basename(frame.path);
+            const [frameImage] = await db
+              .insert(images)
+              .values({
+                deploymentId: deployment.id,
+                jobId: jobId,
+                filename: frameName,
+                path: frame.path,
+                videoId: vid.id,
+                frameIndex: frame.index,
+                status: "pending",
+              })
+              .returning();
+
+            // Generate thumbnail for the extracted frame
+            try {
+              const thumbPath = path.join(thumbDir, `${frameImage.id}.jpg`);
+              const imgData = await fs.readFile(frame.path);
+              const sharp = (await import("sharp")).default;
+              const thumb = await sharp(imgData)
+                .resize(400)
+                .jpeg({ quality: 80 })
+                .toBuffer();
+              await fs.writeFile(thumbPath, thumb);
+            } catch (err) {
+              console.warn(
+                `[processJob] Thumbnail failed for frame ${frameName}:`,
+                err instanceof Error ? err.message : err
+              );
+            }
+          }
+
+          totalExtractedFrames += result.frames.length;
+        }
+
+        // Update job counts to include extracted frames
+        await db
+          .update(processingJobs)
+          .set({
+            extractedFrames: totalExtractedFrames,
+            totalImages: sql`${processingJobs.totalImages} + ${totalExtractedFrames}`,
+          })
+          .where(eq(processingJobs.id, jobId));
       }
     }
 
-    // Re-fetch job images (paths may have been updated by download)
+    // Re-fetch job images (paths may have been updated by download + frame extraction)
     const jobImages = await db
       .select()
       .from(images)
@@ -377,6 +515,9 @@ export async function cancelJob(
       return { success: false, error: "Trabajo no encontrado" };
     }
 
+    // Cancel any running frame extraction
+    cancelFrameExtraction();
+
     // Graceful cancel via stdin (model server stays alive)
     cancelModelServerJob();
 
@@ -423,7 +564,7 @@ export async function cancelJob(
 export async function deleteJob(
   jobId: number
 ): Promise<ActionResult> {
-  await requirePermission("camera-trap", "editor");
+  const user = await requirePermission("camera-trap", "editor");
 
   try {
     const [job] = await db
@@ -452,13 +593,16 @@ export async function deleteJob(
       }
     }
 
-    // 1. Reset images that belonged to this job (before cascade nulls jobId)
+    // 1. Reset images that belonged to this job
     await db
       .update(images)
       .set({ status: "pending", jobId: null })
       .where(eq(images.jobId, jobId));
 
-    // 2. Delete the job (cascades: detections → identifications)
+    // 2. Explicitly delete ML detections for this job (manual detections have job_id=NULL, unaffected)
+    await db.delete(detections).where(eq(detections.jobId, jobId));
+
+    // 3. Delete the job
     await db.delete(processingJobs).where(eq(processingJobs.id, jobId));
 
     // 3. If no completed jobs remain, revert deployment to "scanned"
@@ -478,6 +622,15 @@ export async function deleteJob(
         .set({ status: "scanned", updatedAt: new Date() })
         .where(eq(deployments.id, job.deploymentId));
     }
+
+    await db.insert(activityLog).values({
+      userEmail: user.email,
+      action: "delete_job",
+      projectId: "camera-trap",
+      targetType: "job",
+      targetId: String(jobId),
+      details: JSON.stringify({ deploymentId: job.deploymentId }),
+    });
 
     revalidatePath("/camera-trap/results");
     revalidatePath(CAMERA_TRAP_PATH);
@@ -568,7 +721,7 @@ export async function getJobsDeleteStats(
 export async function deleteJobs(
   jobIds: number[]
 ): Promise<ActionResult<{ count: number }>> {
-  await requirePermission("camera-trap", "editor");
+  const user = await requirePermission("camera-trap", "editor");
 
   if (jobIds.length === 0) {
     return { success: true, data: { count: 0 } };
@@ -606,7 +759,10 @@ export async function deleteJobs(
         .set({ status: "pending", jobId: null })
         .where(eq(images.jobId, jobId));
 
-      // Delete job (cascades: detections → identifications)
+      // Explicitly delete ML detections for this job
+      await db.delete(detections).where(eq(detections.jobId, jobId));
+
+      // Delete job
       await db.delete(processingJobs).where(eq(processingJobs.id, jobId));
 
       // If no completed jobs remain, revert deployment to "scanned"
@@ -627,6 +783,14 @@ export async function deleteJobs(
           .where(eq(deployments.id, job.deploymentId));
       }
     }
+
+    await db.insert(activityLog).values({
+      userEmail: user.email,
+      action: "delete_jobs",
+      projectId: "camera-trap",
+      targetType: "job",
+      details: JSON.stringify({ jobIds, count: jobIds.length }),
+    });
 
     revalidatePath("/camera-trap/results");
     revalidatePath(CAMERA_TRAP_PATH);
@@ -656,6 +820,7 @@ export interface DeploymentRow {
   dateStart: string | null;
   dateEnd: string | null;
   totalImages: number | null;
+  totalVideos: number | null;
   odkSubmissionId: string | null;
   metadataSource: string | null;
   createdAt: Date;
@@ -751,7 +916,7 @@ export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
       .where(inArray(detections.jobId, completedJobIds))
       .groupBy(detections.jobId);
     for (const r of detectionCounts) {
-      detCountMap.set(r.jobId, r.cnt);
+      if (r.jobId != null) detCountMap.set(r.jobId, r.cnt);
     }
 
     const speciesCounts = await db
@@ -764,7 +929,7 @@ export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
       .where(inArray(detections.jobId, completedJobIds))
       .groupBy(detections.jobId);
     for (const r of speciesCounts) {
-      specCountMap.set(r.jobId, r.cnt);
+      if (r.jobId != null) specCountMap.set(r.jobId, r.cnt);
     }
   }
 
@@ -784,6 +949,7 @@ export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
       dateStart: d.dateStart,
       dateEnd: d.dateEnd,
       totalImages: d.totalImages,
+      totalVideos: d.totalVideos,
       odkSubmissionId: d.odkSubmissionId,
       metadataSource: d.metadataSource,
       createdAt: d.createdAt,
@@ -903,7 +1069,7 @@ export async function bulkUpdateMetadata(
 export async function deleteDeployments(
   ids: number[]
 ): Promise<ActionResult<{ count: number }>> {
-  await requirePermission("camera-trap", "editor");
+  const user = await requirePermission("camera-trap", "editor");
 
   try {
     if (ids.length === 0) {
@@ -939,10 +1105,24 @@ export async function deleteDeployments(
       }
     }
 
+    // Get names for audit log before deleting
+    const toDelete = await db
+      .select({ id: deployments.id, name: deployments.name })
+      .from(deployments)
+      .where(inArray(deployments.id, ids));
+
     // Cascade delete: deployments → images, jobs → detections → identifications
     await db
       .delete(deployments)
       .where(inArray(deployments.id, ids));
+
+    await db.insert(activityLog).values({
+      userEmail: user.email,
+      action: "delete_deployments",
+      projectId: "camera-trap",
+      targetType: "deployment",
+      details: JSON.stringify({ count: ids.length, names: toDelete.map(d => d.name) }),
+    });
 
     revalidatePath(CAMERA_TRAP_PATH);
     revalidatePath("/camera-trap/results");
@@ -1342,14 +1522,19 @@ export async function verifyIdentification(
   const user = await requirePermission("camera-trap", "editor");
 
   try {
-    await db
+    const result = await db
       .update(identifications)
       .set({
         verificationStatus: "verified",
         verifiedBy: user.email,
         verifiedAt: new Date(),
       })
-      .where(eq(identifications.id, identificationId));
+      .where(
+        and(
+          eq(identifications.id, identificationId),
+          eq(identifications.verificationStatus, "unverified")
+        )
+      );
 
     revalidatePath(CAMERA_TRAP_PATH);
     return { success: true, data: undefined };
@@ -1374,7 +1559,12 @@ export async function rejectIdentification(
         verifiedBy: user.email,
         verifiedAt: new Date(),
       })
-      .where(eq(identifications.id, identificationId));
+      .where(
+        and(
+          eq(identifications.id, identificationId),
+          eq(identifications.verificationStatus, "unverified")
+        )
+      );
 
     revalidatePath(CAMERA_TRAP_PATH);
     return { success: true, data: undefined };
@@ -1401,7 +1591,12 @@ export async function correctIdentification(
         verifiedBy: user.email,
         verifiedAt: new Date(),
       })
-      .where(eq(identifications.id, identificationId));
+      .where(
+        and(
+          eq(identifications.id, identificationId),
+          inArray(identifications.verificationStatus, ["unverified", "verified", "corrected"])
+        )
+      );
 
     revalidatePath(CAMERA_TRAP_PATH);
     return { success: true, data: undefined };
@@ -1430,7 +1625,12 @@ export async function bulkVerify(
         verifiedBy: user.email,
         verifiedAt: new Date(),
       })
-      .where(inArray(identifications.id, identificationIds));
+      .where(
+        and(
+          inArray(identifications.id, identificationIds),
+          eq(identifications.verificationStatus, "unverified")
+        )
+      );
 
     revalidatePath(CAMERA_TRAP_PATH);
     return { success: true, data: { count: identificationIds.length } };
@@ -1638,5 +1838,319 @@ export async function getDeploymentVerificationStats(
   }
 
   return stats;
+}
+
+// ---------------------------------------------------------------------------
+// Species CRUD
+// ---------------------------------------------------------------------------
+
+export async function createSpecies(data: {
+  scientificName: string;
+  commonName: string;
+  spanishName?: string | null;
+  taxonomicRank?: TaxonomicRank;
+  type?: string;
+}): Promise<ActionResult<Species>> {
+  await requirePermission("camera-trap", "editor");
+
+  try {
+    const [result] = await db
+      .insert(species)
+      .values({
+        scientificName: data.scientificName.trim(),
+        commonName: data.commonName.trim(),
+        spanishName: data.spanishName?.trim() || null,
+        taxonomicRank: data.taxonomicRank || "species",
+        type: (data.type as Species["type"]) || "mammal",
+      })
+      .returning();
+
+    revalidatePath("/camera-trap/species");
+    return { success: true, data: result };
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Error al crear especie";
+    if (msg.includes("UNIQUE constraint")) {
+      return { success: false, error: "Ya existe una especie con ese nombre científico" };
+    }
+    return { success: false, error: msg };
+  }
+}
+
+export async function updateSpecies(
+  id: number,
+  data: {
+    scientificName?: string;
+    commonName?: string;
+    spanishName?: string | null;
+    taxonomicRank?: TaxonomicRank;
+    type?: string;
+  }
+): Promise<ActionResult<Species>> {
+  await requirePermission("camera-trap", "editor");
+
+  try {
+    const updates: Record<string, unknown> = {};
+    if (data.scientificName !== undefined) updates.scientificName = data.scientificName.trim();
+    if (data.commonName !== undefined) updates.commonName = data.commonName.trim();
+    if (data.spanishName !== undefined) updates.spanishName = data.spanishName?.trim() || null;
+    if (data.taxonomicRank !== undefined) updates.taxonomicRank = data.taxonomicRank;
+    if (data.type !== undefined) updates.type = data.type;
+
+    const [result] = await db
+      .update(species)
+      .set(updates)
+      .where(eq(species.id, id))
+      .returning();
+
+    if (!result) {
+      return { success: false, error: "Especie no encontrada" };
+    }
+
+    revalidatePath("/camera-trap/species");
+    return { success: true, data: result };
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Error al actualizar especie";
+    if (msg.includes("UNIQUE constraint")) {
+      return { success: false, error: "Ya existe una especie con ese nombre científico" };
+    }
+    return { success: false, error: msg };
+  }
+}
+
+export async function deleteSpecies(id: number): Promise<ActionResult> {
+  const user = await requirePermission("camera-trap", "editor");
+
+  try {
+    const [sp] = await db
+      .select()
+      .from(species)
+      .where(eq(species.id, id));
+
+    if (!sp) {
+      return { success: false, error: "Especie no encontrada" };
+    }
+
+    // TOCTOU: re-check usage count at delete time
+    const [usage] = await db
+      .select({ cnt: count() })
+      .from(identifications)
+      .where(eq(identifications.correctedSpecies, sp.scientificName));
+
+    if ((usage?.cnt ?? 0) > 0) {
+      return {
+        success: false,
+        error: `No se puede eliminar: la especie está referenciada en ${usage.cnt} correcciones`,
+      };
+    }
+
+    await db.delete(species).where(eq(species.id, id));
+
+    await db.insert(activityLog).values({
+      userEmail: user.email,
+      action: "delete_species",
+      projectId: "camera-trap",
+      targetType: "species",
+      targetId: String(id),
+      details: JSON.stringify({ scientificName: sp.scientificName, commonName: sp.commonName }),
+    });
+
+    revalidatePath("/camera-trap/species");
+    return { success: true, data: undefined };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Error al eliminar especie",
+    };
+  }
+}
+
+export async function getSpeciesUsageCount(
+  id: number
+): Promise<ActionResult<number>> {
+  await requirePermission("camera-trap", "viewer");
+
+  const [sp] = await db
+    .select()
+    .from(species)
+    .where(eq(species.id, id));
+
+  if (!sp) {
+    return { success: false, error: "Especie no encontrada" };
+  }
+
+  const [usage] = await db
+    .select({ cnt: count() })
+    .from(identifications)
+    .where(eq(identifications.correctedSpecies, sp.scientificName));
+
+  return { success: true, data: usage?.cnt ?? 0 };
+}
+
+export async function getRecentSpecies(
+  deploymentId: number,
+  limit = 8
+): Promise<ActionResult<Species[]>> {
+  await requirePermission("camera-trap", "viewer");
+
+  const recent = await db
+    .selectDistinct({ scientificName: identifications.correctedSpecies })
+    .from(identifications)
+    .innerJoin(detections, eq(detections.id, identifications.detectionId))
+    .innerJoin(images, eq(images.id, detections.imageId))
+    .where(
+      and(
+        eq(images.deploymentId, deploymentId),
+        isNotNull(identifications.correctedSpecies)
+      )
+    )
+    .orderBy(desc(identifications.verifiedAt))
+    .limit(limit);
+
+  const recentNames = recent.map((r) => r.scientificName).filter(Boolean) as string[];
+  if (recentNames.length === 0) return { success: true, data: [] };
+
+  const speciesList = await db
+    .select()
+    .from(species)
+    .where(inArray(species.scientificName, recentNames));
+
+  return { success: true, data: speciesList };
+}
+
+export async function createManualDetection(
+  imageId: number,
+  bbox: { x: number; y: number; width: number; height: number }
+): Promise<ActionResult<{ detectionId: number; identificationId: number }>> {
+  await requirePermission("camera-trap", "editor");
+
+  try {
+    const { x, y, width, height } = bbox;
+    if (
+      typeof x !== "number" || typeof y !== "number" ||
+      typeof width !== "number" || typeof height !== "number" ||
+      x < 0 || y < 0 || width <= 0 || height <= 0 ||
+      x + width > 1.01 || y + height > 1.01
+    ) {
+      return { success: false, error: "Coordenadas de bbox inválidas" };
+    }
+
+    const [image] = await db
+      .select({ id: images.id })
+      .from(images)
+      .where(eq(images.id, imageId));
+
+    if (!image) {
+      return { success: false, error: "Imagen no encontrada" };
+    }
+
+    const [det] = await db
+      .insert(detections)
+      .values({
+        imageId,
+        jobId: null,
+        bboxX: x,
+        bboxY: y,
+        bboxWidth: width,
+        bboxHeight: height,
+        detectionConfidence: 1.0,
+        detectionClass: 0,
+        modelVersion: "manual",
+      })
+      .returning();
+
+    const [ident] = await db
+      .insert(identifications)
+      .values({
+        detectionId: det.id,
+        species: "unknown",
+        confidence: 1.0,
+        modelVersion: "manual",
+        verificationStatus: "unverified",
+      })
+      .returning();
+
+    return {
+      success: true,
+      data: { detectionId: det.id, identificationId: ident.id },
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Error al crear detección",
+    };
+  }
+}
+
+export async function verifyAndAdvance(
+  identificationIds: number[],
+  jobId: number,
+  currentImageId: number
+): Promise<ActionResult<{ nextImageId: number | null }>> {
+  const user = await requirePermission("camera-trap", "editor");
+
+  try {
+    if (identificationIds.length > 0) {
+      await db
+        .update(identifications)
+        .set({
+          verificationStatus: "verified",
+          verifiedBy: user.email,
+          verifiedAt: new Date(),
+        })
+        .where(
+          and(
+            inArray(identifications.id, identificationIds),
+            eq(identifications.verificationStatus, "unverified")
+          )
+        );
+    }
+
+    // Get next unverified image — FORWARD first
+    const forward = await db
+      .select({ id: images.id })
+      .from(images)
+      .innerJoin(detections, eq(detections.imageId, images.id))
+      .innerJoin(identifications, eq(identifications.detectionId, detections.id))
+      .where(
+        and(
+          eq(images.jobId, jobId),
+          eq(identifications.verificationStatus, "unverified"),
+          sql`${images.id} > ${currentImageId}`
+        )
+      )
+      .orderBy(images.id)
+      .limit(1);
+
+    if (forward.length > 0) {
+      revalidatePath(CAMERA_TRAP_PATH);
+      return { success: true, data: { nextImageId: forward[0].id } };
+    }
+
+    // Wrap around from beginning
+    const wrapped = await db
+      .select({ id: images.id })
+      .from(images)
+      .innerJoin(detections, eq(detections.imageId, images.id))
+      .innerJoin(identifications, eq(identifications.detectionId, detections.id))
+      .where(
+        and(
+          eq(images.jobId, jobId),
+          eq(identifications.verificationStatus, "unverified")
+        )
+      )
+      .orderBy(images.id)
+      .limit(1);
+
+    const nextId =
+      wrapped[0]?.id === currentImageId ? null : (wrapped[0]?.id ?? null);
+
+    revalidatePath(CAMERA_TRAP_PATH);
+    return { success: true, data: { nextImageId: nextId } };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Error al verificar",
+    };
+  }
 }
 

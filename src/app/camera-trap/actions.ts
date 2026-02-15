@@ -20,6 +20,7 @@ import {
   downloadVideosForProcessing,
   cleanupJobTempDir,
 } from "@/lib/drive-downloader";
+import { uploadFramesToDrive } from "@/lib/drive-client";
 import { extractFrames, cancelFrameExtraction } from "@/lib/frame-extractor";
 import { requirePermission } from "@/lib/auth";
 import { revalidatePath } from "next/cache";
@@ -317,6 +318,75 @@ async function processJobInternal(
           }
 
           totalExtractedFrames += result.frames.length;
+        }
+
+        // Upload extracted frames to Drive (before ML, so driveFileId survives eviction)
+        if (deployment.driveFolderId && totalExtractedFrames > 0) {
+          await db
+            .update(processingJobs)
+            .set({ statusMessage: "Subiendo cuadros a Drive..." })
+            .where(eq(processingJobs.id, jobId));
+
+          // Gather all frame image rows for this job that came from videos
+          const frameImages = await db
+            .select()
+            .from(images)
+            .where(
+              and(
+                eq(images.jobId, jobId),
+                isNotNull(images.videoId)
+              )
+            );
+
+          const framesToUpload = frameImages
+            .filter((img) => img.path)
+            .map((img) => ({
+              localPath: img.path!,
+              filename: img.filename,
+              imageId: img.id,
+            }));
+
+          if (framesToUpload.length > 0) {
+            const driveFileIds = await uploadFramesToDrive(
+              deployment.driveFolderId,
+              framesToUpload,
+              async (uploaded, total) => {
+                await db
+                  .update(processingJobs)
+                  .set({
+                    statusMessage: `Subiendo cuadros a Drive... (${uploaded} de ${total})`,
+                  })
+                  .where(eq(processingJobs.id, jobId));
+              }
+            );
+
+            // Set driveFileId on each uploaded frame
+            for (const frame of framesToUpload) {
+              const driveFileId = driveFileIds.get(frame.filename);
+              if (driveFileId) {
+                await db
+                  .update(images)
+                  .set({ driveFileId })
+                  .where(eq(images.id, frame.imageId));
+              }
+            }
+
+            console.log(
+              `[processJob] Uploaded ${driveFileIds.size}/${framesToUpload.length} frames to Drive`
+            );
+          }
+
+          // Delete local source videos from cache (originals are on Drive)
+          for (const vid of videosToExtract) {
+            if (vid.path) {
+              try {
+                await fs.unlink(vid.path);
+                console.log(`[processJob] Deleted cached video: ${vid.path}`);
+              } catch {
+                // File may already be gone
+              }
+            }
+          }
         }
 
         // Update job counts to include extracted frames

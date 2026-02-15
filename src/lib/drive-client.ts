@@ -8,7 +8,7 @@
 import "server-only";
 
 import { google, type drive_v3 } from "googleapis";
-import { promises as fs } from "fs";
+import { promises as fs, createReadStream } from "fs";
 import path from "path";
 import type { ActionResult } from "./types";
 
@@ -345,8 +345,9 @@ export async function listMediaRecursive(
     pageToken = res.data.nextPageToken ?? undefined;
   } while (pageToken);
 
-  // Recurse into subfolders
+  // Recurse into subfolders (skip _frames/ — our uploaded video frames)
   for (const sub of subfolders) {
+    if (sub.name === "_frames") continue;
     const subPath = pathPrefix ? `${pathPrefix}/${sub.name}` : sub.name;
     const subResult = await listMediaRecursive(sub.id, subPath);
     imageFiles.push(...subResult.images);
@@ -531,4 +532,117 @@ export async function createDeploymentFolder(
   }
 
   return { id: folderId, name: deploymentName, webViewLink };
+}
+
+// ---------------------------------------------------------------------------
+// Upload Video Frames to Drive
+// ---------------------------------------------------------------------------
+
+const FOLDER_MIME = "application/vnd.google-apps.folder";
+
+/**
+ * Find or create a subfolder by name under a parent folder.
+ * Reuses existing folder if found. All calls include supportsAllDrives.
+ */
+async function findOrCreateSubfolder(
+  parentId: string,
+  name: string
+): Promise<string> {
+  const drive = getDrive();
+
+  const existing = await drive.files.list({
+    q: `'${parentId}' in parents and name = '${name.replace(/'/g, "\\'")}' and mimeType = '${FOLDER_MIME}' and trashed = false`,
+    fields: "files(id)",
+    pageSize: 1,
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
+  });
+
+  if (existing.data.files?.[0]?.id) {
+    return existing.data.files[0].id;
+  }
+
+  const created = await drive.files.create({
+    requestBody: {
+      name,
+      mimeType: FOLDER_MIME,
+      parents: [parentId],
+    },
+    fields: "id",
+    supportsAllDrives: true,
+  });
+
+  console.log(`[Drive] Created _frames subfolder in ${parentId}`);
+  return created.data.id!;
+}
+
+/**
+ * Upload a single file to Drive, returning its file ID.
+ */
+async function uploadSingleFile(
+  parentId: string,
+  localPath: string,
+  filename: string
+): Promise<string> {
+  const drive = getDrive();
+
+  const res = await drive.files.create({
+    requestBody: {
+      name: filename,
+      parents: [parentId],
+    },
+    media: {
+      mimeType: "image/jpeg",
+      body: createReadStream(localPath),
+    },
+    fields: "id",
+    supportsAllDrives: true,
+  });
+
+  return res.data.id!;
+}
+
+/**
+ * Upload extracted video frames to a `_frames/` subfolder in the deployment's
+ * Drive folder. Returns a map of filename → driveFileId.
+ *
+ * Uploads in batches of 5 to avoid overwhelming the API.
+ */
+export async function uploadFramesToDrive(
+  deploymentFolderId: string,
+  frames: { localPath: string; filename: string }[],
+  onProgress?: (uploaded: number, total: number) => Promise<void>
+): Promise<Map<string, string>> {
+  const framesFolderId = await findOrCreateSubfolder(deploymentFolderId, "_frames");
+  const result = new Map<string, string>();
+  const BATCH_SIZE = 5;
+
+  for (let i = 0; i < frames.length; i += BATCH_SIZE) {
+    const batch = frames.slice(i, i + BATCH_SIZE);
+
+    await Promise.all(
+      batch.map(async (frame) => {
+        try {
+          const driveFileId = await uploadSingleFile(
+            framesFolderId,
+            frame.localPath,
+            frame.filename
+          );
+          result.set(frame.filename, driveFileId);
+        } catch (err) {
+          console.error(
+            `[Drive] Failed to upload frame ${frame.filename}:`,
+            err instanceof Error ? err.message : err
+          );
+        }
+      })
+    );
+
+    if (onProgress) {
+      await onProgress(Math.min(i + BATCH_SIZE, frames.length), frames.length);
+    }
+  }
+
+  console.log(`[Drive] Uploaded ${result.size}/${frames.length} frames to _frames/`);
+  return result;
 }

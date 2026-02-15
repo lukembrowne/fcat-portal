@@ -1956,7 +1956,7 @@ export async function updateSpecies(
     type?: string;
   }
 ): Promise<ActionResult<Species>> {
-  await requirePermission("camera-trap", "editor");
+  const user = await requirePermission("camera-trap", "editor");
 
   try {
     const updates: Record<string, unknown> = {};
@@ -1966,18 +1966,69 @@ export async function updateSpecies(
     if (data.taxonomicRank !== undefined) updates.taxonomicRank = data.taxonomicRank;
     if (data.type !== undefined) updates.type = data.type;
 
+    // Fetch old record to detect scientificName change
+    const [old] = await db
+      .select()
+      .from(species)
+      .where(eq(species.id, id));
+
+    if (!old) {
+      return { success: false, error: "Especie no encontrada" };
+    }
+
+    const newName = (updates.scientificName as string | undefined) ?? old.scientificName;
+    const nameChanged = newName !== old.scientificName;
+
+    if (nameChanged) {
+      // Use transaction to atomically update species + cascade to identifications
+      const result = await db.transaction(async (tx) => {
+        const [updated] = await tx
+          .update(species)
+          .set(updates)
+          .where(eq(species.id, id))
+          .returning();
+
+        // Cascade to identifications.species
+        await tx
+          .update(identifications)
+          .set({ species: newName })
+          .where(eq(identifications.species, old.scientificName));
+
+        // Cascade to identifications.correctedSpecies
+        await tx
+          .update(identifications)
+          .set({ correctedSpecies: newName })
+          .where(eq(identifications.correctedSpecies, old.scientificName));
+
+        await tx.insert(activityLog).values({
+          userEmail: user.email,
+          action: "rename_species",
+          projectId: "camera-trap",
+          targetType: "species",
+          targetId: String(id),
+          details: JSON.stringify({
+            oldName: old.scientificName,
+            newName,
+          }),
+        });
+
+        return updated;
+      });
+
+      revalidatePath("/camera-trap/species");
+      revalidatePath("/camera-trap/results");
+      return { success: true, data: result };
+    }
+
+    // No name change — simple update, no cascade needed
     const [result] = await db
       .update(species)
       .set(updates)
       .where(eq(species.id, id))
       .returning();
 
-    if (!result) {
-      return { success: false, error: "Especie no encontrada" };
-    }
-
     revalidatePath("/camera-trap/species");
-    return { success: true, data: result };
+    return { success: true, data: result! };
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Error al actualizar especie";
     if (msg.includes("UNIQUE constraint")) {

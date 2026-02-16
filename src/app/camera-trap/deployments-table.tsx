@@ -40,7 +40,14 @@ import {
   RefreshCw,
   Loader2,
   Eye,
+  Info,
 } from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import type { DeploymentRow } from "./actions";
 import { DeploymentExpandedRow } from "./deployment-expanded-row";
 import { BatchEditDialog } from "./batch-edit-dialog";
@@ -162,7 +169,28 @@ export function DeploymentsTable({
       },
       {
         accessorKey: "status",
-        header: "Estado",
+        header: () => (
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="inline-flex items-center gap-1">
+                  Estado
+                  <Info className="h-3.5 w-3.5 text-muted-foreground" />
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="max-w-xs bg-popover text-popover-foreground border shadow-md p-3">
+                <div className="flex flex-col gap-1.5 text-xs">
+                  <span className="inline-flex items-center gap-1.5"><StatusBadge status="unscanned" type="deployment" /> Carpeta importada, imágenes no buscadas</span>
+                  <span className="inline-flex items-center gap-1.5"><StatusBadge status="scanned" type="deployment" /> Imágenes contadas, lista para procesar</span>
+                  <span className="inline-flex items-center gap-1.5"><StatusBadge status="processing" type="deployment" /> Modelo ML analizando</span>
+                  <span className="inline-flex items-center gap-1.5"><StatusBadge status="processed" type="deployment" /> Análisis ML completado</span>
+                  <span className="inline-flex items-center gap-1.5"><StatusBadge status="verified" type="deployment" /> Revisada por investigador</span>
+                  <span className="inline-flex items-center gap-1.5"><StatusBadge status="verified_empty" type="deployment" /> Sin detecciones, confirmada por investigador</span>
+                </div>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        ),
         cell: ({ getValue }) => (
           <StatusBadge status={getValue<string>()} type="deployment" />
         ),
@@ -442,6 +470,7 @@ export function DeploymentsTable({
           <option value="processing">Procesando</option>
           <option value="processed">Procesada</option>
           <option value="verified">Verificada</option>
+          <option value="verified_empty">Vacía verificada</option>
         </select>
 
         {canEdit && (
@@ -461,15 +490,6 @@ export function DeploymentsTable({
             </Button>
           </>
         )}
-      </div>
-
-      {/* Status legend */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground bg-muted/30 px-3 py-2 rounded-md">
-        <span className="inline-flex items-center gap-1.5"><StatusBadge status="unscanned" type="deployment" /> Carpeta importada, imágenes no buscadas</span>
-        <span className="inline-flex items-center gap-1.5"><StatusBadge status="scanned" type="deployment" /> Imágenes contadas, lista para procesar</span>
-        <span className="inline-flex items-center gap-1.5"><StatusBadge status="processing" type="deployment" /> Modelo ML analizando</span>
-        <span className="inline-flex items-center gap-1.5"><StatusBadge status="processed" type="deployment" /> Análisis ML completado</span>
-        <span className="inline-flex items-center gap-1.5"><StatusBadge status="verified" type="deployment" /> Revisada por investigador</span>
       </div>
 
       {/* Sync message */}

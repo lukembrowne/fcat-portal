@@ -11,10 +11,12 @@ import {
   ScanSearch,
   Loader2,
   Trash2,
+  CheckCircle,
+  Undo2,
 } from "lucide-react";
 import type { DeploymentRow } from "./actions";
 import { DeploymentEditForm } from "./deployment-edit-form";
-import { getDeployment, queueProcessing } from "./actions";
+import { getDeployment, queueProcessing, markVerifiedEmpty, undoVerifiedEmpty } from "./actions";
 import { DeleteJobDialog } from "./delete-job-dialog";
 import { scanDeploymentImages } from "./drive-actions";
 
@@ -50,6 +52,7 @@ export function DeploymentExpandedRow({
   const [jobsError, setJobsError] = useState(false);
   const [scanning, startScanning] = useTransition();
   const [processingAction, startProcessing] = useTransition();
+  const [verifying, startVerifying] = useTransition();
   const [deleteJobId, setDeleteJobId] = useState<number | null>(null);
 
   useEffect(() => {
@@ -94,6 +97,18 @@ export function DeploymentExpandedRow({
     startProcessing(async () => {
       await queueProcessing([deployment.id]);
       window.dispatchEvent(new Event("job-started"));
+    });
+  };
+
+  const handleVerifyEmpty = () => {
+    startVerifying(async () => {
+      await markVerifiedEmpty(deployment.id);
+    });
+  };
+
+  const handleUndoVerify = () => {
+    startVerifying(async () => {
+      await undoVerifiedEmpty(deployment.id);
     });
   };
 
@@ -213,6 +228,38 @@ export function DeploymentExpandedRow({
                         <Play className="h-3 w-3 mr-1" />
                       )}
                       Procesar
+                    </Button>
+                  )}
+                  {deployment.status === "processed" && (deployment.totalDetections ?? 0) === 0 && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleVerifyEmpty}
+                      disabled={verifying}
+                      className="h-7 text-xs"
+                    >
+                      {verifying ? (
+                        <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                      ) : (
+                        <CheckCircle className="h-3 w-3 mr-1" />
+                      )}
+                      Verificar vacío
+                    </Button>
+                  )}
+                  {deployment.status === "verified_empty" && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleUndoVerify}
+                      disabled={verifying}
+                      className="h-7 text-xs"
+                    >
+                      {verifying ? (
+                        <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                      ) : (
+                        <Undo2 className="h-3 w-3 mr-1" />
+                      )}
+                      Deshacer verificación
                     </Button>
                   )}
                 </>

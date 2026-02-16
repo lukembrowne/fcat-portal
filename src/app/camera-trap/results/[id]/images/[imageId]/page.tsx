@@ -2,11 +2,11 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { requirePermission } from "@/lib/auth";
-import { getImageWithDetections, getJobImageIds, getSpeciesList } from "@/app/camera-trap/actions";
+import { getImageWithDetections, getJobImageIds, getSpeciesList, getRecentSpecies } from "@/app/camera-trap/actions";
 import { db } from "@/db";
 import { videos } from "@/db/schema";
 import { eq } from "drizzle-orm";
-import { ImageDetailClient } from "./image-detail-client";
+import { ImageAnnotationClient } from "./image-annotation-client";
 
 interface PageProps {
   params: Promise<{ id: string; imageId: string }>;
@@ -29,10 +29,12 @@ export default async function ImageDetailPage({ params }: PageProps) {
 
   const { image, detections: rawDetections } = data;
 
-  const [imageIds, speciesList] = await Promise.all([
+  const [imageIds, speciesList, recentSpeciesResult] = await Promise.all([
     getJobImageIds(jobId),
     getSpeciesList(),
+    getRecentSpecies(image.deploymentId),
   ]);
+  const recentSpecies = recentSpeciesResult.success ? recentSpeciesResult.data : [];
   const currentIndex = imageIds.indexOf(imgId);
   const prevImageId = currentIndex > 0 ? imageIds[currentIndex - 1] : null;
   const nextImageId =
@@ -48,7 +50,7 @@ export default async function ImageDetailPage({ params }: PageProps) {
     height: det.bboxHeight,
     detectionConfidence: det.detectionConfidence,
     detectionClass: det.detectionClass,
-    species: det.identification?.species || null,
+    species: det.identification?.correctedSpecies || det.identification?.species || null,
     speciesConfidence: det.identification?.confidence || null,
     verificationStatus: det.identification?.verificationStatus || "unverified",
   }));
@@ -120,12 +122,13 @@ export default async function ImageDetailPage({ params }: PageProps) {
         </div>
       </div>
 
-      <ImageDetailClient
+      <ImageAnnotationClient
         src={fullImageUrl}
         alt={image.filename}
         boxes={boxes}
         detections={annotationDetections}
         speciesList={speciesList}
+        recentSpecies={recentSpecies}
         jobId={jobId}
         imageId={imgId}
         prevImageId={prevImageId}

@@ -65,7 +65,7 @@ const statements = [
     date_start TEXT,
     date_end TEXT,
     total_images INTEGER DEFAULT 0,
-    status TEXT NOT NULL DEFAULT 'unscanned' CHECK(status IN ('unscanned', 'scanned', 'processing', 'processed', 'verified')),
+    status TEXT NOT NULL DEFAULT 'unscanned' CHECK(status IN ('unscanned', 'scanned', 'processing', 'processed', 'verified', 'verified_empty')),
     created_at INTEGER NOT NULL DEFAULT (unixepoch()),
     updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
     created_by TEXT
@@ -377,7 +377,7 @@ try {
       date_start TEXT,
       date_end TEXT,
       total_images INTEGER DEFAULT 0,
-      status TEXT NOT NULL DEFAULT 'unscanned' CHECK(status IN ('unscanned', 'scanned', 'processing', 'processed', 'verified')),
+      status TEXT NOT NULL DEFAULT 'unscanned' CHECK(status IN ('unscanned', 'scanned', 'processing', 'processed', 'verified', 'verified_empty')),
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
       created_by TEXT
@@ -462,6 +462,48 @@ try {
 } catch (err) {
   try { db.exec(`ROLLBACK`); } catch { /* no active tx */ }
   console.error("Failed to migrate biochoco_detections table:", err.message);
+}
+
+// --- Table recreation: add verified_empty to deployment status CHECK constraint ---
+try {
+  const tableInfo = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='biochoco_deployments'")
+    .get();
+  if (tableInfo && !tableInfo.sql.includes('verified_empty')) {
+    console.log("Migrating biochoco_deployments table: adding verified_empty status...");
+    db.exec(`BEGIN TRANSACTION`);
+    db.exec(`CREATE TABLE biochoco_deployments_new (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      path TEXT,
+      name TEXT NOT NULL,
+      drive_folder_id TEXT,
+      latitude REAL,
+      longitude REAL,
+      date_start TEXT,
+      date_end TEXT,
+      total_images INTEGER DEFAULT 0,
+      total_videos INTEGER DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'unscanned' CHECK(status IN ('unscanned', 'scanned', 'processing', 'processed', 'verified', 'verified_empty')),
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      created_by TEXT,
+      project_label TEXT,
+      site_name TEXT,
+      odk_submission_id TEXT,
+      metadata_source TEXT
+    )`);
+    db.exec(`INSERT INTO biochoco_deployments_new SELECT id, project_id, path, name, drive_folder_id, latitude, longitude, date_start, date_end, total_images, total_videos, status, created_at, updated_at, created_by, project_label, site_name, odk_submission_id, metadata_source FROM biochoco_deployments`);
+    db.exec(`DROP TABLE biochoco_deployments`);
+    db.exec(`ALTER TABLE biochoco_deployments_new RENAME TO biochoco_deployments`);
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_biochoco_deployments_project_path ON biochoco_deployments(project_id, path)`);
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_biochoco_deployments_project_drive_folder ON biochoco_deployments(project_id, drive_folder_id)`);
+    db.exec(`COMMIT`);
+    console.log("  biochoco_deployments status CHECK now includes verified_empty");
+  }
+} catch (err) {
+  try { db.exec(`ROLLBACK`); } catch { /* no active tx */ }
+  console.error("Failed to migrate biochoco_deployments status constraint:", err.message);
 }
 
 console.log(`Schema pushed to ${fullPath}`);

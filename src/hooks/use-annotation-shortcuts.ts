@@ -4,11 +4,13 @@ import { useEffect, useRef } from "react";
 
 export const SHORTCUTS = [
   { key: "←/→", description: "Imagen anterior/siguiente", category: "navigation" },
-  { key: "1-9", description: "Seleccionar detección", category: "navigation" },
-  { key: "Esc", description: "Deseleccionar", category: "navigation" },
+  { key: "1-9", description: "Seleccionar detección / asignar especie", category: "navigation" },
+  { key: "0", description: "Asignar especie #10", category: "annotation" },
+  { key: "Esc", description: "Deseleccionar / limpiar búsqueda", category: "navigation" },
   { key: "Enter", description: "Verificar todo y avanzar", category: "annotation" },
   { key: "v", description: "Verificar detección", category: "annotation" },
   { key: "r", description: "Rechazar detección", category: "annotation" },
+  { key: "d / ⌫ / Supr", description: "Eliminar detección", category: "annotation" },
 ] as const;
 
 interface AnnotationShortcutOptions {
@@ -20,7 +22,12 @@ interface AnnotationShortcutOptions {
   onPrev?: () => void;
   onSelectDetection?: (index: number) => void;
   onDeselect?: () => void;
+  onDeleteSelected?: () => void;
+  onAssignSpeciesByIndex?: (index: number) => void;
   detectionCount?: number;
+  selectedDetectionId?: number | null;
+  searchInputRef?: React.RefObject<HTMLInputElement | null>;
+  isDrawing?: boolean;
 }
 
 export function useAnnotationShortcuts(opts: AnnotationShortcutOptions) {
@@ -34,20 +41,52 @@ export function useAnnotationShortcuts(opts: AnnotationShortcutOptions) {
     if (!opts.enabled) return;
 
     function handleKeyDown(e: KeyboardEvent) {
-      // Skip in editable fields
-      if (
-        e.target instanceof HTMLInputElement ||
-        e.target instanceof HTMLTextAreaElement ||
-        e.target instanceof HTMLSelectElement ||
-        (e.target as HTMLElement).isContentEditable ||
-        (e.target as HTMLElement).getAttribute("role") === "combobox"
-      ) {
+      const o = optsRef.current;
+
+      // Suppress all shortcuts while drawing a bbox
+      if (o.isDrawing) return;
+
+      // Check if the search input is focused
+      const searchInput = o.searchInputRef?.current;
+      const isSearchFocused = searchInput && document.activeElement === searchInput;
+
+      // Escape: two-level behavior
+      if (e.key === "Escape") {
+        if (isSearchFocused && searchInput.value) {
+          // Clear search text, keep focus
+          // The parent manages searchQuery state, so we trigger the input's change
+          // Actually, we need to use the callback. Let's just blur + deselect.
+          // Better: the parent clears search on Escape via onDeselect which handles both.
+          searchInput.value = "";
+          searchInput.dispatchEvent(new Event("input", { bubbles: true }));
+          return;
+        }
+        o.onDeselect?.();
         return;
       }
 
-      // Escape works everywhere
-      if (e.key === "Escape") {
-        optsRef.current.onDeselect?.();
+      // Skip most shortcuts in editable fields (except search input for number keys)
+      const target = e.target as HTMLElement;
+      const isInEditableField =
+        (target instanceof HTMLInputElement && target !== searchInput) ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        target.isContentEditable ||
+        target.getAttribute("role") === "combobox";
+
+      if (isInEditableField) return;
+
+      // If search input is focused, only allow number keys (for species assignment)
+      // and navigation keys
+      if (isSearchFocused) {
+        const hasModifier = e.metaKey || e.ctrlKey || e.altKey;
+        if (!hasModifier && o.selectedDetectionId != null && /^[0-9]$/.test(e.key)) {
+          e.preventDefault();
+          const index = e.key === "0" ? 9 : parseInt(e.key, 10) - 1;
+          o.onAssignSpeciesByIndex?.(index);
+          return;
+        }
+        // Let other keys pass through to the input
         return;
       }
 
@@ -56,39 +95,52 @@ export function useAnnotationShortcuts(opts: AnnotationShortcutOptions) {
       switch (e.key) {
         case "ArrowLeft":
           e.preventDefault();
-          optsRef.current.onPrev?.();
+          o.onPrev?.();
           break;
         case "ArrowRight":
           e.preventDefault();
-          optsRef.current.onNext?.();
+          o.onNext?.();
           break;
         case "Enter":
           if (!hasModifier) {
             e.preventDefault();
-            optsRef.current.onQuickVerifyAll?.();
+            o.onQuickVerifyAll?.();
           }
           break;
         case "v":
           if (!hasModifier) {
             e.preventDefault();
-            optsRef.current.onVerify?.();
+            o.onVerify?.();
           }
           break;
         case "r":
           if (!hasModifier) {
             e.preventDefault();
-            optsRef.current.onReject?.();
+            o.onReject?.();
+          }
+          break;
+        case "d":
+        case "Delete":
+        case "Backspace":
+          if (!hasModifier) {
+            e.preventDefault();
+            o.onDeleteSelected?.();
           }
           break;
         default:
-          if (!hasModifier && /^[1-9]$/.test(e.key)) {
-            const index = parseInt(e.key, 10) - 1;
-            if (
-              optsRef.current.detectionCount &&
-              index < optsRef.current.detectionCount
-            ) {
+          if (!hasModifier && /^[0-9]$/.test(e.key)) {
+            if (o.selectedDetectionId != null) {
+              // Detection selected → assign species by index
               e.preventDefault();
-              optsRef.current.onSelectDetection?.(index);
+              const index = e.key === "0" ? 9 : parseInt(e.key, 10) - 1;
+              o.onAssignSpeciesByIndex?.(index);
+            } else if (/^[1-9]$/.test(e.key)) {
+              // No detection selected → select detection by number
+              const index = parseInt(e.key, 10) - 1;
+              if (o.detectionCount && index < o.detectionCount) {
+                e.preventDefault();
+                o.onSelectDetection?.(index);
+              }
             }
           }
       }

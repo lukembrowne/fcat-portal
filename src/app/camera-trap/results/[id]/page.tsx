@@ -93,7 +93,7 @@ export default async function JobResultsPage({ params }: PageProps) {
     .sort(([, a], [, b]) => b - a);
 
   const verified = jobIdentifications.filter(
-    (i) => i.verificationStatus === "verified"
+    (i) => i.verificationStatus === "verified" || i.verificationStatus === "corrected"
   ).length;
   const unverified = jobIdentifications.filter(
     (i) => i.verificationStatus === "unverified"

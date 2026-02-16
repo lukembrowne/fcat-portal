@@ -96,7 +96,7 @@ export const deployments = sqliteTable(
     totalImages: integer("total_images").default(0),
     totalVideos: integer("total_videos").default(0),
     status: text("status", {
-      enum: ["unscanned", "scanned", "processing", "processed", "verified"],
+      enum: ["unscanned", "scanned", "processing", "processed", "verified", "verified_empty"],
     })
       .notNull()
       .default("unscanned"),

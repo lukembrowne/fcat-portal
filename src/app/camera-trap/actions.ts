@@ -1263,6 +1263,110 @@ export async function getDeploymentsCascadeStats(
 }
 
 // ---------------------------------------------------------------------------
+// Verified Empty
+// ---------------------------------------------------------------------------
+
+export async function markVerifiedEmpty(
+  deploymentId: number
+): Promise<ActionResult> {
+  await requirePermission("camera-trap", "editor");
+
+  try {
+    const [deployment] = await db
+      .select()
+      .from(deployments)
+      .where(eq(deployments.id, deploymentId));
+
+    if (!deployment) {
+      return { success: false, error: "Implementación no encontrada" };
+    }
+
+    if (deployment.status !== "processed") {
+      return {
+        success: false,
+        error: "Solo se pueden verificar implementaciones con estado 'procesada'",
+      };
+    }
+
+    // Verify there are truly 0 detections for this deployment
+    const completedJobs = await db
+      .select({ id: processingJobs.id })
+      .from(processingJobs)
+      .where(
+        and(
+          eq(processingJobs.deploymentId, deploymentId),
+          eq(processingJobs.status, "completed")
+        )
+      );
+
+    if (completedJobs.length > 0) {
+      const jobIds = completedJobs.map((j) => j.id);
+      const [detStats] = await db
+        .select({ cnt: count() })
+        .from(detections)
+        .where(inArray(detections.jobId, jobIds));
+
+      if ((detStats?.cnt ?? 0) > 0) {
+        return {
+          success: false,
+          error: "Esta implementación tiene detecciones — no se puede marcar como vacía",
+        };
+      }
+    }
+
+    await db
+      .update(deployments)
+      .set({ status: "verified_empty", updatedAt: new Date() })
+      .where(eq(deployments.id, deploymentId));
+
+    revalidatePath(CAMERA_TRAP_PATH);
+    return { success: true, data: undefined };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Error al verificar",
+    };
+  }
+}
+
+export async function undoVerifiedEmpty(
+  deploymentId: number
+): Promise<ActionResult> {
+  await requirePermission("camera-trap", "editor");
+
+  try {
+    const [deployment] = await db
+      .select()
+      .from(deployments)
+      .where(eq(deployments.id, deploymentId));
+
+    if (!deployment) {
+      return { success: false, error: "Implementación no encontrada" };
+    }
+
+    if (deployment.status !== "verified_empty") {
+      return {
+        success: false,
+        error: "Solo se puede deshacer la verificación de implementaciones con estado 'vacía verificada'",
+      };
+    }
+
+    await db
+      .update(deployments)
+      .set({ status: "processed", updatedAt: new Date() })
+      .where(eq(deployments.id, deploymentId));
+
+    revalidatePath(CAMERA_TRAP_PATH);
+    return { success: true, data: undefined };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Error al deshacer verificación",
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Processing Queue
 // ---------------------------------------------------------------------------
 
@@ -2136,6 +2240,109 @@ export async function getRecentSpecies(
     .where(inArray(species.scientificName, recentNames));
 
   return { success: true, data: speciesList };
+}
+
+export async function deleteDetection(
+  detectionId: number
+): Promise<ActionResult> {
+  const user = await requirePermission("camera-trap", "editor");
+
+  try {
+    // Fetch detection + image info for activity log
+    const [det] = await db
+      .select({
+        id: detections.id,
+        imageId: detections.imageId,
+        filename: images.filename,
+      })
+      .from(detections)
+      .innerJoin(images, eq(images.id, detections.imageId))
+      .where(eq(detections.id, detectionId));
+
+    if (!det) {
+      return { success: false, error: "Detección no encontrada" };
+    }
+
+    // Hard delete — CASCADE will remove the identification row
+    await db.delete(detections).where(eq(detections.id, detectionId));
+
+    await db.insert(activityLog).values({
+      userEmail: user.email,
+      action: "delete_detection",
+      projectId: "camera-trap",
+      targetType: "detection",
+      targetId: String(detectionId),
+      details: JSON.stringify({
+        imageId: det.imageId,
+        filename: det.filename,
+      }),
+    });
+
+    revalidatePath(CAMERA_TRAP_PATH);
+    return { success: true, data: undefined };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Error al eliminar detección",
+    };
+  }
+}
+
+export async function assignSpecies(
+  identificationId: number,
+  newSpecies: string
+): Promise<ActionResult> {
+  const user = await requirePermission("camera-trap", "editor");
+
+  try {
+    // Fetch the identification to compare against original ML prediction
+    const [ident] = await db
+      .select({
+        id: identifications.id,
+        species: identifications.species,
+        verificationStatus: identifications.verificationStatus,
+      })
+      .from(identifications)
+      .where(eq(identifications.id, identificationId));
+
+    if (!ident) {
+      return { success: false, error: "Identificación no encontrada" };
+    }
+
+    if (ident.verificationStatus === "rejected") {
+      return { success: false, error: "No se puede asignar especie a una detección rechazada" };
+    }
+
+    // If species matches original ML prediction → verify; otherwise → correct
+    const isMatch = newSpecies === ident.species;
+
+    await db
+      .update(identifications)
+      .set({
+        verificationStatus: isMatch ? "verified" : "corrected",
+        correctedSpecies: isMatch ? null : newSpecies,
+        verifiedBy: user.email,
+        verifiedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(identifications.id, identificationId),
+          inArray(identifications.verificationStatus, [
+            "unverified",
+            "verified",
+            "corrected",
+          ])
+        )
+      );
+
+    revalidatePath(CAMERA_TRAP_PATH);
+    return { success: true, data: undefined };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Error al asignar especie",
+    };
+  }
 }
 
 export async function createManualDetection(

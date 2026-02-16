@@ -22,6 +22,7 @@ const DEPLOYMENT_STATUS_CONFIG: Record<
   processing: { variant: "default", label: "Procesando" },
   processed: { variant: "default", label: "Procesada", className: "bg-green-600" },
   verified: { variant: "default", label: "Verificada", className: "bg-emerald-700" },
+  verified_empty: { variant: "default", label: "Vacía verificada", className: "bg-slate-500" },
 };
 
 const IMAGE_STATUS_CONFIG: Record<

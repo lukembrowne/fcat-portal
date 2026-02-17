@@ -2155,21 +2155,24 @@ export async function updateSpecies(
     if (nameChanged) {
       // Use transaction to atomically update species + cascade to identifications
       const result = db.transaction((tx) => {
-        const [updated] = tx
+        const updated = tx
           .update(species)
           .set(updates)
           .where(eq(species.id, id))
-          .returning();
+          .returning()
+          .get();
 
         // Cascade to identifications.species
         tx.update(identifications)
           .set({ species: newName })
-          .where(eq(identifications.species, old.scientificName));
+          .where(eq(identifications.species, old.scientificName))
+          .run();
 
         // Cascade to identifications.correctedSpecies
         tx.update(identifications)
           .set({ correctedSpecies: newName })
-          .where(eq(identifications.correctedSpecies, old.scientificName));
+          .where(eq(identifications.correctedSpecies, old.scientificName))
+          .run();
 
         tx.insert(activityLog).values({
           userEmail: user.email,
@@ -2181,7 +2184,7 @@ export async function updateSpecies(
             oldName: old.scientificName,
             newName,
           }),
-        });
+        }).run();
 
         return updated;
       });
@@ -2430,7 +2433,7 @@ export async function createManualDetection(
     }
 
     const [image] = await db
-      .select({ id: images.id })
+      .select({ id: images.id, confirmedBlank: images.confirmedBlank })
       .from(images)
       .where(eq(images.id, imageId));
 
@@ -2463,6 +2466,14 @@ export async function createManualDetection(
         verificationStatus: "unverified",
       })
       .returning();
+
+    // Auto-clear confirmed blank when adding a manual detection
+    if (image.confirmedBlank) {
+      await db
+        .update(images)
+        .set({ confirmedBlank: false })
+        .where(eq(images.id, imageId));
+    }
 
     return {
       success: true,
@@ -2545,6 +2556,78 @@ export async function verifyAndAdvance(
     return {
       success: false,
       error: error instanceof Error ? error.message : "Error al verificar",
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Per-image blank confirmation
+// ---------------------------------------------------------------------------
+
+export async function toggleConfirmedBlank(
+  imageId: number
+): Promise<ActionResult<{ confirmedBlank: boolean; rejectedCount: number }>> {
+  await requirePermission("camera-trap", "editor");
+
+  try {
+    const [image] = await db
+      .select({
+        id: images.id,
+        status: images.status,
+        confirmedBlank: images.confirmedBlank,
+      })
+      .from(images)
+      .where(eq(images.id, imageId));
+
+    if (!image) {
+      return { success: false, error: "Imagen no encontrada" };
+    }
+
+    if (image.status === "pending") {
+      return {
+        success: false,
+        error: "No se puede confirmar una imagen que aún no se ha procesado",
+      };
+    }
+
+    const newValue = !image.confirmedBlank;
+    let rejectedCount = 0;
+
+    await db.transaction(async (tx) => {
+      await tx
+        .update(images)
+        .set({ confirmedBlank: newValue })
+        .where(eq(images.id, imageId));
+
+      // When toggling ON, batch-reject all identifications
+      if (newValue) {
+        const imageDetections = await tx
+          .select({ id: detections.id })
+          .from(detections)
+          .where(eq(detections.imageId, imageId));
+
+        if (imageDetections.length > 0) {
+          const detectionIds = imageDetections.map((d) => d.id);
+          const result = await tx
+            .update(identifications)
+            .set({ verificationStatus: "rejected" })
+            .where(
+              and(
+                inArray(identifications.detectionId, detectionIds),
+                ne(identifications.verificationStatus, "rejected")
+              )
+            );
+          rejectedCount = result.changes;
+        }
+      }
+    });
+
+    revalidatePath(CAMERA_TRAP_PATH);
+    return { success: true, data: { confirmedBlank: newValue, rejectedCount } };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Error al actualizar",
     };
   }
 }

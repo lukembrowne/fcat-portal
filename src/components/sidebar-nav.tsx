@@ -128,7 +128,7 @@ export function SidebarNav({ user }: SidebarNavProps) {
 
   if (hasCameraTrap) {
     const cameraTrapChildren: NavItem[] = [
-      { label: "Dashboard", href: "/camera-trap" },
+      { label: "Instalaciones", href: "/camera-trap" },
       { label: "Resultados", href: "/camera-trap/results" },
     ];
     if (isCameraTrapEditor) {

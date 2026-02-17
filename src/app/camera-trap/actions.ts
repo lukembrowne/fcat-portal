@@ -13,7 +13,7 @@ import {
   species,
   activityLog,
 } from "@/db/schema";
-import { eq, desc, inArray, and, gte, ne, sql, count, countDistinct, sum, isNotNull } from "drizzle-orm";
+import { eq, desc, inArray, and, gte, ne, sql, count, sum, isNotNull } from "drizzle-orm";
 import { runMLPredictions, checkPytorchWildlife, cancelModelServerJob } from "@/lib/ml-runner";
 import {
   downloadDeploymentForProcessing,
@@ -1007,23 +1007,25 @@ export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
 
   if (completedJobIds.length > 0) {
     const detectionCounts = await db
-      .select({ jobId: detections.jobId, cnt: count() })
+      .select({ jobId: images.jobId, cnt: count() })
       .from(detections)
-      .where(inArray(detections.jobId, completedJobIds))
-      .groupBy(detections.jobId);
+      .innerJoin(images, eq(detections.imageId, images.id))
+      .where(inArray(images.jobId, completedJobIds))
+      .groupBy(images.jobId);
     for (const r of detectionCounts) {
       if (r.jobId != null) detCountMap.set(r.jobId, r.cnt);
     }
 
     const speciesCounts = await db
       .select({
-        jobId: detections.jobId,
-        cnt: countDistinct(identifications.species),
+        jobId: images.jobId,
+        cnt: sql<number>`count(distinct coalesce(${identifications.correctedSpecies}, ${identifications.species}))`,
       })
       .from(identifications)
       .innerJoin(detections, eq(identifications.detectionId, detections.id))
-      .where(inArray(detections.jobId, completedJobIds))
-      .groupBy(detections.jobId);
+      .innerJoin(images, eq(detections.imageId, images.id))
+      .where(inArray(images.jobId, completedJobIds))
+      .groupBy(images.jobId);
     for (const r of speciesCounts) {
       if (r.jobId != null) specCountMap.set(r.jobId, r.cnt);
     }
@@ -1567,38 +1569,41 @@ export async function getRecentJobs(limit: number = 50) {
     .where(inArray(deployments.id, deploymentIds));
   const deploymentMap = new Map(deploymentRows.map((d) => [d.id, d]));
 
-  // Batch: detection counts per job
+  // Batch: detection counts per job (join through images to include manual detections)
   const detectionCounts = await db
-    .select({ jobId: detections.jobId, cnt: count() })
+    .select({ jobId: images.jobId, cnt: count() })
     .from(detections)
-    .where(inArray(detections.jobId, jobIds))
-    .groupBy(detections.jobId);
+    .innerJoin(images, eq(detections.imageId, images.id))
+    .where(inArray(images.jobId, jobIds))
+    .groupBy(images.jobId);
   const detCountMap = new Map(detectionCounts.map((r) => [r.jobId, r.cnt]));
 
-  // Batch: distinct species counts per job
+  // Batch: distinct species counts per job (join through images to include manual detections)
   const speciesCounts = await db
     .select({
-      jobId: detections.jobId,
-      cnt: countDistinct(identifications.species),
+      jobId: images.jobId,
+      cnt: sql<number>`count(distinct coalesce(${identifications.correctedSpecies}, ${identifications.species}))`,
     })
     .from(identifications)
     .innerJoin(detections, eq(identifications.detectionId, detections.id))
-    .where(inArray(detections.jobId, jobIds))
-    .groupBy(detections.jobId);
+    .innerJoin(images, eq(detections.imageId, images.id))
+    .where(inArray(images.jobId, jobIds))
+    .groupBy(images.jobId);
   const specCountMap = new Map(speciesCounts.map((r) => [r.jobId, r.cnt]));
 
   // Batch: verified/corrected/rejected identification counts per job
   const verifiedCounts = await db
-    .select({ jobId: detections.jobId, cnt: count() })
+    .select({ jobId: images.jobId, cnt: count() })
     .from(identifications)
     .innerJoin(detections, eq(identifications.detectionId, detections.id))
+    .innerJoin(images, eq(detections.imageId, images.id))
     .where(
       and(
-        inArray(detections.jobId, jobIds),
+        inArray(images.jobId, jobIds),
         ne(identifications.verificationStatus, "unverified")
       )
     )
-    .groupBy(detections.jobId);
+    .groupBy(images.jobId);
   const verCountMap = new Map(verifiedCounts.map((r) => [r.jobId, r.cnt]));
 
   return jobs.map((job) => ({
@@ -1625,7 +1630,7 @@ export async function getResultsStats() {
     .from(detections);
 
   const [specStats] = await db
-    .select({ totalSpecies: countDistinct(identifications.species) })
+    .select({ totalSpecies: sql<number>`count(distinct coalesce(${identifications.correctedSpecies}, ${identifications.species}))` })
     .from(identifications);
 
   return {
@@ -1849,16 +1854,26 @@ export async function bulkVerifyByThreshold(
   const user = await requirePermission("camera-trap", "editor");
 
   try {
-    const jobDetections = await db
-      .select({ id: detections.id })
-      .from(detections)
-      .where(eq(detections.jobId, jobId));
+    const jobImages = await db
+      .select({ id: images.id })
+      .from(images)
+      .where(eq(images.jobId, jobId));
 
-    if (jobDetections.length === 0) {
+    if (jobImages.length === 0) {
       return { success: true, data: { count: 0 } };
     }
 
-    const detectionIds = jobDetections.map((d) => d.id);
+    const imageIds = jobImages.map((img) => img.id);
+    const jobDets = await db
+      .select({ id: detections.id })
+      .from(detections)
+      .where(inArray(detections.imageId, imageIds));
+
+    if (jobDets.length === 0) {
+      return { success: true, data: { count: 0 } };
+    }
+
+    const detectionIds = jobDets.map((d) => d.id);
 
     const unverifiedAboveThreshold = await db
       .select({ id: identifications.id })
@@ -1908,14 +1923,22 @@ export async function getSpeciesList() {
 export async function getJobSpecies(jobId: number): Promise<string[]> {
   await requirePermission("camera-trap", "viewer");
 
-  const jobDetections = await db
+  const jobImages = await db
+    .select({ id: images.id })
+    .from(images)
+    .where(eq(images.jobId, jobId));
+
+  if (jobImages.length === 0) return [];
+
+  const imageIds = jobImages.map((img) => img.id);
+  const jobDets = await db
     .select({ id: detections.id })
     .from(detections)
-    .where(eq(detections.jobId, jobId));
+    .where(inArray(detections.imageId, imageIds));
 
-  if (jobDetections.length === 0) return [];
+  if (jobDets.length === 0) return [];
 
-  const detectionIds = jobDetections.map((d) => d.id);
+  const detectionIds = jobDets.map((d) => d.id);
   const idents = await db
     .select({ species: identifications.species })
     .from(identifications)
@@ -1959,16 +1982,26 @@ export async function getJobVerificationStats(
 ): Promise<VerificationStats> {
   await requirePermission("camera-trap", "viewer");
 
-  const jobDetections = await db
-    .select({ id: detections.id })
-    .from(detections)
-    .where(eq(detections.jobId, jobId));
+  const jobImages = await db
+    .select({ id: images.id })
+    .from(images)
+    .where(eq(images.jobId, jobId));
 
-  if (jobDetections.length === 0) {
+  if (jobImages.length === 0) {
     return { total: 0, verified: 0, rejected: 0, corrected: 0, unverified: 0 };
   }
 
-  const detectionIds = jobDetections.map((d) => d.id);
+  const imageIds = jobImages.map((img) => img.id);
+  const jobDets = await db
+    .select({ id: detections.id })
+    .from(detections)
+    .where(inArray(detections.imageId, imageIds));
+
+  if (jobDets.length === 0) {
+    return { total: 0, verified: 0, rejected: 0, corrected: 0, unverified: 0 };
+  }
+
+  const detectionIds = jobDets.map((d) => d.id);
   const idents = await db
     .select({ verificationStatus: identifications.verificationStatus })
     .from(identifications)
@@ -2007,16 +2040,26 @@ export async function getDeploymentVerificationStats(
   }
 
   const jobIds = deploymentJobs.map((j) => j.id);
-  const jobDetections = await db
-    .select({ id: detections.id })
-    .from(detections)
-    .where(inArray(detections.jobId, jobIds));
+  const jobImages = await db
+    .select({ id: images.id })
+    .from(images)
+    .where(inArray(images.jobId, jobIds));
 
-  if (jobDetections.length === 0) {
+  if (jobImages.length === 0) {
     return { total: 0, verified: 0, rejected: 0, corrected: 0, unverified: 0 };
   }
 
-  const detectionIds = jobDetections.map((d) => d.id);
+  const imageIds = jobImages.map((img) => img.id);
+  const jobDets = await db
+    .select({ id: detections.id })
+    .from(detections)
+    .where(inArray(detections.imageId, imageIds));
+
+  if (jobDets.length === 0) {
+    return { total: 0, verified: 0, rejected: 0, corrected: 0, unverified: 0 };
+  }
+
+  const detectionIds = jobDets.map((d) => d.id);
   const idents = await db
     .select({ verificationStatus: identifications.verificationStatus })
     .from(identifications)

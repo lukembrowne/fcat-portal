@@ -48,12 +48,13 @@ export default async function JobResultsPage({ params }: PageProps) {
     .from(images)
     .where(eq(images.jobId, jobId));
 
+  const imageIds = jobImages.map((img) => img.id);
   const jobDetections =
-    jobImages.length > 0
+    imageIds.length > 0
       ? await db
           .select()
           .from(detections)
-          .where(eq(detections.jobId, jobId))
+          .where(inArray(detections.imageId, imageIds))
       : [];
 
   const detectionIds = jobDetections.map((d) => d.id);

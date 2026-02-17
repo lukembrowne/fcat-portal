@@ -10,17 +10,17 @@ test.describe("Smoke tests", () => {
 
   test("camera trap page loads", async ({ page }) => {
     await page.goto("/camera-trap");
-    await expect(page.locator("text=Cámaras Trampa")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Cámaras Trampa" })).toBeVisible();
   });
 
   test("admin page loads", async ({ page }) => {
     await page.goto("/admin");
-    await expect(page.locator("text=Administración")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Administración" })).toBeVisible();
   });
 
   test("camera trap results page loads", async ({ page }) => {
     await page.goto("/camera-trap/results");
-    await expect(page.locator("text=Resultados")).toBeVisible();
+    await expect(page.getByRole("heading", { name: /Resultados/ })).toBeVisible();
   });
 
   test("404 page shows in Spanish", async ({ page }) => {

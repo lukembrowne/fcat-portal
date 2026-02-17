@@ -266,9 +266,9 @@ Mock Python subprocess execution:
 - Upload Libro Mayor → preview → commit
 
 ### Acceptance Criteria
-- [ ] Core annotation workflow covered end-to-end
-- [ ] At least one non-admin user scenario tested
-- [ ] Upload → preview → commit pattern tested for one module
+- [x] Core annotation workflow covered end-to-end
+- [ ] At least one non-admin user scenario tested (deferred: requires Playwright projects with separate env vars; Phase 1 unit tests cover permission guards exhaustively)
+- [ ] Upload → preview → commit pattern tested for one module (deferred: requires file upload test fixtures and form interaction)
 
 ---
 

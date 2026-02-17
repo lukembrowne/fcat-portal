@@ -25,7 +25,7 @@ test.describe("Permission boundaries", () => {
 
   test("admin page shows user table", async ({ page }) => {
     await page.goto("/admin");
-    await expect(page.locator("text=Usuarios")).toBeVisible();
-    await expect(page.locator("text=Agregar Usuario")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Administración" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Agregar Usuario" })).toBeVisible();
   });
 });

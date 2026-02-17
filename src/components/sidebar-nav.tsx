@@ -63,10 +63,10 @@ export function SidebarNav({ user }: SidebarNavProps) {
   const biochocoChildren: NavItem[] = [];
 
   if (hasBiochoco) {
-    biochocoChildren.push({ label: "Resumen", href: "/biochoco/overview" });
-    biochocoChildren.push({ label: "Recursos", href: "/biochoco/recursos" });
-    biochocoChildren.push({ label: "Hábitat", href: "/biochoco/habitat" });
+    biochocoChildren.push({ label: "Cronograma", href: "/biochoco/overview" });
     biochocoChildren.push({ label: "Datos", href: "/biochoco/data" });
+    biochocoChildren.push({ label: "Hábitat", href: "/biochoco/habitat" });
+    biochocoChildren.push({ label: "Recursos", href: "/biochoco/recursos" });
     if (isBiochocoEditor) {
       biochocoChildren.push({
         label: "Herramientas",

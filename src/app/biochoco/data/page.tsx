@@ -2,6 +2,7 @@ import { requirePermission } from "@/lib/auth";
 import { fetchSchedule } from "./actions";
 import { UploadStatusTable } from "./upload-status-table";
 import { CreateFoldersPanel } from "./create-folders-panel";
+import { DataUploadGuide } from "./data-upload-guide";
 
 export default async function BiochocoDataPage() {
   const user = await requirePermission("biochoco", "viewer");
@@ -30,6 +31,7 @@ export default async function BiochocoDataPage() {
 
   return (
     <div className="space-y-6">
+      <DataUploadGuide />
       {isEditor && <CreateFoldersPanel />}
       <UploadStatusTable schedule={result.data} />
     </div>

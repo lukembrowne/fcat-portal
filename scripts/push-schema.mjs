@@ -103,7 +103,8 @@ const statements = [
     exif_timestamp TEXT,
     status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'processed', 'failed')),
     error_message TEXT,
-    thumbnail_path TEXT
+    thumbnail_path TEXT,
+    confirmed_blank INTEGER NOT NULL DEFAULT 0
   )`,
 
   // BioChoco — Detections
@@ -352,6 +353,8 @@ const migrations = [
   `ALTER TABLE biochoco_processing_jobs ADD COLUMN frame_extraction_rate REAL DEFAULT 1.0`,
   `ALTER TABLE biochoco_processing_jobs ADD COLUMN total_videos INTEGER DEFAULT 0`,
   `ALTER TABLE biochoco_processing_jobs ADD COLUMN extracted_frames INTEGER DEFAULT 0`,
+  // Per-image blank confirmation
+  `ALTER TABLE biochoco_images ADD COLUMN confirmed_blank INTEGER NOT NULL DEFAULT 0`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }

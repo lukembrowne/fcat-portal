@@ -191,6 +191,9 @@ export const images = sqliteTable(
       onDelete: "cascade",
     }),
     frameIndex: integer("frame_index"),
+    confirmedBlank: integer("confirmed_blank", { mode: "boolean" })
+      .notNull()
+      .default(false),
   },
   (table) => [
     index("idx_biochoco_images_deployment_id").on(table.deploymentId),

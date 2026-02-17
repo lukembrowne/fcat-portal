@@ -13,6 +13,7 @@ export interface ImageGridItem {
   videoId?: number | null;
   frameIndex?: number | null;
   videoFilename?: string | null;
+  confirmedBlank?: boolean;
   detections: {
     id: number;
     species: string | null;
@@ -157,21 +158,25 @@ function ImageCard({ image, jobId }: { image: ImageGridItem; jobId: number }) {
           </div>
         )}
 
-        {image.detections.length > 1 && (
+        {image.confirmedBlank ? (
+          <div className="absolute top-2 right-2">
+            <Badge variant="outline" className="bg-green-50 border-green-300 text-green-700 text-xs">
+              Vacía ✓
+            </Badge>
+          </div>
+        ) : image.detections.length > 1 ? (
           <div className="absolute top-2 right-2">
             <Badge className="bg-primary/90 text-xs">
               {image.detections.length} detecciones
             </Badge>
           </div>
-        )}
-
-        {image.status === "processed" && image.detections.length === 0 && (
+        ) : image.status === "processed" && image.detections.length === 0 ? (
           <div className="absolute top-2 right-2">
             <Badge variant="outline" className="bg-white/80 text-xs">
               Vacía
             </Badge>
           </div>
-        )}
+        ) : null}
 
         {image.status === "failed" && (
           <div className="absolute inset-0 flex items-center justify-center bg-red-500/20">

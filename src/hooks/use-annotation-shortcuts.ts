@@ -11,6 +11,7 @@ export const SHORTCUTS = [
   { key: "v", description: "Verificar detección", category: "annotation" },
   { key: "r", description: "Rechazar detección", category: "annotation" },
   { key: "d / ⌫ / Supr", description: "Eliminar detección", category: "annotation" },
+  { key: "b", description: "Confirmar/desconfirmar imagen vacía", category: "annotation" },
 ] as const;
 
 interface AnnotationShortcutOptions {
@@ -23,7 +24,9 @@ interface AnnotationShortcutOptions {
   onSelectDetection?: (index: number) => void;
   onDeselect?: () => void;
   onDeleteSelected?: () => void;
+  onToggleConfirmedBlank?: () => void;
   onAssignSpeciesByIndex?: (index: number) => void;
+  isDialogOpen?: boolean;
   detectionCount?: number;
   selectedDetectionId?: number | null;
   searchInputRef?: React.RefObject<HTMLInputElement | null>;
@@ -117,6 +120,12 @@ export function useAnnotationShortcuts(opts: AnnotationShortcutOptions) {
           if (!hasModifier) {
             e.preventDefault();
             o.onReject?.();
+          }
+          break;
+        case "b":
+          if (!hasModifier && !o.isDialogOpen) {
+            e.preventDefault();
+            o.onToggleConfirmedBlank?.();
           }
           break;
         case "d":

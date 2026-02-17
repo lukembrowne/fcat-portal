@@ -1,9 +1,16 @@
 "use client";
 
 import { useState, useEffect, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/status-badge";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   ExternalLink,
   Pencil,
@@ -46,6 +53,7 @@ export function DeploymentExpandedRow({
   cachedJobs,
   onCacheJobs,
 }: DeploymentExpandedRowProps) {
+  const router = useRouter();
   const [editing, setEditing] = useState(false);
   const [jobs, setJobs] = useState<JobInfo[]>(cachedJobs ?? []);
   const [loadingJobs, setLoadingJobs] = useState(!cachedJobs);
@@ -102,13 +110,21 @@ export function DeploymentExpandedRow({
 
   const handleVerifyEmpty = () => {
     startVerifying(async () => {
-      await markVerifiedEmpty(deployment.id);
+      const result = await markVerifiedEmpty(deployment.id);
+      if (!result.success) {
+        console.error("[markVerifiedEmpty]", result.error);
+      }
+      router.refresh();
     });
   };
 
   const handleUndoVerify = () => {
     startVerifying(async () => {
-      await undoVerifiedEmpty(deployment.id);
+      const result = await undoVerifiedEmpty(deployment.id);
+      if (!result.success) {
+        console.error("[undoVerifiedEmpty]", result.error);
+      }
+      router.refresh();
     });
   };
 
@@ -231,20 +247,29 @@ export function DeploymentExpandedRow({
                     </Button>
                   )}
                   {deployment.status === "processed" && (deployment.totalDetections ?? 0) === 0 && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handleVerifyEmpty}
-                      disabled={verifying}
-                      className="h-7 text-xs"
-                    >
-                      {verifying ? (
-                        <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-                      ) : (
-                        <CheckCircle className="h-3 w-3 mr-1" />
-                      )}
-                      Verificar vacío
-                    </Button>
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleVerifyEmpty}
+                            disabled={verifying}
+                            className="h-7 text-xs"
+                          >
+                            {verifying ? (
+                              <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                            ) : (
+                              <CheckCircle className="h-3 w-3 mr-1" />
+                            )}
+                            Verificar vacío
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-xs">
+                          Confirma que esta instalación no tiene detecciones de fauna. Úsalo después de revisar las fotos y verificar que realmente no hay animales.
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
                   )}
                   {deployment.status === "verified_empty" && (
                     <Button

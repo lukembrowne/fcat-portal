@@ -2,7 +2,7 @@
 
 ## Overview
 
-Internal web application for FCAT staff and collaborators. Replaces Streamlit dashboards at `internal.dashboards.fcat-ecuador.org`. Domain: `portal.fcat-ecuador.org`.
+Internal web application for FCAT staff and collaborators. Domain: `portal.fcat-ecuador.org`.
 
 ## Environment
 

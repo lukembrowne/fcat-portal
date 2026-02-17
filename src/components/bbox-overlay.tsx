@@ -11,6 +11,7 @@ export interface BBoxData {
   detectionConfidence: number;
   detectionClass: number;
   species?: string | null;
+  displayLabel?: string | null;
   speciesConfidence?: number | null;
   verificationStatus?: string;
 }
@@ -285,26 +286,28 @@ export function BBoxOverlay({
                   {num}
                 </text>
 
-                {(highlight || isSelected) && box.species && (
+                {/* Species label — always visible when species is assigned */}
+                {box.species && box.species !== "unknown" && (
                   <>
                     <rect
                       x={px} y={py - 20}
                       width={Math.max(pw, 100)} height={20}
-                      fill={color} fillOpacity={0.85} rx={2}
+                      fill={color} fillOpacity={highlight ? 0.9 : 0.75} rx={2}
                     />
                     <text
                       x={px + 4} y={py - 6}
                       fill="white" fontSize={12}
                       fontFamily="system-ui, sans-serif" fontWeight={500}
                     >
-                      {box.species}{" "}
+                      {box.displayLabel || box.species}{" "}
                       {box.speciesConfidence != null &&
                         `${(box.speciesConfidence * 100).toFixed(0)}%`}
                     </text>
                   </>
                 )}
 
-                {!highlight && (
+                {/* Confidence badge — show when no species label or not highlighted */}
+                {(!box.species || box.species === "unknown") && !highlight && (
                   <>
                     <rect
                       x={px + 22} y={py} width={36} height={16}

@@ -67,10 +67,7 @@ export async function createProcessingJob(
       .where(eq(videos.deploymentId, deploymentId));
 
     if (deploymentImages.length === 0 && deploymentVideos.length === 0) {
-      return {
-        success: false,
-        error: "No hay imágenes ni videos para procesar. Escanee o vuelva a escanear la carpeta.",
-      };
+      console.log(`[createProcessingJob] Empty deployment ${deploymentId} — 0 images, 0 videos`);
     }
 
     const [job] = await db
@@ -213,7 +210,7 @@ async function processJobInternal(
       // Fail only if nothing was downloaded/cached for both images AND videos
       const hasImages = downloadResult.downloaded > 0 || downloadResult.skipped > 0;
       const hasVideos = deploymentVideos.some((v) => v.path || v.driveFileId);
-      if (!hasImages && !hasVideos) {
+      if (!hasImages && !hasVideos && (deployment.totalImages ?? 0) > 0) {
         await db
           .update(processingJobs)
           .set({
@@ -405,6 +402,35 @@ async function processJobInternal(
       .select()
       .from(images)
       .where(eq(images.jobId, jobId));
+
+    // Empty deployment — nothing to analyze, complete successfully
+    if (jobImages.length === 0) {
+      if (cacheDir) await cleanupJobTempDir(jobId, cacheDir);
+
+      await db
+        .update(processingJobs)
+        .set({
+          status: "completed",
+          completedAt: new Date(),
+          statusMessage: null,
+        })
+        .where(eq(processingJobs.id, jobId));
+
+      await db
+        .update(deployments)
+        .set({ status: "processed", updatedAt: new Date() })
+        .where(eq(deployments.id, job.deploymentId));
+
+      safeRevalidate();
+      processNextInQueue();
+
+      const [updatedJob] = await db
+        .select()
+        .from(processingJobs)
+        .where(eq(processingJobs.id, jobId));
+
+      return { success: true, data: { job: updatedJob } };
+    }
 
     // No mock fallback — ML must work
     console.log(`[processJob] Checking ML availability...`);
@@ -2085,26 +2111,24 @@ export async function updateSpecies(
 
     if (nameChanged) {
       // Use transaction to atomically update species + cascade to identifications
-      const result = await db.transaction(async (tx) => {
-        const [updated] = await tx
+      const result = db.transaction((tx) => {
+        const [updated] = tx
           .update(species)
           .set(updates)
           .where(eq(species.id, id))
           .returning();
 
         // Cascade to identifications.species
-        await tx
-          .update(identifications)
+        tx.update(identifications)
           .set({ species: newName })
           .where(eq(identifications.species, old.scientificName));
 
         // Cascade to identifications.correctedSpecies
-        await tx
-          .update(identifications)
+        tx.update(identifications)
           .set({ correctedSpecies: newName })
           .where(eq(identifications.correctedSpecies, old.scientificName));
 
-        await tx.insert(activityLog).values({
+        tx.insert(activityLog).values({
           userEmail: user.email,
           action: "rename_species",
           projectId: "camera-trap",

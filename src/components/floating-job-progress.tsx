@@ -185,6 +185,7 @@ export function FloatingJobProgress() {
         if (["completed", "failed", "cancelled"].includes(data.status)) {
           es.close();
           eventSourceRef.current = null;
+          window.dispatchEvent(new Event("jobs-updated"));
         }
       } catch {
         // Ignore parse errors

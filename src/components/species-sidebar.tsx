@@ -1,28 +1,26 @@
 "use client";
 
-import { useMemo, useState, useCallback } from "react";
+import { useMemo } from "react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Check, Search } from "lucide-react";
 import type { Species } from "@/db/schema";
 
-type NameDisplay = "common" | "scientific" | "both";
-const DISPLAY_KEY = "species-name-display";
+export type NameDisplay = "common" | "spanish" | "scientific";
+export const DISPLAY_KEY = "species-name-display";
 
-function getStoredDisplay(): NameDisplay {
+export function getStoredDisplay(): NameDisplay {
   if (typeof window === "undefined") return "common";
   const stored = localStorage.getItem(DISPLAY_KEY);
-  if (stored === "common" || stored === "scientific" || stored === "both") return stored;
+  if (stored === "common" || stored === "spanish" || stored === "scientific") return stored;
   return "common";
 }
 
 const DISPLAY_LABELS: Record<NameDisplay, string> = {
-  common: "Común",
+  common: "Inglés",
+  spanish: "Español",
   scientific: "Científico",
-  both: "Ambos",
 };
-
-const DISPLAY_CYCLE: NameDisplay[] = ["common", "scientific", "both"];
 
 const TYPE_LABELS: Record<string, string> = {
   mammal: "Mamíferos",
@@ -43,7 +41,10 @@ interface SpeciesSidebarProps {
   searchQuery: string;
   onSearchChange: (query: string) => void;
   onSelectSpecies: (scientificName: string) => void;
+  onAddSpecies?: () => void;
   searchInputRef: React.RefObject<HTMLInputElement | null>;
+  nameDisplay: NameDisplay;
+  onCycleDisplay: () => void;
 }
 
 function groupByType(speciesList: Species[]): [string, Species[]][] {
@@ -66,7 +67,10 @@ export function SpeciesSidebar({
   searchQuery,
   onSearchChange,
   onSelectSpecies,
+  onAddSpecies,
   searchInputRef,
+  nameDisplay,
+  onCycleDisplay,
 }: SpeciesSidebarProps) {
   const filteredSpecies = useMemo(() => {
     if (!searchQuery.trim()) return speciesList;
@@ -111,17 +115,6 @@ export function SpeciesSidebar({
     return map;
   }, [flatVisible]);
 
-  const [nameDisplay, setNameDisplay] = useState<NameDisplay>(getStoredDisplay);
-
-  const cycleDisplay = useCallback(() => {
-    setNameDisplay((prev) => {
-      const idx = DISPLAY_CYCLE.indexOf(prev);
-      const next = DISPLAY_CYCLE[(idx + 1) % DISPLAY_CYCLE.length];
-      localStorage.setItem(DISPLAY_KEY, next);
-      return next;
-    });
-  }, []);
-
   return (
     <div className="flex flex-col h-full">
       <div className="px-2 pb-2 border-b">
@@ -129,7 +122,7 @@ export function SpeciesSidebar({
           <h3 className="text-sm font-semibold">Especies</h3>
           <button
             type="button"
-            onClick={cycleDisplay}
+            onClick={onCycleDisplay}
             className="text-[10px] text-muted-foreground hover:text-foreground px-1.5 py-0.5 rounded border transition-colors"
             title="Cambiar formato de nombre"
           >
@@ -199,6 +192,18 @@ export function SpeciesSidebar({
           </p>
         )}
       </div>
+
+      {onAddSpecies && (
+        <div className="px-2 py-2 border-t">
+          <button
+            type="button"
+            onClick={onAddSpecies}
+            className="w-full text-xs text-muted-foreground hover:text-foreground py-1 rounded hover:bg-accent transition-colors"
+          >
+            + Agregar especie
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -218,7 +223,7 @@ function SpeciesRow({
   onSelect: (scientificName: string) => void;
   nameDisplay: NameDisplay;
 }) {
-  const title = `${sp.scientificName} — ${sp.commonName}`;
+  const title = `${sp.scientificName} — ${sp.commonName}${sp.spanishName ? ` — ${sp.spanishName}` : ""}`;
 
   return (
     <button
@@ -246,16 +251,11 @@ function SpeciesRow({
       {nameDisplay === "common" && (
         <span className="truncate text-xs">{sp.commonName || sp.scientificName}</span>
       )}
+      {nameDisplay === "spanish" && (
+        <span className="truncate text-xs">{sp.spanishName || sp.commonName || sp.scientificName}</span>
+      )}
       {nameDisplay === "scientific" && (
         <span className="italic truncate text-xs">{sp.scientificName}</span>
-      )}
-      {nameDisplay === "both" && (
-        <>
-          <span className="italic truncate text-xs">{sp.scientificName}</span>
-          <span className="text-[10px] text-muted-foreground truncate ml-auto pl-1">
-            {sp.commonName}
-          </span>
-        </>
       )}
     </button>
   );

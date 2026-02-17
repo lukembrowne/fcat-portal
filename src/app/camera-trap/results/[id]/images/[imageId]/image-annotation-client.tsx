@@ -3,7 +3,13 @@
 import { useRouter } from "next/navigation";
 import { BBoxOverlay, type BBoxData } from "@/components/bbox-overlay";
 import type { DetectionWithIdentification } from "@/components/annotation-toolbar";
-import { SpeciesSidebar, getVisibleSpecies } from "@/components/species-sidebar";
+import {
+  SpeciesSidebar,
+  getVisibleSpecies,
+  getStoredDisplay,
+  DISPLAY_KEY,
+  type NameDisplay,
+} from "@/components/species-sidebar";
 import { DetectionCardStrip } from "@/components/detection-card-strip";
 import { AnnotationHelpPanel } from "@/components/annotation-help-panel";
 import { Button } from "@/components/ui/button";
@@ -18,6 +24,15 @@ import {
 import { useState, useCallback, useRef, useTransition, useMemo } from "react";
 import Link from "next/link";
 import { useAnnotationShortcuts } from "@/hooks/use-annotation-shortcuts";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   verifyIdentification,
   rejectIdentification,
@@ -25,8 +40,10 @@ import {
   createManualDetection,
   deleteDetection,
   assignSpecies,
+  createSpecies,
 } from "@/app/camera-trap/actions";
 import type { Species } from "@/db/schema";
+import type { TaxonomicRank } from "@/lib/types";
 
 interface ImageAnnotationClientProps {
   src: string;
@@ -60,6 +77,58 @@ export function ImageAnnotationClient({
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [, startTransition] = useTransition();
   const isVerifyingRef = useRef(false);
+  const [nameDisplay, setNameDisplay] = useState<NameDisplay>(getStoredDisplay);
+
+  const cycleDisplay = useCallback(() => {
+    setNameDisplay((prev) => {
+      const cycle: NameDisplay[] = ["common", "spanish", "scientific"];
+      const idx = cycle.indexOf(prev);
+      const next = cycle[(idx + 1) % cycle.length];
+      localStorage.setItem(DISPLAY_KEY, next);
+      return next;
+    });
+  }, []);
+
+  // Build species lookup map for display labels
+  const speciesMap = useMemo(() => {
+    const map = new Map<string, Species>();
+    for (const sp of speciesList) {
+      map.set(sp.scientificName, sp);
+    }
+    return map;
+  }, [speciesList]);
+
+  // Compute display labels for bbox overlay based on name display mode
+  const displayBoxes = useMemo(() => {
+    return boxes.map((box) => {
+      if (!box.species || box.species === "unknown") return box;
+      const sp = speciesMap.get(box.species);
+      if (!sp) return box;
+      let displayLabel: string;
+      switch (nameDisplay) {
+        case "common":
+          displayLabel = sp.commonName || sp.scientificName;
+          break;
+        case "spanish":
+          displayLabel = sp.spanishName || sp.commonName || sp.scientificName;
+          break;
+        case "scientific":
+          displayLabel = sp.scientificName;
+          break;
+      }
+      return { ...box, displayLabel };
+    });
+  }, [boxes, speciesMap, nameDisplay]);
+
+  const [addSpeciesOpen, setAddSpeciesOpen] = useState(false);
+  const [addSpeciesForm, setAddSpeciesForm] = useState({
+    scientificName: "",
+    commonName: "",
+    spanishName: "",
+    taxonomicRank: "species" as TaxonomicRank,
+    type: "mammal",
+  });
+  const [addSpeciesError, setAddSpeciesError] = useState<string | null>(null);
 
   const selectedDetection = detections.find((d) => d.id === selectedBoxId) ?? null;
 
@@ -181,6 +250,37 @@ export function ImageAnnotationClient({
     }
   }, [selectedBoxId]);
 
+  const handleAddSpecies = useCallback(() => {
+    setAddSpeciesForm({
+      scientificName: "",
+      commonName: "",
+      spanishName: "",
+      taxonomicRank: "species",
+      type: "mammal",
+    });
+    setAddSpeciesError(null);
+    setAddSpeciesOpen(true);
+  }, []);
+
+  const handleConfirmAddSpecies = useCallback(() => {
+    if (!addSpeciesForm.scientificName || !addSpeciesForm.commonName) return;
+    startTransition(async () => {
+      const result = await createSpecies({
+        scientificName: addSpeciesForm.scientificName,
+        commonName: addSpeciesForm.commonName,
+        spanishName: addSpeciesForm.spanishName || null,
+        taxonomicRank: addSpeciesForm.taxonomicRank,
+        type: addSpeciesForm.type,
+      });
+      if (result.success) {
+        setAddSpeciesOpen(false);
+        router.refresh();
+      } else {
+        setAddSpeciesError(result.error);
+      }
+    });
+  }, [addSpeciesForm, router]);
+
   // --- Keyboard shortcuts ---
 
   useAnnotationShortcuts({
@@ -239,7 +339,10 @@ export function ImageAnnotationClient({
             searchQuery={searchQuery}
             onSearchChange={setSearchQuery}
             onSelectSpecies={handleSelectSpecies}
+            onAddSpecies={handleAddSpecies}
             searchInputRef={searchInputRef}
+            nameDisplay={nameDisplay}
+            onCycleDisplay={cycleDisplay}
           />
         </aside>
 
@@ -260,7 +363,7 @@ export function ImageAnnotationClient({
             <BBoxOverlay
               src={src}
               alt={alt}
-              boxes={boxes}
+              boxes={displayBoxes}
               selectedBoxId={selectedBoxId}
               onBoxClick={(box) =>
                 setSelectedBoxId((prev) => (prev === box.id ? null : box.id))
@@ -310,6 +413,111 @@ export function ImageAnnotationClient({
               onClick={handleConfirmDelete}
             >
               Eliminar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add species dialog */}
+      <Dialog
+        open={addSpeciesOpen}
+        onOpenChange={(open) => {
+          if (!open) setAddSpeciesOpen(false);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Agregar Especie</DialogTitle>
+            <DialogDescription>
+              Agregar una nueva especie al catálogo.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label htmlFor="add-scientificName">Nombre científico *</Label>
+              <Input
+                id="add-scientificName"
+                value={addSpeciesForm.scientificName}
+                onChange={(e) =>
+                  setAddSpeciesForm((f) => ({ ...f, scientificName: e.target.value }))
+                }
+                placeholder="Ej: Cuniculus paca"
+              />
+            </div>
+            <div>
+              <Label htmlFor="add-commonName">Nombre común (inglés) *</Label>
+              <Input
+                id="add-commonName"
+                value={addSpeciesForm.commonName}
+                onChange={(e) =>
+                  setAddSpeciesForm((f) => ({ ...f, commonName: e.target.value }))
+                }
+                placeholder="Ej: Lowland paca"
+              />
+            </div>
+            <div>
+              <Label htmlFor="add-spanishName">Nombre común (español)</Label>
+              <Input
+                id="add-spanishName"
+                value={addSpeciesForm.spanishName}
+                onChange={(e) =>
+                  setAddSpeciesForm((f) => ({ ...f, spanishName: e.target.value }))
+                }
+                placeholder="Ej: Guanta"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label>Rango taxonómico</Label>
+                <Select
+                  value={addSpeciesForm.taxonomicRank}
+                  onValueChange={(v) =>
+                    setAddSpeciesForm((f) => ({ ...f, taxonomicRank: v as TaxonomicRank }))
+                  }
+                >
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="species">Especie</SelectItem>
+                    <SelectItem value="genus">Género</SelectItem>
+                    <SelectItem value="family">Familia</SelectItem>
+                    <SelectItem value="order">Orden</SelectItem>
+                    <SelectItem value="class">Clase</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Tipo</Label>
+                <Select
+                  value={addSpeciesForm.type}
+                  onValueChange={(v) =>
+                    setAddSpeciesForm((f) => ({ ...f, type: v }))
+                  }
+                >
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="mammal">Mamífero</SelectItem>
+                    <SelectItem value="bird">Ave</SelectItem>
+                    <SelectItem value="reptile">Reptil</SelectItem>
+                    <SelectItem value="amphibian">Anfibio</SelectItem>
+                    <SelectItem value="insect">Insecto</SelectItem>
+                    <SelectItem value="system">Sistema</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            {addSpeciesError && (
+              <p className="text-sm text-destructive">{addSpeciesError}</p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAddSpeciesOpen(false)}>
+              Cancelar
+            </Button>
+            <Button
+              onClick={handleConfirmAddSpecies}
+              disabled={!addSpeciesForm.scientificName || !addSpeciesForm.commonName}
+            >
+              Agregar
             </Button>
           </DialogFooter>
         </DialogContent>

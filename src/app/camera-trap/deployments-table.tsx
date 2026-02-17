@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useMemo, useCallback, useRef, useTransition, Fragment } from "react";
+import { useState, useMemo, useCallback, useRef, useTransition, useEffect, Fragment } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   useReactTable,
   getCoreRowModel,
@@ -93,12 +94,23 @@ export function DeploymentsTable({
   const [batchEditOpen, setBatchEditOpen] = useState(false);
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
   const [processing, startProcessing] = useTransition();
+  const router = useRouter();
 
   // Cache for loaded job data per deployment
   const jobsCacheRef = useRef<Map<number, JobInfo[]>>(new Map());
   const handleCacheJobs = useCallback((deploymentId: number, jobs: JobInfo[]) => {
     jobsCacheRef.current.set(deploymentId, jobs);
   }, []);
+
+  // Refresh table data when a job reaches a terminal state
+  useEffect(() => {
+    const handleJobsUpdated = () => {
+      jobsCacheRef.current.clear();
+      router.refresh();
+    };
+    window.addEventListener("jobs-updated", handleJobsUpdated);
+    return () => window.removeEventListener("jobs-updated", handleJobsUpdated);
+  }, [router]);
 
   // Apply dropdown filters
   const filteredData = useMemo(() => {

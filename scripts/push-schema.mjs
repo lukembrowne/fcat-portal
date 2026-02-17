@@ -357,7 +357,13 @@ for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }
 }
 
-// --- Table recreation: make biochoco_deployments.path nullable ---
+// --- Table recreations ---
+// IMPORTANT: Disable foreign keys during table recreation to prevent
+// CASCADE deletes when dropping parent tables (the DROP would otherwise
+// cascade-delete all rows in child tables like processing_jobs, images, etc.)
+db.pragma("foreign_keys = OFF");
+
+// Make biochoco_deployments.path nullable
 // SQLite cannot ALTER column constraints, so we recreate the table
 try {
   const hasNotNull = db
@@ -505,6 +511,9 @@ try {
   try { db.exec(`ROLLBACK`); } catch { /* no active tx */ }
   console.error("Failed to migrate biochoco_deployments status constraint:", err.message);
 }
+
+// Re-enable foreign keys after table recreations
+db.pragma("foreign_keys = ON");
 
 console.log(`Schema pushed to ${fullPath}`);
 console.log("Tables created:");

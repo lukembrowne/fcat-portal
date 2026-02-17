@@ -243,9 +243,9 @@ Mock Python subprocess execution:
 - Data outside valid ranges (temperature > 100C, etc.)
 
 ### Acceptance Criteria
-- [ ] Each module has at least 2-3 error path tests
-- [ ] Tests verify error messages are user-friendly (Spanish)
-- [ ] No uncaught exceptions on invalid input
+- [x] Each module has at least 2-3 error path tests
+- [x] Tests verify error messages are user-friendly (Spanish)
+- [x] No uncaught exceptions on invalid input
 
 ---
 

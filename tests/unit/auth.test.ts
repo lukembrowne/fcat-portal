@@ -25,6 +25,8 @@ const mockDbInsert = vi.fn();
 const mockDbSelect = vi.fn();
 const mockDbSelectFrom = vi.fn();
 
+const mockDbUpdate = vi.fn();
+
 vi.mock("@/db", () => ({
   db: {
     insert: () => ({
@@ -34,6 +36,13 @@ vi.mock("@/db", () => ({
     }),
     select: () => ({
       from: mockDbSelectFrom,
+    }),
+    update: () => ({
+      set: () => ({
+        where: () => ({
+          then: (cb: () => void) => cb?.(),
+        }),
+      }),
     }),
   },
 }));
@@ -379,6 +388,58 @@ describe("auth", () => {
       expect(user.globalRole).toBe("super_admin");
 
       delete process.env.SUPER_ADMIN_EMAILS;
+    });
+  });
+
+  // --- Edge Cases ---
+
+  describe("edge cases", () => {
+    it("handles email with leading/trailing spaces", async () => {
+      mockHeaders.set("x-user-email", "  test@fcat-ecuador.org  ");
+
+      mockDbSelectFrom
+        .mockReturnValueOnce({
+          where: vi.fn().mockReturnValue([
+            {
+              email: "test@fcat-ecuador.org",
+              name: "Test",
+              isExternal: false,
+              globalRole: null,
+            },
+          ]),
+        })
+        .mockReturnValueOnce({
+          where: vi.fn().mockReturnValue([]),
+        });
+
+      const { getCurrentUser } = await import("@/lib/auth");
+      const user = await getCurrentUser();
+
+      expect(user).not.toBeNull();
+      expect(user!.email).toBe("test@fcat-ecuador.org");
+    });
+
+    it("returns null for empty string email header", async () => {
+      mockHeaders.set("x-user-email", "");
+
+      const { getCurrentUser } = await import("@/lib/auth");
+      const user = await getCurrentUser();
+
+      expect(user).toBeNull();
+    });
+
+    it("returns null when user not found in DB", async () => {
+      mockHeaders.set("x-user-email", "unknown@fcat-ecuador.org");
+
+      // User lookup returns empty
+      mockDbSelectFrom.mockReturnValueOnce({
+        where: vi.fn().mockReturnValue([]),
+      });
+
+      const { getCurrentUser } = await import("@/lib/auth");
+      const user = await getCurrentUser();
+
+      expect(user).toBeNull();
     });
   });
 });

@@ -179,4 +179,53 @@ describe("parseTOA5File", () => {
     expect(result.rows).toHaveLength(1);
     expect(result.errors).toHaveLength(0);
   });
+
+  // --- Edge Cases ---
+
+  it("handles completely empty input", () => {
+    const result = parseTOA5File("");
+    expect(result.rows).toHaveLength(0);
+    expect(result.errors.length).toBeGreaterThan(0);
+  });
+
+  it("handles all-NAN data row", () => {
+    const nanRow =
+      '"2025-03-01 11:00:00",28432,"NAN","NAN","NAN","NAN","NAN","NAN","NAN","NAN","NAN","NAN","NAN","NAN","NAN","NAN","NAN","NAN","NAN","NAN","NAN","NAN","NAN","NAN"';
+    const content = HOURLY_HEADER + "\n" + nanRow;
+    const result = parseTOA5File(content);
+
+    expect(result.rows).toHaveLength(1);
+    expect(result.errors).toHaveLength(0);
+    const row = result.rows[0];
+    expect(row.airTempAvg).toBeNull();
+    expect(row.humidityAvg).toBeNull();
+    expect(row.rainMm).toBeNull();
+    expect(row.solarAvg).toBeNull();
+  });
+
+  it("handles duplicate timestamps (keeps both rows)", () => {
+    const content =
+      HOURLY_HEADER + "\n" + HOURLY_DATA_ROW + "\n" + HOURLY_DATA_ROW;
+    const result = parseTOA5File(content);
+    // Parser does not deduplicate — that's the upload action's job
+    expect(result.rows).toHaveLength(2);
+    expect(result.rows[0].timestamp).toBe(result.rows[1].timestamp);
+  });
+
+  it("rejects corrupted TOA5 header line", () => {
+    const corruptedHeader = [
+      '"GARBAGE","data","here"',
+      '"TIMESTAMP","RECORD","AirTC_Avg"',
+      '"TS","RN","Deg C"',
+      '"","","Avg"',
+    ].join("\n");
+    const result = parseTOA5File(corruptedHeader + "\n" + '"2025-01-01 00:00:00",1,20');
+    expect(result.errors.length).toBeGreaterThan(0);
+  });
+
+  it("handles data-only input without proper headers", () => {
+    const result = parseTOA5File("just some random text without headers");
+    expect(result.rows).toHaveLength(0);
+    expect(result.errors.length).toBeGreaterThan(0);
+  });
 });

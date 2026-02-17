@@ -576,3 +576,101 @@ describe("verification stats", () => {
     expect(stats.verified).toBe(0);
   });
 });
+
+// === Edge Cases ===
+
+describe("edge cases", () => {
+  // --- Species deletion when assigned to detections ---
+
+  it("deleteSpecies blocks when species is referenced in corrections", async () => {
+    // Correct an identification to reference "Panthera onca" (from seed)
+    await actions.correctIdentification(
+      seed.identifications[0].id,
+      "Panthera onca"
+    );
+
+    // Now try to delete Panthera onca — should fail
+    const deleteResult = await actions.deleteSpecies(seed.species[1].id);
+    expect(deleteResult.success).toBe(false);
+    if (!deleteResult.success) {
+      expect(deleteResult.error).toContain("referenciada");
+    }
+
+    // Species should still exist
+    const [sp] = db
+      .select()
+      .from(schema.species)
+      .where(eq(schema.species.id, seed.species[1].id))
+      .all();
+    expect(sp).toBeDefined();
+  });
+
+  it("deleteSpecies succeeds when species is not referenced", async () => {
+    const createResult = await actions.createSpecies({
+      scientificName: "Ara macao",
+      commonName: "Guacamayo rojo",
+    });
+    expect(createResult.success).toBe(true);
+    if (!createResult.success) return;
+
+    const deleteResult = await actions.deleteSpecies(createResult.data.id);
+    expect(deleteResult.success).toBe(true);
+
+    const sps = db
+      .select()
+      .from(schema.species)
+      .where(eq(schema.species.id, createResult.data.id))
+      .all();
+    expect(sps).toHaveLength(0);
+  });
+
+  it("deleteSpecies returns error for non-existent species", async () => {
+    const result = await actions.deleteSpecies(99999);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain("no encontrada");
+    }
+  });
+
+  // --- Manual detection with invalid bbox ---
+
+  it("createManualDetection rejects negative coordinates", async () => {
+    const result = await actions.createManualDetection(seed.images[0].id, {
+      x: -0.1, y: 0.1, width: 0.5, height: 0.5,
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain("bbox inválidas");
+    }
+  });
+
+  it("createManualDetection rejects zero-width bbox", async () => {
+    const result = await actions.createManualDetection(seed.images[0].id, {
+      x: 0.1, y: 0.1, width: 0, height: 0.5,
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain("bbox inválidas");
+    }
+  });
+
+  it("createManualDetection rejects bbox exceeding image bounds", async () => {
+    const result = await actions.createManualDetection(seed.images[0].id, {
+      x: 0.8, y: 0.8, width: 0.5, height: 0.5,
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain("bbox inválidas");
+    }
+  });
+
+  it("createManualDetection rejects non-existent image", async () => {
+    const result = await actions.createManualDetection(99999, {
+      x: 0.1, y: 0.1, width: 0.5, height: 0.5,
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain("no encontrada");
+    }
+  });
+});

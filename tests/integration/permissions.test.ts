@@ -15,7 +15,8 @@ function createTestDb() {
       name TEXT,
       is_external INTEGER NOT NULL DEFAULT 0,
       global_role TEXT CHECK(global_role IN ('super_admin')),
-      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      last_seen_at INTEGER
     );
     CREATE TABLE projects (
       id TEXT PRIMARY KEY,

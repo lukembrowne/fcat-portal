@@ -7,7 +7,8 @@ services:
       - path: .env
         required: false
     volumes:
-      - ./data:/app/data                     # DB + thumbnails + allowed emails + ML venv
+      - ./data:/app/data                     # DB + thumbnails + allowed emails
+      - ml-venv:/app/data/ml-venv            # Named volume — keeps venv off host filesystem
       - ${GDRIVE_PATH:-./data/gdrive}:/mnt/gdrive:ro    # rclone mount (prod: /mnt/gdrive)
     environment:
       - NODE_ENV=production
@@ -46,3 +47,6 @@ services:
       - ./data:/data:ro
       - ./oauth2-proxy-templates:/templates:ro
     restart: unless-stopped
+
+volumes:
+  ml-venv:

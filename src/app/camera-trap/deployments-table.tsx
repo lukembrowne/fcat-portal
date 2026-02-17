@@ -42,6 +42,7 @@ import {
   Loader2,
   Eye,
   Info,
+  Download,
 } from "lucide-react";
 import {
   Tooltip,
@@ -94,6 +95,7 @@ export function DeploymentsTable({
   const [batchEditOpen, setBatchEditOpen] = useState(false);
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
   const [processing, startProcessing] = useTransition();
+  const [exporting, setExporting] = useState(false);
   const router = useRouter();
 
   // Cache for loaded job data per deployment
@@ -125,10 +127,8 @@ export function DeploymentsTable({
   }, [initialDeployments, projectFilter, statusFilter]);
 
   const columns = useMemo<ColumnDef<DeploymentRow>[]>(() => {
-    const cols: ColumnDef<DeploymentRow>[] = [];
-
-    if (canEdit) {
-      cols.push({
+    const cols: ColumnDef<DeploymentRow>[] = [
+      {
         id: "select",
         header: ({ table }) => (
           <Checkbox
@@ -152,8 +152,8 @@ export function DeploymentsTable({
         ),
         enableSorting: false,
         enableGlobalFilter: false,
-      });
-    }
+      },
+    ];
 
     cols.push(
       {
@@ -320,7 +320,7 @@ export function DeploymentsTable({
     );
 
     return cols;
-  }, [canEdit]);
+  }, []);
 
   // Accordion behavior: only allow one expanded row at a time
   const handleExpandedChange = useCallback((updater: ExpandedState | ((old: ExpandedState) => ExpandedState)) => {
@@ -357,7 +357,7 @@ export function DeploymentsTable({
     getPaginationRowModel: getPaginationRowModel(),
     getExpandedRowModel: getExpandedRowModel(),
     autoResetExpanded: false,
-    enableRowSelection: canEdit,
+    enableRowSelection: true,
     getRowCanExpand: () => true,
     getRowId: (row) => String(row.id),
   });
@@ -438,6 +438,55 @@ export function DeploymentsTable({
     });
   };
 
+  const handleExport = async () => {
+    const allSelected = table.getFilteredSelectedRowModel().rows;
+    const processedStatuses = new Set(["processed", "verified", "verified_empty"]);
+    const valid = allSelected.filter((r) => processedStatuses.has(r.original.status));
+    const excluded = allSelected.length - valid.length;
+
+    if (valid.length === 0) {
+      setSyncMessage("No hay instalaciones procesadas para exportar.");
+      return;
+    }
+
+    if (excluded > 0) {
+      setSyncMessage(
+        `${excluded} instalación(es) sin procesar no incluida(s) en la exportación.`
+      );
+    }
+
+    setExporting(true);
+    try {
+      const ids = valid.map((r) => r.original.id).join(",");
+      const response = await fetch(`/api/camera-trap/export?ids=${ids}`);
+
+      if (!response.ok) {
+        let msg = "Error al exportar";
+        try {
+          msg = (await response.json()).error || msg;
+        } catch {}
+        setSyncMessage(msg);
+        return;
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `camtrap-dp-${new Date().toISOString().split("T")[0]}.zip`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+
+      setSyncMessage(
+        `Exportación completada: ${valid.length} instalación(es) en formato Camtrap DP.`
+      );
+    } catch {
+      setSyncMessage("Error al exportar los datos.");
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       {/* Toolbar */}
@@ -512,37 +561,63 @@ export function DeploymentsTable({
       )}
 
       {/* Selection toolbar */}
-      {canEdit && selectedRows.length > 0 && (
+      {selectedRows.length > 0 && (
         <div className="flex items-center gap-3 px-3 py-2 bg-muted/50 rounded-md">
           <span className="text-sm font-medium">
             {selectedRows.length} seleccionado(s)
           </span>
           <div className="flex gap-2">
-            <Button
-              variant="default"
-              size="sm"
-              onClick={handleBatchProcess}
-              disabled={processing}
-            >
-              {processing ? (
-                <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-              ) : null}
-              Procesar Seleccionados
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setBatchEditOpen(true)}
-            >
-              Editar Seleccionados
-            </Button>
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={() => setBatchDeleteOpen(true)}
-            >
-              Eliminar
-            </Button>
+            {canEdit && (
+              <>
+                <Button
+                  variant="default"
+                  size="sm"
+                  onClick={handleBatchProcess}
+                  disabled={processing}
+                >
+                  {processing ? (
+                    <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                  ) : null}
+                  Procesar Seleccionados
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setBatchEditOpen(true)}
+                >
+                  Editar Seleccionados
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => setBatchDeleteOpen(true)}
+                >
+                  Eliminar
+                </Button>
+              </>
+            )}
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleExport}
+                    disabled={exporting}
+                  >
+                    {exporting ? (
+                      <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+                    ) : (
+                      <Download className="h-4 w-4 mr-1.5" />
+                    )}
+                    {exporting ? "Exportando..." : "Exportar Camtrap DP"}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Descargar un paquete de datos estandarizado (Camtrap DP)
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </div>
           <Button
             variant="ghost"

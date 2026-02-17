@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseTOA5File, parseCSVLine } from "../parser";
+import { parseTOA5File, parseCSVLine } from "@/app/climate/upload/parser";
 
 // --- Sample data matching real Campbell Scientific TOA5 format ---
 

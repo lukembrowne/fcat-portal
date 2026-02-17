@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { classifyTransaction } from "../parse-libro-mayor";
+import { classifyTransaction } from "@/app/finance/lib/parse-libro-mayor";
 
 describe("classifyTransaction", () => {
   // Transfers and starting balances → "other"

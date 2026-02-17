@@ -33,7 +33,7 @@ From existing tests, follow these patterns:
 - **Integration**: In-memory SQLite via `better-sqlite3` + Drizzle, `foreign_keys = ON`, fresh DB per test.
 - **External APIs**: Mock the SDK (`googleapis`, etc.) at module level, `vi.stubEnv()` for credentials.
 - **File naming**: `*.test.ts` for Vitest, `*.spec.ts` for Playwright.
-- **Location**: Cross-cutting tests in `tests/unit/` or `tests/integration/`. Module-specific tests colocated in `__tests__/` directories.
+- **Location**: All tests in `tests/unit/` or `tests/integration/`, mirroring `src/` structure (e.g., `tests/unit/lib/`, `tests/unit/app/finance/`).
 - **Language**: Spanish UI strings in assertion messages (matching the app).
 
 ## Institutional Learnings That Inform Tests
@@ -211,9 +211,9 @@ Mock Python subprocess execution:
 - Timeout handling for long-running jobs
 
 ### Acceptance Criteria
-- [ ] ODK client tests cover pagination, errors, and token refresh
-- [ ] Sheets client tests verify write-then-clear ordering
-- [ ] ML runner tests cover success, failure, and timeout paths
+- [x] ODK client tests cover pagination, errors, and token refresh
+- [x] Sheets client tests verify write-then-clear ordering
+- [x] ML runner tests cover success, failure, and timeout paths
 
 ---
 

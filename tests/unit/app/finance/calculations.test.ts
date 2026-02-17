@@ -5,7 +5,7 @@ import {
   calculateRunwayMonths,
   monthSequence,
   getDateRangeForPreset,
-} from "../calculations";
+} from "@/app/finance/lib/calculations";
 
 describe("dayOfYear", () => {
   it("returns 1 for January 1", () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { toUtm17N, formatUtm } from "../utm";
+import { toUtm17N, formatUtm } from "@/lib/utm";
 
 describe("toUtm17N", () => {
   it("converts a known FCAT-area coordinate (0.5°N, -79.7°W)", () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { extractFolderId, isValidFolderId } from "../drive-client";
+import { extractFolderId, isValidFolderId } from "@/lib/drive-client";
 
 // Mock googleapis before importing functions that use getDrive()
 const mockFilesList = vi.fn();
@@ -34,7 +34,7 @@ vi.stubEnv("GOOGLE_SERVICE_ACCOUNT_KEY", Buffer.from(JSON.stringify({
 const {
   listDeploymentFolders,
   listImagesRecursive,
-} = await import("../drive-client");
+} = await import("@/lib/drive-client");
 
 describe("extractFolderId", () => {
   it("extracts ID from standard folder URL", () => {

@@ -21,7 +21,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { useState, useCallback, useRef, useTransition, useMemo } from "react";
+import { useState, useCallback, useRef, useTransition, useMemo, useOptimistic } from "react";
 import Link from "next/link";
 import { useAnnotationShortcuts } from "@/hooks/use-annotation-shortcuts";
 import { Input } from "@/components/ui/input";
@@ -41,6 +41,7 @@ import {
   deleteDetection,
   assignSpecies,
   createSpecies,
+  toggleConfirmedBlank,
 } from "@/app/camera-trap/actions";
 import type { Species } from "@/db/schema";
 import type { TaxonomicRank } from "@/lib/types";
@@ -56,6 +57,7 @@ interface ImageAnnotationClientProps {
   imageId: number;
   prevImageId: number | null;
   nextImageId: number | null;
+  confirmedBlank: boolean;
 }
 
 export function ImageAnnotationClient({
@@ -69,6 +71,7 @@ export function ImageAnnotationClient({
   imageId,
   prevImageId,
   nextImageId,
+  confirmedBlank,
 }: ImageAnnotationClientProps) {
   const router = useRouter();
   const [selectedBoxId, setSelectedBoxId] = useState<number | null>(null);
@@ -78,6 +81,7 @@ export function ImageAnnotationClient({
   const [, startTransition] = useTransition();
   const isVerifyingRef = useRef(false);
   const [nameDisplay, setNameDisplay] = useState<NameDisplay>(getStoredDisplay);
+  const [isConfirmedBlank, setOptimisticBlank] = useOptimistic(confirmedBlank);
 
   const cycleDisplay = useCallback(() => {
     setNameDisplay((prev) => {
@@ -250,6 +254,14 @@ export function ImageAnnotationClient({
     }
   }, [selectedBoxId]);
 
+  const handleToggleConfirmedBlank = useCallback(() => {
+    setOptimisticBlank(!isConfirmedBlank);
+    startTransition(async () => {
+      await toggleConfirmedBlank(imageId);
+      router.refresh();
+    });
+  }, [imageId, isConfirmedBlank, router]);
+
   const handleAddSpecies = useCallback(() => {
     setAddSpeciesForm({
       scientificName: "",
@@ -289,6 +301,8 @@ export function ImageAnnotationClient({
     onReject: handleRejectSelected,
     onQuickVerifyAll: handleQuickVerifyAll,
     onDeleteSelected: handleDeleteSelected,
+    onToggleConfirmedBlank: handleToggleConfirmedBlank,
+    isDialogOpen: deleteDialogDetectionId !== null || addSpeciesOpen,
     onNext: () => {
       if (nextImageId) {
         router.push(`/camera-trap/results/${jobId}/images/${nextImageId}`);
@@ -356,6 +370,8 @@ export function ImageAnnotationClient({
               setSelectedBoxId((prev) => (prev === id ? null : id))
             }
             onDeleteDetection={handleDeleteDetection}
+            confirmedBlank={isConfirmedBlank}
+            onToggleConfirmedBlank={handleToggleConfirmedBlank}
           />
 
           {/* Image with bbox overlay */}

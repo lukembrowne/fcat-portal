@@ -18,14 +18,10 @@ export default async function ImageDetailPage({ params }: PageProps) {
   const jobId = parseInt(id, 10);
   const imgId = parseInt(imageId, 10);
 
-  if (isNaN(jobId) || isNaN(imgId)) {
-    notFound();
-  }
+  if (isNaN(jobId) || isNaN(imgId)) notFound();
 
   const data = await getImageWithDetections(imgId);
-  if (!data) {
-    notFound();
-  }
+  if (!data) notFound();
 
   const { image, detections: rawDetections } = data;
 
@@ -133,6 +129,7 @@ export default async function ImageDetailPage({ params }: PageProps) {
         imageId={imgId}
         prevImageId={prevImageId}
         nextImageId={nextImageId}
+        confirmedBlank={image.confirmedBlank}
       />
     </div>
   );

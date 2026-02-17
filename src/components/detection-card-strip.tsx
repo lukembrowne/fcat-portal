@@ -2,7 +2,8 @@
 
 import { useEffect, useRef } from "react";
 import { Badge } from "@/components/ui/badge";
-import { Trash2 } from "lucide-react";
+import { Trash2, CheckCircle2 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import type { DetectionWithIdentification } from "@/components/annotation-toolbar";
 
 const CLASS_LABELS: Record<number, string> = {
@@ -23,6 +24,8 @@ interface DetectionCardStripProps {
   selectedDetectionId: number | null;
   onSelectDetection: (id: number) => void;
   onDeleteDetection: (id: number) => void;
+  confirmedBlank?: boolean;
+  onToggleConfirmedBlank?: () => void;
 }
 
 export function DetectionCardStrip({
@@ -30,6 +33,8 @@ export function DetectionCardStrip({
   selectedDetectionId,
   onSelectDetection,
   onDeleteDetection,
+  confirmedBlank,
+  onToggleConfirmedBlank,
 }: DetectionCardStripProps) {
   const cardRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
 
@@ -43,14 +48,53 @@ export function DetectionCardStrip({
 
   if (detections.length === 0) {
     return (
-      <div className="flex items-center justify-center px-3 py-2 border rounded-lg bg-muted/50 text-sm text-muted-foreground">
-        No hay detecciones — clic y arrastrar en la imagen para dibujar un cuadro
+      <div className={cn(
+        "flex items-center justify-center gap-2 px-3 py-2 border rounded-lg text-sm",
+        confirmedBlank
+          ? "bg-green-50 border-green-200 text-green-700"
+          : "bg-muted/50 text-muted-foreground"
+      )}>
+        {confirmedBlank ? (
+          <>
+            <CheckCircle2 className="h-4 w-4" />
+            Imagen confirmada como vacía
+            {onToggleConfirmedBlank && (
+              <button
+                type="button"
+                onClick={onToggleConfirmedBlank}
+                className="ml-2 text-xs underline hover:text-green-900 transition-colors"
+              >
+                Deshacer
+              </button>
+            )}
+          </>
+        ) : (
+          <>
+            No hay detecciones — clic y arrastrar en la imagen para dibujar un cuadro
+            {onToggleConfirmedBlank && (
+              <button
+                type="button"
+                onClick={onToggleConfirmedBlank}
+                className="ml-2 px-2 py-0.5 text-xs rounded border border-green-300 bg-green-50 text-green-700 hover:bg-green-100 transition-colors"
+              >
+                Confirmar vacía
+              </button>
+            )}
+          </>
+        )}
       </div>
     );
   }
 
   return (
-    <div className="flex gap-2 overflow-x-auto pb-1 min-w-0">
+    <div className="flex flex-col gap-1.5">
+      {confirmedBlank && (
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-green-50 border border-green-200 text-green-700 text-xs">
+          <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0" />
+          Imagen confirmada como vacía — detecciones rechazadas como falsos positivos
+        </div>
+      )}
+      <div className="flex gap-2 overflow-x-auto pb-1 min-w-0">
       {detections.map((det, index) => {
         const ident = det.identification;
         const isSelected = det.id === selectedDetectionId;
@@ -116,6 +160,7 @@ export function DetectionCardStrip({
           </button>
         );
       })}
+      </div>
     </div>
   );
 }

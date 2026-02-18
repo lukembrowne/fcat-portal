@@ -239,7 +239,11 @@ async function processJobInternal(
         .from(videos)
         .where(eq(videos.deploymentId, deployment.id));
 
-      const videosToExtract = videosWithPaths.filter((v) => v.path);
+      // Videos already fully extracted — skip them, their frames are re-assigned to this job
+      // Videos that need (re-)extraction — have a local path but aren't fully processed
+      const videosToExtract = videosWithPaths.filter(
+        (v) => v.path && v.status !== "processed"
+      );
 
       if (videosToExtract.length > 0) {
         const fps = job.frameExtractionRate ?? 1.0;
@@ -253,6 +257,11 @@ async function processJobInternal(
               statusMessage: `Extrayendo cuadros de video... (${i + 1} de ${videosToExtract.length})`,
             })
             .where(eq(processingJobs.id, jobId));
+
+          // Clean up partial frames from a previous interrupted extraction
+          await db
+            .delete(images)
+            .where(and(eq(images.videoId, vid.id), eq(images.deploymentId, deployment.id)));
 
           const baseName = vid.filename.replace(/\.[^.]+$/, "");
           const result = await extractFrames(
@@ -336,7 +345,7 @@ async function processJobInternal(
             );
 
           const framesToUpload = frameImages
-            .filter((img) => img.path)
+            .filter((img) => img.path && !img.driveFileId)
             .map((img) => ({
               localPath: img.path!,
               filename: img.filename,

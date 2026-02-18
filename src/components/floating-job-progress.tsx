@@ -4,6 +4,7 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import Link from "next/link";
 import { X, Minus, ChevronUp, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { formatDuration } from "@/lib/format-duration";
 import { cancelJob, cancelQueue } from "@/app/camera-trap/actions";
 
 interface ActiveJob {
@@ -14,6 +15,7 @@ interface ActiveJob {
   totalImages: number;
   processedImages: number;
   statusMessage: string | null;
+  startedAt: string | null;
 }
 
 interface SSEData {
@@ -23,6 +25,7 @@ interface SSEData {
   total: number;
   failed: number;
   statusMessage?: string;
+  startedAt?: string | null;
 }
 
 const POLL_INTERVAL = 3000;
@@ -36,6 +39,8 @@ export function FloatingJobProgress() {
   const [cancelling, setCancelling] = useState(false);
   const [showQueue, setShowQueue] = useState(false);
   const [polling, setPolling] = useState(false);
+
+  const [elapsed, setElapsed] = useState<string | null>(null);
 
   const eventSourceRef = useRef<EventSource | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -219,14 +224,32 @@ export function FloatingJobProgress() {
     };
   }, [status, pendingJobs.length]);
 
+  // Elapsed time timer
+  const startedAtStr = sseData?.startedAt ?? activeJob?.startedAt ?? null;
+  const isTerminalStatus = status === "completed" || status === "failed" || status === "cancelled";
+  useEffect(() => {
+    if (!startedAtStr) {
+      setElapsed(null);
+      return;
+    }
+    const startMs = new Date(startedAtStr).getTime();
+    if (isTerminalStatus) {
+      setElapsed(formatDuration(Date.now() - startMs));
+      return;
+    }
+    const update = () => setElapsed(formatDuration(Date.now() - startMs));
+    update();
+    const id = setInterval(update, 1000);
+    return () => clearInterval(id);
+  }, [startedAtStr, isTerminalStatus]);
+
   // Nothing to show
   const hasJob = activeJob || (sseData && !dismissed);
   if (!hasJob || dismissed) return null;
 
   const jobId = sseData?.jobId || activeJob?.jobId;
   const deploymentName = activeJob?.deploymentName || "Instalación";
-  const isTerminal =
-    status === "completed" || status === "failed" || status === "cancelled";
+  const isTerminal = isTerminalStatus;
   const isAnalyzing = status === "processing" && (sseData?.processed ?? 0) > 0;
   const processed = sseData?.processed ?? activeJob?.processedImages ?? 0;
   const total = sseData?.total ?? activeJob?.totalImages ?? 0;
@@ -368,7 +391,11 @@ export function FloatingJobProgress() {
           {(isAnalyzing || isTerminal) && (
             <p className="text-xs text-muted-foreground">
               {processed} de {total} imágenes · {percentage}%
+              {elapsed && <> · {elapsed}</>}
             </p>
+          )}
+          {!isAnalyzing && !isTerminal && elapsed && (
+            <p className="text-xs text-muted-foreground">{elapsed}</p>
           )}
         </div>
 

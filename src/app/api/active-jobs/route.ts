@@ -35,6 +35,7 @@ export async function GET() {
     totalImages: job.totalImages,
     processedImages: job.processedImages,
     statusMessage: job.statusMessage,
+    startedAt: job.startedAt?.toISOString() ?? null,
   }));
 
   return Response.json(result);

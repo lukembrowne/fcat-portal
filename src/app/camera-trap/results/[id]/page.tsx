@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/status-badge";
 import { requirePermission } from "@/lib/auth";
+import { formatDuration } from "@/lib/format-duration";
 import { db } from "@/db";
 import {
   processingJobs,
@@ -158,6 +159,11 @@ export default async function JobResultsPage({ params }: PageProps) {
           </h1>
           <div className="flex items-center gap-4">
             <StatusBadge status={job.status} type="job" />
+            {job.startedAt && job.completedAt && (
+              <span className="text-muted-foreground">
+                {formatDuration(new Date(job.completedAt).getTime() - new Date(job.startedAt).getTime())}
+              </span>
+            )}
             <span className="text-muted-foreground">
               {job.processedImages} / {job.totalImages} imágenes procesadas
             </span>

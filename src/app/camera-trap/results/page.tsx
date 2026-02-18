@@ -30,6 +30,8 @@ export default async function ResultsPage() {
     detectorModel: job.detectorModel,
     classifierModel: job.classifierModel,
     createdAt: job.createdAt?.toISOString() || null,
+    startedAt: job.startedAt?.toISOString() || null,
+    completedAt: job.completedAt?.toISOString() || null,
     deployment: job.deployment
       ? { id: job.deployment.id, name: job.deployment.name }
       : null,

@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { formatDuration } from "@/lib/format-duration";
 
 interface ProgressData {
   jobId: number;
@@ -13,6 +14,7 @@ interface ProgressData {
   failed: number;
   error?: string;
   statusMessage?: string;
+  startedAt?: string | null;
 }
 
 interface ProgressTrackerProps {
@@ -109,6 +111,27 @@ export function ProgressTracker({
     connect();
   };
 
+  // Elapsed time timer
+  const [elapsed, setElapsed] = useState<string | null>(null);
+  const startedAtStr = progress?.startedAt ?? null;
+  const progressStatus = progress?.status;
+  useEffect(() => {
+    if (!startedAtStr) {
+      setElapsed(null);
+      return;
+    }
+    const startMs = new Date(startedAtStr).getTime();
+    const terminal = progressStatus === "completed" || progressStatus === "failed" || progressStatus === "cancelled";
+    if (terminal) {
+      setElapsed(formatDuration(Date.now() - startMs));
+      return;
+    }
+    const update = () => setElapsed(formatDuration(Date.now() - startMs));
+    update();
+    const id = setInterval(update, 1000);
+    return () => clearInterval(id);
+  }, [startedAtStr, progressStatus]);
+
   const percentage = progress
     ? Math.round((progress.processed / Math.max(progress.total, 1)) * 100)
     : 0;
@@ -174,12 +197,13 @@ export function ProgressTracker({
             <div className="flex justify-between text-sm text-muted-foreground">
               <span>
                 {progress?.processed || 0} de {progress?.total || 0} imágenes
+                {elapsed && <> · {elapsed}</>}
               </span>
               <span>{percentage}%</span>
             </div>
           ) : status === "processing" ? (
             <div className="text-sm text-muted-foreground">
-              Preparando...
+              Preparando...{elapsed && <> · {elapsed}</>}
             </div>
           ) : (
             <div className="flex justify-between text-sm text-muted-foreground">

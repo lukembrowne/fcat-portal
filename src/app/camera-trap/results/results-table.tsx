@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { StatusBadge } from "@/components/status-badge";
+import { formatDuration } from "@/lib/format-duration";
 import {
   Table,
   TableBody,
@@ -22,7 +23,8 @@ type SortKey =
   | "images"
   | "detections"
   | "species"
-  | "date";
+  | "date"
+  | "duration";
 type SortDir = "asc" | "desc";
 
 export interface ResultsJob {
@@ -34,6 +36,8 @@ export interface ResultsJob {
   detectorModel: string | null;
   classifierModel: string | null;
   createdAt: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
   deployment: { id: number; name: string } | null;
   detectionsCount: number;
   speciesCount: number;
@@ -80,6 +84,10 @@ export function ResultsTable({ jobs, canDelete }: Props) {
           cmp = ta - tb;
           break;
         }
+        case "duration": {
+          cmp = getDurationMs(a) - getDurationMs(b);
+          break;
+        }
       }
       return sortDir === "asc" ? cmp : -cmp;
     });
@@ -113,6 +121,17 @@ export function ResultsTable({ jobs, canDelete }: Props) {
       month: "2-digit",
       year: "2-digit",
     });
+  }
+
+  function getDurationMs(job: ResultsJob): number {
+    if (!job.startedAt || !job.completedAt) return 0;
+    return new Date(job.completedAt).getTime() - new Date(job.startedAt).getTime();
+  }
+
+  function renderDuration(job: ResultsJob): string {
+    const ms = getDurationMs(job);
+    if (ms <= 0) return "—";
+    return formatDuration(ms);
   }
 
   const allSelected =
@@ -182,6 +201,7 @@ export function ResultsTable({ jobs, canDelete }: Props) {
               <SortHeader label="Especies" col="species" />
               <TableHead>Modelos</TableHead>
               <SortHeader label="Fecha" col="date" />
+              <SortHeader label="Duración" col="duration" />
               <TableHead className="text-right">Acciones</TableHead>
             </TableRow>
           </TableHeader>
@@ -224,6 +244,9 @@ export function ResultsTable({ jobs, canDelete }: Props) {
                 </TableCell>
                 <TableCell className="text-sm">
                   {formatDate(job.createdAt)}
+                </TableCell>
+                <TableCell className="text-sm text-muted-foreground">
+                  {renderDuration(job)}
                 </TableCell>
                 <TableCell
                   className="text-right"

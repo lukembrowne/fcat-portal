@@ -3,7 +3,7 @@ import { fetchToolsData } from "./actions";
 import { ToolsShell } from "./tools-shell";
 
 export default async function BiochocoToolsPage() {
-  await requirePermission("biochoco", "editor");
+  await requirePermission("biochoco", "admin");
 
   const result = await fetchToolsData();
 

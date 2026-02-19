@@ -31,12 +31,10 @@ interface SidebarNavProps {
 }
 
 export function SidebarNav({ user }: SidebarNavProps) {
-  const isBiochocoEditor =
+  const isBiochocoAdmin =
     user.globalRole === "super_admin" ||
     user.permissions.some(
-      (p) =>
-        p.projectId === "biochoco" &&
-        (p.role === "editor" || p.role === "admin")
+      (p) => p.projectId === "biochoco" && p.role === "admin"
     );
 
   const hasBiochoco = hasProjectAccess(user, "biochoco");
@@ -67,7 +65,7 @@ export function SidebarNav({ user }: SidebarNavProps) {
     biochocoChildren.push({ label: "Datos", href: "/biochoco/data" });
     biochocoChildren.push({ label: "Hábitat", href: "/biochoco/habitat" });
     biochocoChildren.push({ label: "Recursos", href: "/biochoco/recursos" });
-    if (isBiochocoEditor) {
+    if (isBiochocoAdmin) {
       biochocoChildren.push({
         label: "Herramientas",
         href: "/biochoco/tools",
@@ -130,6 +128,7 @@ export function SidebarNav({ user }: SidebarNavProps) {
     const cameraTrapChildren: NavItem[] = [
       { label: "Instalaciones", href: "/camera-trap" },
       { label: "Resultados", href: "/camera-trap/results" },
+      { label: "Destacadas", href: "/camera-trap/favorites" },
     ];
     if (isCameraTrapEditor) {
       cameraTrapChildren.push({ label: "Especies", href: "/camera-trap/species" });

@@ -68,7 +68,7 @@ export interface ToolsPageData {
 
 export async function fetchToolsData(): Promise<ActionResult<ToolsPageData>> {
   try {
-    await requirePermission("biochoco", "editor");
+    await requirePermission("biochoco", "admin");
     const schedule = await loadSchedule();
     let slots: SlotRow[] | null = null;
     let hasSlots = false;
@@ -90,7 +90,7 @@ export async function fetchToolsData(): Promise<ActionResult<ToolsPageData>> {
 
 export async function previewBulkShift(shiftAmount: number, useSlots: boolean): Promise<ActionResult<ShiftPreview>> {
   try {
-    await requirePermission("biochoco", "editor");
+    await requirePermission("biochoco", "admin");
     const schedule = await loadSchedule();
     const scheduledCount = schedule.filter((r) => r.status === "scheduled").length;
 
@@ -116,7 +116,7 @@ export async function previewBulkShift(shiftAmount: number, useSlots: boolean): 
 
 export async function commitBulkShift(shiftAmount: number, useSlots: boolean, expectedHash: string): Promise<ActionResult<void>> {
   try {
-    const user = await requirePermission("biochoco", "editor");
+    const user = await requirePermission("biochoco", "admin");
 
     const schedule = await loadSchedule();
     if (scheduleHash(schedule) !== expectedHash) {
@@ -158,7 +158,7 @@ export async function commitBulkShift(shiftAmount: number, useSlots: boolean, ex
 
 export async function previewDateSwap(id1: string, id2: string): Promise<ActionResult<SwapPreview>> {
   try {
-    await requirePermission("biochoco", "editor");
+    await requirePermission("biochoco", "admin");
     const schedule = await loadSchedule();
     const result = swapDeploymentDates(schedule, id1, id2);
 
@@ -181,7 +181,7 @@ export async function previewDateSwap(id1: string, id2: string): Promise<ActionR
 
 export async function commitDateSwap(id1: string, id2: string, expectedHash: string): Promise<ActionResult<void>> {
   try {
-    const user = await requirePermission("biochoco", "editor");
+    const user = await requirePermission("biochoco", "admin");
 
     const schedule = await loadSchedule();
     if (scheduleHash(schedule) !== expectedHash) {
@@ -217,7 +217,7 @@ export interface AvailableSite {
 
 export async function getAvailableSites(): Promise<ActionResult<AvailableSite[]>> {
   try {
-    await requirePermission("biochoco", "editor");
+    await requirePermission("biochoco", "admin");
     const [schedule, rawSites] = await Promise.all([
       loadSchedule(),
       fetchEntities<OdkSiteEntity>(BIOCHOCO_PROJECT_ID, BIOCHOCO_DATASET_SITES),
@@ -243,7 +243,7 @@ export async function getAvailableSites(): Promise<ActionResult<AvailableSite[]>
 
 export async function previewAddSite(siteId: string, siteName: string, habitatType: string): Promise<ActionResult<AddSitePreview>> {
   try {
-    await requirePermission("biochoco", "editor");
+    await requirePermission("biochoco", "admin");
     const schedule = await loadSchedule();
     const result = addSiteToSchedule(schedule, { siteId, siteName, habitatType });
     const validationErrors = validateSchedule(result.rows);
@@ -256,7 +256,7 @@ export async function previewAddSite(siteId: string, siteName: string, habitatTy
 
 export async function commitAddSite(siteId: string, siteName: string, habitatType: string, expectedHash: string): Promise<ActionResult<void>> {
   try {
-    const user = await requirePermission("biochoco", "editor");
+    const user = await requirePermission("biochoco", "admin");
 
     const schedule = await loadSchedule();
     if (scheduleHash(schedule) !== expectedHash) {
@@ -284,7 +284,7 @@ export async function commitAddSite(siteId: string, siteName: string, habitatTyp
 
 export async function runValidation(): Promise<ActionResult<string[]>> {
   try {
-    await requirePermission("biochoco", "editor");
+    await requirePermission("biochoco", "admin");
     const schedule = await loadSchedule();
     const errors = validateSchedule(schedule);
     return { success: true, data: errors };
@@ -352,7 +352,7 @@ async function deriveSyncUpdates(): Promise<SyncUpdate[]> {
 
 export async function previewSyncOdk(): Promise<ActionResult<SyncUpdate[]>> {
   try {
-    await requirePermission("biochoco", "editor");
+    await requirePermission("biochoco", "admin");
     const updates = await deriveSyncUpdates();
     return { success: true, data: updates };
   } catch (err) {
@@ -366,7 +366,7 @@ export async function previewSyncOdk(): Promise<ActionResult<SyncUpdate[]>> {
  */
 export async function commitSyncOdk(deploymentIds: string[]): Promise<ActionResult<void>> {
   try {
-    const user = await requirePermission("biochoco", "editor");
+    const user = await requirePermission("biochoco", "admin");
 
     // Re-derive updates from ODK (server-side truth)
     const allUpdates = await deriveSyncUpdates();

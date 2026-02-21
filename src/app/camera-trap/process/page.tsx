@@ -1,11 +1,13 @@
 "use client";
 
 import { useSearchParams, useRouter } from "next/navigation";
-import { useState, useTransition, Suspense } from "react";
+import { useState, useTransition, useCallback, Suspense } from "react";
 import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ProgressTracker } from "@/components/progress-tracker";
+import { QueueOverview } from "@/components/queue-overview";
+import { useActiveJobs } from "@/hooks/use-active-jobs";
 import { cancelJob } from "../actions";
 
 function ProcessingContent() {
@@ -14,6 +16,22 @@ function ProcessingContent() {
   const jobId = searchParams.get("jobId");
   const [isPending, startTransition] = useTransition();
   const [cancelled, setCancelled] = useState(false);
+
+  const { allJobs, pendingJobs } = useActiveJobs();
+
+  const handleComplete = useCallback(() => {
+    // If there are pending jobs in the queue, navigate to the next one
+    // (the next pending job will become the processing job shortly)
+    setTimeout(() => {
+      if (pendingJobs.length > 0) {
+        const nextJob = pendingJobs[0];
+        window.dispatchEvent(new Event("jobs-updated"));
+        router.push(`/camera-trap/process?jobId=${nextJob.jobId}`);
+      } else {
+        router.push(`/camera-trap/results/${jobId}`);
+      }
+    }, 1500);
+  }, [pendingJobs, jobId, router]);
 
   if (!jobId) {
     return (
@@ -34,12 +52,6 @@ function ProcessingContent() {
   }
 
   const jobIdNum = parseInt(jobId, 10);
-
-  const handleComplete = () => {
-    setTimeout(() => {
-      router.push(`/camera-trap/results/${jobId}`);
-    }, 1500);
-  };
 
   const handleCancel = () => {
     startTransition(async () => {
@@ -65,6 +77,8 @@ function ProcessingContent() {
         <h1 className="text-3xl font-bold mb-2">Procesando Imágenes</h1>
         <p className="text-muted-foreground">Trabajo #{jobId}</p>
       </div>
+
+      <QueueOverview currentJobId={jobIdNum} />
 
       <ProgressTracker
         jobId={jobIdNum}

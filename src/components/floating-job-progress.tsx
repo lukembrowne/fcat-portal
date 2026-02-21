@@ -1,22 +1,12 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef } from "react";
 import Link from "next/link";
 import { X, Minus, ChevronUp, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatDuration } from "@/lib/format-duration";
 import { cancelJob, cancelQueue } from "@/app/camera-trap/actions";
-
-interface ActiveJob {
-  jobId: number;
-  deploymentId: number;
-  deploymentName: string;
-  status: string;
-  totalImages: number;
-  processedImages: number;
-  statusMessage: string | null;
-  startedAt: string | null;
-}
+import { useActiveJobs } from "@/hooks/use-active-jobs";
 
 interface SSEData {
   jobId: number;
@@ -28,130 +18,40 @@ interface SSEData {
   startedAt?: string | null;
 }
 
-const POLL_INTERVAL = 3000;
-const EMPTY_POLLS_BEFORE_STOP = 2;
-
 export function FloatingJobProgress() {
-  const [allJobs, setAllJobs] = useState<ActiveJob[]>([]);
+  const {
+    allJobs,
+    processingJob,
+    pendingJobs,
+    totalQueueSize,
+    currentQueuePosition,
+    hasQueue,
+    newJobDetected,
+  } = useActiveJobs();
+
   const [sseData, setSseData] = useState<SSEData | null>(null);
   const [minimized, setMinimized] = useState(false);
   const [dismissed, setDismissed] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [showQueue, setShowQueue] = useState(false);
-  const [polling, setPolling] = useState(false);
 
   const [elapsed, setElapsed] = useState<string | null>(null);
 
   const eventSourceRef = useRef<EventSource | null>(null);
-  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastJobIdRef = useRef<number | null>(null);
-  const emptyPollCountRef = useRef(0);
+  const sseErrorCountRef = useRef(0);
+  const [sseRetryTrigger, setSseRetryTrigger] = useState(0);
 
-  // Derived state
-  const processingJob = allJobs.find((j) => j.status === "processing") ?? null;
-  const pendingJobs = allJobs.filter((j) => j.status === "pending");
-  const totalQueueSize = allJobs.length;
-  const currentQueuePosition =
-    processingJob && totalQueueSize > 1
-      ? totalQueueSize - pendingJobs.length
-      : 0;
-  const hasQueue = totalQueueSize > 1;
   const activeJob = processingJob ?? allJobs[0] ?? null;
 
-  // Start polling (called by job-started event or on mount check)
-  const startPolling = useCallback(() => {
-    emptyPollCountRef.current = 0;
-    setPolling(true);
-  }, []);
-
-  // Poll /api/active-jobs for active jobs
-  const pollActiveJobs = useCallback(async () => {
-    try {
-      const res = await fetch("/api/active-jobs");
-      if (!res.ok) return;
-      const jobs: ActiveJob[] = await res.json();
-
-      setAllJobs(jobs);
-
-      if (jobs.length > 0) {
-        emptyPollCountRef.current = 0;
-
-        // Find the currently processing job (or highest ID)
-        const current =
-          jobs.find((j) => j.status === "processing") ??
-          jobs.reduce((a, b) => (a.jobId > b.jobId ? a : b));
-
-        // New job discovered — reset dismissed state
-        if (current.jobId !== lastJobIdRef.current) {
-          lastJobIdRef.current = current.jobId;
-          setDismissed(false);
-          setMinimized(false);
-          setSseData(null);
-          setCancelling(false);
-        }
-      } else {
-        emptyPollCountRef.current++;
-        if (emptyPollCountRef.current >= EMPTY_POLLS_BEFORE_STOP) {
-          setPolling(false);
-        }
-      }
-    } catch {
-      // Silently ignore polling errors
-    }
-  }, []);
-
-  // Listen for job-started events to begin polling
+  // Reset UI state when a new job is detected
   useEffect(() => {
-    const handleJobStarted = () => startPolling();
-    window.addEventListener("job-started", handleJobStarted);
-    return () => window.removeEventListener("job-started", handleJobStarted);
-  }, [startPolling]);
-
-  // One-time check on mount to catch jobs already running (e.g. page refresh)
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await fetch("/api/active-jobs");
-        if (!res.ok) return;
-        const jobs: ActiveJob[] = await res.json();
-        if (jobs.length > 0) startPolling();
-      } catch {
-        // ignore
-      }
-    })();
-  }, [startPolling]);
-
-  // Pause polling when tab is hidden, resume when visible
-  useEffect(() => {
-    const handleVisibility = () => {
-      if (document.hidden && pollTimerRef.current) {
-        clearTimeout(pollTimerRef.current);
-        pollTimerRef.current = null;
-      }
-    };
-    document.addEventListener("visibilitychange", handleVisibility);
-    return () =>
-      document.removeEventListener("visibilitychange", handleVisibility);
-  }, []);
-
-  // Polling loop — only runs when `polling` is true
-  useEffect(() => {
-    if (!polling) {
-      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
-      return;
-    }
-
-    const poll = () => {
-      pollActiveJobs();
-      pollTimerRef.current = setTimeout(poll, POLL_INTERVAL);
-    };
-    poll();
-
-    return () => {
-      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
-    };
-  }, [polling, pollActiveJobs]);
+    if (newJobDetected === 0) return;
+    setDismissed(false);
+    setMinimized(false);
+    setSseData(null);
+    setCancelling(false);
+  }, [newJobDetected]);
 
   // SSE connection — connects when we have a processing job
   useEffect(() => {
@@ -185,6 +85,7 @@ export function FloatingJobProgress() {
     es.onmessage = (event) => {
       try {
         const data: SSEData = JSON.parse(event.data);
+        sseErrorCountRef.current = 0;
         setSseData(data);
 
         if (["completed", "failed", "cancelled"].includes(data.status)) {
@@ -200,13 +101,17 @@ export function FloatingJobProgress() {
     es.onerror = () => {
       es.close();
       eventSourceRef.current = null;
+      if (sseErrorCountRef.current < 5) {
+        sseErrorCountRef.current++;
+        setTimeout(() => setSseRetryTrigger((n) => n + 1), 2000);
+      }
     };
 
     return () => {
       es.close();
       eventSourceRef.current = null;
     };
-  }, [processingJob?.jobId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [processingJob?.jobId, sseRetryTrigger]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-dismiss after terminal state (only when no pending jobs remain)
   const status = sseData?.status;

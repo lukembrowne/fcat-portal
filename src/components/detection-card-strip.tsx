@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Trash2, CheckCircle2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { DetectionWithIdentification } from "@/components/annotation-toolbar";
+import type { Species } from "@/db/schema";
+import type { NameDisplay } from "@/components/species-sidebar";
 
 const CLASS_LABELS: Record<number, string> = {
   0: "Animal",
@@ -26,6 +28,8 @@ interface DetectionCardStripProps {
   onDeleteDetection: (id: number) => void;
   confirmedBlank?: boolean;
   onToggleConfirmedBlank?: () => void;
+  nameDisplay?: NameDisplay;
+  speciesList?: Species[];
 }
 
 export function DetectionCardStrip({
@@ -35,8 +39,19 @@ export function DetectionCardStrip({
   onDeleteDetection,
   confirmedBlank,
   onToggleConfirmedBlank,
+  nameDisplay = "scientific",
+  speciesList = [],
 }: DetectionCardStripProps) {
   const cardRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
+
+  // Build species lookup for display name resolution
+  const speciesMap = useMemo(() => {
+    const map = new Map<string, Species>();
+    for (const sp of speciesList) {
+      map.set(sp.scientificName, sp);
+    }
+    return map;
+  }, [speciesList]);
 
   // Scroll selected card into view
   useEffect(() => {
@@ -98,9 +113,33 @@ export function DetectionCardStrip({
       {detections.map((det, index) => {
         const ident = det.identification;
         const isSelected = det.id === selectedDetectionId;
-        const displaySpecies = ident
+        const scientificName = ident
           ? ident.correctedSpecies || ident.species
-          : "Sin identificar";
+          : null;
+        let displaySpecies: string;
+        if (!scientificName) {
+          displaySpecies = "Sin identificar";
+        } else if (scientificName === "unknown") {
+          displaySpecies = "Sin identificar";
+        } else {
+          const sp = speciesMap.get(scientificName);
+          if (!sp) {
+            displaySpecies = scientificName;
+          } else {
+            switch (nameDisplay) {
+              case "common":
+                displaySpecies = sp.commonName || sp.scientificName;
+                break;
+              case "spanish":
+                displaySpecies = sp.spanishName || sp.commonName || sp.scientificName;
+                break;
+              case "scientific":
+              default:
+                displaySpecies = sp.scientificName;
+                break;
+            }
+          }
+        }
         const status = ident?.verificationStatus || "unverified";
         const confidence = ident
           ? (ident.confidence * 100).toFixed(0)
@@ -154,7 +193,7 @@ export function DetectionCardStrip({
                 className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${STATUS_COLORS[status] || STATUS_COLORS.unverified}`}
               />
               <span className="text-xs truncate" title={displaySpecies}>
-                {displaySpecies === "unknown" ? "Sin identificar" : displaySpecies}
+                {displaySpecies}
               </span>
             </div>
           </button>

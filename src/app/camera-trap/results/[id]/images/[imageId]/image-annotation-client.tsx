@@ -42,6 +42,7 @@ import {
   assignSpecies,
   createSpecies,
   toggleConfirmedBlank,
+  toggleStarred,
 } from "@/app/camera-trap/actions";
 import type { Species } from "@/db/schema";
 import type { TaxonomicRank } from "@/lib/types";
@@ -58,6 +59,8 @@ interface ImageAnnotationClientProps {
   prevImageId: number | null;
   nextImageId: number | null;
   confirmedBlank: boolean;
+  starred: boolean;
+  starredBy: string | null;
 }
 
 export function ImageAnnotationClient({
@@ -72,6 +75,8 @@ export function ImageAnnotationClient({
   prevImageId,
   nextImageId,
   confirmedBlank,
+  starred,
+  starredBy,
 }: ImageAnnotationClientProps) {
   const router = useRouter();
   const [selectedBoxId, setSelectedBoxId] = useState<number | null>(null);
@@ -82,6 +87,7 @@ export function ImageAnnotationClient({
   const isVerifyingRef = useRef(false);
   const [nameDisplay, setNameDisplay] = useState<NameDisplay>(getStoredDisplay);
   const [isConfirmedBlank, setOptimisticBlank] = useOptimistic(confirmedBlank);
+  const [isStarred, setOptimisticStarred] = useOptimistic(starred);
 
   const cycleDisplay = useCallback(() => {
     setNameDisplay((prev) => {
@@ -262,6 +268,14 @@ export function ImageAnnotationClient({
     });
   }, [imageId, isConfirmedBlank, router]);
 
+  const handleToggleStarred = useCallback(() => {
+    setOptimisticStarred(!isStarred);
+    startTransition(async () => {
+      await toggleStarred(imageId);
+      router.refresh();
+    });
+  }, [imageId, isStarred, router]);
+
   const handleAddSpecies = useCallback(() => {
     setAddSpeciesForm({
       scientificName: "",
@@ -302,6 +316,7 @@ export function ImageAnnotationClient({
     onQuickVerifyAll: handleQuickVerifyAll,
     onDeleteSelected: handleDeleteSelected,
     onToggleConfirmedBlank: handleToggleConfirmedBlank,
+    onToggleStarred: handleToggleStarred,
     isDialogOpen: deleteDialogDetectionId !== null || addSpeciesOpen,
     onNext: () => {
       if (nextImageId) {
@@ -372,10 +387,12 @@ export function ImageAnnotationClient({
             onDeleteDetection={handleDeleteDetection}
             confirmedBlank={isConfirmedBlank}
             onToggleConfirmedBlank={handleToggleConfirmedBlank}
+            nameDisplay={nameDisplay}
+            speciesList={speciesList}
           />
 
           {/* Image with bbox overlay */}
-          <div className="flex-1 min-h-0 rounded-lg overflow-hidden border bg-muted">
+          <div className="flex-1 min-h-0 rounded-lg overflow-hidden border bg-black flex items-center">
             <BBoxOverlay
               src={src}
               alt={alt}
@@ -389,11 +406,29 @@ export function ImageAnnotationClient({
             />
           </div>
 
-          {/* Help panel + back link */}
+          {/* Help panel + star + back link */}
           <div className="flex items-start gap-2">
             <div className="flex-1 min-w-0">
               <AnnotationHelpPanel />
             </div>
+            <Button
+              variant={isStarred ? "default" : "outline"}
+              size="sm"
+              className={`shrink-0 gap-1.5 ${isStarred ? "bg-amber-500 hover:bg-amber-600 text-white" : ""}`}
+              onClick={handleToggleStarred}
+              title={isStarred && starredBy ? `Destacada por ${starredBy}` : "Destacar imagen (s)"}
+            >
+              <svg
+                className="size-4"
+                fill={isStarred ? "currentColor" : "none"}
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={1.5}
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="M11.48 3.499a.562.562 0 0 1 1.04 0l2.125 5.111a.563.563 0 0 0 .475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 0 0-.182.557l1.285 5.385a.562.562 0 0 1-.84.61l-4.725-2.885a.562.562 0 0 0-.586 0L6.982 20.54a.562.562 0 0 1-.84-.61l1.285-5.386a.562.562 0 0 0-.182-.557l-4.204-3.602a.562.562 0 0 1 .321-.988l5.518-.442a.563.563 0 0 0 .475-.345L11.48 3.5Z" />
+              </svg>
+              {isStarred ? "Destacada" : "Destacar"}
+            </Button>
             <Button asChild variant="outline" size="sm" className="shrink-0">
               <Link href={`/camera-trap/results/${jobId}`}>
                 Volver a Cuadrícula

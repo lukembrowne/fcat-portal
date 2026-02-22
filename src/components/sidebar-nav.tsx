@@ -12,7 +12,7 @@ import { hasProjectAccess } from "@/lib/auth";
 import type { AuthUser } from "@/lib/types";
 import { SidebarShell } from "@/components/sidebar-shell";
 
-export type IconName = "home" | "tree-pine" | "leaf" | "camera" | "shield" | "dollar-sign" | "bar-chart-3" | "cloud-sun";
+export type IconName = "home" | "tree-pine" | "leaf" | "camera" | "shield" | "dollar-sign" | "bar-chart-3" | "cloud-sun" | "clipboard-list";
 
 export interface NavItem {
   label: string;
@@ -92,6 +92,17 @@ export function SidebarNav({ user }: SidebarNavProps) {
       label: "BioChocó",
       icon: "leaf",
       children: biochocoChildren,
+    });
+  }
+
+  const hasMonitoreo = hasProjectAccess(user, "monitoreo");
+  if (hasMonitoreo) {
+    projectItems.push({
+      label: "Monitoreo Programático",
+      icon: "clipboard-list",
+      children: [
+        { label: "Actividades Sociales", href: "/monitoreo/social-activities" },
+      ],
     });
   }
 

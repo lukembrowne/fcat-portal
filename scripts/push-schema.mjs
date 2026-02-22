@@ -104,7 +104,10 @@ const statements = [
     status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'processed', 'failed')),
     error_message TEXT,
     thumbnail_path TEXT,
-    confirmed_blank INTEGER NOT NULL DEFAULT 0
+    confirmed_blank INTEGER NOT NULL DEFAULT 0,
+    starred INTEGER NOT NULL DEFAULT 0,
+    starred_by TEXT,
+    starred_at INTEGER
   )`,
 
   // BioChoco — Detections
@@ -355,9 +358,21 @@ const migrations = [
   `ALTER TABLE biochoco_processing_jobs ADD COLUMN extracted_frames INTEGER DEFAULT 0`,
   // Per-image blank confirmation
   `ALTER TABLE biochoco_images ADD COLUMN confirmed_blank INTEGER NOT NULL DEFAULT 0`,
+  // Image starring/favorites (2026-02-18)
+  `ALTER TABLE biochoco_images ADD COLUMN starred INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE biochoco_images ADD COLUMN starred_by TEXT`,
+  `ALTER TABLE biochoco_images ADD COLUMN starred_at INTEGER`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }
+}
+
+// --- Post-migration indexes (depend on columns added by migrations) ---
+const postMigrationIndexes = [
+  `CREATE INDEX IF NOT EXISTS idx_biochoco_images_starred ON biochoco_images(starred) WHERE starred = 1`,
+];
+for (const idx of postMigrationIndexes) {
+  db.exec(idx);
 }
 
 // --- Table recreations ---
@@ -532,6 +547,7 @@ const coreProjects = [
   ["biochoco", "BioChoco", "Programa de monitoreo de biodiversidad BioChoco"],
   ["finance", "Finanzas", "Dashboard financiero y gestión de presupuestos"],
   ["climate", "Datos Climáticos", "Datos de la estación meteorológica central de FCAT"],
+  ["monitoreo", "Monitoreo Programático", "Seguimiento de actividades sociales y programáticas de FCAT"],
 ];
 
 const insertProject = db.prepare(

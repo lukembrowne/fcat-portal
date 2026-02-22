@@ -10,6 +10,10 @@ export const GIZ_PROJECT_ID = "2";
 export const GIZ_FORM_TREE_PLANTING = "siembra_arboles";
 export const GIZ_FORM_CACAO_MONITORING = "monitoreo_cacao_v1";
 
+// ─── Monitoreo Programático Project ─────────────────────────
+export const MONITOREO_PROJECT_ID = "11";
+export const MONITOREO_FORM_SOCIAL_ACTIVITIES = "actividades_sociales_fcat";
+
 // ─── BioChoco Project ────────────────────────────────────────
 export const BIOCHOCO_PROJECT_ID = "8";
 export const BIOCHOCO_DATASET_SITES = "monitoring_sites_v0_14";

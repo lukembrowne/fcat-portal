@@ -5,12 +5,14 @@ import {
   GIZ_PROJECT_ID, GIZ_FORM_TREE_PLANTING, GIZ_FORM_CACAO_MONITORING,
   BIOCHOCO_PROJECT_ID, BIOCHOCO_FORM_DEPLOY, BIOCHOCO_FORM_RETRIEVE,
   BIOCHOCO_FORM_HABITAT,
+  MONITOREO_PROJECT_ID, MONITOREO_FORM_SOCIAL_ACTIVITIES,
 } from "@/lib/odk-constants";
 
 // Map ODK project IDs to internal project IDs for permission checks
 const ODK_PROJECT_MAP: Record<string, string> = {
   [GIZ_PROJECT_ID]: "giz",
   [BIOCHOCO_PROJECT_ID]: "biochoco",
+  [MONITOREO_PROJECT_ID]: "monitoreo",
 };
 
 // Only allow known form IDs to prevent arbitrary ODK access
@@ -20,6 +22,7 @@ const ALLOWED_FORMS = new Set([
   BIOCHOCO_FORM_DEPLOY,
   BIOCHOCO_FORM_RETRIEVE,
   BIOCHOCO_FORM_HABITAT,
+  MONITOREO_FORM_SOCIAL_ACTIVITIES,
 ]);
 
 // Validate that a parameter contains no path traversal characters

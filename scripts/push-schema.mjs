@@ -159,6 +159,21 @@ const statements = [
     type TEXT NOT NULL DEFAULT 'mammal' CHECK(type IN ('mammal', 'bird', 'reptile', 'amphibian', 'insect', 'system'))
   )`,
 
+  // Camera Trap Projects (sub-projects within camera-trap module)
+  `CREATE TABLE IF NOT EXISTS ct_projects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    drive_folder_id TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+
+  // Camera Trap Project Access (user ↔ CT project assignments)
+  `CREATE TABLE IF NOT EXISTS ct_project_access (
+    user_email TEXT NOT NULL REFERENCES users(email) ON DELETE CASCADE,
+    ct_project_id INTEGER NOT NULL REFERENCES ct_projects(id) ON DELETE CASCADE,
+    PRIMARY KEY (user_email, ct_project_id)
+  )`,
+
   // Activity Log
   `CREATE TABLE IF NOT EXISTS activity_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -362,6 +377,8 @@ const migrations = [
   `ALTER TABLE biochoco_images ADD COLUMN starred INTEGER NOT NULL DEFAULT 0`,
   `ALTER TABLE biochoco_images ADD COLUMN starred_by TEXT`,
   `ALTER TABLE biochoco_images ADD COLUMN starred_at INTEGER`,
+  // Camera trap project-level permissions (2026-02-22)
+  `ALTER TABLE biochoco_deployments ADD COLUMN ct_project_id INTEGER REFERENCES ct_projects(id) ON DELETE SET NULL`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }
@@ -562,5 +579,57 @@ for (const [id, name, desc] of coreProjects) {
 
 const totalProjects = db.prepare("SELECT COUNT(*) as count FROM projects").get();
 console.log(`Projects: ${projectsAdded} new, ${totalProjects.count} total`);
+
+// --- Seed camera trap projects from existing deployment projectLabels ---
+const ctProjectInsert = db.prepare(
+  "INSERT OR IGNORE INTO ct_projects (name) VALUES (?)"
+);
+
+// 1. Create CT projects from distinct non-null projectLabel values
+const distinctLabels = db
+  .prepare("SELECT DISTINCT project_label FROM biochoco_deployments WHERE project_label IS NOT NULL")
+  .all();
+for (const row of distinctLabels) {
+  ctProjectInsert.run(row.project_label);
+}
+
+// 2. Create a "General" catch-all project with Drive folder ID from env
+const driveFolderId = process.env.CAMERA_TRAP_ROOT_FOLDER_ID || null;
+const generalInsert = db.prepare(
+  "INSERT OR IGNORE INTO ct_projects (name, drive_folder_id) VALUES (?, ?)"
+);
+generalInsert.run("General", driveFolderId);
+
+// 3. Link deployments to their CT project by matching project_label → ct_projects.name
+db.exec(`
+  UPDATE biochoco_deployments
+  SET ct_project_id = (SELECT id FROM ct_projects WHERE name = biochoco_deployments.project_label)
+  WHERE project_label IS NOT NULL AND ct_project_id IS NULL
+`);
+
+// 4. Assign remaining deployments (null project_label) to "General"
+db.exec(`
+  UPDATE biochoco_deployments
+  SET ct_project_id = (SELECT id FROM ct_projects WHERE name = 'General')
+  WHERE ct_project_id IS NULL
+`);
+
+// 5. Bootstrap: give all current camera-trap users access to all CT projects
+const cameraTrapUsers = db
+  .prepare("SELECT user_email FROM user_permissions WHERE project_id = 'camera-trap'")
+  .all();
+const allCtProjects = db.prepare("SELECT id FROM ct_projects").all();
+const insertAccess = db.prepare(
+  "INSERT OR IGNORE INTO ct_project_access (user_email, ct_project_id) VALUES (?, ?)"
+);
+for (const user of cameraTrapUsers) {
+  for (const proj of allCtProjects) {
+    insertAccess.run(user.user_email, proj.id);
+  }
+}
+
+const totalCtProjects = db.prepare("SELECT COUNT(*) as count FROM ct_projects").get();
+const totalAccess = db.prepare("SELECT COUNT(*) as count FROM ct_project_access").get();
+console.log(`CT Projects: ${totalCtProjects.count} total, ${totalAccess.count} access grants`);
 
 db.close();

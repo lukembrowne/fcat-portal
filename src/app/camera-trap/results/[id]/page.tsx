@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/status-badge";
 import { requirePermission } from "@/lib/auth";
+import { requireDeploymentAccess } from "@/lib/camera-trap-auth";
 import { formatDuration } from "@/lib/format-duration";
 import { db } from "@/db";
 import {
@@ -21,7 +22,7 @@ interface PageProps {
 }
 
 export default async function JobResultsPage({ params }: PageProps) {
-  await requirePermission("camera-trap", "viewer");
+  const user = await requirePermission("camera-trap", "viewer");
 
   const { id } = await params;
   const jobId = parseInt(id, 10);
@@ -36,6 +37,13 @@ export default async function JobResultsPage({ params }: PageProps) {
     .where(eq(processingJobs.id, jobId));
 
   if (!job) {
+    notFound();
+  }
+
+  // Verify CT project access (return 404 to avoid leaking existence)
+  try {
+    await requireDeploymentAccess(user, job.deploymentId);
+  } catch {
     notFound();
   }
 

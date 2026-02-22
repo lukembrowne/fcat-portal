@@ -76,6 +76,38 @@ export const userPermissions = sqliteTable(
 );
 
 // ---------------------------------------------------------------------------
+// Camera Trap Projects (sub-projects within camera-trap module)
+// ---------------------------------------------------------------------------
+
+export const cameraTrapProjects = sqliteTable("ct_projects", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull().unique(),
+  driveFolderId: text("drive_folder_id"),
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+
+// ---------------------------------------------------------------------------
+// Camera Trap Project Access (user ↔ CT project assignments)
+// ---------------------------------------------------------------------------
+
+export const cameraTrapProjectAccess = sqliteTable(
+  "ct_project_access",
+  {
+    userEmail: text("user_email")
+      .notNull()
+      .references(() => users.email, { onDelete: "cascade" }),
+    cameraTrapProjectId: integer("ct_project_id")
+      .notNull()
+      .references(() => cameraTrapProjects.id, { onDelete: "cascade" }),
+  },
+  (table) => [
+    primaryKey({ columns: [table.userEmail, table.cameraTrapProjectId] }),
+  ]
+);
+
+// ---------------------------------------------------------------------------
 // Deployments (camera trap installations)
 // ---------------------------------------------------------------------------
 
@@ -107,6 +139,10 @@ export const deployments = sqliteTable(
       .notNull()
       .default(sql`(unixepoch())`),
     createdBy: text("created_by"),
+    cameraTrapProjectId: integer("ct_project_id").references(
+      () => cameraTrapProjects.id,
+      { onDelete: "set null" }
+    ),
     projectLabel: text("project_label"),
     siteName: text("site_name"),
     odkSubmissionId: text("odk_submission_id"),
@@ -546,6 +582,12 @@ export const climateEdits = sqliteTable("climate_edits", {
 // ---------------------------------------------------------------------------
 // Type Exports
 // ---------------------------------------------------------------------------
+
+export type CameraTrapProject = typeof cameraTrapProjects.$inferSelect;
+export type NewCameraTrapProject = typeof cameraTrapProjects.$inferInsert;
+
+export type CameraTrapProjectAccessRow = typeof cameraTrapProjectAccess.$inferSelect;
+export type NewCameraTrapProjectAccess = typeof cameraTrapProjectAccess.$inferInsert;
 
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;

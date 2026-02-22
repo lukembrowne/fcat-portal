@@ -14,6 +14,7 @@ export interface ImageGridItem {
   frameIndex?: number | null;
   videoFilename?: string | null;
   confirmedBlank?: boolean;
+  starred?: boolean;
   detections: {
     id: number;
     species: string | null;
@@ -189,6 +190,18 @@ function ImageCard({ image, jobId }: { image: ImageGridItem; jobId: number }) {
         <div className="absolute top-0 left-0 right-0 bg-gradient-to-b from-black/50 to-transparent p-2 opacity-0 group-hover:opacity-100 transition-opacity">
           <p className="text-white text-xs truncate">{image.filename}</p>
         </div>
+
+        {image.starred && (
+          <div className="absolute top-2 left-2 z-10">
+            <svg
+              className="size-5 text-amber-400 drop-shadow"
+              fill="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path d="M11.48 3.499a.562.562 0 0 1 1.04 0l2.125 5.111a.563.563 0 0 0 .475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 0 0-.182.557l1.285 5.385a.562.562 0 0 1-.84.61l-4.725-2.885a.562.562 0 0 0-.586 0L6.982 20.54a.562.562 0 0 1-.84-.61l1.285-5.386a.562.562 0 0 0-.182-.557l-4.204-3.602a.562.562 0 0 1 .321-.988l5.518-.442a.563.563 0 0 0 .475-.345L11.48 3.5Z" />
+            </svg>
+          </div>
+        )}
       </div>
     </Link>
   );

@@ -23,7 +23,7 @@ export default async function ImageDetailPage({ params }: PageProps) {
   const data = await getImageWithDetections(imgId);
   if (!data) notFound();
 
-  const { image, detections: rawDetections } = data;
+  const { image, deploymentName, detections: rawDetections } = data;
 
   const [imageIds, speciesList, recentSpeciesResult] = await Promise.all([
     getJobImageIds(jobId),
@@ -88,6 +88,9 @@ export default async function ImageDetailPage({ params }: PageProps) {
       {/* Header with navigation */}
       <div className="flex items-center justify-between mb-4">
         <div className="min-w-0">
+          {deploymentName && (
+            <p className="text-sm text-muted-foreground truncate">{deploymentName}</p>
+          )}
           <h1 className="text-xl font-bold truncate">{image.filename}</h1>
           {image.videoId && (
             <VideoFrameLabel videoId={image.videoId} frameIndex={image.frameIndex} />
@@ -130,6 +133,8 @@ export default async function ImageDetailPage({ params }: PageProps) {
         prevImageId={prevImageId}
         nextImageId={nextImageId}
         confirmedBlank={image.confirmedBlank}
+        starred={image.starred}
+        starredBy={image.starredBy}
       />
     </div>
   );

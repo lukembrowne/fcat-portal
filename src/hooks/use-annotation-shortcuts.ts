@@ -12,6 +12,7 @@ export const SHORTCUTS = [
   { key: "r", description: "Rechazar detección", category: "annotation" },
   { key: "d / ⌫ / Supr", description: "Eliminar detección", category: "annotation" },
   { key: "b", description: "Confirmar/desconfirmar imagen vacía", category: "annotation" },
+  { key: "s", description: "Destacar/quitar destacado", category: "annotation" },
 ] as const;
 
 interface AnnotationShortcutOptions {
@@ -25,6 +26,7 @@ interface AnnotationShortcutOptions {
   onDeselect?: () => void;
   onDeleteSelected?: () => void;
   onToggleConfirmedBlank?: () => void;
+  onToggleStarred?: () => void;
   onAssignSpeciesByIndex?: (index: number) => void;
   isDialogOpen?: boolean;
   detectionCount?: number;
@@ -126,6 +128,12 @@ export function useAnnotationShortcuts(opts: AnnotationShortcutOptions) {
           if (!hasModifier && !o.isDialogOpen) {
             e.preventDefault();
             o.onToggleConfirmedBlank?.();
+          }
+          break;
+        case "s":
+          if (!hasModifier && !o.isDialogOpen) {
+            e.preventDefault();
+            o.onToggleStarred?.();
           }
           break;
         case "d":

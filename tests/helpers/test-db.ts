@@ -116,7 +116,10 @@ const CAMERA_TRAP_DDL = `
     thumbnail_path TEXT,
     video_id INTEGER REFERENCES biochoco_videos(id) ON DELETE CASCADE,
     frame_index INTEGER,
-    confirmed_blank INTEGER NOT NULL DEFAULT 0
+    confirmed_blank INTEGER NOT NULL DEFAULT 0,
+    starred INTEGER NOT NULL DEFAULT 0,
+    starred_by TEXT,
+    starred_at INTEGER
   );
 
   CREATE TABLE biochoco_detections (

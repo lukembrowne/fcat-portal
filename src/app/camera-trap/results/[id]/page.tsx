@@ -123,6 +123,7 @@ export default async function JobResultsPage({ params }: PageProps) {
       frameIndex: img.frameIndex ?? null,
       videoFilename: vid?.filename ?? null,
       confirmedBlank: img.confirmedBlank ?? false,
+      starred: img.starred ?? false,
       detections: imgDets.map((det) => {
         const ident = identByDetection.get(det.id);
         return {

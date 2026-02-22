@@ -194,6 +194,11 @@ export const images = sqliteTable(
     confirmedBlank: integer("confirmed_blank", { mode: "boolean" })
       .notNull()
       .default(false),
+    starred: integer("starred", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    starredBy: text("starred_by"),
+    starredAt: integer("starred_at", { mode: "timestamp" }),
   },
   (table) => [
     index("idx_biochoco_images_deployment_id").on(table.deploymentId),

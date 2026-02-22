@@ -33,9 +33,12 @@ export function ResultsClient({
   ]);
   const [verificationFilter, setVerificationFilter] = useState("all");
   const [showEmpty, setShowEmpty] = useState(true);
+  const [showStarredOnly, setShowStarredOnly] = useState(false);
 
   const filteredImages = useMemo(() => {
     return images.filter((img) => {
+      if (showStarredOnly && !img.starred) return false;
+
       if (selectedSpecies) {
         const hasSpecies = img.detections.some(
           (d) => d.species === selectedSpecies
@@ -66,13 +69,14 @@ export function ResultsClient({
 
       return true;
     });
-  }, [images, selectedSpecies, confidenceRange, verificationFilter, showEmpty]);
+  }, [images, selectedSpecies, confidenceRange, verificationFilter, showEmpty, showStarredOnly]);
 
   const clearFilters = () => {
     setSelectedSpecies(null);
     setConfidenceRange([0, 1]);
     setVerificationFilter("all");
     setShowEmpty(true);
+    setShowStarredOnly(false);
   };
 
   const hasActiveFilters =
@@ -80,7 +84,8 @@ export function ResultsClient({
     confidenceRange[0] > 0 ||
     confidenceRange[1] < 1 ||
     verificationFilter !== "all" ||
-    !showEmpty;
+    !showEmpty ||
+    showStarredOnly;
 
   return (
     <div className="grid gap-6 lg:grid-cols-[240px_1fr]">
@@ -179,6 +184,16 @@ export function ResultsClient({
                 className="accent-primary"
               />
               Mostrar imágenes sin detecciones
+            </label>
+
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                checked={showStarredOnly}
+                onChange={(e) => setShowStarredOnly(e.target.checked)}
+                className="accent-primary"
+              />
+              Solo destacadas
             </label>
           </CardContent>
         </Card>

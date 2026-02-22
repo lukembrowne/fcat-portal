@@ -1676,12 +1676,18 @@ export async function getJobWithDetails(jobId: number) {
 export async function getImageWithDetections(imageId: number) {
   await requirePermission("camera-trap", "viewer");
 
-  const [image] = await db
-    .select()
+  const [row] = await db
+    .select({
+      image: images,
+      deploymentName: deployments.name,
+    })
     .from(images)
+    .leftJoin(deployments, eq(images.deploymentId, deployments.id))
     .where(eq(images.id, imageId));
 
-  if (!image) return null;
+  if (!row) return null;
+  const image = row.image;
+  const deploymentName = row.deploymentName;
 
   const imageDetections = await db
     .select()
@@ -1707,6 +1713,7 @@ export async function getImageWithDetections(imageId: number) {
 
   return {
     image,
+    deploymentName,
     detections: imageDetections.map((det) => ({
       ...det,
       identification: identByDetection.get(det.id) || null,
@@ -2639,5 +2646,68 @@ export async function toggleConfirmedBlank(
       error: error instanceof Error ? error.message : "Error al actualizar",
     };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Image starring / favorites
+// ---------------------------------------------------------------------------
+
+export async function toggleStarred(
+  imageId: number
+): Promise<ActionResult<{ starred: boolean }>> {
+  const user = await requirePermission("camera-trap", "editor");
+
+  try {
+    const [image] = await db
+      .select({ id: images.id, starred: images.starred })
+      .from(images)
+      .where(eq(images.id, imageId));
+
+    if (!image) {
+      return { success: false, error: "Imagen no encontrada" };
+    }
+
+    const newValue = !image.starred;
+    await db
+      .update(images)
+      .set({
+        starred: newValue,
+        starredBy: newValue ? user.email : null,
+        starredAt: newValue ? new Date() : null,
+      })
+      .where(eq(images.id, imageId));
+
+    revalidatePath(CAMERA_TRAP_PATH);
+    return { success: true, data: { starred: newValue } };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Error al actualizar",
+    };
+  }
+}
+
+export async function getStarredImages() {
+  await requirePermission("camera-trap", "viewer");
+
+  return db
+    .select({
+      id: images.id,
+      filename: images.filename,
+      path: images.path,
+      status: images.status,
+      thumbnailPath: images.thumbnailPath,
+      starred: images.starred,
+      starredBy: images.starredBy,
+      starredAt: images.starredAt,
+      jobId: images.jobId,
+      deploymentId: images.deploymentId,
+      deploymentName: deployments.name,
+      siteName: deployments.siteName,
+    })
+    .from(images)
+    .innerJoin(deployments, eq(images.deploymentId, deployments.id))
+    .where(eq(images.starred, true))
+    .orderBy(desc(images.starredAt));
 }
 

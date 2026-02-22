@@ -40,6 +40,15 @@ Restore a database from backup. Creates a pre-restore copy at `data/portal.db.pr
 ./scripts/restore-db.sh portal-2026-02-12T14-00-00.db  # Restore specific file
 ```
 
+### fix-species-list.mjs
+
+One-off migration to fix species list issues (typos, wrong types, redundant entries). Dry-run by default.
+
+```bash
+node scripts/fix-species-list.mjs          # Preview changes
+node scripts/fix-species-list.mjs --apply  # Apply changes
+```
+
 ## Data Import
 
 ### import-species-csv.mjs

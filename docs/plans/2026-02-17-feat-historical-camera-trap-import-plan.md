@@ -61,7 +61,7 @@ Options:
   --deployment TP-062    Process only one deployment (for debugging)
 ```
 
-No `--csv-dir` flag — hardcode the path to the BioChoco repo CSV directory.
+No `--csv-dir` flag — uses `data/historical-camera-data/` relative to project root.
 
 ### Phase 1: Parse CSVs + Build Maps
 
@@ -238,4 +238,4 @@ Unmatched filenames (first 20):
 - Existing import script: `scripts/import-species-csv.mjs`
 - Schema: `scripts/push-schema.mjs` (raw SQL definitions)
 - Verification actions: `src/app/camera-trap/actions.ts` (correctIdentification, assignSpecies patterns)
-- CSV data: `/Users/luke/apps/BioChoco/.worktrees/camera-trap-integration/data/historical_camera_data/`
+- CSV data: `data/historical-camera-data/` (gitignored with the rest of `data/`)

@@ -11,7 +11,7 @@ import type { OdkSiteEntity } from "@/lib/odk-types";
 import { loadSchedule, updateScheduleRows } from "@/lib/sheets-client";
 import { createDeploymentFolder } from "@/lib/drive-client";
 import { db } from "@/db";
-import { deployments } from "@/db/schema";
+import { deployments, cameraTrapProjects } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import type { ActionResult } from "@/lib/types";
@@ -190,12 +190,18 @@ export async function createSingleDriveFolder(
   try {
     await requirePermission("biochoco", "editor");
 
-    const rootFolderId = process.env.CAMERA_TRAP_ROOT_FOLDER_ID;
+    // Look up "BioChoco" CT project for Drive folder ID
+    const [bioChocoProject] = await db
+      .select({ id: cameraTrapProjects.id, driveFolderId: cameraTrapProjects.driveFolderId })
+      .from(cameraTrapProjects)
+      .where(eq(cameraTrapProjects.name, "BioChoco"));
+
+    const rootFolderId = bioChocoProject?.driveFolderId ?? process.env.CAMERA_TRAP_ROOT_FOLDER_ID;
     if (!rootFolderId) {
       return {
         deploymentId,
         success: false,
-        error: "CAMERA_TRAP_ROOT_FOLDER_ID no está configurado.",
+        error: "La carpeta de Drive del proyecto BioChoco no está configurada.",
       };
     }
 
@@ -239,6 +245,7 @@ export async function createSingleDriveFolder(
         .insert(deployments)
         .values({
           projectId: "camera-trap",
+          cameraTrapProjectId: bioChocoProject?.id ?? null,
           projectLabel: "BioChoco",
           name: deploymentId,
           driveFolderId: folder.id,
@@ -290,12 +297,18 @@ export async function recreateDriveFolder(
   try {
     await requirePermission("biochoco", "editor");
 
-    const rootFolderId = process.env.CAMERA_TRAP_ROOT_FOLDER_ID;
+    // Look up "BioChoco" CT project for Drive folder ID
+    const [bioChocoProject] = await db
+      .select({ driveFolderId: cameraTrapProjects.driveFolderId })
+      .from(cameraTrapProjects)
+      .where(eq(cameraTrapProjects.name, "BioChoco"));
+
+    const rootFolderId = bioChocoProject?.driveFolderId ?? process.env.CAMERA_TRAP_ROOT_FOLDER_ID;
     if (!rootFolderId) {
       return {
         deploymentId,
         success: false,
-        error: "CAMERA_TRAP_ROOT_FOLDER_ID no está configurado.",
+        error: "La carpeta de Drive del proyecto BioChoco no está configurada.",
       };
     }
 

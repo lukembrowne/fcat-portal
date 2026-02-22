@@ -1,14 +1,15 @@
 "use server";
 
 import { db } from "@/db";
-import { deployments, images, videos } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { deployments, images, videos, cameraTrapProjects } from "@/db/schema";
+import { eq, and, inArray } from "drizzle-orm";
 import {
   listDeploymentFolders,
   listMediaRecursive,
   isValidFolderId,
 } from "@/lib/drive-client";
 import { requirePermission } from "@/lib/auth";
+import { getUserCameraTrapProjects, requireDeploymentAccess } from "@/lib/camera-trap-auth";
 import { revalidatePath } from "next/cache";
 import type { ActionResult } from "@/lib/types";
 import type { Deployment } from "@/db/schema";
@@ -19,22 +20,49 @@ const CAMERA_TRAP_PATH = "/camera-trap";
 // Sync with Google Drive — auto-create deployment rows for new folders
 // ---------------------------------------------------------------------------
 
-export async function syncWithDrive(): Promise<
+export async function syncWithDrive(
+  cameraTrapProjectId?: number
+): Promise<
   ActionResult<{ created: Deployment[]; existing: Deployment[]; errors: string[] }>
 > {
   const user = await requirePermission("camera-trap", "editor");
-
-  const rootFolderId = process.env.CAMERA_TRAP_ROOT_FOLDER_ID;
-  if (!rootFolderId) {
-    return {
-      success: false,
-      error:
-        "CAMERA_TRAP_ROOT_FOLDER_ID no está configurado. Contacte al administrador.",
-    };
-  }
+  const ctProjects = await getUserCameraTrapProjects(user);
 
   try {
-    const driveFolders = await listDeploymentFolders(rootFolderId);
+    // Determine which CT projects to sync
+    type SyncProject = { id: number; name: string; driveFolderId: string };
+    let projectsToSync: SyncProject[];
+
+    if (cameraTrapProjectId) {
+      // Specific project requested
+      if (ctProjects !== "all" && !ctProjects.includes(cameraTrapProjectId)) {
+        return { success: false, error: "No tienes acceso a este proyecto" };
+      }
+      const [proj] = await db
+        .select()
+        .from(cameraTrapProjects)
+        .where(eq(cameraTrapProjects.id, cameraTrapProjectId));
+      if (!proj?.driveFolderId) {
+        return { success: false, error: "Este proyecto no tiene una carpeta de Drive configurada. Contacta al administrador." };
+      }
+      projectsToSync = [{ id: proj.id, name: proj.name, driveFolderId: proj.driveFolderId }];
+    } else {
+      // Sync all accessible projects with Drive folders
+      let allProjects;
+      if (ctProjects === "all") {
+        allProjects = await db.select().from(cameraTrapProjects);
+      } else {
+        if (ctProjects.length === 0) return { success: true, data: { created: [], existing: [], errors: [] } };
+        allProjects = await db.select().from(cameraTrapProjects).where(inArray(cameraTrapProjects.id, ctProjects));
+      }
+      projectsToSync = allProjects
+        .filter((p): p is typeof p & { driveFolderId: string } => !!p.driveFolderId)
+        .map((p) => ({ id: p.id, name: p.name, driveFolderId: p.driveFolderId }));
+    }
+
+    if (projectsToSync.length === 0) {
+      return { success: false, error: "No hay proyectos con carpeta de Drive configurada." };
+    }
 
     // Get all existing deployments with drive folder IDs
     const existingDeployments = await db
@@ -51,59 +79,64 @@ export async function syncWithDrive(): Promise<
     const existing = existingDeployments.filter(
       (d) => d.driveFolderId && knownFolderIds.has(d.driveFolderId)
     );
-    const newFolders = driveFolders.filter((f) => !knownFolderIds.has(f.id));
 
-    // Auto-create deployment rows for new folders
-    const created: Deployment[] = [];
-    const errors: string[] = [];
+    const allCreated: Deployment[] = [];
+    const allErrors: string[] = [];
 
-    for (const folder of newFolders) {
-      if (!isValidFolderId(folder.id)) {
-        errors.push(`ID de carpeta inválido: ${folder.name}`);
-        continue;
-      }
+    for (const proj of projectsToSync) {
+      const driveFolders = await listDeploymentFolders(proj.driveFolderId);
+      const newFolders = driveFolders.filter((f) => !knownFolderIds.has(f.id));
 
-      try {
-        const [deployment] = await db
-          .insert(deployments)
-          .values({
-            projectId: "camera-trap",
-            name: folder.name.trim(),
-            driveFolderId: folder.id,
-            totalImages: 0,
-            status: "unscanned",
-            metadataSource: "drive",
-            createdBy: user.email,
-          })
-          .returning();
-
-        created.push(deployment);
-      } catch (err) {
-        // Unique constraint = already exists (race condition with another sync)
-        if (
-          err instanceof Error &&
-          err.message.includes("UNIQUE constraint failed")
-        ) {
+      for (const folder of newFolders) {
+        if (!isValidFolderId(folder.id)) {
+          allErrors.push(`ID de carpeta inválido: ${folder.name}`);
           continue;
         }
-        errors.push(
-          `Error al crear ${folder.name}: ${err instanceof Error ? err.message : "Error desconocido"}`
-        );
+
+        try {
+          const [deployment] = await db
+            .insert(deployments)
+            .values({
+              projectId: "camera-trap",
+              cameraTrapProjectId: proj.id,
+              name: folder.name.trim(),
+              driveFolderId: folder.id,
+              projectLabel: proj.name,
+              totalImages: 0,
+              status: "unscanned",
+              metadataSource: "drive",
+              createdBy: user.email,
+            })
+            .returning();
+
+          allCreated.push(deployment);
+          knownFolderIds.add(folder.id);
+        } catch (err) {
+          if (
+            err instanceof Error &&
+            err.message.includes("UNIQUE constraint failed")
+          ) {
+            continue;
+          }
+          allErrors.push(
+            `Error al crear ${folder.name}: ${err instanceof Error ? err.message : "Error desconocido"}`
+          );
+        }
       }
     }
 
-    // Auto-scan new deployments to eliminate the manual scan step
-    for (const dep of created) {
+    // Auto-scan new deployments
+    for (const dep of allCreated) {
       try {
         await scanDeploymentImages(dep.id);
       } catch (err) {
         console.error(`[Drive] Auto-scan failed for ${dep.name}:`, err);
-        errors.push(`Error al escanear ${dep.name}: ${err instanceof Error ? err.message : "Error desconocido"}`);
+        allErrors.push(`Error al escanear ${dep.name}: ${err instanceof Error ? err.message : "Error desconocido"}`);
       }
     }
 
     revalidatePath(CAMERA_TRAP_PATH);
-    return { success: true, data: { created, existing, errors } };
+    return { success: true, data: { created: allCreated, existing, errors: allErrors } };
   } catch (err) {
     console.error("[Drive] Sync failed:", err);
     const message =
@@ -119,9 +152,11 @@ export async function syncWithDrive(): Promise<
 export async function scanDeploymentImages(
   deploymentId: number
 ): Promise<ActionResult<{ imageCount: number }>> {
-  await requirePermission("camera-trap", "editor");
+  const user = await requirePermission("camera-trap", "editor");
 
   try {
+    await requireDeploymentAccess(user, deploymentId);
+
     const [deployment] = await db
       .select()
       .from(deployments)

@@ -30,12 +30,17 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   addUser,
   removeUser,
   setPermission,
   removePermission,
   syncAllowedEmails,
+  createCameraTrapProject,
+  updateCameraTrapProject,
+  deleteCameraTrapProject,
+  setCameraTrapProjectAccess,
 } from "./actions";
 
 interface UserWithPermissions {
@@ -70,9 +75,18 @@ interface Project {
   createdAt: Date;
 }
 
+interface CameraTrapProject {
+  id: number;
+  name: string;
+  driveFolderId: string | null;
+  createdAt: Date;
+}
+
 interface AdminClientProps {
   users: UserWithPermissions[];
   projects: Project[];
+  ctProjects: CameraTrapProject[];
+  ctAccess: Record<string, number[]>;
 }
 
 const ROLES = [
@@ -81,7 +95,7 @@ const ROLES = [
   { value: "admin", label: "Admin", description: "Control total — puede gestionar configuración del proyecto" },
 ];
 
-export function AdminClient({ users, projects }: AdminClientProps) {
+export function AdminClient({ users, projects, ctProjects, ctAccess }: AdminClientProps) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [addDialogOpen, setAddDialogOpen] = useState(false);
@@ -90,6 +104,12 @@ export function AdminClient({ users, projects }: AdminClientProps) {
   const [newEmail, setNewEmail] = useState("");
   const [newName, setNewName] = useState("");
   const [newIsExternal, setNewIsExternal] = useState(false);
+
+  // CT project form state
+  const [ctDialogOpen, setCtDialogOpen] = useState(false);
+  const [ctName, setCtName] = useState("");
+  const [ctDriveFolderId, setCtDriveFolderId] = useState("");
+  const [editingCtProject, setEditingCtProject] = useState<CameraTrapProject | null>(null);
 
   const handleAddUser = () => {
     startTransition(async () => {
@@ -153,7 +173,73 @@ export function AdminClient({ users, projects }: AdminClientProps) {
     });
   };
 
+  // CT project handlers
+  const handleCreateCtProject = () => {
+    startTransition(async () => {
+      const result = await createCameraTrapProject(ctName, ctDriveFolderId || undefined);
+      if (result.success) {
+        setCtDialogOpen(false);
+        setCtName("");
+        setCtDriveFolderId("");
+        router.refresh();
+      } else {
+        alert(result.error);
+      }
+    });
+  };
+
+  const handleUpdateCtProject = () => {
+    if (!editingCtProject) return;
+    startTransition(async () => {
+      const result = await updateCameraTrapProject(editingCtProject.id, {
+        name: ctName,
+        driveFolderId: ctDriveFolderId || null,
+      });
+      if (result.success) {
+        setEditingCtProject(null);
+        setCtName("");
+        setCtDriveFolderId("");
+        router.refresh();
+      } else {
+        alert(result.error);
+      }
+    });
+  };
+
+  const handleDeleteCtProject = (id: number, name: string) => {
+    if (!confirm(`¿Eliminar el proyecto "${name}"? Esta acción no se puede deshacer.`)) return;
+    startTransition(async () => {
+      const result = await deleteCameraTrapProject(id);
+      if (!result.success) {
+        alert(result.error);
+      } else {
+        router.refresh();
+      }
+    });
+  };
+
+  const handleToggleCtAccess = (email: string, projectId: number, currentlyHasAccess: boolean) => {
+    const currentIds = ctAccess[email] || [];
+    const newIds = currentlyHasAccess
+      ? currentIds.filter((id) => id !== projectId)
+      : [...currentIds, projectId];
+
+    startTransition(async () => {
+      const result = await setCameraTrapProjectAccess(email, newIds);
+      if (result.success) {
+        router.refresh();
+      } else {
+        alert(result.error);
+      }
+    });
+  };
+
   const externalCount = users.filter((u) => u.isExternal).length;
+
+  // Users who have camera-trap module access (for CT project assignment)
+  const cameraTrapUsers = users.filter(
+    (u) => u.globalRole === "super_admin" || u.permissions.some((p) => p.projectId === "camera-trap")
+  );
 
   return (
     <div className="space-y-6">
@@ -328,6 +414,210 @@ export function AdminClient({ users, projects }: AdminClientProps) {
                 ))}
               </TableBody>
             </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Camera Trap Projects */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-lg">Proyectos de Cámaras Trampa</CardTitle>
+            <Dialog open={ctDialogOpen} onOpenChange={(open) => {
+              setCtDialogOpen(open);
+              if (!open) { setCtName(""); setCtDriveFolderId(""); }
+            }}>
+              <DialogTrigger asChild>
+                <Button size="sm">Agregar Proyecto</Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Agregar Proyecto</DialogTitle>
+                </DialogHeader>
+                <div className="space-y-4 py-2">
+                  <div>
+                    <Label htmlFor="ct-name">Nombre</Label>
+                    <Input
+                      id="ct-name"
+                      placeholder="Ej: Canande"
+                      value={ctName}
+                      onChange={(e) => setCtName(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="ct-drive">ID de Carpeta Drive (opcional)</Label>
+                    <Input
+                      id="ct-drive"
+                      placeholder="Ej: 1-oYvxb...fgqo"
+                      value={ctDriveFolderId}
+                      onChange={(e) => setCtDriveFolderId(e.target.value)}
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      El ID está en la URL de la carpeta de Google Drive.
+                    </p>
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setCtDialogOpen(false)}>
+                    Cancelar
+                  </Button>
+                  <Button onClick={handleCreateCtProject} disabled={isPending || !ctName.trim()}>
+                    {isPending ? "Creando..." : "Crear"}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          {/* Project list */}
+          {ctProjects.length === 0 ? (
+            <p className="text-muted-foreground text-sm text-center py-4">
+              No hay proyectos configurados.
+            </p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Nombre</TableHead>
+                  <TableHead>Carpeta Drive</TableHead>
+                  <TableHead className="w-[120px]" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {ctProjects.map((proj) => (
+                  <TableRow key={proj.id}>
+                    <TableCell className="font-medium">{proj.name}</TableCell>
+                    <TableCell className="font-mono text-xs text-muted-foreground">
+                      {proj.driveFolderId
+                        ? proj.driveFolderId.length > 20
+                          ? `${proj.driveFolderId.slice(0, 20)}...`
+                          : proj.driveFolderId
+                        : "(sin configurar)"}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex gap-1 justify-end">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            setEditingCtProject(proj);
+                            setCtName(proj.name);
+                            setCtDriveFolderId(proj.driveFolderId || "");
+                          }}
+                          disabled={isPending}
+                        >
+                          Editar
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-destructive hover:text-destructive"
+                          onClick={() => handleDeleteCtProject(proj.id, proj.name)}
+                          disabled={isPending}
+                        >
+                          Eliminar
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+
+          {/* Edit project dialog */}
+          <Dialog
+            open={editingCtProject !== null}
+            onOpenChange={(open) => {
+              if (!open) { setEditingCtProject(null); setCtName(""); setCtDriveFolderId(""); }
+            }}
+          >
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Editar Proyecto</DialogTitle>
+              </DialogHeader>
+              <div className="space-y-4 py-2">
+                <div>
+                  <Label htmlFor="ct-edit-name">Nombre</Label>
+                  <Input
+                    id="ct-edit-name"
+                    value={ctName}
+                    onChange={(e) => setCtName(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="ct-edit-drive">ID de Carpeta Drive</Label>
+                  <Input
+                    id="ct-edit-drive"
+                    placeholder="Ej: 1-oYvxb...fgqo"
+                    value={ctDriveFolderId}
+                    onChange={(e) => setCtDriveFolderId(e.target.value)}
+                  />
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setEditingCtProject(null)}>
+                  Cancelar
+                </Button>
+                <Button onClick={handleUpdateCtProject} disabled={isPending || !ctName.trim()}>
+                  {isPending ? "Guardando..." : "Guardar"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          {/* User ↔ CT project access matrix */}
+          {ctProjects.length > 0 && cameraTrapUsers.length > 0 && (
+            <div>
+              <h3 className="text-sm font-medium mb-3">Acceso por usuario</h3>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Usuario</TableHead>
+                    {ctProjects.map((proj) => (
+                      <TableHead key={proj.id} className="text-center">
+                        {proj.name}
+                      </TableHead>
+                    ))}
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {cameraTrapUsers.map((user) => {
+                    const userAccessIds = ctAccess[user.email] || [];
+                    const isSuperAdmin = user.globalRole === "super_admin";
+                    return (
+                      <TableRow key={user.email}>
+                        <TableCell className="font-mono text-sm">
+                          {user.email}
+                          {isSuperAdmin && (
+                            <span className="text-xs text-muted-foreground ml-2">(todos)</span>
+                          )}
+                        </TableCell>
+                        {ctProjects.map((proj) => {
+                          const hasAccess = userAccessIds.includes(proj.id);
+                          return (
+                            <TableCell key={proj.id} className="text-center">
+                              {isSuperAdmin ? (
+                                <Checkbox checked disabled className="opacity-50" />
+                              ) : (
+                                <Checkbox
+                                  checked={hasAccess}
+                                  onCheckedChange={() =>
+                                    handleToggleCtAccess(user.email, proj.id, hasAccess)
+                                  }
+                                  disabled={isPending}
+                                />
+                              )}
+                            </TableCell>
+                          );
+                        })}
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
           )}
         </CardContent>
       </Card>

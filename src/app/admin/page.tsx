@@ -1,13 +1,15 @@
 import { requireAdmin } from "@/lib/auth";
-import { getUsers, getProjects } from "./actions";
+import { getUsers, getProjects, getCameraTrapProjects, getUserCameraTrapProjectAccess } from "./actions";
 import { AdminClient } from "./admin-client";
 
 export default async function AdminPage() {
   await requireAdmin();
 
-  const [allUsers, allProjects] = await Promise.all([
+  const [allUsers, allProjects, ctProjects, ctAccess] = await Promise.all([
     getUsers(),
     getProjects(),
+    getCameraTrapProjects(),
+    getUserCameraTrapProjectAccess(),
   ]);
 
   return (
@@ -19,7 +21,12 @@ export default async function AdminPage() {
         </p>
       </div>
 
-      <AdminClient users={allUsers} projects={allProjects} />
+      <AdminClient
+        users={allUsers}
+        projects={allProjects}
+        ctProjects={ctProjects}
+        ctAccess={ctAccess}
+      />
     </div>
   );
 }

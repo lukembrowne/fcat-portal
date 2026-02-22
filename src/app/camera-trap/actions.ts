@@ -24,7 +24,13 @@ import {
 import { uploadFramesToDrive } from "@/lib/drive-client";
 import { extractFrames, cancelFrameExtraction } from "@/lib/frame-extractor";
 import { requirePermission } from "@/lib/auth";
-import { getUserCameraTrapProjects, ctProjectFilter, requireDeploymentAccess } from "@/lib/camera-trap-auth";
+import {
+  getUserCameraTrapProjects,
+  ctProjectFilter,
+  requireDeploymentAccess,
+  getDeploymentIdForDetection,
+  getDeploymentIdForIdentification,
+} from "@/lib/camera-trap-auth";
 import { revalidatePath } from "next/cache";
 import type { ActionResult, VerificationStats, TaxonomicRank } from "@/lib/types";
 import type { Deployment, ProcessingJob, Species, NewSpecies } from "@/db/schema";
@@ -56,6 +62,8 @@ export async function createProcessingJob(
     if (!deployment) {
       return { success: false, error: "Instalación no encontrada" };
     }
+
+    await requireDeploymentAccess(user, deploymentId);
 
     // Check for images OR videos (deployments with only videos are valid)
     const deploymentImages = await db
@@ -594,7 +602,20 @@ function safeRevalidate(): void {
 export async function processJob(
   jobId: number
 ): Promise<ActionResult<{ job: ProcessingJob }>> {
-  await requirePermission("camera-trap", "editor");
+  const user = await requirePermission("camera-trap", "editor");
+
+  const [job] = await db
+    .select({ deploymentId: processingJobs.deploymentId })
+    .from(processingJobs)
+    .where(eq(processingJobs.id, jobId));
+  if (!job) return { success: false, error: "Trabajo no encontrado" };
+
+  try {
+    await requireDeploymentAccess(user, job.deploymentId);
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : "Sin acceso" };
+  }
+
   return processJobInternal(jobId);
 }
 
@@ -610,7 +631,7 @@ export async function getMLStatus() {
 export async function cancelJob(
   jobId: number
 ): Promise<ActionResult> {
-  await requirePermission("camera-trap", "editor");
+  const user = await requirePermission("camera-trap", "editor");
 
   try {
     const [job] = await db
@@ -621,6 +642,8 @@ export async function cancelJob(
     if (!job) {
       return { success: false, error: "Trabajo no encontrado" };
     }
+
+    await requireDeploymentAccess(user, job.deploymentId);
 
     // Cancel any running frame extraction
     cancelFrameExtraction();
@@ -682,6 +705,8 @@ export async function deleteJob(
     if (!job) {
       return { success: false, error: "Trabajo no encontrado" };
     }
+
+    await requireDeploymentAccess(user, job.deploymentId);
 
     // Auto-cancel if active (graceful cancel + kill subprocess, clean up temp dir)
     if (job.status === "processing" || job.status === "pending") {
@@ -867,6 +892,8 @@ export async function deleteJobs(
         .where(eq(processingJobs.id, jobId));
 
       if (!job) continue;
+
+      await requireDeploymentAccess(user, job.deploymentId);
 
       // Auto-cancel if active
       if (job.status === "processing" || job.status === "pending") {
@@ -1129,7 +1156,7 @@ export async function updateDeploymentMetadata(
     dateEnd?: string | null;
   }
 ): Promise<ActionResult> {
-  await requirePermission("camera-trap", "editor");
+  const user = await requirePermission("camera-trap", "editor");
 
   try {
     const [existing] = await db
@@ -1140,6 +1167,8 @@ export async function updateDeploymentMetadata(
     if (!existing) {
       return { success: false, error: "Instalación no encontrada" };
     }
+
+    await requireDeploymentAccess(user, id);
 
     await db
       .update(deployments)
@@ -1171,11 +1200,16 @@ export async function bulkUpdateMetadata(
     dateEnd?: string | null;
   }
 ): Promise<ActionResult<{ count: number }>> {
-  await requirePermission("camera-trap", "editor");
+  const user = await requirePermission("camera-trap", "editor");
 
   try {
     if (ids.length === 0) {
       return { success: true, data: { count: 0 } };
+    }
+
+    // Verify access to all deployments
+    for (const id of ids) {
+      await requireDeploymentAccess(user, id);
     }
 
     // Only include non-undefined fields (undefined = "do not change")
@@ -1210,6 +1244,11 @@ export async function deleteDeployments(
   try {
     if (ids.length === 0) {
       return { success: true, data: { count: 0 } };
+    }
+
+    // Verify access to all deployments
+    for (const id of ids) {
+      await requireDeploymentAccess(user, id);
     }
 
     // Cancel any active jobs on these deployments
@@ -1344,7 +1383,7 @@ export async function getDeploymentsCascadeStats(
 export async function markVerifiedEmpty(
   deploymentId: number
 ): Promise<ActionResult> {
-  await requirePermission("camera-trap", "editor");
+  const user = await requirePermission("camera-trap", "editor");
 
   try {
     const [deployment] = await db
@@ -1355,6 +1394,8 @@ export async function markVerifiedEmpty(
     if (!deployment) {
       return { success: false, error: "Implementación no encontrada" };
     }
+
+    await requireDeploymentAccess(user, deploymentId);
 
     if (deployment.status !== "processed") {
       return {
@@ -1407,9 +1448,11 @@ export async function markVerifiedEmpty(
 export async function undoVerifiedEmpty(
   deploymentId: number
 ): Promise<ActionResult> {
-  await requirePermission("camera-trap", "editor");
+  const user = await requirePermission("camera-trap", "editor");
 
   try {
+    await requireDeploymentAccess(user, deploymentId);
+
     const [deployment] = await db
       .select()
       .from(deployments)
@@ -1448,11 +1491,16 @@ export async function undoVerifiedEmpty(
 export async function queueProcessing(
   deploymentIds: number[]
 ): Promise<ActionResult<{ jobIds: number[] }>> {
-  await requirePermission("camera-trap", "editor");
+  const user = await requirePermission("camera-trap", "editor");
 
   try {
     if (deploymentIds.length === 0) {
       return { success: true, data: { jobIds: [] } };
+    }
+
+    // Verify access to all deployments
+    for (const id of deploymentIds) {
+      await requireDeploymentAccess(user, id);
     }
 
     const jobIds: number[] = [];
@@ -1861,6 +1909,9 @@ export async function verifyIdentification(
   const user = await requirePermission("camera-trap", "editor");
 
   try {
+    const depId = await getDeploymentIdForIdentification(identificationId);
+    if (depId) await requireDeploymentAccess(user, depId);
+
     const result = await db
       .update(identifications)
       .set({
@@ -1891,6 +1942,9 @@ export async function rejectIdentification(
   const user = await requirePermission("camera-trap", "editor");
 
   try {
+    const depId = await getDeploymentIdForIdentification(identificationId);
+    if (depId) await requireDeploymentAccess(user, depId);
+
     await db
       .update(identifications)
       .set({
@@ -1922,6 +1976,9 @@ export async function correctIdentification(
   const user = await requirePermission("camera-trap", "editor");
 
   try {
+    const depId = await getDeploymentIdForIdentification(identificationId);
+    if (depId) await requireDeploymentAccess(user, depId);
+
     await db
       .update(identifications)
       .set({
@@ -1957,6 +2014,18 @@ export async function bulkVerify(
       return { success: true, data: { count: 0 } };
     }
 
+    // Verify access to all identifications' deployments
+    const depRows = await db
+      .select({ deploymentId: images.deploymentId })
+      .from(identifications)
+      .innerJoin(detections, eq(identifications.detectionId, detections.id))
+      .innerJoin(images, eq(detections.imageId, images.id))
+      .where(inArray(identifications.id, identificationIds))
+      .groupBy(images.deploymentId);
+    for (const row of depRows) {
+      await requireDeploymentAccess(user, row.deploymentId);
+    }
+
     await db
       .update(identifications)
       .set({
@@ -1988,6 +2057,14 @@ export async function bulkVerifyByThreshold(
   const user = await requirePermission("camera-trap", "editor");
 
   try {
+    const [job] = await db
+      .select({ deploymentId: processingJobs.deploymentId })
+      .from(processingJobs)
+      .where(eq(processingJobs.id, jobId));
+    if (!job) return { success: true, data: { count: 0 } };
+
+    await requireDeploymentAccess(user, job.deploymentId);
+
     const jobImages = await db
       .select({ id: images.id })
       .from(images)
@@ -2486,6 +2563,9 @@ export async function deleteDetection(
   const user = await requirePermission("camera-trap", "editor");
 
   try {
+    const depId = await getDeploymentIdForDetection(detectionId);
+    if (depId) await requireDeploymentAccess(user, depId);
+
     // Fetch detection + image info for activity log
     const [det] = await db
       .select({
@@ -2533,6 +2613,9 @@ export async function assignSpecies(
   const user = await requirePermission("camera-trap", "editor");
 
   try {
+    const depId = await getDeploymentIdForIdentification(identificationId);
+    if (depId) await requireDeploymentAccess(user, depId);
+
     // Fetch the identification to compare against original ML prediction
     const [ident] = await db
       .select({
@@ -2587,9 +2670,14 @@ export async function createManualDetection(
   imageId: number,
   bbox: { x: number; y: number; width: number; height: number }
 ): Promise<ActionResult<{ detectionId: number; identificationId: number }>> {
-  await requirePermission("camera-trap", "editor");
+  const user = await requirePermission("camera-trap", "editor");
 
   try {
+    const [img] = await db
+      .select({ deploymentId: images.deploymentId })
+      .from(images)
+      .where(eq(images.id, imageId));
+    if (img) await requireDeploymentAccess(user, img.deploymentId);
     const { x, y, width, height } = bbox;
     if (
       typeof x !== "number" || typeof y !== "number" ||
@@ -2663,6 +2751,14 @@ export async function verifyAndAdvance(
   const user = await requirePermission("camera-trap", "editor");
 
   try {
+    const [job] = await db
+      .select({ deploymentId: processingJobs.deploymentId })
+      .from(processingJobs)
+      .where(eq(processingJobs.id, jobId));
+    if (!job) return { success: false, error: "Trabajo no encontrado" };
+
+    await requireDeploymentAccess(user, job.deploymentId);
+
     if (identificationIds.length > 0) {
       await db
         .update(identifications)
@@ -2735,12 +2831,13 @@ export async function verifyAndAdvance(
 export async function toggleConfirmedBlank(
   imageId: number
 ): Promise<ActionResult<{ confirmedBlank: boolean; rejectedCount: number }>> {
-  await requirePermission("camera-trap", "editor");
+  const user = await requirePermission("camera-trap", "editor");
 
   try {
     const [image] = await db
       .select({
         id: images.id,
+        deploymentId: images.deploymentId,
         status: images.status,
         confirmedBlank: images.confirmedBlank,
       })
@@ -2750,6 +2847,8 @@ export async function toggleConfirmedBlank(
     if (!image) {
       return { success: false, error: "Imagen no encontrada" };
     }
+
+    await requireDeploymentAccess(user, image.deploymentId);
 
     if (image.status === "pending") {
       return {
@@ -2811,13 +2910,15 @@ export async function toggleStarred(
 
   try {
     const [image] = await db
-      .select({ id: images.id, starred: images.starred })
+      .select({ id: images.id, deploymentId: images.deploymentId, starred: images.starred })
       .from(images)
       .where(eq(images.id, imageId));
 
     if (!image) {
       return { success: false, error: "Imagen no encontrada" };
     }
+
+    await requireDeploymentAccess(user, image.deploymentId);
 
     const newValue = !image.starred;
     await db

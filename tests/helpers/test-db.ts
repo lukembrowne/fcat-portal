@@ -37,11 +37,41 @@ export function setupIntegrationDbMock() {
 }
 
 const CAMERA_TRAP_DDL = `
+  CREATE TABLE users (
+    email TEXT PRIMARY KEY,
+    name TEXT,
+    is_external INTEGER NOT NULL DEFAULT 0,
+    global_role TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    last_seen_at INTEGER
+  );
+
   CREATE TABLE projects (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     description TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+
+  CREATE TABLE user_permissions (
+    user_email TEXT NOT NULL REFERENCES users(email) ON DELETE CASCADE,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    granted_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (user_email, project_id)
+  );
+
+  CREATE TABLE ct_projects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    drive_folder_id TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+
+  CREATE TABLE ct_project_access (
+    user_email TEXT NOT NULL REFERENCES users(email) ON DELETE CASCADE,
+    ct_project_id INTEGER NOT NULL REFERENCES ct_projects(id) ON DELETE CASCADE,
+    PRIMARY KEY (user_email, ct_project_id)
   );
 
   CREATE TABLE biochoco_deployments (
@@ -60,6 +90,7 @@ const CAMERA_TRAP_DDL = `
     created_at INTEGER NOT NULL DEFAULT (unixepoch()),
     updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
     created_by TEXT,
+    ct_project_id INTEGER REFERENCES ct_projects(id) ON DELETE SET NULL,
     project_label TEXT,
     site_name TEXT,
     odk_submission_id TEXT,
@@ -190,6 +221,23 @@ export type TestDb = ReturnType<typeof createTestDb>;
  * Returns IDs for use in test assertions.
  */
 export function seedTestData(db: TestDb) {
+  // Create a user + CT project + access for requireDeploymentAccess()
+  db.insert(schema.users)
+    .values({ email: "test@fcat-ecuador.org", name: "Test User" })
+    .onConflictDoNothing()
+    .run();
+
+  const [ctProject] = db
+    .insert(schema.cameraTrapProjects)
+    .values({ name: "TestProject" })
+    .returning()
+    .all();
+
+  db.insert(schema.cameraTrapProjectAccess)
+    .values({ userEmail: "test@fcat-ecuador.org", cameraTrapProjectId: ctProject.id })
+    .onConflictDoNothing()
+    .run();
+
   // Create a deployment
   const [deployment] = db
     .insert(schema.deployments)
@@ -197,6 +245,7 @@ export function seedTestData(db: TestDb) {
       projectId: "camera-trap",
       name: "TEST-DEPLOY-001",
       status: "processed",
+      cameraTrapProjectId: ctProject.id,
     })
     .returning()
     .all();
@@ -282,6 +331,7 @@ export function seedTestData(db: TestDb) {
     .all();
 
   return {
+    ctProject,
     deployment,
     job,
     images: imgRows,

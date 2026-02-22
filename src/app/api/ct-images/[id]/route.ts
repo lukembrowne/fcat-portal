@@ -18,6 +18,7 @@ import { db } from "@/db";
 import { images, deployments } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { getCurrentUser } from "@/lib/auth";
+import { getUserCameraTrapProjects } from "@/lib/camera-trap-auth";
 import { downloadFileToBuffer } from "@/lib/drive-client";
 
 export const dynamic = "force-dynamic";
@@ -80,6 +81,17 @@ export async function GET(
       { error: "Deployment not found" },
       { status: 404 }
     );
+  }
+
+  // CT project-level access check
+  const ctProjects = await getUserCameraTrapProjects(user);
+  if (ctProjects !== "all") {
+    if (
+      deployment.cameraTrapProjectId == null ||
+      !ctProjects.includes(deployment.cameraTrapProjectId)
+    ) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
   }
 
   const { searchParams } = request.nextUrl;

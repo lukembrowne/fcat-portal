@@ -22,6 +22,7 @@ import {
   identifications,
 } from "@/db/schema";
 import { getCurrentUser } from "@/lib/auth";
+import { getUserCameraTrapProjects, ctProjectFilter } from "@/lib/camera-trap-auth";
 import { eq, inArray, and, ne, isNull, or } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
@@ -113,6 +114,10 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  // CT project-level access: filter requested IDs to accessible projects
+  const ctProjects = await getUserCameraTrapProjects(user);
+  const projectAccessFilter = ctProjectFilter(ctProjects);
+
   // ── Query 1: Deployments ─────────────────────────────────────────────
 
   const deploymentRows = await db
@@ -121,7 +126,8 @@ export async function GET(request: NextRequest) {
     .where(
       and(
         inArray(deployments.id, ids),
-        inArray(deployments.status, PROCESSED_STATUSES)
+        inArray(deployments.status, PROCESSED_STATUSES),
+        projectAccessFilter,
       )
     );
 

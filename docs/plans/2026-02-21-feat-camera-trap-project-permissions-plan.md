@@ -194,10 +194,10 @@ export function projectFilter(
 
 **Tasks:**
 
-- [ ] Add `cameraTrapProjects` table to `src/db/schema.ts` (with `driveFolderId` column)
-- [ ] Add `cameraTrapProjectAccess` table to `src/db/schema.ts`
-- [ ] Add `cameraTrapProjectId` column to `deployments` table in schema
-- [ ] Add migration to `scripts/push-schema.mjs`:
+- [x] Add `cameraTrapProjects` table to `src/db/schema.ts` (with `driveFolderId` column)
+- [x] Add `cameraTrapProjectAccess` table to `src/db/schema.ts`
+- [x] Add `cameraTrapProjectId` column to `deployments` table in schema
+- [x] Add migration to `scripts/push-schema.mjs`:
   - `CREATE TABLE IF NOT EXISTS ct_projects` (with `drive_folder_id TEXT`)
   - `CREATE TABLE IF NOT EXISTS ct_project_access`
   - `ALTER TABLE biochoco_deployments ADD COLUMN ct_project_id INTEGER REFERENCES ct_projects(id) ON DELETE SET NULL`
@@ -206,8 +206,8 @@ export function projectFilter(
   - Data migration: UPDATE deployments SET `ct_project_id` = matching `ct_projects.id` WHERE `project_label` IS NOT NULL
   - Data migration: UPDATE deployments SET `ct_project_id` = General project id WHERE `ct_project_id` IS NULL
   - Bootstrap: INSERT into `ct_project_access` all current camera-trap users → all existing ct_projects
-- [ ] Create `src/lib/camera-trap-auth.ts` with `getUserCameraTrapProjects()`, `requireDeploymentAccess()`, `projectFilter()`, and entity resolution helpers
-- [ ] Write tests for the auth helpers
+- [x] Create `src/lib/camera-trap-auth.ts` with `getUserCameraTrapProjects()`, `requireDeploymentAccess()`, `projectFilter()`, and entity resolution helpers
+- [x] Write tests for the auth helpers
 
 **Migration SQL for `push-schema.mjs`:**
 
@@ -353,9 +353,9 @@ Add object-level authorization to all write actions. Each mutation that takes an
 
 **Files:** `src/app/api/camera-trap/export/route.ts`, `src/app/api/ct-images/[id]/route.ts`
 
-- [ ] Update `/api/camera-trap/export/route.ts`: validate each requested deployment ID belongs to an accessible project
-- [ ] Update `/api/ct-images/[id]/route.ts`: resolve image → deployment → project, verify access
-- [ ] Update ODK actions (`odk-actions.ts`): scope `matchOdkDeployments()` to accessible deployments
+- [x] Update `/api/camera-trap/export/route.ts`: validate each requested deployment ID belongs to an accessible project
+- [x] Update `/api/ct-images/[id]/route.ts`: resolve image → deployment → project, verify access
+- [x] Update ODK actions (`odk-actions.ts`): scope `matchOdkDeployments()` to accessible deployments
 
 #### Phase 6: Admin UI
 

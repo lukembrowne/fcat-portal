@@ -143,13 +143,14 @@ describe("updateDeploymentMetadata", () => {
 
 describe("bulkUpdateMetadata", () => {
   it("updates multiple deployments", async () => {
-    // Create a second deployment
+    // Create a second deployment (same CT project for access check)
     const [dep2] = db
       .insert(schema.deployments)
       .values({
         projectId: "camera-trap",
         name: "DEPLOY-002",
         status: "unscanned",
+        cameraTrapProjectId: seed.ctProject.id,
       })
       .returning()
       .all();
@@ -252,13 +253,14 @@ describe("deleteDeployments", () => {
   });
 
   it("deletes multiple deployments", async () => {
-    // Create a second deployment
+    // Create a second deployment (same CT project for access check)
     const [dep2] = db
       .insert(schema.deployments)
       .values({
         projectId: "camera-trap",
         name: "DEPLOY-002",
         status: "unscanned",
+        cameraTrapProjectId: seed.ctProject.id,
       })
       .returning()
       .all();

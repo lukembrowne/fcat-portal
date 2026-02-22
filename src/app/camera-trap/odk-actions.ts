@@ -2,7 +2,7 @@
 
 import { db } from "@/db";
 import { deployments } from "@/db/schema";
-import { eq, inArray, isNull, or } from "drizzle-orm";
+import { eq, inArray, isNull, or, and } from "drizzle-orm";
 import { fetchEntities, fetchSubmissions } from "@/lib/odk-client";
 import {
   BIOCHOCO_PROJECT_ID,
@@ -11,6 +11,7 @@ import {
 } from "@/lib/odk-constants";
 import type { OdkSiteEntity } from "@/lib/odk-types";
 import { requirePermission } from "@/lib/auth";
+import { getUserCameraTrapProjects, ctProjectFilter, requireDeploymentAccess } from "@/lib/camera-trap-auth";
 import { revalidatePath } from "next/cache";
 import type { ActionResult } from "@/lib/types";
 
@@ -41,11 +42,16 @@ interface MatchResult {
 export async function matchOdkDeployments(
   deploymentIds: number[]
 ): Promise<ActionResult<MatchResult>> {
-  await requirePermission("camera-trap", "editor");
+  const user = await requirePermission("camera-trap", "editor");
 
   try {
     if (deploymentIds.length === 0) {
       return { success: true, data: { matched: [], unmatched: [] } };
+    }
+
+    // Verify access to all requested deployments
+    for (const id of deploymentIds) {
+      await requireDeploymentAccess(user, id);
     }
 
     // Fetch deployments to match
@@ -180,15 +186,19 @@ export async function matchOdkDeployments(
  * Match all unmatched deployments (those without an odkSubmissionId).
  */
 export async function matchAllUnmatched(): Promise<ActionResult<MatchResult>> {
-  await requirePermission("camera-trap", "editor");
+  const user = await requirePermission("camera-trap", "editor");
+  const ctProjects = await getUserCameraTrapProjects(user);
 
   const unmatched = await db
     .select({ id: deployments.id })
     .from(deployments)
     .where(
-      or(
-        isNull(deployments.odkSubmissionId),
-        eq(deployments.odkSubmissionId, "")
+      and(
+        or(
+          isNull(deployments.odkSubmissionId),
+          eq(deployments.odkSubmissionId, "")
+        ),
+        ctProjectFilter(ctProjects),
       )
     );
 

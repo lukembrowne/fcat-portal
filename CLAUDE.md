@@ -2,7 +2,7 @@
 
 ## Overview
 
-Internal web application for FCAT staff and collaborators. Domain: `portal.fcat-ecuador.org`.
+Internal web application for FCAT staff and collaborators. Domain: `portal.fcat-ecuador.org`. Primarily TypeScript (Next.js) with a camera trap data processing pipeline. The UI is in Spanish (e.g., 'Instalaciones', 'Historial de Procesamiento', 'Herramientas'). Always use Spanish for user-facing strings unless told otherwise.
 
 ## Environment
 
@@ -52,6 +52,8 @@ ML Python venv is auto-installed via `uv` on first startup into `data/ml-venv/`.
 The venv persists across container restarts. Delete `data/ml-venv/` to force reinstall.
 ML becomes available ~2-5 min after first boot (runs in background via `docker-entrypoint.sh`).
 
+When working in this project's Docker environment, always verify that file paths resolve correctly inside the container (not just locally), and test builds with `docker compose build` before committing. Be aware that symlinks, named volumes, and standalone builds behave differently than local dev.
+
 ## Database
 
 - Schema in `src/db/schema.ts`
@@ -91,6 +93,17 @@ cp data/portal.db.pre-restore data/portal.db && docker compose start portal
 - All bulk operations (finance uploads, climate uploads, ML detections) use transactions
 - Graceful shutdown checkpoints WAL on SIGTERM/SIGINT
 - Startup integrity check + health report (DB size, WAL size, backup freshness)
+
+When fixing database queries, always check for edge cases where records have NULL foreign keys or were created outside the normal flow (e.g., manual detections with null jobId). Run the fix against real data scenarios, not just the happy path.
+
+## UI Development
+
+- After implementing any UI changes, verify there are no layout regressions (empty space, overflow, alignment shifts) before considering the task complete. Test the component in its full context, not in isolation.
+- After implementing any state mutation (deletion, confirmation toggle, processing completion), always ensure the relevant UI caches are invalidated and the UI updates optimistically or refreshes automatically. Check both the immediate component AND related components (e.g., tables, sidebars, history panels) that display derived data.
+
+## Git Workflow
+
+- When committing changes, always check `git diff --cached` for unrelated modifications before finalizing. Use `git add -p` (patch staging) when the working tree contains changes from multiple features.
 
 ## Gotchas
 

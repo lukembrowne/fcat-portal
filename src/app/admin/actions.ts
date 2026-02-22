@@ -2,7 +2,7 @@
 
 import { db } from "@/db";
 import { users, userPermissions, projects, cameraTrapProjects, cameraTrapProjectAccess, deployments } from "@/db/schema";
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { requireAdmin } from "@/lib/auth";
 import { revalidatePath } from "next/cache";
 import fs from "fs/promises";

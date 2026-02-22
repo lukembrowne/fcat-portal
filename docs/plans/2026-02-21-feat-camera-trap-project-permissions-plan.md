@@ -442,10 +442,10 @@ Add a new section below the existing permissions matrix:
 
 For pages that load a specific entity by URL param, add project access verification:
 
-- [ ] `/camera-trap/[id]/page.tsx`: verify deployment's project is accessible
-- [ ] `/camera-trap/results/[id]/page.tsx`: verify job's deployment's project is accessible
-- [ ] `/camera-trap/results/[id]/images/[imageId]/page.tsx`: verify image's deployment's project is accessible
-- [ ] Return 404 (not 403) when user doesn't have access — avoids leaking entity existence
+- [x] `/camera-trap/[id]/page.tsx`: verify deployment's project is accessible (already protected via `getDeployment()` → `requireDeploymentAccess`)
+- [x] `/camera-trap/results/[id]/page.tsx`: verify job's deployment's project is accessible
+- [x] `/camera-trap/results/[id]/images/[imageId]/page.tsx`: verify image's deployment's project is accessible (already protected via `getImageWithDetections()` → `requireDeploymentAccess`)
+- [x] Return 404 (not 403) when user doesn't have access — avoids leaking entity existence
 
 ## Edge Cases
 

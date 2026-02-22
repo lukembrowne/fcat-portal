@@ -11,6 +11,7 @@ import {
   detections,
   identifications,
   species,
+  cameraTrapProjects,
   activityLog,
 } from "@/db/schema";
 import { eq, desc, inArray, and, gte, ne, sql, count, sum, isNotNull } from "drizzle-orm";
@@ -23,6 +24,7 @@ import {
 import { uploadFramesToDrive } from "@/lib/drive-client";
 import { extractFrames, cancelFrameExtraction } from "@/lib/frame-extractor";
 import { requirePermission } from "@/lib/auth";
+import { getUserCameraTrapProjects, ctProjectFilter, requireDeploymentAccess } from "@/lib/camera-trap-auth";
 import { revalidatePath } from "next/cache";
 import type { ActionResult, VerificationStats, TaxonomicRank } from "@/lib/types";
 import type { Deployment, ProcessingJob, Species, NewSpecies } from "@/db/schema";
@@ -752,7 +754,19 @@ export async function deleteJob(
 export async function getJobDeleteStats(
   jobId: number
 ): Promise<{ detectionsCount: number; verifiedCount: number }> {
-  await requirePermission("camera-trap", "viewer");
+  const user = await requirePermission("camera-trap", "viewer");
+
+  const [job] = await db
+    .select({ deploymentId: processingJobs.deploymentId })
+    .from(processingJobs)
+    .where(eq(processingJobs.id, jobId));
+  if (!job) return { detectionsCount: 0, verifiedCount: 0 };
+
+  try {
+    await requireDeploymentAccess(user, job.deploymentId);
+  } catch {
+    return { detectionsCount: 0, verifiedCount: 0 };
+  }
 
   const [detStats] = await db
     .select({ cnt: count() })
@@ -786,9 +800,22 @@ export async function getJobDeleteStats(
 export async function getJobsDeleteStats(
   jobIds: number[]
 ): Promise<{ totalDetections: number; totalVerified: number }> {
-  await requirePermission("camera-trap", "viewer");
+  const user = await requirePermission("camera-trap", "viewer");
 
   if (jobIds.length === 0) return { totalDetections: 0, totalVerified: 0 };
+
+  // Verify access to all jobs' deployments
+  const jobRows = await db
+    .select({ deploymentId: processingJobs.deploymentId })
+    .from(processingJobs)
+    .where(inArray(processingJobs.id, jobIds));
+  for (const j of jobRows) {
+    try {
+      await requireDeploymentAccess(user, j.deploymentId);
+    } catch {
+      return { totalDetections: 0, totalVerified: 0 };
+    }
+  }
 
   const [detStats] = await db
     .select({ cnt: count() })
@@ -940,12 +967,13 @@ export interface DeploymentRow {
 }
 
 export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
-  await requirePermission("camera-trap", "viewer");
+  const user = await requirePermission("camera-trap", "viewer");
+  const ctProjects = await getUserCameraTrapProjects(user);
 
   const allDeployments = await db
     .select()
     .from(deployments)
-    .where(eq(deployments.projectId, "camera-trap"))
+    .where(and(eq(deployments.projectId, "camera-trap"), ctProjectFilter(ctProjects)))
     .orderBy(desc(deployments.updatedAt));
 
   if (allDeployments.length === 0) return [];
@@ -1075,11 +1103,12 @@ export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
 export async function getDeployments(
   limit: number = 50
 ): Promise<Deployment[]> {
-  await requirePermission("camera-trap", "viewer");
+  const user = await requirePermission("camera-trap", "viewer");
+  const ctProjects = await getUserCameraTrapProjects(user);
   return db
     .select()
     .from(deployments)
-    .where(eq(deployments.projectId, "camera-trap"))
+    .where(and(eq(deployments.projectId, "camera-trap"), ctProjectFilter(ctProjects)))
     .orderBy(desc(deployments.updatedAt))
     .limit(limit);
 }
@@ -1246,9 +1275,18 @@ export async function deleteDeployments(
 export async function getDeploymentsCascadeStats(
   ids: number[]
 ): Promise<{ totalImages: number; totalDetections: number; totalVerified: number }> {
-  await requirePermission("camera-trap", "viewer");
+  const user = await requirePermission("camera-trap", "viewer");
 
   if (ids.length === 0) return { totalImages: 0, totalDetections: 0, totalVerified: 0 };
+
+  // Verify access to all deployments
+  for (const id of ids) {
+    try {
+      await requireDeploymentAccess(user, id);
+    } catch {
+      return { totalImages: 0, totalDetections: 0, totalVerified: 0 };
+    }
+  }
 
   const [imgStats] = await db
     .select({ cnt: count() })
@@ -1519,22 +1557,31 @@ export async function cancelQueue(): Promise<ActionResult<{ cancelled: number }>
   }
 }
 
-/** Get distinct project label values for filter dropdown. */
+/** Get CT project names the user can access, for filter dropdown. */
 export async function getDistinctProjects(): Promise<string[]> {
-  await requirePermission("camera-trap", "viewer");
+  const user = await requirePermission("camera-trap", "viewer");
+  const ctProjects = await getUserCameraTrapProjects(user);
+
+  if (ctProjects === "all") {
+    const rows = await db
+      .select({ name: cameraTrapProjects.name })
+      .from(cameraTrapProjects)
+      .orderBy(cameraTrapProjects.name);
+    return rows.map((r) => r.name);
+  }
+
+  if (ctProjects.length === 0) return [];
+
   const rows = await db
-    .select({ projectLabel: deployments.projectLabel })
-    .from(deployments)
-    .where(eq(deployments.projectId, "camera-trap"))
-    .groupBy(deployments.projectLabel);
-  return rows
-    .map((r) => r.projectLabel)
-    .filter((p): p is string => p !== null)
-    .sort();
+    .select({ name: cameraTrapProjects.name })
+    .from(cameraTrapProjects)
+    .where(inArray(cameraTrapProjects.id, ctProjects))
+    .orderBy(cameraTrapProjects.name);
+  return rows.map((r) => r.name);
 }
 
 export async function getDeployment(id: number) {
-  await requirePermission("camera-trap", "viewer");
+  const user = await requirePermission("camera-trap", "viewer");
 
   const [deployment] = await db
     .select()
@@ -1542,6 +1589,13 @@ export async function getDeployment(id: number) {
     .where(eq(deployments.id, id));
 
   if (!deployment) return null;
+
+  // Check CT project access
+  try {
+    await requireDeploymentAccess(user, id);
+  } catch {
+    return null;
+  }
 
   const deploymentImages = await db
     .select()
@@ -1558,11 +1612,26 @@ export async function getDeployment(id: number) {
 }
 
 export async function getRecentJobs(limit: number = 50) {
-  await requirePermission("camera-trap", "viewer");
+  const user = await requirePermission("camera-trap", "viewer");
+  const ctProjects = await getUserCameraTrapProjects(user);
+  const pf = ctProjectFilter(ctProjects);
+
+  // Scope jobs to accessible deployments
+  let jobFilter: ReturnType<typeof inArray> | undefined;
+  if (pf) {
+    const accessibleDeps = await db
+      .select({ id: deployments.id })
+      .from(deployments)
+      .where(and(eq(deployments.projectId, "camera-trap"), pf));
+    const depIds = accessibleDeps.map((d) => d.id);
+    if (depIds.length === 0) return [];
+    jobFilter = inArray(processingJobs.deploymentId, depIds);
+  }
 
   const jobs = await db
     .select()
     .from(processingJobs)
+    .where(jobFilter)
     .orderBy(desc(processingJobs.createdAt))
     .limit(limit);
 
@@ -1625,22 +1694,46 @@ export async function getRecentJobs(limit: number = 50) {
 }
 
 export async function getResultsStats() {
-  await requirePermission("camera-trap", "viewer");
+  const user = await requirePermission("camera-trap", "viewer");
+  const ctProjects = await getUserCameraTrapProjects(user);
+  const pf = ctProjectFilter(ctProjects);
+
+  // Get accessible deployment IDs for scoping
+  let depIds: number[] | null = null;
+  if (pf) {
+    const accessibleDeps = await db
+      .select({ id: deployments.id })
+      .from(deployments)
+      .where(and(eq(deployments.projectId, "camera-trap"), pf));
+    depIds = accessibleDeps.map((d) => d.id);
+    if (depIds.length === 0) {
+      return { totalJobs: 0, totalImagesProcessed: 0, totalDetections: 0, uniqueSpecies: 0 };
+    }
+  }
+
+  const jobWhere = depIds ? inArray(processingJobs.deploymentId, depIds) : undefined;
+  const imgWhere = depIds ? inArray(images.deploymentId, depIds) : undefined;
 
   const [jobStats] = await db
     .select({
       totalJobs: count(),
       totalProcessed: sum(processingJobs.processedImages),
     })
-    .from(processingJobs);
+    .from(processingJobs)
+    .where(jobWhere);
 
   const [detStats] = await db
     .select({ totalDetections: count() })
-    .from(detections);
+    .from(detections)
+    .innerJoin(images, eq(detections.imageId, images.id))
+    .where(imgWhere);
 
   const [specStats] = await db
     .select({ totalSpecies: sql<number>`count(distinct coalesce(${identifications.correctedSpecies}, ${identifications.species}))` })
-    .from(identifications);
+    .from(identifications)
+    .innerJoin(detections, eq(identifications.detectionId, detections.id))
+    .innerJoin(images, eq(detections.imageId, images.id))
+    .where(imgWhere);
 
   return {
     totalJobs: jobStats?.totalJobs || 0,
@@ -1651,7 +1744,7 @@ export async function getResultsStats() {
 }
 
 export async function getJobWithDetails(jobId: number) {
-  await requirePermission("camera-trap", "viewer");
+  const user = await requirePermission("camera-trap", "viewer");
 
   const [job] = await db
     .select()
@@ -1659,6 +1752,12 @@ export async function getJobWithDetails(jobId: number) {
     .where(eq(processingJobs.id, jobId));
 
   if (!job) return null;
+
+  try {
+    await requireDeploymentAccess(user, job.deploymentId);
+  } catch {
+    return null;
+  }
 
   const [deployment] = await db
     .select()
@@ -1674,7 +1773,7 @@ export async function getJobWithDetails(jobId: number) {
 }
 
 export async function getImageWithDetections(imageId: number) {
-  await requirePermission("camera-trap", "viewer");
+  const user = await requirePermission("camera-trap", "viewer");
 
   const [row] = await db
     .select({
@@ -1686,6 +1785,13 @@ export async function getImageWithDetections(imageId: number) {
     .where(eq(images.id, imageId));
 
   if (!row) return null;
+
+  try {
+    await requireDeploymentAccess(user, row.image.deploymentId);
+  } catch {
+    return null;
+  }
+
   const image = row.image;
   const deploymentName = row.deploymentName;
 
@@ -1722,7 +1828,19 @@ export async function getImageWithDetections(imageId: number) {
 }
 
 export async function getJobImageIds(jobId: number): Promise<number[]> {
-  await requirePermission("camera-trap", "viewer");
+  const user = await requirePermission("camera-trap", "viewer");
+
+  const [job] = await db
+    .select({ deploymentId: processingJobs.deploymentId })
+    .from(processingJobs)
+    .where(eq(processingJobs.id, jobId));
+  if (!job) return [];
+
+  try {
+    await requireDeploymentAccess(user, job.deploymentId);
+  } catch {
+    return [];
+  }
 
   const rows = await db
     .select({ id: images.id })
@@ -1937,7 +2055,19 @@ export async function getSpeciesList() {
 }
 
 export async function getJobSpecies(jobId: number): Promise<string[]> {
-  await requirePermission("camera-trap", "viewer");
+  const user = await requirePermission("camera-trap", "viewer");
+
+  const [job] = await db
+    .select({ deploymentId: processingJobs.deploymentId })
+    .from(processingJobs)
+    .where(eq(processingJobs.id, jobId));
+  if (!job) return [];
+
+  try {
+    await requireDeploymentAccess(user, job.deploymentId);
+  } catch {
+    return [];
+  }
 
   const jobImages = await db
     .select({ id: images.id })
@@ -1970,7 +2100,19 @@ export async function getNextUnverifiedImageId(
   jobId: number,
   currentImageId?: number
 ): Promise<number | null> {
-  await requirePermission("camera-trap", "viewer");
+  const user = await requirePermission("camera-trap", "viewer");
+
+  const [job] = await db
+    .select({ deploymentId: processingJobs.deploymentId })
+    .from(processingJobs)
+    .where(eq(processingJobs.id, jobId));
+  if (!job) return null;
+
+  try {
+    await requireDeploymentAccess(user, job.deploymentId);
+  } catch {
+    return null;
+  }
 
   const conditions = [
     eq(images.jobId, jobId),
@@ -1996,16 +2138,27 @@ export async function getNextUnverifiedImageId(
 export async function getJobVerificationStats(
   jobId: number
 ): Promise<VerificationStats> {
-  await requirePermission("camera-trap", "viewer");
+  const user = await requirePermission("camera-trap", "viewer");
+  const emptyStats: VerificationStats = { total: 0, verified: 0, rejected: 0, corrected: 0, unverified: 0 };
+
+  const [job] = await db
+    .select({ deploymentId: processingJobs.deploymentId })
+    .from(processingJobs)
+    .where(eq(processingJobs.id, jobId));
+  if (!job) return emptyStats;
+
+  try {
+    await requireDeploymentAccess(user, job.deploymentId);
+  } catch {
+    return emptyStats;
+  }
 
   const jobImages = await db
     .select({ id: images.id })
     .from(images)
     .where(eq(images.jobId, jobId));
 
-  if (jobImages.length === 0) {
-    return { total: 0, verified: 0, rejected: 0, corrected: 0, unverified: 0 };
-  }
+  if (jobImages.length === 0) return emptyStats;
 
   const imageIds = jobImages.map((img) => img.id);
   const jobDets = await db
@@ -2013,9 +2166,7 @@ export async function getJobVerificationStats(
     .from(detections)
     .where(inArray(detections.imageId, imageIds));
 
-  if (jobDets.length === 0) {
-    return { total: 0, verified: 0, rejected: 0, corrected: 0, unverified: 0 };
-  }
+  if (jobDets.length === 0) return emptyStats;
 
   const detectionIds = jobDets.map((d) => d.id);
   const idents = await db
@@ -2044,16 +2195,21 @@ export async function getJobVerificationStats(
 export async function getDeploymentVerificationStats(
   deploymentId: number
 ): Promise<VerificationStats> {
-  await requirePermission("camera-trap", "viewer");
+  const user = await requirePermission("camera-trap", "viewer");
+  const emptyStats: VerificationStats = { total: 0, verified: 0, rejected: 0, corrected: 0, unverified: 0 };
+
+  try {
+    await requireDeploymentAccess(user, deploymentId);
+  } catch {
+    return emptyStats;
+  }
 
   const deploymentJobs = await db
     .select({ id: processingJobs.id })
     .from(processingJobs)
     .where(eq(processingJobs.deploymentId, deploymentId));
 
-  if (deploymentJobs.length === 0) {
-    return { total: 0, verified: 0, rejected: 0, corrected: 0, unverified: 0 };
-  }
+  if (deploymentJobs.length === 0) return emptyStats;
 
   const jobIds = deploymentJobs.map((j) => j.id);
   const jobImages = await db
@@ -2061,9 +2217,7 @@ export async function getDeploymentVerificationStats(
     .from(images)
     .where(inArray(images.jobId, jobIds));
 
-  if (jobImages.length === 0) {
-    return { total: 0, verified: 0, rejected: 0, corrected: 0, unverified: 0 };
-  }
+  if (jobImages.length === 0) return emptyStats;
 
   const imageIds = jobImages.map((img) => img.id);
   const jobDets = await db
@@ -2071,9 +2225,7 @@ export async function getDeploymentVerificationStats(
     .from(detections)
     .where(inArray(detections.imageId, imageIds));
 
-  if (jobDets.length === 0) {
-    return { total: 0, verified: 0, rejected: 0, corrected: 0, unverified: 0 };
-  }
+  if (jobDets.length === 0) return emptyStats;
 
   const detectionIds = jobDets.map((d) => d.id);
   const idents = await db
@@ -2688,7 +2840,8 @@ export async function toggleStarred(
 }
 
 export async function getStarredImages() {
-  await requirePermission("camera-trap", "viewer");
+  const user = await requirePermission("camera-trap", "viewer");
+  const ctProjects = await getUserCameraTrapProjects(user);
 
   return db
     .select({
@@ -2707,7 +2860,7 @@ export async function getStarredImages() {
     })
     .from(images)
     .innerJoin(deployments, eq(images.deploymentId, deployments.id))
-    .where(eq(images.starred, true))
+    .where(and(eq(images.starred, true), ctProjectFilter(ctProjects)))
     .orderBy(desc(images.starredAt));
 }
 

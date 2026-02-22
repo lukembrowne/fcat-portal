@@ -170,8 +170,57 @@ export function ActivityTable({ activities, onViewPhotos }: ActivityTableProps) 
         header: "Lugar",
       },
       {
+        accessorKey: "institucionOrganizadora",
+        header: "Institución",
+        cell: ({ getValue }) => {
+          const val = getValue<string>();
+          return (
+            <span className="text-xs line-clamp-1 max-w-[160px]" title={val}>
+              {val || "—"}
+            </span>
+          );
+        },
+      },
+      {
+        accessorKey: "nombreCapacitadores",
+        header: "Capacitadores",
+        cell: ({ getValue }) => {
+          const val = getValue<string>();
+          return (
+            <span className="text-xs line-clamp-1 max-w-[160px]" title={val}>
+              {val || "—"}
+            </span>
+          );
+        },
+      },
+      {
+        accessorKey: "tipoParticipantesLabels",
+        header: "Tipo Participantes",
+        cell: ({ getValue }) => {
+          const labels = getValue<string[]>();
+          return (
+            <span className="text-xs line-clamp-1" title={labels.join(", ")}>
+              {labels.join(", ") || "—"}
+            </span>
+          );
+        },
+        enableSorting: false,
+      },
+      {
+        accessorKey: "comunidadesInstituciones",
+        header: "Comunidades",
+        cell: ({ getValue }) => {
+          const val = getValue<string>();
+          return (
+            <span className="text-xs line-clamp-1 max-w-[180px]" title={val}>
+              {val || "—"}
+            </span>
+          );
+        },
+      },
+      {
         accessorKey: "totalParticipantes",
-        header: "Participantes",
+        header: "Total",
         cell: ({ getValue }) => (
           <span className="tabular-nums font-medium">
             {getValue<number>()}
@@ -179,13 +228,13 @@ export function ActivityTable({ activities, onViewPhotos }: ActivityTableProps) 
         ),
       },
       {
-        id: "gender",
-        header: "M / H",
+        id: "demographics",
+        header: "M / H / N / A",
         cell: ({ row }) => {
           const a = row.original;
           return (
-            <span className="tabular-nums text-xs">
-              {a.numMujeres}M / {a.numHombres}H
+            <span className="tabular-nums text-xs whitespace-nowrap">
+              {a.numMujeres}M / {a.numHombres}H / {a.numNinos}N / {a.numAdolescentes}A
             </span>
           );
         },
@@ -204,6 +253,18 @@ export function ActivityTable({ activities, onViewPhotos }: ActivityTableProps) 
           );
         },
         enableSorting: false,
+      },
+      {
+        accessorKey: "nombreEncuestador",
+        header: "Encuestador",
+        cell: ({ getValue }) => {
+          const val = getValue<string>();
+          return (
+            <span className="text-xs whitespace-nowrap">
+              {val || "—"}
+            </span>
+          );
+        },
       },
     ],
     [onViewPhotos]

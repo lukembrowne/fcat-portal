@@ -4,13 +4,25 @@ import { useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Loader2 } from "lucide-react";
 import type { DeploymentRow } from "./actions";
 import { updateDeploymentMetadata } from "./actions";
 
+interface CtProject {
+  id: number;
+  name: string;
+}
+
 interface DeploymentEditFormProps {
   deployment: DeploymentRow;
-  distinctProjects: string[];
+  distinctProjects: CtProject[];
   onCancel: () => void;
   onSaved: () => void;
 }
@@ -22,7 +34,9 @@ export function DeploymentEditForm({
   onSaved,
 }: DeploymentEditFormProps) {
   const [name, setName] = useState(deployment.name);
-  const [projectLabel, setCtProject] = useState(deployment.projectLabel ?? "");
+  const [selectedProjectId, setSelectedProjectId] = useState<string>(
+    deployment.cameraTrapProjectId != null ? String(deployment.cameraTrapProjectId) : ""
+  );
   const [siteName, setSiteName] = useState(deployment.siteName ?? "");
   const [latitude, setLatitude] = useState(
     deployment.latitude != null ? String(deployment.latitude) : ""
@@ -41,7 +55,7 @@ export function DeploymentEditForm({
       setError(null);
       const result = await updateDeploymentMetadata(deployment.id, {
         name: name.trim() || deployment.name,
-        projectLabel: projectLabel.trim() || null,
+        cameraTrapProjectId: selectedProjectId ? parseInt(selectedProjectId, 10) : null,
         siteName: siteName.trim() || null,
         latitude: latitude ? parseFloat(latitude) : null,
         longitude: longitude ? parseFloat(longitude) : null,
@@ -69,18 +83,18 @@ export function DeploymentEditForm({
 
       <div>
         <Label htmlFor="edit-project">Proyecto</Label>
-        <Input
-          id="edit-project"
-          value={projectLabel}
-          onChange={(e) => setCtProject(e.target.value)}
-          list="project-options"
-          placeholder="Ej: BioChoco"
-        />
-        <datalist id="project-options">
-          {distinctProjects.map((p) => (
-            <option key={p} value={p} />
-          ))}
-        </datalist>
+        <Select value={selectedProjectId} onValueChange={setSelectedProjectId}>
+          <SelectTrigger id="edit-project">
+            <SelectValue placeholder="Seleccionar proyecto" />
+          </SelectTrigger>
+          <SelectContent>
+            {distinctProjects.map((p) => (
+              <SelectItem key={p.id} value={String(p.id)}>
+                {p.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       <div>

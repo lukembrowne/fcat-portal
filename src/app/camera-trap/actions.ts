@@ -973,6 +973,7 @@ export interface DeploymentRow {
   status: string;
   driveFolderId: string | null;
   projectLabel: string | null;
+  cameraTrapProjectId: number | null;
   siteName: string | null;
   latitude: number | null;
   longitude: number | null;
@@ -1105,6 +1106,7 @@ export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
       status: d.status,
       driveFolderId: d.driveFolderId,
       projectLabel: d.projectLabel,
+      cameraTrapProjectId: d.cameraTrapProjectId,
       siteName: d.siteName,
       latitude: d.latitude,
       longitude: d.longitude,
@@ -1149,6 +1151,7 @@ export async function updateDeploymentMetadata(
   fields: {
     name?: string;
     projectLabel?: string | null;
+    cameraTrapProjectId?: number | null;
     siteName?: string | null;
     latitude?: number | null;
     longitude?: number | null;
@@ -1170,10 +1173,24 @@ export async function updateDeploymentMetadata(
 
     await requireDeploymentAccess(user, id);
 
+    // If changing CT project, also update projectLabel to keep in sync
+    const updates: Record<string, unknown> = { ...fields };
+    if (fields.cameraTrapProjectId !== undefined && fields.projectLabel === undefined) {
+      if (fields.cameraTrapProjectId) {
+        const [proj] = await db
+          .select({ name: cameraTrapProjects.name })
+          .from(cameraTrapProjects)
+          .where(eq(cameraTrapProjects.id, fields.cameraTrapProjectId));
+        if (proj) updates.projectLabel = proj.name;
+      } else {
+        updates.projectLabel = null;
+      }
+    }
+
     await db
       .update(deployments)
       .set({
-        ...fields,
+        ...updates,
         metadataSource: "manual",
         updatedAt: new Date(),
       })
@@ -1193,6 +1210,7 @@ export async function bulkUpdateMetadata(
   ids: number[],
   fields: {
     projectLabel?: string | null;
+    cameraTrapProjectId?: number | null;
     siteName?: string | null;
     latitude?: number | null;
     longitude?: number | null;
@@ -1214,6 +1232,17 @@ export async function bulkUpdateMetadata(
 
     // Only include non-undefined fields (undefined = "do not change")
     const updates: Record<string, unknown> = { updatedAt: new Date(), metadataSource: "manual" };
+    if (fields.cameraTrapProjectId !== undefined) {
+      updates.cameraTrapProjectId = fields.cameraTrapProjectId;
+      // Keep projectLabel in sync
+      if (fields.cameraTrapProjectId && fields.projectLabel === undefined) {
+        const [proj] = await db
+          .select({ name: cameraTrapProjects.name })
+          .from(cameraTrapProjects)
+          .where(eq(cameraTrapProjects.id, fields.cameraTrapProjectId));
+        if (proj) updates.projectLabel = proj.name;
+      }
+    }
     if (fields.projectLabel !== undefined) updates.projectLabel = fields.projectLabel;
     if (fields.siteName !== undefined) updates.siteName = fields.siteName;
     if (fields.latitude !== undefined) updates.latitude = fields.latitude;
@@ -1605,27 +1634,25 @@ export async function cancelQueue(): Promise<ActionResult<{ cancelled: number }>
   }
 }
 
-/** Get CT project names the user can access, for filter dropdown. */
-export async function getDistinctProjects(): Promise<string[]> {
+/** Get CT projects the user can access, for filter dropdown and edit forms. */
+export async function getDistinctProjects(): Promise<{ id: number; name: string }[]> {
   const user = await requirePermission("camera-trap", "viewer");
   const ctProjects = await getUserCameraTrapProjects(user);
 
   if (ctProjects === "all") {
-    const rows = await db
-      .select({ name: cameraTrapProjects.name })
+    return db
+      .select({ id: cameraTrapProjects.id, name: cameraTrapProjects.name })
       .from(cameraTrapProjects)
       .orderBy(cameraTrapProjects.name);
-    return rows.map((r) => r.name);
   }
 
   if (ctProjects.length === 0) return [];
 
-  const rows = await db
-    .select({ name: cameraTrapProjects.name })
+  return db
+    .select({ id: cameraTrapProjects.id, name: cameraTrapProjects.name })
     .from(cameraTrapProjects)
     .where(inArray(cameraTrapProjects.id, ctProjects))
     .orderBy(cameraTrapProjects.name);
-  return rows.map((r) => r.name);
 }
 
 export async function getDeployment(id: number) {

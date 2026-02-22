@@ -431,10 +431,10 @@ Add a new section below the existing permissions matrix:
 
 **Files:** `src/app/camera-trap/deployment-edit-form.tsx`, `src/app/camera-trap/batch-edit-dialog.tsx`
 
-- [ ] Replace free-text `projectLabel` input in `deployment-edit-form.tsx` with a dropdown of user's accessible CT projects
-- [ ] Replace free-text `projectLabel` in `batch-edit-dialog.tsx` with same dropdown
-- [ ] Show confirmation warning when reassigning a deployment to a different project ("Esta instalación desaparecerá de tu vista si cambias el proyecto")
-- [ ] Update historical import script (`scripts/import-historical-camera-data.ts`): use `cameraTrapProjectId` instead of `projectLabel`
+- [x] Replace free-text `projectLabel` input in `deployment-edit-form.tsx` with a dropdown of user's accessible CT projects
+- [x] Replace free-text `projectLabel` in `batch-edit-dialog.tsx` with same dropdown
+- [x] Show confirmation warning when reassigning a deployment to a different project ("Esta instalación desaparecerá de tu vista si cambias el proyecto")
+- [x] Update historical import script (`scripts/import-historical-camera-data.ts`): use `cameraTrapProjectId` instead of `projectLabel`
 
 #### Phase 8: Page-Level Access Guards
 

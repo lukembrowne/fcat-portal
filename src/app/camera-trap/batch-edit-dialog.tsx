@@ -13,15 +13,27 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Loader2 } from "lucide-react";
 import { bulkUpdateMetadata } from "./actions";
+
+interface CtProject {
+  id: number;
+  name: string;
+}
 
 interface BatchEditDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   selectedIds: number[];
   selectedCount: number;
-  distinctProjects: string[];
+  distinctProjects: CtProject[];
   onComplete: () => void;
 }
 
@@ -37,7 +49,7 @@ export function BatchEditDialog({
   const [applyLocation, setApplyLocation] = useState(false);
   const [applyDates, setApplyDates] = useState(false);
   const [applySite, setApplySite] = useState(false);
-  const [projectLabel, setCtProject] = useState("");
+  const [selectedProjectId, setSelectedProjectId] = useState("");
   const [siteName, setSiteName] = useState("");
   const [latitude, setLatitude] = useState("");
   const [longitude, setLongitude] = useState("");
@@ -50,7 +62,9 @@ export function BatchEditDialog({
     startSaving(async () => {
       setError(null);
       const fields: Record<string, unknown> = {};
-      if (applyProject) fields.projectLabel = projectLabel.trim() || null;
+      if (applyProject) {
+        fields.cameraTrapProjectId = selectedProjectId ? parseInt(selectedProjectId, 10) : null;
+      }
       if (applySite) fields.siteName = siteName.trim() || null;
       if (applyLocation) {
         fields.latitude = latitude ? parseFloat(latitude) : null;
@@ -75,7 +89,7 @@ export function BatchEditDialog({
         setApplyLocation(false);
         setApplyDates(false);
         setApplySite(false);
-        setCtProject("");
+        setSelectedProjectId("");
         setSiteName("");
         setLatitude("");
         setLongitude("");
@@ -108,19 +122,22 @@ export function BatchEditDialog({
             />
             <div className="flex-1">
               <Label htmlFor="batch-project">Proyecto</Label>
-              <Input
-                id="batch-project"
-                value={projectLabel}
-                onChange={(e) => setCtProject(e.target.value)}
+              <Select
+                value={selectedProjectId}
+                onValueChange={setSelectedProjectId}
                 disabled={!applyProject}
-                list="batch-project-options"
-                placeholder="Ej: BioChoco"
-              />
-              <datalist id="batch-project-options">
-                {distinctProjects.map((p) => (
-                  <option key={p} value={p} />
-                ))}
-              </datalist>
+              >
+                <SelectTrigger id="batch-project">
+                  <SelectValue placeholder="Seleccionar proyecto" />
+                </SelectTrigger>
+                <SelectContent>
+                  {distinctProjects.map((p) => (
+                    <SelectItem key={p.id} value={String(p.id)}>
+                      {p.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
 

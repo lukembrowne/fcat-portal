@@ -69,9 +69,14 @@ interface JobInfo {
   completedAt: Date | null;
 }
 
+export interface CtProject {
+  id: number;
+  name: string;
+}
+
 interface DeploymentsTableProps {
   deployments: DeploymentRow[];
-  distinctProjects: string[];
+  distinctProjects: CtProject[];
   canEdit: boolean;
 }
 
@@ -511,8 +516,8 @@ export function DeploymentsTable({
         >
           <option value="">Todos los proyectos</option>
           {distinctProjects.map((p) => (
-            <option key={p} value={p}>
-              {p}
+            <option key={p.id} value={p.name}>
+              {p.name}
             </option>
           ))}
         </select>

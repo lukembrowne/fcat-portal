@@ -38,10 +38,15 @@ interface JobInfo {
   completedAt: Date | null;
 }
 
+interface CtProject {
+  id: number;
+  name: string;
+}
+
 interface DeploymentExpandedRowProps {
   deployment: DeploymentRow;
   canEdit: boolean;
-  distinctProjects: string[];
+  distinctProjects: CtProject[];
   cachedJobs: JobInfo[] | undefined;
   onCacheJobs: (deploymentId: number, jobs: JobInfo[]) => void;
 }

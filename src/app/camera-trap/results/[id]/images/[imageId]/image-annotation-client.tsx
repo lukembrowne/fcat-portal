@@ -445,7 +445,12 @@ export function ImageAnnotationClient({
           if (!open) setDeleteDialogDetectionId(null);
         }}
       >
-        <DialogContent>
+        <DialogContent onKeyDown={(e: React.KeyboardEvent) => {
+          if (e.key === "Delete" || e.key === "Backspace" || e.key === "d") {
+            e.preventDefault();
+            handleConfirmDelete();
+          }
+        }}>
           <DialogHeader>
             <DialogTitle>Eliminar detección #{deleteDialogIndex}</DialogTitle>
             <DialogDescription>

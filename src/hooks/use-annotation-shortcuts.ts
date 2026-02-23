@@ -107,7 +107,7 @@ export function useAnnotationShortcuts(opts: AnnotationShortcutOptions) {
           o.onNext?.();
           break;
         case "Enter":
-          if (!hasModifier) {
+          if (!hasModifier && !o.isDialogOpen) {
             e.preventDefault();
             o.onQuickVerifyAll?.();
           }
@@ -139,7 +139,7 @@ export function useAnnotationShortcuts(opts: AnnotationShortcutOptions) {
         case "d":
         case "Delete":
         case "Backspace":
-          if (!hasModifier) {
+          if (!hasModifier && !o.isDialogOpen) {
             e.preventDefault();
             o.onDeleteSelected?.();
           }

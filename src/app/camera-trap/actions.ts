@@ -258,82 +258,93 @@ async function processJobInternal(
       if (videosToExtract.length > 0) {
         const fps = job.frameExtractionRate ?? 1.0;
         let totalExtractedFrames = 0;
+        const FFMPEG_CONCURRENCY = 4;
 
-        for (let i = 0; i < videosToExtract.length; i++) {
-          const vid = videosToExtract[i];
+        const thumbDir = path.join(
+          process.cwd(),
+          "data",
+          "thumbnails",
+          String(deployment.id)
+        );
+        await fs.mkdir(thumbDir, { recursive: true });
+
+        // Process videos in parallel batches (up to FFMPEG_CONCURRENCY at a time)
+        for (let i = 0; i < videosToExtract.length; i += FFMPEG_CONCURRENCY) {
+          const batch = videosToExtract.slice(i, i + FFMPEG_CONCURRENCY);
+          const batchEnd = Math.min(i + batch.length, videosToExtract.length);
+
           await db
             .update(processingJobs)
             .set({
-              statusMessage: `Extrayendo cuadros de video... (${i + 1} de ${videosToExtract.length})`,
+              statusMessage: `Extrayendo cuadros de video... (${i + 1}–${batchEnd} de ${videosToExtract.length})`,
             })
             .where(eq(processingJobs.id, jobId));
 
-          // Clean up partial frames from a previous interrupted extraction
-          await db
-            .delete(images)
-            .where(and(eq(images.videoId, vid.id), eq(images.deploymentId, deployment.id)));
+          await Promise.all(batch.map(async (vid) => {
+            // Clean up partial frames from a previous interrupted extraction
+            await db
+              .delete(images)
+              .where(and(eq(images.videoId, vid.id), eq(images.deploymentId, deployment.id)));
 
-          const baseName = vid.filename.replace(/\.[^.]+$/, "");
-          const result = await extractFrames(
-            vid.path!,
-            cacheDir,
-            baseName,
-            fps
-          );
+            // Use vid.id prefix for unique frame filenames (prevents collisions with parallel extraction)
+            const baseName = `vid${vid.id}_${vid.filename.replace(/\.[^.]+$/, "")}`;
+            const result = await extractFrames(
+              vid.path!,
+              cacheDir!,
+              baseName,
+              fps
+            );
 
-          // Update video status and duration
-          await db
-            .update(videos)
-            .set({
-              status: result.error && result.frames.length === 0 ? "failed" : "processed",
-              duration: result.duration || null,
-              errorMessage: result.error ?? null,
-            })
-            .where(eq(videos.id, vid.id));
-
-          // Create image rows for each extracted frame
-          const thumbDir = path.join(
-            process.cwd(),
-            "data",
-            "thumbnails",
-            String(deployment.id)
-          );
-          await fs.mkdir(thumbDir, { recursive: true });
-
-          for (const frame of result.frames) {
-            const frameName = path.basename(frame.path);
-            const [frameImage] = await db
-              .insert(images)
-              .values({
-                deploymentId: deployment.id,
-                jobId: jobId,
-                filename: frameName,
-                path: frame.path,
-                videoId: vid.id,
-                frameIndex: frame.index,
-                status: "pending",
+            // Update video status and duration
+            await db
+              .update(videos)
+              .set({
+                status: result.error && result.frames.length === 0 ? "failed" : "processed",
+                duration: result.duration || null,
+                errorMessage: result.error ?? null,
               })
-              .returning();
+              .where(eq(videos.id, vid.id));
 
-            // Generate thumbnail for the extracted frame
-            try {
-              const thumbPath = path.join(thumbDir, `${frameImage.id}.jpg`);
-              const imgData = await fs.readFile(frame.path);
-              const sharp = (await import("sharp")).default;
-              const thumb = await sharp(imgData)
-                .resize(400)
-                .jpeg({ quality: 80 })
-                .toBuffer();
-              await fs.writeFile(thumbPath, thumb);
-            } catch (err) {
-              console.warn(
-                `[processJob] Thumbnail failed for frame ${frameName}:`,
-                err instanceof Error ? err.message : err
-              );
+            // Insert frame rows and collect IDs for thumbnail generation
+            const frameRecords: { id: number; framePath: string; frameName: string }[] = [];
+            for (const frame of result.frames) {
+              const frameName = path.basename(frame.path);
+              const [frameImage] = await db
+                .insert(images)
+                .values({
+                  deploymentId: deployment.id,
+                  jobId: jobId,
+                  filename: frameName,
+                  path: frame.path,
+                  videoId: vid.id,
+                  frameIndex: frame.index,
+                  status: "pending",
+                })
+                .returning();
+              frameRecords.push({ id: frameImage.id, framePath: frame.path, frameName });
             }
-          }
 
-          totalExtractedFrames += result.frames.length;
+            // Generate thumbnails (outside transaction — I/O heavy)
+            const sharp = (await import("sharp")).default;
+            for (const { id, framePath, frameName } of frameRecords) {
+              try {
+                const thumbPath = path.join(thumbDir, `${id}.jpg`);
+                const imgData = await fs.readFile(framePath);
+                const thumb = await sharp(imgData)
+                  .resize(400)
+                  .jpeg({ quality: 80 })
+                  .toBuffer();
+                await fs.writeFile(thumbPath, thumb);
+              } catch (err) {
+                console.warn(
+                  `[processJob] Thumbnail failed for frame ${frameName}:`,
+                  err instanceof Error ? err.message : err
+                );
+              }
+            }
+
+            totalExtractedFrames += result.frames.length;
+          }));
         }
 
         // Upload extracted frames to Drive (before ML, so driveFileId survives eviction)
@@ -498,7 +509,8 @@ async function processJobInternal(
       classifierModel: job.classifierModel || ML_DEFAULTS.classifierModel,
       device: "auto",
       confidenceThreshold: job.confidenceThreshold ?? ML_DEFAULTS.confidenceThreshold,
-      batchSize: 16,
+      batchSize: ML_DEFAULTS.batchSize,
+      numWorkers: ML_DEFAULTS.numWorkers,
     });
 
     console.log(`[processJob] ML result: success=${mlResult.success}, processed=${mlResult.totalProcessed}, detections=${mlResult.totalDetections}, error=${mlResult.error || "none"}`);

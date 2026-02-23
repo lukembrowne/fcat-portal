@@ -46,11 +46,23 @@ export function getDb(): BetterSQLite3Database<typeof schema> {
   sqlite.pragma("busy_timeout = 5000");
   sqlite.pragma("wal_autocheckpoint = 1000");
 
-  // Integrity check on startup — catch corruption before it spreads
+  // Structural integrity check on startup — catch corruption before it spreads.
+  // SQLite 3.37+ reports type affinity mismatches (e.g., "NUMERIC value in ...")
+  // alongside real corruption. Filter these out since they're harmless.
   const integrity = sqlite.pragma("integrity_check") as { integrity_check: string }[];
-  if (integrity[0]?.integrity_check !== "ok") {
-    console.error("[db] DATABASE INTEGRITY CHECK FAILED:", integrity);
-    throw new Error("Database integrity check failed — the database file may be corrupted");
+  const firstResult = integrity[0]?.integrity_check;
+  if (firstResult !== "ok") {
+    const typeAffinityPattern = /^(NUMERIC|TEXT|NULL|REAL|BLOB|INTEGER) value in /;
+    const structuralIssues = integrity.filter(
+      (r) => !typeAffinityPattern.test(r.integrity_check)
+    );
+    if (structuralIssues.length > 0) {
+      console.error("[db] DATABASE INTEGRITY CHECK FAILED:", structuralIssues);
+      throw new Error("Database integrity check failed — the database file may be corrupted");
+    }
+    console.warn(`[db] Integrity check: ${integrity.length} type affinity warnings (non-critical)`);
+  } else {
+    console.log("[db] Integrity check: ok");
   }
 
   // Startup health report
@@ -85,7 +97,7 @@ function logStartupHealth(dbPath: string) {
     console.log(
       `[db] Database: ${(dbStat.size / 1024 / 1024).toFixed(1)}MB, WAL: ${(walSize / 1024 / 1024).toFixed(1)}MB`
     );
-    console.log("[db] Integrity check: ok");
+    // Integrity check result is logged in getDb() before this function runs
 
     // Check backup freshness
     const backupDir = path.join(path.dirname(dbPath), "backups");

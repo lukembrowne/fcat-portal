@@ -114,6 +114,8 @@ export async function extractFrames(
     ffmpegArgs.splice(2, 0, "-t", String(effectiveDuration));
   }
 
+  let ffmpegPid: number | undefined;
+
   const ffmpegError = await new Promise<string | null>((resolve) => {
     const proc = execFile(
       "ffmpeg",
@@ -135,11 +137,14 @@ export async function extractFrames(
 
     // Track PID for cancellation
     if (proc.pid) {
-      activeExtractionPid = proc.pid;
+      ffmpegPid = proc.pid;
+      activeExtractionPids.add(proc.pid);
     }
   });
 
-  activeExtractionPid = null;
+  if (ffmpegPid) {
+    activeExtractionPids.delete(ffmpegPid);
+  }
 
   // 4. Collect extracted frame paths
   const frames: { path: string; index: number }[] = [];
@@ -189,18 +194,18 @@ export async function extractFrames(
 
 // --- Cancellation support ---
 
-let activeExtractionPid: number | null = null;
+const activeExtractionPids = new Set<number>();
 
 /**
- * Kill the currently running ffmpeg process, if any.
+ * Kill all currently running ffmpeg processes.
  */
 export function cancelFrameExtraction(): void {
-  if (activeExtractionPid) {
+  for (const pid of activeExtractionPids) {
     try {
-      process.kill(activeExtractionPid, "SIGTERM");
+      process.kill(pid, "SIGTERM");
     } catch {
       // Process may have already exited
     }
-    activeExtractionPid = null;
   }
+  activeExtractionPids.clear();
 }

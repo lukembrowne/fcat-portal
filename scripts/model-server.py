@@ -12,7 +12,7 @@ Protocol:
     <- {"type": "server_ready", "device": "cpu", "detector": "...", "classifier": "..."}
 
   Per job (repeats):
-    -> {"image_paths": [...], "confidence_threshold": 0.1, "batch_size": 16}\n
+    -> {"image_paths": [...], "confidence_threshold": 0.1, "batch_size": 16, "num_workers": 2}\n
     <- {"type": "progress", ...}
     <- {"type": "result", ...}
     <- {"type": "complete", "total_processed": N, "total_detections": N}
@@ -26,6 +26,7 @@ import json
 import sys
 import os
 import select
+from concurrent.futures import ThreadPoolExecutor
 
 
 def emit(msg):
@@ -96,101 +97,185 @@ def load_models(detector_version, classifier_name, device):
     return detector, classifier, device
 
 
-def process_job(config, detector, classifier):
-    """Process a single job using pre-loaded models. Yields NDJSON messages."""
-    import numpy as np
+def load_image_safe(image_path):
+    """Load a single image from disk. Returns dict with loaded data or error."""
     from PIL import Image
+    import numpy as np
 
+    try:
+        pil_img = Image.open(image_path).convert("RGB")
+        return {
+            "path": image_path,
+            "array": np.array(pil_img),
+            "width": pil_img.size[0],
+            "height": pil_img.size[1],
+            "error": None,
+        }
+    except Exception as e:
+        return {
+            "path": image_path,
+            "array": None,
+            "width": 0,
+            "height": 0,
+            "error": str(e),
+        }
+
+
+def process_image(item, detector, classifier, confidence_threshold):
+    """Run detection + classification on a single pre-loaded image. Returns (detections_list, error)."""
+    import numpy as np
+
+    image_path = item["path"]
+    img_w = item["width"]
+    img_h = item["height"]
+    img_array = item["array"]
+
+    det_result = detector.single_image_detection(image_path)
+
+    detections_list = []
+
+    if det_result and "detections" in det_result:
+        sv_detections = det_result["detections"]
+
+        for xyxy, class_id, conf in zip(
+            sv_detections.xyxy,
+            sv_detections.class_id,
+            sv_detections.confidence,
+        ):
+            if conf < confidence_threshold:
+                continue
+
+            x1, y1, x2, y2 = xyxy
+            norm_x = float(x1) / img_w
+            norm_y = float(y1) / img_h
+            norm_w = float(x2 - x1) / img_w
+            norm_h = float(y2 - y1) / img_h
+
+            detection = {
+                "bbox": {
+                    "x": round(norm_x, 4),
+                    "y": round(norm_y, 4),
+                    "width": round(norm_w, 4),
+                    "height": round(norm_h, 4),
+                },
+                "detection_confidence": round(float(conf), 4),
+                "detection_class": int(class_id),
+                "classification": None,
+            }
+
+            # Classify animals (class_id 0)
+            if classifier and int(class_id) == 0:
+                try:
+                    import supervision as sv
+
+                    cropped = sv.crop_image(image=img_array, xyxy=xyxy)
+                    clf_result = classifier.single_image_classification(cropped)
+                    if clf_result:
+                        detection["classification"] = {
+                            "species": clf_result.get("prediction", "Unknown"),
+                            "confidence": round(float(clf_result.get("confidence", 0)), 4),
+                        }
+                except Exception:
+                    detection["classification"] = {
+                        "species": "Unknown",
+                        "confidence": 0.0,
+                    }
+
+            detections_list.append(detection)
+
+    return detections_list
+
+
+def process_job(config, detector, classifier):
+    """Process a single job using pre-loaded models. Yields NDJSON messages.
+
+    Images are pre-loaded in parallel using a thread pool (num_workers threads),
+    then detection runs sequentially per image within each mini-batch.
+    Cancel is checked between batches AND between individual images.
+    """
     image_paths = config["image_paths"]
     confidence_threshold = config.get("confidence_threshold", 0.1)
+    batch_size = max(1, min(config.get("batch_size", 16), 64))
+    num_workers = config.get("num_workers", 0)
+
+    if batch_size != config.get("batch_size", 16):
+        emit({"type": "info", "message": f"batch_size clamped to {batch_size}"})
+
     total = len(image_paths)
+    num_batches = (total + batch_size - 1) // batch_size
     total_detections = 0
     processed = 0
     cancelled = False
 
-    for idx, image_path in enumerate(image_paths):
-        # Check for cancel between images
+    emit({"type": "info", "message": f"Job config: {total} images, batch_size={batch_size}, num_workers={num_workers}, {num_batches} batches"})
+
+    for batch_start in range(0, total, batch_size):
+        # Check for cancel between batches
         if check_cancel():
             cancelled = True
             break
 
-        emit({"type": "progress", "image": image_path, "index": idx, "total": total})
+        batch_paths = image_paths[batch_start:batch_start + batch_size]
+        batch_num = batch_start // batch_size + 1
 
-        try:
-            # Load image once — reuse for dimensions and cropping
-            pil_img = Image.open(image_path).convert("RGB")
-            img_w, img_h = pil_img.size
-            img_array = np.array(pil_img)
+        # Pre-load images in parallel using thread pool
+        if num_workers > 0:
+            emit({"type": "info", "message": f"Batch {batch_num}/{num_batches}: loading {len(batch_paths)} images with {num_workers} threads"})
+            with ThreadPoolExecutor(max_workers=num_workers) as pool:
+                loaded_batch = list(pool.map(load_image_safe, batch_paths))
+        else:
+            emit({"type": "info", "message": f"Batch {batch_num}/{num_batches}: loading {len(batch_paths)} images sequentially"})
+            loaded_batch = [load_image_safe(p) for p in batch_paths]
 
-            # Run detection
-            det_result = detector.single_image_detection(image_path)
+        failed_in_batch = sum(1 for item in loaded_batch if item["error"])
+        if failed_in_batch > 0:
+            emit({"type": "info", "message": f"Batch {batch_num}: {failed_in_batch}/{len(batch_paths)} images failed to load"})
 
-            detections_list = []
+        # Process each pre-loaded image
+        for i, item in enumerate(loaded_batch):
+            # Also check cancel between individual images for responsiveness
+            if check_cancel():
+                cancelled = True
+                break
 
-            if det_result and "detections" in det_result:
-                sv_detections = det_result["detections"]
+            image_path = item["path"]
+            idx = batch_start + i
 
-                for xyxy, class_id, conf in zip(
-                    sv_detections.xyxy,
-                    sv_detections.class_id,
-                    sv_detections.confidence,
-                ):
-                    if conf < confidence_threshold:
-                        continue
+            # Handle images that failed to load
+            if item["error"]:
+                emit({
+                    "type": "error",
+                    "image": image_path,
+                    "message": item["error"],
+                })
+                processed += 1
+                continue
 
-                    x1, y1, x2, y2 = xyxy
-                    norm_x = float(x1) / img_w
-                    norm_y = float(y1) / img_h
-                    norm_w = float(x2 - x1) / img_w
-                    norm_h = float(y2 - y1) / img_h
+            emit({"type": "progress", "image": image_path, "index": idx, "total": total})
 
-                    detection = {
-                        "bbox": {
-                            "x": round(norm_x, 4),
-                            "y": round(norm_y, 4),
-                            "width": round(norm_w, 4),
-                            "height": round(norm_h, 4),
-                        },
-                        "detection_confidence": round(float(conf), 4),
-                        "detection_class": int(class_id),
-                        "classification": None,
-                    }
+            try:
+                detections_list = process_image(
+                    item, detector, classifier, confidence_threshold
+                )
 
-                    # Classify animals (class_id 0)
-                    if classifier and int(class_id) == 0:
-                        try:
-                            import supervision as sv
+                emit({
+                    "type": "result",
+                    "image": image_path,
+                    "detections": detections_list,
+                })
+                total_detections += len(detections_list)
+                processed += 1
 
-                            cropped = sv.crop_image(image=img_array, xyxy=xyxy)
-                            clf_result = classifier.single_image_classification(cropped)
-                            if clf_result:
-                                detection["classification"] = {
-                                    "species": clf_result.get("prediction", "Unknown"),
-                                    "confidence": round(float(clf_result.get("confidence", 0)), 4),
-                                }
-                        except Exception:
-                            detection["classification"] = {
-                                "species": "Unknown",
-                                "confidence": 0.0,
-                            }
+            except Exception as e:
+                emit({
+                    "type": "error",
+                    "image": image_path,
+                    "message": str(e),
+                })
+                processed += 1
 
-                    detections_list.append(detection)
-                    total_detections += 1
-
-            emit({
-                "type": "result",
-                "image": image_path,
-                "detections": detections_list,
-            })
-            processed += 1
-
-        except Exception as e:
-            emit({
-                "type": "error",
-                "image": image_path,
-                "message": str(e),
-            })
-            processed += 1
+        if cancelled:
+            break
 
     complete_msg = {
         "type": "complete",

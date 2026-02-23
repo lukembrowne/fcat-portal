@@ -36,6 +36,7 @@ export interface MLConfig {
   device: string;
   confidenceThreshold: number;
   batchSize: number;
+  numWorkers: number;
 }
 
 export interface MLRunResult {
@@ -530,13 +531,14 @@ export function cancelModelServerJob(): void {
     // stdin may be closed
   }
 
-  // Fallback: if job doesn't complete within 5s, kill server
+  // Fallback: if job doesn't complete within 30s, kill server
+  // (batch processing takes longer per cancel check than sequential)
   setTimeout(() => {
     if (currentJob) {
       console.log("[ml-runner] Cancel timeout — killing model server");
       shutdownModelServer();
     }
-  }, 5000);
+  }, 30_000);
 }
 
 // ---------------------------------------------------------------------------
@@ -607,6 +609,7 @@ export async function runMLPredictions(
       image_paths: config.imagePaths,
       confidence_threshold: config.confidenceThreshold,
       batch_size: config.batchSize,
+      num_workers: config.numWorkers,
     });
 
     serverProc!.stdin!.write(jobConfig + "\n");

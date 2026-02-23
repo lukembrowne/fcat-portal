@@ -33,7 +33,7 @@ export default async function ResultsPage() {
     startedAt: job.startedAt?.toISOString() || null,
     completedAt: job.completedAt?.toISOString() || null,
     deployment: job.deployment
-      ? { id: job.deployment.id, name: job.deployment.name }
+      ? { id: job.deployment.id, name: job.deployment.name, siteName: job.deployment.siteName }
       : null,
     detectionsCount: job.detectionsCount,
     speciesCount: job.speciesCount,

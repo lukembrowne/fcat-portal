@@ -38,7 +38,7 @@ export interface ResultsJob {
   createdAt: string | null;
   startedAt: string | null;
   completedAt: string | null;
-  deployment: { id: number; name: string } | null;
+  deployment: { id: number; name: string; siteName: string | null } | null;
   detectionsCount: number;
   speciesCount: number;
   verifiedCount: number;
@@ -224,6 +224,9 @@ export function ResultsTable({ jobs, canDelete }: Props) {
                 )}
                 <TableCell className="font-medium">
                   {job.deployment?.name || "Instalación desconocida"}
+                  {job.deployment?.siteName && (
+                    <div className="text-xs text-muted-foreground font-normal">{job.deployment.siteName}</div>
+                  )}
                 </TableCell>
                 <TableCell>
                   <StatusBadge status={job.status} type="job" />

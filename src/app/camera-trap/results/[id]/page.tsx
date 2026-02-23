@@ -166,6 +166,9 @@ export default async function JobResultsPage({ params }: PageProps) {
           <h1 className="text-3xl font-bold mb-2">
             {deployment?.name || "Instalación desconocida"}
           </h1>
+          {deployment?.siteName && (
+            <p className="text-muted-foreground mb-1">{deployment.siteName}</p>
+          )}
           <div className="flex items-center gap-4">
             <StatusBadge status={job.status} type="job" />
             {job.startedAt && job.completedAt && (

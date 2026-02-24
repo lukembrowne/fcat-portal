@@ -75,6 +75,57 @@ export function extractFolderId(driveUrl: string): string | null {
 }
 
 /**
+ * Recursively count files whose extension matches the given set.
+ * Skips `_frames/` subfolders (video frame uploads).
+ * Caps recursion at depth 5 to prevent pathological nesting.
+ */
+async function countFilesRecursive(
+  folderId: string,
+  extensions: Set<string>,
+  depth = 0
+): Promise<number> {
+  if (depth > 5) return 0;
+
+  const drive = getDrive();
+  let count = 0;
+  const subfolders: { id: string; name: string }[] = [];
+  let pageToken: string | undefined;
+
+  do {
+    const res = await drive.files.list({
+      q: `'${folderId}' in parents and trashed = false`,
+      fields: "nextPageToken, files(id, name, mimeType)",
+      pageSize: 1000,
+      pageToken,
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
+    });
+
+    for (const file of res.data.files ?? []) {
+      if (!file.id || !file.name) continue;
+
+      if (file.mimeType === "application/vnd.google-apps.folder") {
+        subfolders.push({ id: file.id, name: file.name });
+      } else {
+        const ext = path.extname(file.name).toLowerCase();
+        if (extensions.has(ext)) {
+          count++;
+        }
+      }
+    }
+
+    pageToken = res.data.nextPageToken ?? undefined;
+  } while (pageToken);
+
+  for (const sub of subfolders) {
+    if (sub.name === "_frames") continue;
+    count += await countFilesRecursive(sub.id, extensions, depth + 1);
+  }
+
+  return count;
+}
+
+/**
  * Check what data has been uploaded to a deployment's Drive folder.
  *
  * Lists subfolders of the deployment folder, then counts files in each
@@ -135,26 +186,21 @@ export async function checkDeploymentUploads(
 
     const countPromises = Object.entries(DATA_TYPE_FOLDERS).map(
       async ([key, folderName]) => {
+        const k = key as keyof typeof DATA_TYPE_FOLDERS;
         const subfolderId = subfolderMap.get(folderName);
         if (!subfolderId) {
           console.log(`[Drive] ${folderName}: subfolder not found in parent`);
-          return { key, count: 0 };
+          return { key: k, count: 0 };
         }
 
         try {
-          const filesRes = await drive.files.list({
-            q: `'${subfolderId}' in parents and trashed = false`,
-            fields: "files(id)",
-            pageSize: 1000,
-            supportsAllDrives: true,
-            includeItemsFromAllDrives: true,
-          });
-          const count = filesRes.data.files?.length ?? 0;
+          const extensions = DATA_TYPE_EXTENSIONS[k];
+          const count = await countFilesRecursive(subfolderId, extensions);
           console.log(`[Drive] ${folderName} (${subfolderId}): ${count} files`);
-          return { key, count };
+          return { key: k, count };
         } catch (err) {
           console.error(`[Drive] Error counting files in ${folderName}:`, err);
-          return { key, count: null };
+          return { key: k, count: null as number | null };
         }
       }
     );
@@ -164,8 +210,7 @@ export async function checkDeploymentUploads(
     for (const result of results) {
       if (result.status === "fulfilled") {
         const { key, count } = result.value;
-        const k = key as keyof typeof DATA_TYPE_FOLDERS;
-        status[k] = count;
+        status[key] = count;
       }
     }
 
@@ -218,6 +263,18 @@ const IMAGE_EXTENSIONS = new Set([
 ]);
 
 const VIDEO_EXTENSIONS = new Set([".mp4", ".avi", ".mov"]);
+
+const AUDIO_EXTENSIONS = new Set([
+  ".wav", ".mp3", ".flac", ".wac", ".w4v", ".ogg", ".aac",
+]);
+
+const IBUTTON_EXTENSIONS = new Set([".xlsx"]);
+
+const DATA_TYPE_EXTENSIONS: Record<keyof typeof DATA_TYPE_FOLDERS, Set<string>> = {
+  camarasTrampas: new Set([...IMAGE_EXTENSIONS, ...VIDEO_EXTENSIONS]),
+  grabadoresDeAudio: AUDIO_EXTENSIONS,
+  ibutton: IBUTTON_EXTENSIONS,
+};
 
 // ---------------------------------------------------------------------------
 // Camera Trap — Public API

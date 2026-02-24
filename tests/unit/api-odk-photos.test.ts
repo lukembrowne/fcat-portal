@@ -31,6 +31,8 @@ vi.mock("@/lib/odk-constants", () => ({
   BIOCHOCO_FORM_DEPLOY: "deploy-form",
   BIOCHOCO_FORM_RETRIEVE: "retrieve-form",
   BIOCHOCO_FORM_HABITAT: "habitat-form",
+  MONITOREO_PROJECT_ID: "30",
+  MONITOREO_FORM_SOCIAL_ACTIVITIES: "social-activities",
 }));
 
 const { GET } = await import("@/app/api/odk/photos/route");

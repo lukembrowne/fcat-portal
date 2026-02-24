@@ -169,8 +169,8 @@ describe("action permission guards", () => {
     it("fetchHabitatData requires biochoco viewer", () =>
       expectPermission(biochocoHabitat.fetchHabitatData, "biochoco", "viewer"));
 
-    describe("tools (editor)", () => {
-      const editorActions: [string, Function, unknown[]][] = [
+    describe("tools (admin)", () => {
+      const adminActions: [string, Function, unknown[]][] = [
         ["fetchToolsData", biochocoTools.fetchToolsData, []],
         ["previewBulkShift", biochocoTools.previewBulkShift, [1, false]],
         ["commitBulkShift", biochocoTools.commitBulkShift, [1, false, "abc"]],
@@ -184,9 +184,9 @@ describe("action permission guards", () => {
         ["commitSyncOdk", biochocoTools.commitSyncOdk, [["d1"]]],
       ];
 
-      for (const [name, fn, args] of editorActions) {
-        it(`${name} requires biochoco editor`, () =>
-          expectPermission(fn, "biochoco", "editor", args));
+      for (const [name, fn, args] of adminActions) {
+        it(`${name} requires biochoco admin`, () =>
+          expectPermission(fn, "biochoco", "admin", args));
       }
     });
 

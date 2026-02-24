@@ -120,13 +120,14 @@ export async function GET(request: NextRequest) {
 
   // ── Query 1: Deployments ─────────────────────────────────────────────
 
-  const deploymentRows = await db
+  let deploymentRows = await db
     .select()
     .from(deployments)
     .where(
       and(
         inArray(deployments.id, ids),
         inArray(deployments.status, PROCESSED_STATUSES),
+        eq(deployments.excluded, false),
         projectAccessFilter,
       )
     );
@@ -158,10 +159,33 @@ export async function GET(request: NextRequest) {
     .leftJoin(videos, eq(images.videoId, videos.id))
     .where(inArray(images.deploymentId, validIds));
 
-  // Build a map of deploymentId → dateStart for timestamp fallback
+  // Build deployment lookup maps
   const deploymentDateMap = new Map(
     deploymentRows.map((d) => [d.id, d.dateStart])
   );
+  const deploymentValidWindowMap = new Map(
+    deploymentRows.map((d) => [d.id, { validStart: d.validStart, validEnd: d.validEnd }])
+  );
+
+  // Filter media by valid time window per deployment
+  const filteredMediaRows = mediaRows.filter((m) => {
+    const window = deploymentValidWindowMap.get(m.deploymentId);
+    if (!window || (!window.validStart && !window.validEnd)) return true;
+
+    const ts =
+      m.exifTimestamp ??
+      (m.fileModified ? m.fileModified.toISOString() : null);
+    if (!ts) return true; // No timestamp — include (don't lose data)
+
+    if (window.validStart && ts < window.validStart) return false;
+    if (window.validEnd && ts > window.validEnd) return false;
+    return true;
+  });
+
+  // Remove deployments that have zero media after filtering
+  const deploymentIdsWithMedia = new Set(filteredMediaRows.map((m) => m.deploymentId));
+  deploymentRows = deploymentRows.filter((d) => deploymentIdsWithMedia.has(d.id));
+  const filteredValidIds = deploymentRows.map((d) => d.id);
 
   // ── Query 3: Observations (detections + identifications) ─────────────
 
@@ -189,7 +213,7 @@ export async function GET(request: NextRequest) {
     .leftJoin(identifications, eq(identifications.detectionId, detections.id))
     .where(
       and(
-        inArray(images.deploymentId, validIds),
+        inArray(images.deploymentId, filteredValidIds),
         or(
           isNull(identifications.verificationStatus),
           ne(identifications.verificationStatus, "rejected")
@@ -197,13 +221,14 @@ export async function GET(request: NextRequest) {
       )
     );
 
-  // Build image→deploymentId lookup
+  // Build image→deploymentId lookup (filtered media only)
+  const filteredMediaIds = new Set(filteredMediaRows.map((m) => m.id));
   const imageDeploymentMap = new Map(
-    mediaRows.map((m) => [m.id, m.deploymentId])
+    filteredMediaRows.map((m) => [m.id, m.deploymentId])
   );
   // Build image→timestamp lookup
   const imageTimestampMap = new Map(
-    mediaRows.map((m) => [
+    filteredMediaRows.map((m) => [
       m.id,
       m.exifTimestamp ??
         (m.fileModified ? m.fileModified.toISOString() : null) ??
@@ -231,8 +256,8 @@ export async function GET(request: NextRequest) {
     d.name,
     d.latitude,
     d.longitude,
-    toISO(d.dateStart),
-    toISO(d.dateEnd),
+    toISO(d.validStart ?? d.dateStart),
+    toISO(d.validEnd ?? d.dateEnd),
     d.projectLabel,
   ]);
 
@@ -252,7 +277,7 @@ export async function GET(request: NextRequest) {
     "mediaComments",
   ];
 
-  const mediaCsvRows = mediaRows.map((m) => {
+  const mediaCsvRows = filteredMediaRows.map((m) => {
     const isVideoFrame = m.videoId != null;
     const timestamp =
       m.exifTimestamp ??
@@ -298,10 +323,15 @@ export async function GET(request: NextRequest) {
     "classificationProbability",
   ];
 
+  // Filter observations to only include those for filtered media
+  const filteredObservationRows = observationRows.filter((o) =>
+    filteredMediaIds.has(o.imageId)
+  );
+
   // Track which images have at least one non-rejected observation
   const imagesWithObservations = new Set<number>();
 
-  const detectionObsRows = observationRows.map((o) => {
+  const detectionObsRows = filteredObservationRows.map((o) => {
     imagesWithObservations.add(o.imageId);
 
     const obsType = observationTypeFromClass(o.detectionClass);
@@ -333,7 +363,7 @@ export async function GET(request: NextRequest) {
   });
 
   // Blank observations for images with no detections or confirmedBlank
-  const blankObsRows = mediaRows
+  const blankObsRows = filteredMediaRows
     .filter(
       (m) => !imagesWithObservations.has(m.id) || m.confirmedBlank === true
     )
@@ -379,7 +409,7 @@ export async function GET(request: NextRequest) {
   // ── Build datapackage.json ───────────────────────────────────────────
 
   const dates = deploymentRows
-    .flatMap((d) => [d.dateStart, d.dateEnd])
+    .flatMap((d) => [d.validStart ?? d.dateStart, d.validEnd ?? d.dateEnd])
     .filter(Boolean) as string[];
   dates.sort();
 

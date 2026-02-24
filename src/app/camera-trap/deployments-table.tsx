@@ -208,8 +208,15 @@ export function DeploymentsTable({
             </Tooltip>
           </TooltipProvider>
         ),
-        cell: ({ getValue }) => (
-          <StatusBadge status={getValue<string>()} type="deployment" />
+        cell: ({ row }) => (
+          <span className="inline-flex items-center gap-1">
+            <StatusBadge status={row.original.status} type="deployment" />
+            {row.original.excluded && (
+              <span className="inline-flex items-center rounded-full border border-destructive/30 bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium text-destructive">
+                Excluida
+              </span>
+            )}
+          </span>
         ),
       },
       {
@@ -692,7 +699,7 @@ export function DeploymentsTable({
               table.getRowModel().rows.map((row) => (
                 <Fragment key={row.id}>
                   <TableRow
-                    className={`cursor-pointer hover:bg-muted/50 ${row.getIsExpanded() ? "bg-primary/10 border-b-0" : ""}`}
+                    className={`cursor-pointer hover:bg-muted/50 ${row.getIsExpanded() ? "bg-primary/10 border-b-0" : ""} ${row.original.excluded ? "opacity-50" : ""}`}
                     data-state={row.getIsSelected() ? "selected" : undefined}
                     onClick={() => row.toggleExpanded()}
                   >

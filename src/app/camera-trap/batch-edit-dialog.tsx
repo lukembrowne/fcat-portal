@@ -20,6 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { Loader2 } from "lucide-react";
 import { bulkUpdateMetadata } from "./actions";
 
@@ -55,6 +56,10 @@ export function BatchEditDialog({
   const [longitude, setLongitude] = useState("");
   const [dateStart, setDateStart] = useState("");
   const [dateEnd, setDateEnd] = useState("");
+  const [applyExcluded, setApplyExcluded] = useState(false);
+  const [excludedValue, setExcludedValue] = useState("");
+  const [applyQaNotes, setApplyQaNotes] = useState(false);
+  const [qaNotes, setQaNotes] = useState("");
   const [saving, startSaving] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
@@ -73,6 +78,12 @@ export function BatchEditDialog({
       if (applyDates) {
         fields.dateStart = dateStart || null;
         fields.dateEnd = dateEnd || null;
+      }
+      if (applyExcluded) {
+        fields.excluded = excludedValue === "true";
+      }
+      if (applyQaNotes) {
+        fields.qaNotes = qaNotes.trim() || null;
       }
 
       if (Object.keys(fields).length === 0) {
@@ -95,6 +106,10 @@ export function BatchEditDialog({
         setLongitude("");
         setDateStart("");
         setDateEnd("");
+        setApplyExcluded(false);
+        setExcludedValue("");
+        setApplyQaNotes(false);
+        setQaNotes("");
       } else {
         setError(result.error);
       }
@@ -224,6 +239,54 @@ export function BatchEditDialog({
                   disabled={!applyDates}
                 />
               </div>
+            </div>
+          </div>
+
+          {/* Exclusion */}
+          <div className="flex items-start gap-3">
+            <Checkbox
+              id="apply-excluded"
+              checked={applyExcluded}
+              onCheckedChange={(v) => setApplyExcluded(!!v)}
+              className="mt-2"
+            />
+            <div className="flex-1">
+              <Label htmlFor="batch-excluded">Excluir</Label>
+              <Select
+                value={excludedValue}
+                onValueChange={setExcludedValue}
+                disabled={!applyExcluded}
+              >
+                <SelectTrigger id="batch-excluded">
+                  <SelectValue placeholder="No cambiar" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="true">Excluir</SelectItem>
+                  <SelectItem value="false">Incluir</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          {/* QA Notes */}
+          <div className="flex items-start gap-3">
+            <Checkbox
+              id="apply-qa-notes"
+              checked={applyQaNotes}
+              onCheckedChange={(v) => setApplyQaNotes(!!v)}
+              className="mt-2"
+            />
+            <div className="flex-1">
+              <Label htmlFor="batch-qa-notes">Notas QA</Label>
+              <Textarea
+                id="batch-qa-notes"
+                value={qaNotes}
+                onChange={(e) => setQaNotes(e.target.value)}
+                disabled={!applyQaNotes}
+                placeholder="Notas de calidad"
+                rows={2}
+                maxLength={2000}
+              />
             </div>
           </div>
         </div>

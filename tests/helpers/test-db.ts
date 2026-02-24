@@ -98,7 +98,14 @@ const CAMERA_TRAP_DDL = `
     excluded INTEGER NOT NULL DEFAULT 0,
     valid_start TEXT,
     valid_end TEXT,
-    qa_notes TEXT
+    qa_notes TEXT,
+    upload_camera_count INTEGER,
+    upload_audio_count INTEGER,
+    upload_ibutton_count INTEGER,
+    upload_camera_folder_id TEXT,
+    upload_audio_folder_id TEXT,
+    upload_ibutton_folder_id TEXT,
+    upload_counts_checked_at INTEGER
   );
 
   CREATE TABLE biochoco_processing_jobs (

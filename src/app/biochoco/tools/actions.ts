@@ -66,6 +66,8 @@ export interface ToolsPageData {
 
 // ─── Load initial data ──────────────────────────────────────
 
+// NOTE: Tools page intentionally reads status from the Google Sheet (not live ODK).
+// The "Sincronizar ODK" tool exists to push live ODK status back to the sheet.
 export async function fetchToolsData(): Promise<ActionResult<ToolsPageData>> {
   try {
     await requirePermission("biochoco", "admin");
@@ -320,8 +322,9 @@ async function deriveSyncUpdates(): Promise<SyncUpdate[]> {
   const retrievedMap = new Map<string, string>();
   for (const sub of rawRetrieves) {
     const sel = sub.site_selection as Record<string, unknown> | undefined;
+    const retInfo = sub.retrieval_info as Record<string, unknown> | undefined;
     const depId = (sel?.deployment_id as string) ?? (sub.deployment_id as string) ?? "";
-    const date = (sel?.fecha_recuperacion as string) ?? (sub.fecha_recuperacion as string) ?? "";
+    const date = (retInfo?.retrieval_date as string) ?? (sel?.fecha_recuperacion as string) ?? (sub.fecha_recuperacion as string) ?? "";
     if (depId) retrievedMap.set(depId, date.slice(0, 10));
   }
 

@@ -154,6 +154,14 @@ export const deployments = sqliteTable(
     validStart: text("valid_start"),
     validEnd: text("valid_end"),
     qaNotes: text("qa_notes"),
+    // Upload cache (Drive file counts)
+    uploadCameraCount: integer("upload_camera_count"),
+    uploadAudioCount: integer("upload_audio_count"),
+    uploadIbuttonCount: integer("upload_ibutton_count"),
+    uploadCameraFolderId: text("upload_camera_folder_id"),
+    uploadAudioFolderId: text("upload_audio_folder_id"),
+    uploadIbuttonFolderId: text("upload_ibutton_folder_id"),
+    uploadCountsCheckedAt: integer("upload_counts_checked_at", { mode: "timestamp" }),
   },
   (table) => [
     uniqueIndex("idx_biochoco_deployments_project_path").on(

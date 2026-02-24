@@ -100,6 +100,25 @@ Persistent model server for MegaDetector V6 + species classifier. Loads models o
 
 Single-shot prediction script (legacy). Accepts JSON config via stdin, runs MegaDetector detection + classification, outputs NDJSON to stdout. Superseded by `model-server.py` for production use.
 
+## Google Drive
+
+### copy-deployments-to-test-drive.sh
+
+Copy deployment folders from `BIOCHOCO_Data` to `BIOCHOCO_Data_test/Biochoco` on the same Shared Drive using rclone. Uses server-side copy (no local download/upload). Safe — uses `rclone copy` which is additive and won't delete existing files.
+
+**Prerequisites:** rclone installed with `gdrive-biochoco:` remote configured.
+
+```bash
+# Copy specific deployments
+./scripts/copy-deployments-to-test-drive.sh CCN-001_V1 CCN-003_V1 GIZ-009_V1
+
+# Preview what would be copied without copying
+./scripts/copy-deployments-to-test-drive.sh --dry-run CCN-001_V1 CCN-003_V1
+
+# Verify the copy
+rclone lsd "gdrive-biochoco:BIOCHOCO_Data_test/Biochoco/CCN-001_V1"
+```
+
 ## Diagnostics
 
 ### test-drive.mjs

@@ -6,6 +6,7 @@ import {
   BIOCHOCO_PROJECT_ID,
   BIOCHOCO_DATASET_SITES,
   BIOCHOCO_FORM_DEPLOY,
+  BIOCHOCO_FORM_RETRIEVE,
 } from "@/lib/odk-constants";
 import type { OdkSiteEntity } from "@/lib/odk-types";
 import { loadSchedule, updateScheduleRows } from "@/lib/sheets-client";
@@ -26,6 +27,8 @@ export interface MissingDeployment {
   latitude: number | null;
   longitude: number | null;
   dateInstalled: string | null;
+  dateRetrieved: string | null;
+  status: "scheduled" | "deployed" | "retrieved";
   inSchedule: boolean;
 }
 
@@ -94,10 +97,14 @@ function buildSiteMap(
 // ─── Shared data fetching ────────────────────────────────────
 
 async function fetchOdkDeploymentData() {
-  const [rawSubmissions, rawSites, schedule] = await Promise.all([
+  const [rawSubmissions, rawRetrieves, rawSites, schedule] = await Promise.all([
     fetchSubmissions<Record<string, unknown>>(
       BIOCHOCO_PROJECT_ID,
       BIOCHOCO_FORM_DEPLOY
+    ),
+    fetchSubmissions<Record<string, unknown>>(
+      BIOCHOCO_PROJECT_ID,
+      BIOCHOCO_FORM_RETRIEVE
     ),
     fetchEntities<OdkSiteEntity>(
       BIOCHOCO_PROJECT_ID,
@@ -114,7 +121,18 @@ async function fetchOdkDeploymentData() {
   }
   const scheduleSet = new Set(schedule.map((r) => r.deploymentId));
 
-  return { siteMap, submissions, submissionMap, schedule, scheduleSet };
+  // Build retrieve date map from retrieve submissions
+  const retrievedDateMap = new Map<string, string>();
+  for (const sub of rawRetrieves) {
+    const sel = sub.site_selection as Record<string, unknown> | undefined;
+    const retInfo = sub.retrieval_info as Record<string, unknown> | undefined;
+    const depId = (sel?.deployment_id as string) ?? (sub.deployment_id as string) ?? "";
+    if (!depId) continue;
+    const date = (retInfo?.retrieval_date as string) ?? (sel?.fecha_recuperacion as string) ?? (sub.fecha_recuperacion as string) ?? "";
+    if (date) retrievedDateMap.set(depId, date.slice(0, 10));
+  }
+
+  return { siteMap, submissions, submissionMap, schedule, scheduleSet, retrievedDateMap };
 }
 
 // ─── Actions ─────────────────────────────────────────────────
@@ -128,7 +146,7 @@ export async function getMissingDriveFolders(): Promise<
   try {
     await requirePermission("biochoco", "editor");
 
-    const { siteMap, submissions, scheduleSet: scheduleDeploymentIds } =
+    const { siteMap, submissions, scheduleSet: scheduleDeploymentIds, retrievedDateMap } =
       await fetchOdkDeploymentData();
 
     // Check DB for deployments with driveFolderId set (source of truth)
@@ -156,6 +174,8 @@ export async function getMissingDriveFolders(): Promise<
       }
 
       const site = siteMap.get(sub.siteId);
+      const dateRetrieved = retrievedDateMap.get(sub.deploymentId) ?? null;
+      const status = dateRetrieved ? "retrieved" : sub.dateInstalled ? "deployed" : "scheduled";
       missing.push({
         deploymentId: sub.deploymentId,
         odkSubmissionId: sub.id,
@@ -164,6 +184,8 @@ export async function getMissingDriveFolders(): Promise<
         latitude: site?.lat ?? null,
         longitude: site?.lng ?? null,
         dateInstalled: sub.dateInstalled?.slice(0, 10) ?? null,
+        dateRetrieved,
+        status,
         inSchedule: scheduleDeploymentIds.has(sub.deploymentId),
       });
     }
@@ -256,6 +278,14 @@ export async function createSingleDriveFolder(
           odkSubmissionId: sub.id,
           metadataSource: "odk",
           status: "unscanned",
+          // Save subfolder IDs and initial counts at creation time
+          uploadCameraFolderId: folder.subfolderIds.camarasTrampas,
+          uploadAudioFolderId: folder.subfolderIds.grabadoresDeAudio,
+          uploadIbuttonFolderId: folder.subfolderIds.ibutton,
+          uploadCameraCount: 0,
+          uploadAudioCount: 0,
+          uploadIbuttonCount: 0,
+          uploadCountsCheckedAt: new Date(),
         })
         .onConflictDoNothing();
     } catch (err) {
@@ -334,11 +364,20 @@ export async function recreateDriveFolder(
       }
     }
 
-    // Update existing DB row with new folder ID
+    // Update existing DB row with new folder ID and subfolder IDs
     try {
       await db
         .update(deployments)
-        .set({ driveFolderId: folder.id })
+        .set({
+          driveFolderId: folder.id,
+          uploadCameraFolderId: folder.subfolderIds.camarasTrampas,
+          uploadAudioFolderId: folder.subfolderIds.grabadoresDeAudio,
+          uploadIbuttonFolderId: folder.subfolderIds.ibutton,
+          uploadCameraCount: 0,
+          uploadAudioCount: 0,
+          uploadIbuttonCount: 0,
+          uploadCountsCheckedAt: new Date(),
+        })
         .where(eq(deployments.name, deploymentId));
     } catch (err) {
       console.error(

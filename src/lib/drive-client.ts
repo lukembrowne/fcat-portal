@@ -503,6 +503,11 @@ export interface CreatedFolder {
   id: string;
   name: string;
   webViewLink: string;
+  subfolderIds: {
+    camarasTrampas: string | null;
+    grabadoresDeAudio: string | null;
+    ibutton: string | null;
+  };
 }
 
 /**
@@ -564,19 +569,23 @@ export async function createDeploymentFolder(
     includeItemsFromAllDrives: true,
   });
 
-  const existingSubfolders = new Set(
-    (subfoldersRes.data.files ?? []).map((f) => f.name)
+  const existingSubfolderMap = new Map(
+    (subfoldersRes.data.files ?? [])
+      .filter((f): f is { id: string; name: string } => !!f.id && !!f.name)
+      .map((f) => [f.name, f.id])
   );
 
-  // Create missing subfolders
-  const subfolderNames = Object.values(DATA_TYPE_FOLDERS);
-  for (const subName of subfolderNames) {
-    if (existingSubfolders.has(subName)) {
+  // Create missing subfolders, tracking IDs for all
+  const subfolderIdMap = new Map<string, string>();
+  for (const [key, subName] of Object.entries(DATA_TYPE_FOLDERS)) {
+    const existingId = existingSubfolderMap.get(subName);
+    if (existingId) {
       console.log(`[Drive] Subfolder already exists: ${subName}`);
+      subfolderIdMap.set(key, existingId);
       continue;
     }
 
-    await drive.files.create({
+    const res = await drive.files.create({
       requestBody: {
         name: subName,
         mimeType: FOLDER_MIME,
@@ -585,10 +594,22 @@ export async function createDeploymentFolder(
       fields: "id",
       supportsAllDrives: true,
     });
+    if (res.data.id) {
+      subfolderIdMap.set(key, res.data.id);
+    }
     console.log(`[Drive] Created subfolder: ${subName}`);
   }
 
-  return { id: folderId, name: deploymentName, webViewLink };
+  return {
+    id: folderId,
+    name: deploymentName,
+    webViewLink,
+    subfolderIds: {
+      camarasTrampas: subfolderIdMap.get("camarasTrampas") ?? null,
+      grabadoresDeAudio: subfolderIdMap.get("grabadoresDeAudio") ?? null,
+      ibutton: subfolderIdMap.get("ibutton") ?? null,
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------

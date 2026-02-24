@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   CheckCircle2,
   XCircle,
@@ -26,7 +26,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import type { ScheduleRow, ScheduleStatus } from "@/lib/schedule-types";
 import type { UploadStatus } from "@/lib/drive-client";
-import { checkDriveForDeployments, checkSingleDeployment, type DriveStatusResult } from "./actions";
+import { refreshSingleUploadCount, type DriveStatusResult } from "./actions";
 import { recreateDriveFolder } from "./drive-folder-actions";
 
 // --- Helpers ---
@@ -42,6 +42,38 @@ function formatShortDate(dateStr: string | null): string {
 
 function driveLink(folderId: string): string {
   return `https://drive.google.com/drive/folders/${folderId}`;
+}
+
+function formatRelativeTime(unixTimestamp: number): string {
+  const now = Date.now() / 1000;
+  const diff = now - unixTimestamp;
+  if (diff < 60) return "ahora";
+  if (diff < 3600) return `hace ${Math.floor(diff / 60)} min`;
+  if (diff < 86400) return `hace ${Math.floor(diff / 3600)}h`;
+  return `hace ${Math.floor(diff / 86400)}d`;
+}
+
+/** Build initial driveCache from cached schedule data */
+function buildInitialCache(schedule: ScheduleRow[]): Map<string, DriveStatusResult> {
+  const cache = new Map<string, DriveStatusResult>();
+  for (const row of schedule) {
+    if (row.uploadCountsCheckedAt != null) {
+      cache.set(row.deploymentId, {
+        deploymentId: row.deploymentId,
+        uploads: {
+          camarasTrampas: row.uploadCameraCount ?? null,
+          grabadoresDeAudio: row.uploadAudioCount ?? null,
+          ibutton: row.uploadIbuttonCount ?? null,
+          subfolderIds: {
+            camarasTrampas: row.uploadCameraFolderId ?? null,
+            grabadoresDeAudio: row.uploadAudioFolderId ?? null,
+            ibutton: row.uploadIbuttonFolderId ?? null,
+          },
+        },
+      });
+    }
+  }
+  return cache;
 }
 
 // --- Status display components ---
@@ -119,12 +151,21 @@ function DataTypeCell({
 
 // --- Sorting ---
 
-type SortField = "deploymentId" | "siteId" | "status";
+type SortField = "deploymentId" | "siteId" | "status" | "actualDeployDate" | "actualRetrieveDate" | "uploadCameraCount" | "uploadAudioCount" | "uploadIbuttonCount";
 type SortDir = "asc" | "desc";
+
+const NUMERIC_FIELDS = new Set<SortField>(["uploadCameraCount", "uploadAudioCount", "uploadIbuttonCount"]);
 
 function sortRows(rows: ScheduleRow[], field: SortField, dir: SortDir): ScheduleRow[] {
   return [...rows].sort((a, b) => {
-    const cmp = (a[field] ?? "").localeCompare(b[field] ?? "");
+    let cmp: number;
+    if (NUMERIC_FIELDS.has(field)) {
+      const av = (a[field] as number | null | undefined) ?? -1;
+      const bv = (b[field] as number | null | undefined) ?? -1;
+      cmp = av - bv;
+    } else {
+      cmp = (a[field] as string ?? "").localeCompare(b[field] as string ?? "");
+    }
     return dir === "asc" ? cmp : -cmp;
   });
 }
@@ -160,8 +201,7 @@ export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
   const [sortField, setSortField] = useState<SortField>("deploymentId");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [page, setPage] = useState(0);
-  const [driveCache, setDriveCache] = useState<Map<string, DriveStatusResult>>(new Map());
-  const [checking, startCheck] = useTransition();
+  const [driveCache, setDriveCache] = useState<Map<string, DriveStatusResult>>(() => buildInitialCache(schedule));
   const [progress, setProgress] = useState<{ current: number; total: number; action: "verify" | "recreate" } | null>(null);
 
   const handleSort = useCallback((field: SortField) => {
@@ -193,57 +233,37 @@ export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const pageRows = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
-  // Check Drive for visible rows
-  const checkVisibleRows = useCallback(() => {
-    const toCheck = pageRows
-      .filter((r) => r.driveFolderLink && !driveCache.has(r.deploymentId))
-      .map((r) => ({ deploymentId: r.deploymentId, driveFolderLink: r.driveFolderLink }));
+  // Staleness indicator: earliest checkedAt among all rows, or null if none checked
+  const stalenessText = useMemo(() => {
+    const checkedTimestamps = schedule
+      .map((r) => r.uploadCountsCheckedAt)
+      .filter((t): t is number => t != null);
+    if (checkedTimestamps.length === 0) return "Sin verificar";
+    const earliest = Math.min(...checkedTimestamps);
+    return `Último conteo: ${formatRelativeTime(earliest)}`;
+  }, [schedule, driveCache]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    if (toCheck.length === 0) return;
+  // Refresh ALL deployments — sequential with progress
+  const refreshAll = useCallback(async () => {
+    const allWithFolders = schedule.filter((r) => r.driveFolderLink);
+    if (allWithFolders.length === 0) return;
 
-    startCheck(async () => {
-      const result = await checkDriveForDeployments(toCheck);
-      if (result.success) {
-        setDriveCache((prev) => {
-          const next = new Map(prev);
-          for (const row of result.data) {
-            next.set(row.deploymentId, row);
-          }
-          return next;
-        });
-      }
-    });
-  }, [pageRows, driveCache]);
-
-  // Auto-check when page changes
-  useEffect(() => {
-    checkVisibleRows();
-  }, [page, sortField, sortDir, search]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Force re-check visible rows (ignore cache) — sequential with progress
-  const refreshVisible = useCallback(async () => {
-    const toCheck = pageRows
-      .filter((r) => r.driveFolderLink)
-      .map((r) => ({ deploymentId: r.deploymentId, driveFolderLink: r.driveFolderLink }));
-
-    if (toCheck.length === 0) return;
-
-    setProgress({ current: 0, total: toCheck.length, action: "verify" });
+    setProgress({ current: 0, total: allWithFolders.length, action: "verify" });
     try {
-      for (let i = 0; i < toCheck.length; i++) {
-        const { deploymentId, driveFolderLink } = toCheck[i];
-        const result = await checkSingleDeployment(deploymentId, driveFolderLink);
+      for (let i = 0; i < allWithFolders.length; i++) {
+        const { deploymentId, driveFolderLink } = allWithFolders[i];
+        const result = await refreshSingleUploadCount(deploymentId, driveFolderLink);
         setDriveCache((prev) => {
           const next = new Map(prev);
           next.set(result.deploymentId, result);
           return next;
         });
-        setProgress({ current: i + 1, total: toCheck.length, action: "verify" });
+        setProgress({ current: i + 1, total: allWithFolders.length, action: "verify" });
       }
     } finally {
       setProgress(null);
     }
-  }, [pageRows]);
+  }, [schedule]);
 
   // Recreate Drive folders for deployments with errors
   const handleRecreate = useCallback(async () => {
@@ -270,8 +290,8 @@ export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
       setProgress(null);
     }
     // Re-verify to show fresh counts
-    refreshVisible();
-  }, [pageRows, driveCache, refreshVisible]);
+    refreshAll();
+  }, [pageRows, driveCache, refreshAll]);
 
   const failedCount = pageRows.filter((r) => driveCache.get(r.deploymentId)?.error).length;
 
@@ -298,13 +318,16 @@ export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
         <Button
           variant="outline"
           size="sm"
-          onClick={refreshVisible}
-          disabled={checking || progress !== null}
+          onClick={refreshAll}
+          disabled={progress !== null}
           title="Consulta Google Drive para contar cuántos archivos hay en cada carpeta. Ejecutar después de subir nuevos datos."
         >
-          {checking || progress?.action === "verify" ? <Loader2 className="size-4 animate-spin mr-1.5" /> : <RefreshCw className="size-4 mr-1.5" />}
+          {progress?.action === "verify" ? <Loader2 className="size-4 animate-spin mr-1.5" /> : <RefreshCw className="size-4 mr-1.5" />}
           {progress?.action === "verify" ? `Actualizando ${progress.current}/${progress.total}...` : "Actualizar Conteo"}
         </Button>
+        <span className="text-sm text-muted-foreground">
+          {stalenessText}
+        </span>
         <span className="text-sm text-muted-foreground">
           {filtered.length} instalaci{filtered.length !== 1 ? "ones" : "ón"}
         </span>
@@ -320,7 +343,7 @@ export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
               size="sm"
               variant="outline"
               onClick={handleRecreate}
-              disabled={checking || progress !== null}
+              disabled={progress !== null}
             >
               {progress?.action === "recreate" ? <Loader2 className="size-4 animate-spin mr-1.5" /> : <FolderPlus className="size-4 mr-1.5" />}
               {progress?.action === "recreate" ? `Recreando ${progress.current}/${progress.total}...` : "Recrear Carpetas"}
@@ -357,11 +380,36 @@ export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
                       <SortButton field="status" current={sortField} dir={sortDir} onSort={handleSort} />
                     </span>
                   </TableHead>
-                  <TableHead className="text-center whitespace-nowrap">F. Instalación</TableHead>
-                  <TableHead className="text-center whitespace-nowrap">F. Recuperación</TableHead>
-                  <TableHead className="text-center">Cámaras</TableHead>
-                  <TableHead className="text-center">Audio</TableHead>
-                  <TableHead className="text-center">iButton</TableHead>
+                  <TableHead className="text-center whitespace-nowrap">
+                    <span className="inline-flex items-center gap-1">
+                      F. Instalación
+                      <SortButton field="actualDeployDate" current={sortField} dir={sortDir} onSort={handleSort} />
+                    </span>
+                  </TableHead>
+                  <TableHead className="text-center whitespace-nowrap">
+                    <span className="inline-flex items-center gap-1">
+                      F. Recuperación
+                      <SortButton field="actualRetrieveDate" current={sortField} dir={sortDir} onSort={handleSort} />
+                    </span>
+                  </TableHead>
+                  <TableHead className="text-center">
+                    <span className="inline-flex items-center gap-1">
+                      Cámaras
+                      <SortButton field="uploadCameraCount" current={sortField} dir={sortDir} onSort={handleSort} />
+                    </span>
+                  </TableHead>
+                  <TableHead className="text-center">
+                    <span className="inline-flex items-center gap-1">
+                      Audio
+                      <SortButton field="uploadAudioCount" current={sortField} dir={sortDir} onSort={handleSort} />
+                    </span>
+                  </TableHead>
+                  <TableHead className="text-center">
+                    <span className="inline-flex items-center gap-1">
+                      iButton
+                      <SortButton field="uploadIbuttonCount" current={sortField} dir={sortDir} onSort={handleSort} />
+                    </span>
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>

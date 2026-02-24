@@ -384,6 +384,14 @@ const migrations = [
   `ALTER TABLE biochoco_deployments ADD COLUMN valid_start TEXT`,
   `ALTER TABLE biochoco_deployments ADD COLUMN valid_end TEXT`,
   `ALTER TABLE biochoco_deployments ADD COLUMN qa_notes TEXT`,
+  // Upload cache — Drive file counts (2026-02-24)
+  `ALTER TABLE biochoco_deployments ADD COLUMN upload_camera_count INTEGER`,
+  `ALTER TABLE biochoco_deployments ADD COLUMN upload_audio_count INTEGER`,
+  `ALTER TABLE biochoco_deployments ADD COLUMN upload_ibutton_count INTEGER`,
+  `ALTER TABLE biochoco_deployments ADD COLUMN upload_camera_folder_id TEXT`,
+  `ALTER TABLE biochoco_deployments ADD COLUMN upload_audio_folder_id TEXT`,
+  `ALTER TABLE biochoco_deployments ADD COLUMN upload_ibutton_folder_id TEXT`,
+  `ALTER TABLE biochoco_deployments ADD COLUMN upload_counts_checked_at INTEGER`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }

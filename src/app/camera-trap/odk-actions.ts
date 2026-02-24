@@ -136,7 +136,9 @@ export async function matchOdkDeployments(
         (sel?.deployment_id as string) ??
         (sub.deployment_id as string) ??
         "";
+      const retInfo = sub.retrieval_info as Record<string, unknown> | undefined;
       const dateRetrieved =
+        (retInfo?.retrieval_date as string) ??
         (sel?.fecha_recuperacion as string) ??
         (sub.fecha_recuperacion as string) ??
         "";

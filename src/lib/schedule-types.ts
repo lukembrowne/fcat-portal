@@ -15,11 +15,20 @@ export interface ScheduleRow {
   plannedRetrieveDate: string | null;
   actualDeployDate: string | null;
   actualRetrieveDate: string | null;
+  /** From Google Sheet — often stale. Override with getDeploymentStatus() using live ODK data. */
   status: ScheduleStatus;
   deploySlotId: number | null;
   retrieveSlotId: number | null;
   notes: string;
   driveFolderLink: string;
+  // Cached upload counts from DB (only populated on /biochoco/data page)
+  uploadCameraCount?: number | null;
+  uploadAudioCount?: number | null;
+  uploadIbuttonCount?: number | null;
+  uploadCameraFolderId?: string | null;
+  uploadAudioFolderId?: string | null;
+  uploadIbuttonFolderId?: string | null;
+  uploadCountsCheckedAt?: number | null; // unix timestamp
 }
 
 export interface SlotRow {

@@ -39,6 +39,13 @@ server {
         proxy_set_header Content-Length "";
     }
 
+    # ===== Public assets (no auth) — used for OG image in link previews =====
+    location = /logo-fcat.png {
+        proxy_pass http://127.0.0.1:3003;
+        proxy_set_header Host $host;
+        expires 7d;
+    }
+
     # ===== Main app - requires authentication =====
     location / {
         # Check with oauth2-proxy before allowing access

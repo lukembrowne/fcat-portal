@@ -379,6 +379,11 @@ const migrations = [
   `ALTER TABLE biochoco_images ADD COLUMN starred_at INTEGER`,
   // Camera trap project-level permissions (2026-02-22)
   `ALTER TABLE biochoco_deployments ADD COLUMN ct_project_id INTEGER REFERENCES ct_projects(id) ON DELETE SET NULL`,
+  // Deployment QA metadata (2026-02-23)
+  `ALTER TABLE biochoco_deployments ADD COLUMN excluded INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE biochoco_deployments ADD COLUMN valid_start TEXT`,
+  `ALTER TABLE biochoco_deployments ADD COLUMN valid_end TEXT`,
+  `ALTER TABLE biochoco_deployments ADD COLUMN qa_notes TEXT`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }

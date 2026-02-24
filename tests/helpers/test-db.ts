@@ -94,7 +94,11 @@ const CAMERA_TRAP_DDL = `
     project_label TEXT,
     site_name TEXT,
     odk_submission_id TEXT,
-    metadata_source TEXT
+    metadata_source TEXT,
+    excluded INTEGER NOT NULL DEFAULT 0,
+    valid_start TEXT,
+    valid_end TEXT,
+    qa_notes TEXT
   );
 
   CREATE TABLE biochoco_processing_jobs (

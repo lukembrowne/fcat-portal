@@ -149,6 +149,11 @@ export const deployments = sqliteTable(
     metadataSource: text("metadata_source", {
       enum: ["manual", "odk", "drive"],
     }),
+    // QA metadata
+    excluded: integer("excluded", { mode: "boolean" }).notNull().default(false),
+    validStart: text("valid_start"),
+    validEnd: text("valid_end"),
+    qaNotes: text("qa_notes"),
   },
   (table) => [
     uniqueIndex("idx_biochoco_deployments_project_path").on(

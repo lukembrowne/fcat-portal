@@ -8,6 +8,7 @@ import {
   BIOCHOCO_PROJECT_ID,
   BIOCHOCO_DATASET_SITES,
   BIOCHOCO_FORM_DEPLOY,
+  BIOCHOCO_FORM_RETRIEVE,
 } from "@/lib/odk-constants";
 import type { OdkSiteEntity } from "@/lib/odk-types";
 import { requirePermission } from "@/lib/auth";
@@ -61,7 +62,7 @@ export async function matchOdkDeployments(
       .where(inArray(deployments.id, deploymentIds));
 
     // Fetch ODK data in parallel
-    const [rawSubmissions, rawSites] = await Promise.all([
+    const [rawSubmissions, rawSites, rawRetrievals] = await Promise.all([
       fetchSubmissions<Record<string, unknown>>(
         BIOCHOCO_PROJECT_ID,
         BIOCHOCO_FORM_DEPLOY
@@ -69,6 +70,10 @@ export async function matchOdkDeployments(
       fetchEntities<OdkSiteEntity>(
         BIOCHOCO_PROJECT_ID,
         BIOCHOCO_DATASET_SITES
+      ),
+      fetchSubmissions<Record<string, unknown>>(
+        BIOCHOCO_PROJECT_ID,
+        BIOCHOCO_FORM_RETRIEVE
       ),
     ]);
 
@@ -123,6 +128,27 @@ export async function matchOdkDeployments(
       submissionMap.set(normalize(sub.deploymentId), sub);
     }
 
+    // Build retrieval lookup: normalized deployment_id → latest fecha_recuperacion
+    const retrievalMap = new Map<string, string>();
+    for (const sub of rawRetrievals) {
+      const sel = sub.site_selection as Record<string, unknown> | undefined;
+      const depId =
+        (sel?.deployment_id as string) ??
+        (sub.deployment_id as string) ??
+        "";
+      const dateRetrieved =
+        (sel?.fecha_recuperacion as string) ??
+        (sub.fecha_recuperacion as string) ??
+        "";
+      if (!depId || !dateRetrieved) continue;
+      const key = normalize(depId);
+      const existing = retrievalMap.get(key);
+      // Keep the latest retrieval date
+      if (!existing || dateRetrieved > existing) {
+        retrievalMap.set(key, dateRetrieved.slice(0, 10));
+      }
+    }
+
     // Match deployments
     const matched: OdkMatch[] = [];
     const unmatched: string[] = [];
@@ -132,6 +158,21 @@ export async function matchOdkDeployments(
       const sub = submissionMap.get(normalizedName);
 
       if (!sub) {
+        // Even without a deploy match, try to fill dateEnd from retrieval
+        const retrieval = retrievalMap.get(normalizedName);
+        if (!dep.dateEnd && retrieval) {
+          const retUpdates: Record<string, unknown> = {
+            dateEnd: retrieval,
+            updatedAt: new Date(),
+          };
+          if (dep.metadataSource !== "manual") {
+            retUpdates.metadataSource = "odk";
+          }
+          await db
+            .update(deployments)
+            .set(retUpdates)
+            .where(eq(deployments.id, dep.id));
+        }
         unmatched.push(dep.name);
         continue;
       }
@@ -154,9 +195,12 @@ export async function matchOdkDeployments(
       // Update deployment — only fill NULL fields
       const updates: Record<string, unknown> = {
         odkSubmissionId: sub.id,
-        metadataSource: "odk",
         updatedAt: new Date(),
       };
+      // Only set metadataSource to "odk" if not already "manual"
+      if (dep.metadataSource !== "manual") {
+        updates.metadataSource = "odk";
+      }
 
       if (!dep.siteName && site?.name) updates.siteName = site.name;
       if (dep.latitude == null && site?.lat != null) updates.latitude = site.lat;
@@ -164,6 +208,12 @@ export async function matchOdkDeployments(
         updates.longitude = site.lng;
       if (!dep.dateStart && sub.dateInstalled)
         updates.dateStart = sub.dateInstalled;
+
+      // Fill dateEnd from retrieve_sensors if NULL
+      const retrieval = retrievalMap.get(normalizedName);
+      if (!dep.dateEnd && retrieval) {
+        updates.dateEnd = retrieval;
+      }
 
       await db
         .update(deployments)

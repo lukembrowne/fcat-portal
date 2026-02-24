@@ -4,6 +4,7 @@
  * Tables:
  * - users, projects, user_permissions (auth/permissions)
  * - biochoco_deployments, biochoco_processing_jobs, biochoco_images, biochoco_detections, biochoco_identifications, biochoco_species (camera trap)
+ * - ibutton_uploads, ibutton_readings (iButton temperature data)
  * - finance_transactions, finance_budget_items, finance_category_map,
  *   finance_sueldos_grants, finance_sueldos_totals, finance_projections,
  *   finance_uploads (financial dashboard)
@@ -593,6 +594,56 @@ export const climateEdits = sqliteTable("climate_edits", {
 });
 
 // ---------------------------------------------------------------------------
+// iButton — Uploads (tracking processed iButton files per deployment)
+// ---------------------------------------------------------------------------
+
+export const ibuttonUploads = sqliteTable("ibutton_uploads", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  deploymentId: integer("deployment_id")
+    .notNull()
+    .unique()
+    .references(() => deployments.id, { onDelete: "cascade" }),
+  filename: text("filename").notNull(),
+  deviceSerial: text("device_serial"),
+  sampleRate: text("sample_rate"),
+  missionStart: text("mission_start"),
+  rowsImported: integer("rows_imported").notNull(),
+  dateRangeStart: text("date_range_start"),
+  dateRangeEnd: text("date_range_end"),
+  processedBy: text("processed_by").notNull(),
+  processedAt: integer("processed_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+
+// ---------------------------------------------------------------------------
+// iButton — Readings (individual temperature measurements)
+// ---------------------------------------------------------------------------
+
+export const ibuttonReadings = sqliteTable(
+  "ibutton_readings",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    deploymentId: integer("deployment_id")
+      .notNull()
+      .references(() => deployments.id, { onDelete: "cascade" }),
+    uploadId: integer("upload_id")
+      .notNull()
+      .references(() => ibuttonUploads.id, { onDelete: "cascade" }),
+    timestamp: text("timestamp").notNull(),
+    temperatureC: real("temperature_c").notNull(),
+    flagged: integer("flagged", { mode: "boolean" }).notNull().default(false),
+  },
+  (table) => [
+    uniqueIndex("idx_ibutton_readings_dep_ts").on(
+      table.deploymentId,
+      table.timestamp
+    ),
+    index("idx_ibutton_readings_dep").on(table.deploymentId),
+  ]
+);
+
+// ---------------------------------------------------------------------------
 // Type Exports
 // ---------------------------------------------------------------------------
 
@@ -634,6 +685,12 @@ export type NewSpecies = typeof species.$inferInsert;
 
 export type ActivityLog = typeof activityLog.$inferSelect;
 export type NewActivityLog = typeof activityLog.$inferInsert;
+
+export type IbuttonUpload = typeof ibuttonUploads.$inferSelect;
+export type NewIbuttonUpload = typeof ibuttonUploads.$inferInsert;
+
+export type IbuttonReading = typeof ibuttonReadings.$inferSelect;
+export type NewIbuttonReading = typeof ibuttonReadings.$inferInsert;
 
 export type FinanceTransaction = typeof financeTransactions.$inferSelect;
 export type NewFinanceTransaction = typeof financeTransactions.$inferInsert;

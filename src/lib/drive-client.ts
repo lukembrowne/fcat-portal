@@ -126,6 +126,46 @@ async function countFilesRecursive(
 }
 
 /**
+ * List files in a Drive folder that match the given extensions.
+ * Returns file metadata (id, name, mimeType) for each matching file.
+ */
+export async function listFolderFiles(
+  folderId: string,
+  extensions: Set<string>
+): Promise<{ id: string; name: string; mimeType: string }[]> {
+  const drive = getDrive();
+  const files: { id: string; name: string; mimeType: string }[] = [];
+  let pageToken: string | undefined;
+
+  do {
+    const res = await drive.files.list({
+      q: `'${folderId}' in parents and trashed = false and mimeType != 'application/vnd.google-apps.folder'`,
+      fields: "nextPageToken, files(id, name, mimeType)",
+      pageSize: 100,
+      pageToken,
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
+    });
+
+    for (const file of res.data.files ?? []) {
+      if (!file.id || !file.name) continue;
+      const ext = path.extname(file.name).toLowerCase();
+      if (extensions.has(ext)) {
+        files.push({
+          id: file.id,
+          name: file.name,
+          mimeType: file.mimeType ?? "application/octet-stream",
+        });
+      }
+    }
+
+    pageToken = res.data.nextPageToken ?? undefined;
+  } while (pageToken);
+
+  return files;
+}
+
+/**
  * Check what data has been uploaded to a deployment's Drive folder.
  *
  * Lists subfolders of the deployment folder, then counts files in each

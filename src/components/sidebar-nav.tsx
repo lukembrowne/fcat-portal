@@ -12,7 +12,7 @@ import { hasProjectAccess } from "@/lib/auth";
 import type { AuthUser } from "@/lib/types";
 import { SidebarShell } from "@/components/sidebar-shell";
 
-export type IconName = "home" | "tree-pine" | "leaf" | "camera" | "shield" | "dollar-sign" | "bar-chart-3" | "cloud-sun" | "clipboard-list";
+export type IconName = "home" | "tree-pine" | "leaf" | "camera" | "shield" | "dollar-sign" | "bar-chart-3" | "cloud-sun" | "clipboard-list" | "thermometer";
 
 export interface NavItem {
   label: string;
@@ -64,6 +64,7 @@ export function SidebarNav({ user }: SidebarNavProps) {
     biochocoChildren.push({ label: "Cronograma", href: "/biochoco/overview" });
     biochocoChildren.push({ label: "Datos", href: "/biochoco/data" });
     biochocoChildren.push({ label: "Hábitat", href: "/biochoco/habitat" });
+    biochocoChildren.push({ label: "Temperatura", href: "/biochoco/ibutton" });
     biochocoChildren.push({ label: "Recursos", href: "/biochoco/recursos" });
     if (isBiochocoAdmin) {
       biochocoChildren.push({

@@ -343,6 +343,35 @@ const statements = [
   // Climate indexes
   `CREATE INDEX IF NOT EXISTS idx_climate_readings_res_ts ON climate_readings(resolution, timestamp)`,
   `CREATE INDEX IF NOT EXISTS idx_climate_edits_ts_res ON climate_edits(timestamp, resolution)`,
+
+  // iButton — Uploads (tracking processed iButton files per deployment)
+  `CREATE TABLE IF NOT EXISTS ibutton_uploads (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    deployment_id INTEGER NOT NULL UNIQUE REFERENCES biochoco_deployments(id) ON DELETE CASCADE,
+    filename TEXT NOT NULL,
+    device_serial TEXT,
+    sample_rate TEXT,
+    mission_start TEXT,
+    rows_imported INTEGER NOT NULL,
+    date_range_start TEXT,
+    date_range_end TEXT,
+    processed_by TEXT NOT NULL,
+    processed_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+
+  // iButton — Readings (individual temperature measurements)
+  `CREATE TABLE IF NOT EXISTS ibutton_readings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    deployment_id INTEGER NOT NULL REFERENCES biochoco_deployments(id) ON DELETE CASCADE,
+    upload_id INTEGER NOT NULL REFERENCES ibutton_uploads(id) ON DELETE CASCADE,
+    timestamp TEXT NOT NULL,
+    temperature_c REAL NOT NULL,
+    flagged INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(deployment_id, timestamp)
+  )`,
+
+  // iButton indexes
+  `CREATE INDEX IF NOT EXISTS idx_ibutton_readings_dep ON ibutton_readings(deployment_id)`,
 ];
 
 for (const stmt of statements) {

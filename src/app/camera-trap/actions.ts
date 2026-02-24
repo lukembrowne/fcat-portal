@@ -998,6 +998,10 @@ export interface DeploymentRow {
   createdAt: Date;
   updatedAt: Date;
   createdBy: string | null;
+  excluded: boolean;
+  validStart: string | null;
+  validEnd: string | null;
+  qaNotes: string | null;
   lastProcessedAt: Date | null;
   lastJobStatus: string | null;
   lastCompletedJobId: number | null;
@@ -1131,6 +1135,10 @@ export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
       createdAt: d.createdAt,
       updatedAt: d.updatedAt,
       createdBy: d.createdBy,
+      excluded: d.excluded,
+      validStart: d.validStart,
+      validEnd: d.validEnd,
+      qaNotes: d.qaNotes,
       lastProcessedAt: latestStatus?.completedAt ?? null,
       lastJobStatus: latestStatus?.status ?? null,
       lastCompletedJobId: completedJobId ?? null,
@@ -1169,11 +1177,25 @@ export async function updateDeploymentMetadata(
     longitude?: number | null;
     dateStart?: string | null;
     dateEnd?: string | null;
+    excluded?: boolean;
+    validStart?: string | null;
+    validEnd?: string | null;
+    qaNotes?: string | null;
   }
 ): Promise<ActionResult> {
   const user = await requirePermission("camera-trap", "editor");
 
   try {
+    // Validate QA fields
+    const vs = fields.validStart !== undefined ? fields.validStart : undefined;
+    const ve = fields.validEnd !== undefined ? fields.validEnd : undefined;
+    if (vs && ve && vs > ve) {
+      return { success: false, error: "La fecha de inicio válida debe ser anterior a la fecha de fin válida" };
+    }
+    if (fields.qaNotes && fields.qaNotes.length > 2000) {
+      return { success: false, error: "Las notas de calidad no pueden superar los 2000 caracteres" };
+    }
+
     const [existing] = await db
       .select()
       .from(deployments)
@@ -1218,6 +1240,58 @@ export async function updateDeploymentMetadata(
   }
 }
 
+/** QA-only update — no revalidatePath so the expanded row stays open. */
+export async function updateDeploymentQa(
+  id: number,
+  fields: {
+    excluded: boolean;
+    validStart: string | null;
+    validEnd: string | null;
+    qaNotes: string | null;
+  }
+): Promise<ActionResult> {
+  const user = await requirePermission("camera-trap", "editor");
+
+  try {
+    if (fields.validStart && fields.validEnd && fields.validStart > fields.validEnd) {
+      return { success: false, error: "La fecha de inicio válida debe ser anterior a la fecha de fin válida" };
+    }
+    if (fields.qaNotes && fields.qaNotes.length > 2000) {
+      return { success: false, error: "Las notas de calidad no pueden superar los 2000 caracteres" };
+    }
+
+    const [existing] = await db
+      .select()
+      .from(deployments)
+      .where(eq(deployments.id, id));
+
+    if (!existing) {
+      return { success: false, error: "Instalación no encontrada" };
+    }
+
+    await requireDeploymentAccess(user, id);
+
+    await db
+      .update(deployments)
+      .set({
+        excluded: fields.excluded,
+        validStart: fields.validStart,
+        validEnd: fields.validEnd,
+        qaNotes: fields.qaNotes,
+        updatedAt: new Date(),
+      })
+      .where(eq(deployments.id, id));
+
+    // Intentionally no revalidatePath — the inline form manages its own state
+    return { success: true, data: undefined };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Error al actualizar",
+    };
+  }
+}
+
 export async function bulkUpdateMetadata(
   ids: number[],
   fields: {
@@ -1228,6 +1302,8 @@ export async function bulkUpdateMetadata(
     longitude?: number | null;
     dateStart?: string | null;
     dateEnd?: string | null;
+    excluded?: boolean;
+    qaNotes?: string | null;
   }
 ): Promise<ActionResult<{ count: number }>> {
   const user = await requirePermission("camera-trap", "editor");
@@ -1261,6 +1337,8 @@ export async function bulkUpdateMetadata(
     if (fields.longitude !== undefined) updates.longitude = fields.longitude;
     if (fields.dateStart !== undefined) updates.dateStart = fields.dateStart;
     if (fields.dateEnd !== undefined) updates.dateEnd = fields.dateEnd;
+    if (fields.excluded !== undefined) updates.excluded = fields.excluded;
+    if (fields.qaNotes !== undefined) updates.qaNotes = fields.qaNotes;
 
     await db
       .update(deployments)

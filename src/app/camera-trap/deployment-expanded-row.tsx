@@ -4,6 +4,10 @@ import { useState, useEffect, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { StatusBadge } from "@/components/status-badge";
 import {
   Tooltip,
@@ -20,10 +24,11 @@ import {
   Trash2,
   CheckCircle,
   Undo2,
+  Save,
 } from "lucide-react";
 import type { DeploymentRow } from "./actions";
 import { DeploymentEditForm } from "./deployment-edit-form";
-import { getDeployment, queueProcessing, markVerifiedEmpty, undoVerifiedEmpty } from "./actions";
+import { getDeployment, queueProcessing, markVerifiedEmpty, undoVerifiedEmpty, updateDeploymentQa } from "./actions";
 import { DeleteJobDialog } from "./delete-job-dialog";
 import { scanDeploymentImages } from "./drive-actions";
 
@@ -67,6 +72,52 @@ export function DeploymentExpandedRow({
   const [processingAction, startProcessing] = useTransition();
   const [verifying, startVerifying] = useTransition();
   const [deleteJobId, setDeleteJobId] = useState<number | null>(null);
+
+  // QA inline editing state
+  const [excluded, setExcluded] = useState(deployment.excluded);
+  const [validStart, setValidStart] = useState(deployment.validStart ?? "");
+  const [validEnd, setValidEnd] = useState(deployment.validEnd ?? "");
+  const [qaNotes, setQaNotes] = useState(deployment.qaNotes ?? "");
+  const [savingQa, startSavingQa] = useTransition();
+  const [qaError, setQaError] = useState<string | null>(null);
+  const [qaSaved, setQaSaved] = useState(false);
+
+  const qaChanged =
+    excluded !== deployment.excluded ||
+    (validStart || null) !== deployment.validStart ||
+    (validEnd || null) !== deployment.validEnd ||
+    ((qaNotes.trim() || null) !== deployment.qaNotes);
+
+  const qaDateWarning =
+    validStart && validEnd && validStart > validEnd
+      ? "La fecha de inicio válida debe ser anterior a la fecha de fin"
+      : null;
+
+  const handleSaveQa = () => {
+    startSavingQa(async () => {
+      setQaError(null);
+      const result = await updateDeploymentQa(deployment.id, {
+        excluded,
+        validStart: validStart || null,
+        validEnd: validEnd || null,
+        qaNotes: qaNotes.trim() || null,
+      });
+      if (result.success) {
+        setQaSaved(true);
+        setTimeout(() => setQaSaved(false), 2000);
+      } else {
+        setQaError(result.error);
+      }
+    });
+  };
+
+  // Sync QA state when deployment prop changes (e.g. after revalidation)
+  useEffect(() => {
+    setExcluded(deployment.excluded);
+    setValidStart(deployment.validStart ?? "");
+    setValidEnd(deployment.validEnd ?? "");
+    setQaNotes(deployment.qaNotes ?? "");
+  }, [deployment.excluded, deployment.validStart, deployment.validEnd, deployment.qaNotes]);
 
   useEffect(() => {
     if (cachedJobs) return;
@@ -140,7 +191,7 @@ export function DeploymentExpandedRow({
   };
 
   return (
-    <div className="p-4 bg-muted/30 border-t">
+    <div className="p-4 bg-muted/30 border-t" onClick={(e) => e.stopPropagation()}>
       {editing ? (
         <div className="max-w-md">
           <DeploymentEditForm
@@ -195,6 +246,118 @@ export function DeploymentExpandedRow({
                         : null
                 }
               />
+            </div>
+
+            {/* QA Section */}
+            <div className="border-t pt-3 space-y-2">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Control de Calidad</p>
+              {canEdit ? (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Checkbox
+                      id={`qa-excluded-${deployment.id}`}
+                      checked={excluded}
+                      onCheckedChange={(v) => setExcluded(!!v)}
+                    />
+                    <Label htmlFor={`qa-excluded-${deployment.id}`} className="text-xs font-normal">
+                      Excluir de exportaciones
+                    </Label>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <Label htmlFor={`qa-valid-start-${deployment.id}`} className="text-[10px] text-muted-foreground">
+                        Inicio válido
+                      </Label>
+                      <Input
+                        id={`qa-valid-start-${deployment.id}`}
+                        type="datetime-local"
+                        className="h-7 text-xs"
+                        value={validStart}
+                        onChange={(e) => setValidStart(e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor={`qa-valid-end-${deployment.id}`} className="text-[10px] text-muted-foreground">
+                        Fin válido
+                      </Label>
+                      <Input
+                        id={`qa-valid-end-${deployment.id}`}
+                        type="datetime-local"
+                        className="h-7 text-xs"
+                        value={validEnd}
+                        onChange={(e) => setValidEnd(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                  {qaDateWarning && (
+                    <p className="text-xs text-amber-600">{qaDateWarning}</p>
+                  )}
+
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor={`qa-notes-${deployment.id}`} className="text-[10px] text-muted-foreground">
+                        Notas de calidad
+                      </Label>
+                      <span className={`text-[10px] ${qaNotes.length > 2000 ? "text-destructive" : "text-muted-foreground"}`}>
+                        {qaNotes.length} / 2000
+                      </span>
+                    </div>
+                    <Textarea
+                      id={`qa-notes-${deployment.id}`}
+                      value={qaNotes}
+                      onChange={(e) => setQaNotes(e.target.value)}
+                      placeholder="Problemas con la cámara, datos, etc."
+                      rows={2}
+                      maxLength={2000}
+                      className="text-xs"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {qaChanged && (
+                      <Button
+                        size="sm"
+                        onClick={handleSaveQa}
+                        disabled={savingQa || !!qaDateWarning}
+                        className="h-7 text-xs"
+                      >
+                        {savingQa ? (
+                          <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                        ) : (
+                          <Save className="h-3 w-3 mr-1" />
+                        )}
+                        Guardar QA
+                      </Button>
+                    )}
+                    {qaSaved && (
+                      <span className="text-xs text-green-600">Guardado</span>
+                    )}
+                    {qaError && (
+                      <span className="text-xs text-destructive">{qaError}</span>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  {deployment.excluded && (
+                    <div className="flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-1.5">
+                      <div className="h-2 w-2 rounded-full bg-destructive shrink-0" />
+                      <p className="text-xs font-medium text-destructive">Excluida de exportaciones</p>
+                    </div>
+                  )}
+                  <div className="grid grid-cols-2 gap-2">
+                    <MetaField label="Inicio válido" value={deployment.validStart} />
+                    <MetaField label="Fin válido" value={deployment.validEnd} />
+                  </div>
+                  {deployment.qaNotes && (
+                    <div className="rounded-md border bg-amber-50 dark:bg-amber-950/20 px-3 py-2">
+                      <p className="text-muted-foreground text-[10px] font-medium uppercase tracking-wide mb-0.5">Notas QA</p>
+                      <p className="text-xs whitespace-pre-wrap">{deployment.qaNotes}</p>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="flex items-center gap-2 flex-wrap">

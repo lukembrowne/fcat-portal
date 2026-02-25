@@ -391,6 +391,36 @@ const statements = [
   `CREATE INDEX IF NOT EXISTS idx_audio_files_deployment_id ON audio_files(deployment_id)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_audio_files_deployment_drive_file ON audio_files(deployment_id, drive_file_id)`,
 
+  // Audio Detections (time-frequency bounding boxes on spectrograms)
+  `CREATE TABLE IF NOT EXISTS audio_detections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    audio_file_id INTEGER NOT NULL REFERENCES audio_files(id) ON DELETE CASCADE,
+    start_time REAL NOT NULL,
+    end_time REAL NOT NULL,
+    min_freq REAL NOT NULL,
+    max_freq REAL NOT NULL,
+    confidence REAL,
+    model_version TEXT,
+    created_by TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_audio_detections_file ON audio_detections(audio_file_id)`,
+
+  // Audio Identifications (species labels for audio detections)
+  `CREATE TABLE IF NOT EXISTS audio_identifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    audio_detection_id INTEGER NOT NULL REFERENCES audio_detections(id) ON DELETE CASCADE,
+    species TEXT NOT NULL,
+    confidence REAL,
+    model_version TEXT,
+    verification_status TEXT NOT NULL DEFAULT 'unverified'
+      CHECK(verification_status IN ('unverified','verified','rejected','corrected')),
+    corrected_species TEXT,
+    verified_by TEXT,
+    verified_at INTEGER
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_audio_identifications_detection ON audio_identifications(audio_detection_id)`,
+
   // Upload Count Snapshots (daily aggregate of Drive upload counts)
   `CREATE TABLE IF NOT EXISTS upload_count_snapshots (
     date TEXT PRIMARY KEY,
@@ -450,6 +480,11 @@ const migrations = [
   `ALTER TABLE biochoco_deployments ADD COLUMN upload_audio_folder_id TEXT`,
   `ALTER TABLE biochoco_deployments ADD COLUMN upload_ibutton_folder_id TEXT`,
   `ALTER TABLE biochoco_deployments ADD COLUMN upload_counts_checked_at INTEGER`,
+  // Audio annotation — new columns on audio_files (2026-02-25)
+  `ALTER TABLE audio_files ADD COLUMN duration REAL`,
+  `ALTER TABLE audio_files ADD COLUMN sample_rate INTEGER`,
+  `ALTER TABLE audio_files ADD COLUMN cache_path TEXT`,
+  `ALTER TABLE audio_files ADD COLUMN spectrogram_path TEXT`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }

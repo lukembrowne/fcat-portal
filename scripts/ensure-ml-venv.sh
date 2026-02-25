@@ -9,13 +9,13 @@ export UV_CACHE_DIR="${UV_CACHE_DIR:-/tmp/uv-cache}"
 export UV_LINK_MODE=copy
 export MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp/matplotlib-config}"
 
-# Check if venv already exists and has pytorch-wildlife
+# Check if venv already exists and has all required packages
 if [ -x "$ML_PYTHON" ]; then
-  if "$ML_PYTHON" -c "import PytorchWildlife" 2>/dev/null; then
+  if "$ML_PYTHON" -c "import PytorchWildlife; import librosa" 2>/dev/null; then
     echo "[ml-setup] ML venv ready at $ML_VENV_DIR"
     exit 0
   fi
-  echo "[ml-setup] ML venv exists but PytorchWildlife missing, reinstalling..."
+  echo "[ml-setup] ML venv exists but missing packages, reinstalling..."
 fi
 
 echo "[ml-setup] Creating ML venv at $ML_VENV_DIR..."
@@ -33,6 +33,9 @@ fi
 
 echo "[ml-setup] Installing PytorchWildlife + missing runtime deps..."
 uv pip install --python "$ML_PYTHON" PytorchWildlife lightning omegaconf
+
+echo "[ml-setup] Installing librosa + audio spectrogram deps..."
+uv pip install --python "$ML_PYTHON" librosa soundfile numpy matplotlib Pillow
 
 # pkg_resources (from setuptools) is needed by yolov5 at runtime but:
 # 1. uv's resolver strips setuptools since nothing explicitly depends on it

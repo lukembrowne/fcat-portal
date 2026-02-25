@@ -5,6 +5,7 @@ import { db } from "@/db";
 import {
   deployments,
   audioFiles,
+  audioDetections,
   cameraTrapProjects,
 } from "@/db/schema";
 import { eq, sql, and, isNotNull, count as drizzleCount } from "drizzle-orm";
@@ -282,6 +283,7 @@ export async function scanDeploymentAudio(
     }
 
     // Remove files that no longer exist on Drive
+    // Soft-delete (null driveFileId) if file has annotations, hard-delete otherwise
     const dbFiles = tx
       .select({ id: audioFiles.id, driveFileId: audioFiles.driveFileId })
       .from(audioFiles)
@@ -290,7 +292,23 @@ export async function scanDeploymentAudio(
 
     for (const dbFile of dbFiles) {
       if (dbFile.driveFileId && !driveFileIds.has(dbFile.driveFileId)) {
-        tx.delete(audioFiles).where(eq(audioFiles.id, dbFile.id)).run();
+        // Check if this file has any annotations
+        const [det] = tx
+          .select({ id: audioDetections.id })
+          .from(audioDetections)
+          .where(eq(audioDetections.audioFileId, dbFile.id))
+          .limit(1)
+          .all();
+
+        if (det) {
+          // Soft-delete: preserve row but clear Drive reference
+          tx.update(audioFiles)
+            .set({ driveFileId: null })
+            .where(eq(audioFiles.id, dbFile.id))
+            .run();
+        } else {
+          tx.delete(audioFiles).where(eq(audioFiles.id, dbFile.id)).run();
+        }
       }
     }
 

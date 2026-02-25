@@ -662,6 +662,10 @@ export const audioFiles = sqliteTable(
     modifiedAt: integer("modified_at", { mode: "timestamp" }),
     format: text("format"),
     playable: integer("playable", { mode: "boolean" }).notNull().default(true),
+    duration: real("duration"),
+    sampleRate: integer("sample_rate"),
+    cachePath: text("cache_path"),
+    spectrogramPath: text("spectrogram_path"),
     createdAt: integer("created_at", { mode: "timestamp" })
       .notNull()
       .default(sql`(unixepoch())`),
@@ -672,6 +676,57 @@ export const audioFiles = sqliteTable(
       table.deploymentId,
       table.driveFileId
     ),
+  ]
+);
+
+// ---------------------------------------------------------------------------
+// Audio Detections (time-frequency bounding boxes on spectrograms)
+// ---------------------------------------------------------------------------
+
+export const audioDetections = sqliteTable(
+  "audio_detections",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    audioFileId: integer("audio_file_id")
+      .notNull()
+      .references(() => audioFiles.id, { onDelete: "cascade" }),
+    startTime: real("start_time").notNull(),
+    endTime: real("end_time").notNull(),
+    minFreq: real("min_freq").notNull(),
+    maxFreq: real("max_freq").notNull(),
+    confidence: real("confidence"),
+    modelVersion: text("model_version"),
+    createdBy: text("created_by"),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [
+    index("idx_audio_detections_file").on(table.audioFileId),
+  ]
+);
+
+// ---------------------------------------------------------------------------
+// Audio Identifications (species labels for audio detections)
+// ---------------------------------------------------------------------------
+
+export const audioIdentifications = sqliteTable(
+  "audio_identifications",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    audioDetectionId: integer("audio_detection_id")
+      .notNull()
+      .references(() => audioDetections.id, { onDelete: "cascade" }),
+    species: text("species").notNull(),
+    confidence: real("confidence"),
+    modelVersion: text("model_version"),
+    verificationStatus: text("verification_status").notNull().default("unverified"),
+    correctedSpecies: text("corrected_species"),
+    verifiedBy: text("verified_by"),
+    verifiedAt: integer("verified_at", { mode: "timestamp" }),
+  },
+  (table) => [
+    index("idx_audio_identifications_detection").on(table.audioDetectionId),
   ]
 );
 
@@ -774,6 +829,12 @@ export type ClimateResolution = "hourly" | "15min";
 
 export type AudioFile = typeof audioFiles.$inferSelect;
 export type NewAudioFile = typeof audioFiles.$inferInsert;
+
+export type AudioDetection = typeof audioDetections.$inferSelect;
+export type NewAudioDetection = typeof audioDetections.$inferInsert;
+
+export type AudioIdentification = typeof audioIdentifications.$inferSelect;
+export type NewAudioIdentification = typeof audioIdentifications.$inferInsert;
 
 export type UploadCountSnapshot = typeof uploadCountSnapshots.$inferSelect;
 export type NewUploadCountSnapshot = typeof uploadCountSnapshots.$inferInsert;

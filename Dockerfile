@@ -10,7 +10,7 @@ RUN npm ci
 # --- Dev (deps + ML tooling for development) ---
 FROM deps AS dev
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3-venv curl libgl1 libglib2.0-0 ffmpeg \
+    python3-venv curl libgl1 libglib2.0-0 ffmpeg libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
 RUN curl -LsSf https://astral.sh/uv/install.sh | env INSTALLER_NO_MODIFY_PATH=1 sh \
     && mv /root/.local/bin/uv /usr/local/bin/uv
@@ -28,9 +28,9 @@ FROM base AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
-# System deps: python3 for ML, curl for uv, libgl1/libglib2 for OpenCV, cron for backups
+# System deps: python3 for ML, curl for uv, libgl1/libglib2 for OpenCV, cron for backups, libsndfile1 for librosa
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 python3-venv curl wget libgl1 libglib2.0-0 cron ffmpeg \
+    python3 python3-venv curl wget libgl1 libglib2.0-0 cron ffmpeg libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Timezone: US Eastern (for backup filenames and cron logs)

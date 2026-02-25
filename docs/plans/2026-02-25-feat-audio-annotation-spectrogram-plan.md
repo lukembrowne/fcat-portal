@@ -155,23 +155,23 @@ Serve spectrograms and build the annotation page shell.
 
 **Files to create/modify:**
 
-- [ ] `src/app/api/audio/spectrogram/route.ts` — NEW API route:
+- [x] `src/app/api/audio/spectrogram/route.ts` — NEW API route:
   - `GET /api/audio/spectrogram?fileId=<audioFileId>`
   - Auth: `requirePermission("camera-trap", "viewer")` + deployment access check
   - Calls `ensureAudioCached()` + `ensureSpectrogramGenerated()`
   - Returns the PNG file with `Cache-Control: public, max-age=31536000, immutable`
   - Returns 202 with `{ status: "generating" }` if spectrogram is being created (client polls)
   - Returns 400 for non-WAV/FLAC/MP3 formats with error message
-- [ ] `src/app/api/audio/spectrogram/meta/route.ts` — NEW API route:
+- [x] `src/app/api/audio/spectrogram/meta/route.ts` — NEW API route:
   - `GET /api/audio/spectrogram/meta?fileId=<audioFileId>`
   - Returns JSON: `{ ready: boolean, duration, sampleRate, width, height, pixelsPerSecond, hzPerPixel, fmin, fmax }`
   - Client uses this for coordinate mapping and to know when the spectrogram is ready
-- [ ] `src/app/audio/[id]/annotate/[fileId]/page.tsx` — NEW Server Component:
+- [x] `src/app/audio/[id]/annotate/[fileId]/page.tsx` — NEW Server Component:
   - Auth: `requirePermission("camera-trap", "viewer")` + `requireDeploymentAccess`
   - Fetches: audio file row, existing detections+identifications, species list, recent species, prev/next file IDs
   - Determines `isEditor`
   - Passes serializable props to client shell
-- [ ] `src/app/audio/[id]/annotate/[fileId]/annotation-client.tsx` — NEW Client Component:
+- [x] `src/app/audio/[id]/annotate/[fileId]/annotation-client.tsx` — NEW Client Component:
   - Layout: `flex h-[calc(100vh-4rem)]` with SpeciesSidebar (left, w-56) + main content (flex-1, min-w-0)
   - Main content: DetectionCardStrip (top) + spectrogram container (center, overflow-x-auto) + playback controls (bottom)
   - State: `selectedDetectionId`, `isPlaying`, `currentTime`, detection list (from server, refreshed via `router.refresh()`)

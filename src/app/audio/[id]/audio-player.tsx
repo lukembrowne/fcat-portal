@@ -2,7 +2,8 @@
 
 import { useRef, useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import { Download, X, Play, Pause } from "lucide-react";
+import { Download, X, Play, Pause, SkipBack, SkipForward } from "lucide-react";
+import { useSidebar } from "@/components/ui/sidebar";
 import type { AudioFileRow } from "../actions";
 import { Spectrogram } from "./spectrogram";
 
@@ -29,6 +30,7 @@ export function AudioPlayer({
   const [duration, setDuration] = useState(0);
   const [bufferedEnd, setBufferedEnd] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
+  const { state: sidebarState } = useSidebar();
 
   const streamUrl = `/api/audio/stream?fileId=${encodeURIComponent(fileId)}`;
 
@@ -105,6 +107,18 @@ export function AudioPlayer({
     [duration]
   );
 
+  const seekRelative = useCallback(
+    (deltaSeconds: number) => {
+      const audio = audioRef.current;
+      if (!audio) return;
+      audio.currentTime = Math.max(
+        0,
+        Math.min(audio.duration || 0, audio.currentTime + deltaSeconds)
+      );
+    },
+    []
+  );
+
   // Click-to-seek on progress bar
   const handleProgressClick = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
@@ -148,7 +162,6 @@ export function AudioPlayer({
   // Keyboard shortcuts
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      // Don't capture if user is typing in an input
       if (
         e.target instanceof HTMLInputElement ||
         e.target instanceof HTMLTextAreaElement ||
@@ -162,25 +175,16 @@ export function AudioPlayer({
         togglePlayPause();
       } else if (e.code === "ArrowLeft") {
         e.preventDefault();
-        const audio = audioRef.current;
-        if (audio) {
-          audio.currentTime = Math.max(0, audio.currentTime - 5);
-        }
+        seekRelative(-5);
       } else if (e.code === "ArrowRight") {
         e.preventDefault();
-        const audio = audioRef.current;
-        if (audio) {
-          audio.currentTime = Math.min(
-            audio.duration || 0,
-            audio.currentTime + 5
-          );
-        }
+        seekRelative(5);
       }
     }
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [togglePlayPause]);
+  }, [togglePlayPause, seekRelative]);
 
   // Close stops audio
   function handleClose() {
@@ -195,43 +199,75 @@ export function AudioPlayer({
   const playedPct = duration > 0 ? (currentTime / duration) * 100 : 0;
   const bufferedPct = duration > 0 ? (bufferedEnd / duration) * 100 : 0;
 
+  // Offset by sidebar width so player doesn't overlap
+  const sidebarOffset =
+    sidebarState === "collapsed"
+      ? "var(--sidebar-width-icon)"
+      : "var(--sidebar-width)";
+
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-40 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 shadow-lg">
+    <div
+      className="fixed bottom-0 right-0 z-40 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 shadow-lg"
+      style={{ left: sidebarOffset }}
+    >
       {/* Hidden audio element */}
       <audio ref={audioRef} src={streamUrl} preload="auto" />
 
-      {/* Progress bar */}
-      <div
-        ref={progressRef}
-        className="h-1.5 bg-muted cursor-pointer group relative"
-        onClick={handleProgressClick}
-        onMouseDown={handleMouseDown}
-      >
-        {/* Buffered range */}
-        <div
-          className="absolute inset-y-0 left-0 bg-muted-foreground/20"
-          style={{ width: `${bufferedPct}%` }}
-        />
-        {/* Played range */}
-        <div
-          className="absolute inset-y-0 left-0 bg-primary"
-          style={{ width: `${playedPct}%` }}
-        />
-        {/* Thumb */}
-        <div
-          className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 h-3 w-3 rounded-full bg-primary opacity-0 group-hover:opacity-100 transition-opacity"
-          style={{ left: `${playedPct}%` }}
-        />
+      {/* Top row: spectrogram + progress */}
+      <div className="flex items-stretch">
+        {/* Live spectrogram visualization */}
+        <div className="shrink-0 bg-black">
+          <Spectrogram
+            audioRef={audioRef}
+            isPlaying={isPlaying}
+            onSeek={seekTo}
+          />
+        </div>
+
+        {/* Progress bar — fills remaining width */}
+        <div className="flex-1 flex flex-col justify-center min-w-0">
+          <div
+            ref={progressRef}
+            className="h-full bg-muted cursor-pointer group relative"
+            onClick={handleProgressClick}
+            onMouseDown={handleMouseDown}
+          >
+            {/* Buffered range */}
+            <div
+              className="absolute inset-y-0 left-0 bg-muted-foreground/20"
+              style={{ width: `${bufferedPct}%` }}
+            />
+            {/* Played range */}
+            <div
+              className="absolute inset-y-0 left-0 bg-primary/30"
+              style={{ width: `${playedPct}%` }}
+            />
+            {/* Playhead line */}
+            <div
+              className="absolute inset-y-0 w-0.5 bg-primary"
+              style={{ left: `${playedPct}%` }}
+            />
+            {/* Thumb — shows on hover */}
+            <div
+              className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 h-4 w-4 rounded-full bg-primary opacity-0 group-hover:opacity-100 transition-opacity shadow"
+              style={{ left: `${playedPct}%` }}
+            />
+          </div>
+        </div>
       </div>
 
-      {/* Controls */}
-      <div className="flex items-center gap-3 px-4 py-2">
-        {/* Spectrogram */}
-        <Spectrogram
-          audioRef={audioRef}
-          isPlaying={isPlaying}
-          onSeek={seekTo}
-        />
+      {/* Bottom row: controls */}
+      <div className="flex items-center gap-2 px-3 py-1.5">
+        {/* Skip back */}
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 w-7 p-0 shrink-0"
+          onClick={() => seekRelative(-5)}
+          title="Retroceder 5s (←)"
+        >
+          <SkipBack className="h-3.5 w-3.5" />
+        </Button>
 
         {/* Play/Pause */}
         <Button
@@ -239,6 +275,7 @@ export function AudioPlayer({
           variant="ghost"
           className="h-8 w-8 p-0 shrink-0"
           onClick={togglePlayPause}
+          title={isPlaying ? "Pausar (Espacio)" : "Reproducir (Espacio)"}
         >
           {isPlaying ? (
             <Pause className="h-4 w-4" />
@@ -247,8 +284,19 @@ export function AudioPlayer({
           )}
         </Button>
 
+        {/* Skip forward */}
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 w-7 p-0 shrink-0"
+          onClick={() => seekRelative(5)}
+          title="Avanzar 5s (→)"
+        >
+          <SkipForward className="h-3.5 w-3.5" />
+        </Button>
+
         {/* Time */}
-        <span className="text-xs tabular-nums text-muted-foreground shrink-0 w-24 text-center">
+        <span className="text-xs tabular-nums text-muted-foreground shrink-0 min-w-[5.5rem] text-center">
           {formatTime(currentTime)} / {formatTime(duration)}
         </span>
 
@@ -265,8 +313,8 @@ export function AudioPlayer({
           download
           className="shrink-0"
         >
-          <Button size="sm" variant="ghost" className="h-8 w-8 p-0">
-            <Download className="h-4 w-4" />
+          <Button size="sm" variant="ghost" className="h-7 w-7 p-0">
+            <Download className="h-3.5 w-3.5" />
           </Button>
         </a>
 
@@ -274,10 +322,10 @@ export function AudioPlayer({
         <Button
           size="sm"
           variant="ghost"
-          className="h-8 w-8 p-0 shrink-0"
+          className="h-7 w-7 p-0 shrink-0"
           onClick={handleClose}
         >
-          <X className="h-4 w-4" />
+          <X className="h-3.5 w-3.5" />
         </Button>
       </div>
     </div>

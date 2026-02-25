@@ -1,10 +1,20 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo, useCallback, useTransition, Fragment } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import {
+  useReactTable,
+  getCoreRowModel,
+  getSortedRowModel,
+  getPaginationRowModel,
+  getFilteredRowModel,
+  getExpandedRowModel,
+  flexRender,
+  type ColumnDef,
+  type SortingState,
+  type PaginationState,
+  type ExpandedState,
+} from "@tanstack/react-table";
 import {
   Table,
   TableBody,
@@ -13,228 +23,411 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, AudioLines, Search, FolderSync } from "lucide-react";
-import { scanAllAudio, scanDeploymentAudio } from "./actions";
-import type { AudioDeploymentRow, AudioStats } from "./actions";
-import { formatBytes } from "@/lib/format";
+import {
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  Search,
+  FolderSync,
+  Loader2,
+  AudioLines,
+} from "lucide-react";
+import { scanAllAudio } from "./actions";
+import type { AudioDeploymentRow, AudioProject } from "./actions";
+import { AudioExpandedRow } from "./audio-expanded-row";
 
-type ScanState = "idle" | "scanning" | "done" | "error";
+function getAudioStatus(
+  row: AudioDeploymentRow
+): { label: string; variant: "outline" | "secondary" | "destructive" } {
+  if (row.lastScanned === null && row.audioFileCount === 0) {
+    return { label: "Sin escanear", variant: "outline" };
+  }
+  if (row.audioFileCount > 0) {
+    return { label: "Escaneado", variant: "secondary" };
+  }
+  return { label: "Vacío", variant: "destructive" };
+}
 
 export function AudioDeploymentsShell({
-  deployments,
-  stats,
+  deployments: initialDeployments,
+  distinctProjects,
   isEditor,
 }: {
   deployments: AudioDeploymentRow[];
-  stats: AudioStats | null;
+  distinctProjects: AudioProject[];
   isEditor: boolean;
 }) {
   const router = useRouter();
-  const [scanState, setScanState] = useState<ScanState>("idle");
-  const [scanMessage, setScanMessage] = useState("");
-  const [scanningId, setScanningId] = useState<number | null>(null);
-  const [search, setSearch] = useState("");
+  const [sorting, setSorting] = useState<SortingState>([]);
+  const [globalFilter, setGlobalFilter] = useState("");
+  const [pagination, setPagination] = useState<PaginationState>({
+    pageIndex: 0,
+    pageSize: 25,
+  });
+  const [expanded, setExpanded] = useState<ExpandedState>({});
+  const [projectFilter, setProjectFilter] = useState("");
+  const [syncing, startSync] = useTransition();
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
-  const filtered = deployments.filter(
-    (d) =>
-      d.name.toLowerCase().includes(search.toLowerCase()) ||
-      (d.siteName?.toLowerCase().includes(search.toLowerCase()) ?? false) ||
-      (d.ctProjectName?.toLowerCase().includes(search.toLowerCase()) ?? false)
+  // Pre-filter by project dropdown
+  const filteredData = useMemo(() => {
+    if (!projectFilter) return initialDeployments;
+    return initialDeployments.filter(
+      (d) => d.ctProjectName === projectFilter
+    );
+  }, [initialDeployments, projectFilter]);
+
+  const columns = useMemo<ColumnDef<AudioDeploymentRow>[]>(
+    () => [
+      {
+        accessorKey: "name",
+        header: "Instalación",
+        cell: ({ getValue }) => (
+          <span className="font-medium whitespace-normal">
+            {getValue<string>()}
+          </span>
+        ),
+      },
+      {
+        accessorKey: "ctProjectName",
+        header: "Proyecto",
+        cell: ({ getValue }) => {
+          const v = getValue<string | null>();
+          return v ? <Badge variant="outline">{v}</Badge> : "—";
+        },
+      },
+      {
+        accessorKey: "siteName",
+        header: "Sitio",
+        cell: ({ getValue }) => (
+          <span className="whitespace-normal">
+            {getValue<string | null>() || "—"}
+          </span>
+        ),
+      },
+      {
+        id: "status",
+        header: "Estado",
+        accessorFn: (row) => {
+          if (row.audioFileCount > 0) return "escaneado";
+          if (row.lastScanned !== null) return "vacio";
+          return "sin_escanear";
+        },
+        cell: ({ row }) => {
+          const status = getAudioStatus(row.original);
+          return <Badge variant={status.variant}>{status.label}</Badge>;
+        },
+        enableGlobalFilter: false,
+      },
+      {
+        id: "audioFileCount",
+        header: "Archivos",
+        accessorFn: (row) => row.audioFileCount,
+        cell: ({ row }) => {
+          const count = row.original.audioFileCount;
+          return (
+            <span className="tabular-nums">
+              {count > 0 ? count.toLocaleString() : "—"}
+            </span>
+          );
+        },
+        enableGlobalFilter: false,
+      },
+      {
+        id: "dates",
+        header: "Fechas",
+        accessorFn: (row) => row.dateStart || "",
+        cell: ({ row }) => {
+          const { dateStart, dateEnd } = row.original;
+          if (!dateStart) return "—";
+          return (
+            <span className="tabular-nums text-muted-foreground whitespace-nowrap">
+              {dateStart}
+              {dateEnd && ` — ${dateEnd}`}
+            </span>
+          );
+        },
+        enableGlobalFilter: false,
+      },
+      {
+        id: "expand",
+        header: "",
+        cell: ({ row }) => (
+          <ChevronRight
+            className={`h-4 w-4 text-muted-foreground transition-transform ${row.getIsExpanded() ? "rotate-90" : ""}`}
+          />
+        ),
+        enableSorting: false,
+        enableGlobalFilter: false,
+      },
+    ],
+    []
   );
 
-  async function handleScanAll() {
-    setScanState("scanning");
-    setScanMessage("Escaneando archivos de audio...");
-    try {
-      const result = await scanAllAudio();
-      if (result.success) {
-        setScanMessage(
-          `${result.data.scanned} escaneado(s), ${result.data.errors} con error.`
-        );
-        setScanState("done");
-        router.refresh();
-      } else {
-        setScanMessage(result.error);
-        setScanState("error");
-      }
-    } catch (err) {
-      setScanMessage(
-        err instanceof Error ? err.message : "Error inesperado"
-      );
-      setScanState("error");
-    }
-  }
+  // Accordion: one expanded row at a time
+  const handleExpandedChange = useCallback(
+    (updater: ExpandedState | ((old: ExpandedState) => ExpandedState)) => {
+      setExpanded((prev) => {
+        const next = typeof updater === "function" ? updater(prev) : updater;
+        if (next === true) return next;
+        const prevKeys =
+          prev === true ? [] : Object.keys(prev).filter((k) => prev[k]);
+        const nextKeys = Object.keys(next).filter((k) => next[k]);
+        const newlyExpanded = nextKeys.filter((k) => !prevKeys.includes(k));
+        if (newlyExpanded.length > 0) {
+          return { [newlyExpanded[newlyExpanded.length - 1]]: true };
+        }
+        return next;
+      });
+    },
+    []
+  );
 
-  async function handleScanOne(deploymentId: number) {
-    setScanningId(deploymentId);
-    try {
-      const result = await scanDeploymentAudio(deploymentId);
-      if (result.success) {
-        router.refresh();
+  const table = useReactTable({
+    data: filteredData,
+    columns,
+    state: { sorting, globalFilter, pagination, expanded },
+    onSortingChange: setSorting,
+    onGlobalFilterChange: setGlobalFilter,
+    onPaginationChange: (updater) => {
+      setPagination(updater);
+      setExpanded({});
+    },
+    onExpandedChange: handleExpandedChange,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+    getExpandedRowModel: getExpandedRowModel(),
+    autoResetExpanded: false,
+    getRowCanExpand: () => true,
+    getRowId: (row) => String(row.id),
+  });
+
+  const handleScanAll = () => {
+    startSync(async () => {
+      setSyncMessage("Escaneando archivos de audio...");
+      try {
+        const result = await scanAllAudio();
+        if (result.success) {
+          setSyncMessage(
+            `${result.data.scanned} escaneado(s). ${result.data.errors > 0 ? `${result.data.errors} error(es).` : "Sin errores."}`
+          );
+          router.refresh();
+        } else {
+          setSyncMessage(result.error);
+        }
+      } catch (err) {
+        setSyncMessage(
+          err instanceof Error ? err.message : "Error inesperado"
+        );
       }
-    } catch {
-      // silent — user will see stale data
-    }
-    setScanningId(null);
-  }
+    });
+  };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
             <AudioLines className="h-6 w-6" />
             Grabaciones
           </h1>
-          <p className="text-muted-foreground mt-1">
+          <p className="text-muted-foreground text-sm mt-1">
             Archivos de audio de grabadoras pasivas
           </p>
         </div>
+      </div>
+
+      {/* Toolbar */}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="relative flex-1 min-w-[200px] max-w-sm">
+          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Buscar por nombre, proyecto, sitio..."
+            value={globalFilter}
+            onChange={(e) => setGlobalFilter(e.target.value)}
+            className="pl-9"
+          />
+        </div>
+
+        <select
+          value={projectFilter}
+          onChange={(e) => {
+            setProjectFilter(e.target.value);
+            setPagination((p) => ({ ...p, pageIndex: 0 }));
+          }}
+          className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+        >
+          <option value="">Todos los proyectos</option>
+          {distinctProjects.map((p) => (
+            <option key={p.id} value={p.name}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+
         {isEditor && (
           <Button
-            onClick={handleScanAll}
-            disabled={scanState === "scanning"}
             variant="outline"
+            size="sm"
+            onClick={handleScanAll}
+            disabled={syncing}
           >
-            {scanState === "scanning" ? (
-              <Loader2 className="h-4 w-4 animate-spin mr-2" />
+            {syncing ? (
+              <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
             ) : (
-              <FolderSync className="h-4 w-4 mr-2" />
+              <FolderSync className="h-4 w-4 mr-1.5" />
             )}
             Escanear Todo
           </Button>
         )}
       </div>
 
-      {scanMessage && (
-        <div
-          className={`text-sm px-3 py-2 rounded ${
-            scanState === "error"
-              ? "bg-destructive/10 text-destructive"
-              : "bg-muted text-muted-foreground"
-          }`}
-        >
-          {scanMessage}
-        </div>
+      {/* Sync message */}
+      {syncMessage && (
+        <p className="text-sm text-muted-foreground bg-muted/50 px-3 py-2 rounded-md">
+          {syncMessage}
+        </p>
       )}
 
-      {stats && (
-        <div className="grid grid-cols-3 gap-4">
-          <div className="rounded-lg border p-4">
-            <div className="text-sm text-muted-foreground">Instalaciones</div>
-            <div className="text-2xl font-bold">{stats.totalDeployments}</div>
-          </div>
-          <div className="rounded-lg border p-4">
-            <div className="text-sm text-muted-foreground">
-              Archivos de Audio
-            </div>
-            <div className="text-2xl font-bold">{stats.totalFiles}</div>
-          </div>
-          <div className="rounded-lg border p-4">
-            <div className="text-sm text-muted-foreground">Tamaño Total</div>
-            <div className="text-2xl font-bold">
-              {formatBytes(stats.totalSizeBytes)}
-            </div>
-          </div>
-        </div>
-      )}
-
-      <div className="flex items-center gap-2">
-        <div className="relative flex-1 max-w-sm">
-          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Buscar instalación..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="pl-9"
-          />
-        </div>
-        <span className="text-sm text-muted-foreground">
-          {filtered.length} instalación(es)
-        </span>
-      </div>
-
-      <div className="rounded-md border">
-        <Table>
+      {/* Table */}
+      <div className="rounded-xl border overflow-auto">
+        <Table className="text-xs">
           <TableHeader>
-            <TableRow>
-              <TableHead>Instalación</TableHead>
-              <TableHead>Sitio</TableHead>
-              <TableHead>Proyecto</TableHead>
-              <TableHead>Fechas</TableHead>
-              <TableHead className="text-right">En Drive</TableHead>
-              <TableHead className="text-right">Escaneados</TableHead>
-              {isEditor && <TableHead className="w-[100px]" />}
-            </TableRow>
+            {table.getHeaderGroups().map((headerGroup) => (
+              <TableRow key={headerGroup.id}>
+                {headerGroup.headers.map((header) => (
+                  <TableHead
+                    key={header.id}
+                    className={
+                      header.column.getCanSort()
+                        ? "cursor-pointer select-none"
+                        : ""
+                    }
+                    onClick={header.column.getToggleSortingHandler()}
+                  >
+                    <span className="flex items-center gap-1">
+                      {header.isPlaceholder
+                        ? null
+                        : flexRender(
+                            header.column.columnDef.header,
+                            header.getContext()
+                          )}
+                      {header.column.getCanSort() &&
+                        ({
+                          asc: <ArrowUp className="h-3.5 w-3.5" />,
+                          desc: <ArrowDown className="h-3.5 w-3.5" />,
+                        }[header.column.getIsSorted() as string] ?? (
+                          <ArrowUpDown className="h-3.5 w-3.5 opacity-30" />
+                        ))}
+                    </span>
+                  </TableHead>
+                ))}
+              </TableRow>
+            ))}
           </TableHeader>
           <TableBody>
-            {filtered.length === 0 ? (
+            {table.getRowModel().rows.length === 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={isEditor ? 7 : 6}
-                  className="h-24 text-center text-muted-foreground"
+                  colSpan={columns.length}
+                  className="text-center text-muted-foreground py-8"
                 >
-                  No hay instalaciones con audio
+                  No hay instalaciones con audio.
+                  {isEditor &&
+                    ' Usa "Escanear Todo" para buscar archivos.'}
                 </TableCell>
               </TableRow>
             ) : (
-              filtered.map((dep) => (
-                <TableRow key={dep.id}>
-                  <TableCell>
-                    <Link
-                      href={`/audio/${dep.id}`}
-                      className="font-medium text-primary hover:underline"
-                    >
-                      {dep.name}
-                    </Link>
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {dep.siteName ?? "—"}
-                  </TableCell>
-                  <TableCell>
-                    {dep.ctProjectName ? (
-                      <Badge variant="outline">{dep.ctProjectName}</Badge>
-                    ) : (
-                      "—"
-                    )}
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {dep.dateStart && dep.dateEnd
-                      ? `${dep.dateStart} → ${dep.dateEnd}`
-                      : dep.dateStart ?? "—"}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {dep.uploadAudioCount ?? "—"}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {dep.audioFileCount > 0 ? (
-                      dep.audioFileCount
-                    ) : (
-                      <span className="text-muted-foreground">—</span>
-                    )}
-                  </TableCell>
-                  {isEditor && (
-                    <TableCell>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        disabled={scanningId === dep.id}
-                        onClick={() => handleScanOne(dep.id)}
-                      >
-                        {scanningId === dep.id ? (
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                        ) : (
-                          <FolderSync className="h-3 w-3" />
+              table.getRowModel().rows.map((row) => (
+                <Fragment key={row.id}>
+                  <TableRow
+                    className={`cursor-pointer hover:bg-muted/50 ${row.getIsExpanded() ? "bg-primary/10 border-b-0" : ""}`}
+                    onClick={() => row.toggleExpanded()}
+                  >
+                    {row.getVisibleCells().map((cell) => (
+                      <TableCell key={cell.id}>
+                        {flexRender(
+                          cell.column.columnDef.cell,
+                          cell.getContext()
                         )}
-                      </Button>
-                    </TableCell>
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                  {row.getIsExpanded() && (
+                    <TableRow className="hover:bg-transparent">
+                      <TableCell colSpan={columns.length} className="p-0">
+                        <AudioExpandedRow
+                          deployment={row.original}
+                          isEditor={isEditor}
+                        />
+                      </TableCell>
+                    </TableRow>
                   )}
-                </TableRow>
+                </Fragment>
               ))
             )}
           </TableBody>
         </Table>
+      </div>
+
+      {/* Pagination */}
+      <div className="flex items-center justify-between text-sm">
+        <p className="text-muted-foreground">
+          {table.getFilteredRowModel().rows.length} instalaciones
+          {(globalFilter || projectFilter) && " (filtradas)"}
+        </p>
+        <div className="flex items-center gap-1.5">
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 w-8 p-0"
+            onClick={() => table.firstPage()}
+            disabled={!table.getCanPreviousPage()}
+          >
+            <ChevronsLeft className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 w-8 p-0"
+            onClick={() => table.previousPage()}
+            disabled={!table.getCanPreviousPage()}
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </Button>
+          <span className="px-2 text-muted-foreground">
+            {table.getState().pagination.pageIndex + 1} /{" "}
+            {table.getPageCount()}
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 w-8 p-0"
+            onClick={() => table.nextPage()}
+            disabled={!table.getCanNextPage()}
+          >
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 w-8 p-0"
+            onClick={() => table.lastPage()}
+            disabled={!table.getCanNextPage()}
+          >
+            <ChevronsRight className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
     </div>
   );

@@ -46,10 +46,17 @@ export interface AudioDeploymentRow {
   dateStart: string | null;
   dateEnd: string | null;
   ctProjectName: string | null;
+  latitude: number | null;
+  longitude: number | null;
   uploadAudioCount: number | null;
   uploadAudioFolderId: string | null;
   audioFileCount: number;
   lastScanned: Date | null;
+}
+
+export interface AudioProject {
+  id: number;
+  name: string;
 }
 
 export interface AudioFileRow {
@@ -88,6 +95,8 @@ export async function fetchAudioDeployments(): Promise<
       dateStart: deployments.dateStart,
       dateEnd: deployments.dateEnd,
       ctProjectName: cameraTrapProjects.name,
+      latitude: deployments.latitude,
+      longitude: deployments.longitude,
       uploadAudioCount: deployments.uploadAudioCount,
       uploadAudioFolderId: deployments.uploadAudioFolderId,
       audioFileCount: sql<number>`(
@@ -113,6 +122,25 @@ export async function fetchAudioDeployments(): Promise<
     .orderBy(deployments.name);
 
   return { success: true, data: rows };
+}
+
+export async function fetchDistinctAudioProjects(): Promise<AudioProject[]> {
+  await requirePermission("camera-trap", "viewer");
+
+  const rows = await db
+    .selectDistinct({
+      id: cameraTrapProjects.id,
+      name: cameraTrapProjects.name,
+    })
+    .from(deployments)
+    .innerJoin(
+      cameraTrapProjects,
+      eq(deployments.cameraTrapProjectId, cameraTrapProjects.id)
+    )
+    .where(isNotNull(deployments.uploadAudioFolderId))
+    .orderBy(cameraTrapProjects.name);
+
+  return rows;
 }
 
 export async function fetchAudioFiles(
@@ -190,74 +218,84 @@ export async function scanDeploymentAudio(
     };
   }
 
-  // List files from Drive
+  // List files from Drive (recursive — audio files may be in subfolders)
   const driveFiles = await listFolderFiles(
     dep.uploadAudioFolderId,
     AUDIO_EXTENSIONS
   );
 
-  let added = 0;
-  let updated = 0;
-
-  for (const file of driveFiles) {
-    const ext = path.extname(file.name).toLowerCase().replace(".", "");
-    const playable = PLAYABLE_FORMATS.has(ext);
-    const mimeType = AUDIO_MIME_TYPES[ext] ?? "application/octet-stream";
-    const modifiedAt = file.modifiedTime
-      ? new Date(file.modifiedTime)
-      : null;
-
-    // Upsert: try insert, on conflict update
-    const existing = await db
-      .select({ id: audioFiles.id })
-      .from(audioFiles)
-      .where(
-        and(
-          eq(audioFiles.deploymentId, deploymentId),
-          eq(audioFiles.driveFileId, file.id)
-        )
-      );
-
-    if (existing.length > 0) {
-      await db
-        .update(audioFiles)
-        .set({
-          filename: file.name,
-          fileSize: file.size ?? null,
-          mimeType,
-          modifiedAt: modifiedAt ?? null,
-          format: ext,
-          playable,
-        })
-        .where(eq(audioFiles.id, existing[0].id));
-      updated++;
-    } else {
-      await db.insert(audioFiles).values({
-        deploymentId,
-        filename: file.name,
-        driveFileId: file.id,
-        fileSize: file.size ?? null,
-        mimeType,
-        modifiedAt: modifiedAt ?? null,
-        format: ext,
-        playable,
-      });
-      added++;
-    }
-  }
-
-  // Remove files that no longer exist on Drive
+  // Build set of Drive file IDs for cleanup
   const driveFileIds = new Set(driveFiles.map((f) => f.id));
-  const dbFiles = await db
-    .select({ id: audioFiles.id, driveFileId: audioFiles.driveFileId })
-    .from(audioFiles)
-    .where(eq(audioFiles.deploymentId, deploymentId));
 
-  for (const dbFile of dbFiles) {
-    if (dbFile.driveFileId && !driveFileIds.has(dbFile.driveFileId)) {
-      await db.delete(audioFiles).where(eq(audioFiles.id, dbFile.id));
+  // Batch upsert in a synchronous transaction (better-sqlite3 requirement)
+  const result = db.transaction((tx) => {
+    let added = 0;
+    let updated = 0;
+
+    for (const file of driveFiles) {
+      const ext = path.extname(file.name).toLowerCase().replace(".", "");
+      const playable = PLAYABLE_FORMATS.has(ext);
+      const mimeType = AUDIO_MIME_TYPES[ext] ?? "application/octet-stream";
+      const modifiedAt = file.modifiedTime
+        ? new Date(file.modifiedTime)
+        : null;
+
+      const [existing] = tx
+        .select({ id: audioFiles.id })
+        .from(audioFiles)
+        .where(
+          and(
+            eq(audioFiles.deploymentId, deploymentId),
+            eq(audioFiles.driveFileId, file.id)
+          )
+        )
+        .all();
+
+      if (existing) {
+        tx.update(audioFiles)
+          .set({
+            filename: file.name,
+            fileSize: file.size ?? null,
+            mimeType,
+            modifiedAt: modifiedAt ?? null,
+            format: ext,
+            playable,
+          })
+          .where(eq(audioFiles.id, existing.id))
+          .run();
+        updated++;
+      } else {
+        tx.insert(audioFiles)
+          .values({
+            deploymentId,
+            filename: file.name,
+            driveFileId: file.id,
+            fileSize: file.size ?? null,
+            mimeType,
+            modifiedAt: modifiedAt ?? null,
+            format: ext,
+            playable,
+          })
+          .run();
+        added++;
+      }
     }
-  }
+
+    // Remove files that no longer exist on Drive
+    const dbFiles = tx
+      .select({ id: audioFiles.id, driveFileId: audioFiles.driveFileId })
+      .from(audioFiles)
+      .where(eq(audioFiles.deploymentId, deploymentId))
+      .all();
+
+    for (const dbFile of dbFiles) {
+      if (dbFile.driveFileId && !driveFileIds.has(dbFile.driveFileId)) {
+        tx.delete(audioFiles).where(eq(audioFiles.id, dbFile.id)).run();
+      }
+    }
+
+    return { added, updated, total: driveFiles.length };
+  });
 
   revalidatePath("/audio");
   revalidatePath(`/audio/${deploymentId}`);
@@ -265,8 +303,8 @@ export async function scanDeploymentAudio(
   return {
     success: true,
     data: {
-      added,
-      updated,
+      added: result.added,
+      updated: result.updated,
       total: driveFiles.length,
     },
   };

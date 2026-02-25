@@ -1,5 +1,8 @@
 import { requirePermission } from "@/lib/auth";
-import { fetchAudioDeployments, getAudioStats } from "./actions";
+import {
+  fetchAudioDeployments,
+  fetchDistinctAudioProjects,
+} from "./actions";
 import { AudioDeploymentsShell } from "./audio-deployments-shell";
 
 export default async function AudioPage() {
@@ -13,15 +16,15 @@ export default async function AudioPage() {
         (p.role === "editor" || p.role === "admin")
     );
 
-  const [deploymentsResult, statsResult] = await Promise.all([
+  const [deploymentsResult, distinctProjects] = await Promise.all([
     fetchAudioDeployments(),
-    getAudioStats(),
+    fetchDistinctAudioProjects(),
   ]);
 
   return (
     <AudioDeploymentsShell
       deployments={deploymentsResult.success ? deploymentsResult.data : []}
-      stats={statsResult.success ? statsResult.data : null}
+      distinctProjects={distinctProjects}
       isEditor={isEditor}
     />
   );

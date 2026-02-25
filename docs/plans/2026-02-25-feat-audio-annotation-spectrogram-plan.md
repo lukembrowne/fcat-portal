@@ -227,13 +227,13 @@ Audio playback synced with the spectrogram.
 
 **Files to modify:**
 
-- [ ] `src/app/audio/[id]/annotate/[fileId]/annotation-client.tsx` — add playback:
+- [x] `src/app/audio/[id]/annotate/[fileId]/annotation-client.tsx` — add playback:
   - Hidden `<audio>` element with src from `/api/audio/stream?fileId=<driveFileId>`
   - Track `currentTime` via `timeupdate` event → pass to spectrogram overlay for cursor position
   - Play/pause toggle button in controls bar
   - "Play selection" on selected detection: `audio.currentTime = det.startTime`, play, stop at `det.endTime`
   - Click on spectrogram seeks: convert pixelX → time, set `audio.currentTime`
-- [ ] `src/hooks/use-audio-annotation-shortcuts.ts` — NEW hook (adapted from `use-annotation-shortcuts.ts`):
+- [x] `src/hooks/use-audio-annotation-shortcuts.ts` — NEW hook (adapted from `use-annotation-shortcuts.ts`):
   - Space = play/pause
   - `[` / `]` = seek audio ±5s
   - ArrowLeft/Right = prev/next file

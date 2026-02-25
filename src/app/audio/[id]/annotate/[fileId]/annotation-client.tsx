@@ -5,19 +5,24 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   SpeciesSidebar,
+  getVisibleSpecies,
   getStoredDisplay,
   DISPLAY_KEY,
   type NameDisplay,
 } from "@/components/species-sidebar";
 import { Button } from "@/components/ui/button";
-import { ChevronLeft, ChevronRight, Loader2, Trash2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, Loader2, Trash2, Play, Pause, SkipBack, SkipForward } from "lucide-react";
 import type { Species } from "@/db/schema";
 import type { SpectrogramMetadata } from "@/lib/audio-cache";
 import { SpectrogramOverlay, type AudioBoxData } from "./spectrogram-overlay";
+import { useAudioAnnotationShortcuts } from "@/hooks/use-audio-annotation-shortcuts";
 import {
   createAudioDetection,
   deleteAudioDetection,
   assignAudioSpecies,
+  verifyAudioIdentification,
+  rejectAudioIdentification,
+  verifyAllAudioAndAdvance,
 } from "@/app/audio/annotation-actions";
 
 export interface AudioDetectionData {
@@ -53,6 +58,12 @@ interface AudioAnnotationClientProps {
   totalFiles: number;
 }
 
+function formatTime(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
 export function AudioAnnotationClient({
   audioFileId,
   deploymentId,
@@ -79,8 +90,13 @@ export function AudioAnnotationClient({
   const [spectrogramReady, setSpectrogramReady] = useState(false);
   const [spectrogramError, setSpectrogramError] = useState<string | null>(null);
   const [metadata, setMetadata] = useState<SpectrogramMetadata | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const selectionEndRef = useRef<number | null>(null);
 
   const spectrogramUrl = `/api/audio/spectrogram?fileId=${audioFileId}`;
+  const audioStreamUrl = driveFileId ? `/api/audio/stream?fileId=${driveFileId}` : null;
 
   // Poll for spectrogram readiness
   useEffect(() => {
@@ -187,30 +203,144 @@ export function AudioAnnotationClient({
     [selectedDetectionId, router]
   );
 
-  // Keyboard navigation
-  useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      if (
-        e.target instanceof HTMLInputElement ||
-        e.target instanceof HTMLTextAreaElement
-      )
-        return;
+  // Playback controls
+  const handlePlayPause = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (audio.paused) {
+      selectionEndRef.current = null;
+      audio.play();
+    } else {
+      audio.pause();
+    }
+  }, []);
 
-      if (e.code === "ArrowLeft" && prevFileId) {
-        e.preventDefault();
-        router.push(`/audio/${deploymentId}/annotate/${prevFileId}`);
-      } else if (e.code === "ArrowRight" && nextFileId) {
-        e.preventDefault();
-        router.push(`/audio/${deploymentId}/annotate/${nextFileId}`);
+  const handleSeek = useCallback((time: number) => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.currentTime = Math.max(0, Math.min(time, audio.duration || 0));
+  }, []);
+
+  const handlePlaySelection = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio || !selectedDetection) return;
+    audio.currentTime = selectedDetection.startTime;
+    selectionEndRef.current = selectedDetection.endTime;
+    audio.play();
+  }, [selectedDetection]);
+
+  // Stop at selection end
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    function onTimeUpdate() {
+      const a = audioRef.current;
+      if (!a) return;
+      setCurrentTime(a.currentTime);
+      if (selectionEndRef.current != null && a.currentTime >= selectionEndRef.current) {
+        a.pause();
+        selectionEndRef.current = null;
       }
     }
 
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [router, deploymentId, prevFileId, nextFileId]);
+    function onPlay() { setIsPlaying(true); }
+    function onPause() { setIsPlaying(false); }
+    function onEnded() { setIsPlaying(false); setCurrentTime(0); }
+
+    audio.addEventListener("timeupdate", onTimeUpdate);
+    audio.addEventListener("play", onPlay);
+    audio.addEventListener("pause", onPause);
+    audio.addEventListener("ended", onEnded);
+
+    return () => {
+      audio.removeEventListener("timeupdate", onTimeUpdate);
+      audio.removeEventListener("play", onPlay);
+      audio.removeEventListener("pause", onPause);
+      audio.removeEventListener("ended", onEnded);
+    };
+  }, []);
+
+  // Verify/reject handlers
+  const handleVerifySelected = useCallback(() => {
+    if (!selectedDetection?.identification) return;
+    startTransition(async () => {
+      await verifyAudioIdentification(selectedDetection.identification!.id);
+      router.refresh();
+    });
+  }, [selectedDetection, router]);
+
+  const handleRejectSelected = useCallback(() => {
+    if (!selectedDetection?.identification) return;
+    startTransition(async () => {
+      await rejectAudioIdentification(selectedDetection.identification!.id);
+      router.refresh();
+    });
+  }, [selectedDetection, router]);
+
+  const handleQuickVerifyAll = useCallback(() => {
+    const unverifiedIds = detections
+      .filter((d) => d.identification?.verificationStatus === "unverified")
+      .map((d) => d.identification!.id);
+
+    startTransition(async () => {
+      const result = await verifyAllAudioAndAdvance(unverifiedIds, deploymentId, audioFileId);
+      if (result.success && result.data.nextFileId) {
+        router.push(`/audio/${deploymentId}/annotate/${result.data.nextFileId}`);
+      } else {
+        router.refresh();
+      }
+    });
+  }, [detections, deploymentId, audioFileId, router]);
+
+  // Visible species for number-key assignment
+  const visibleSpecies = getVisibleSpecies(speciesList, recentSpecies, searchQuery);
+
+  // Keyboard shortcuts
+  useAudioAnnotationShortcuts({
+    enabled: true,
+    onPlayPause: handlePlayPause,
+    onSeekBack: () => handleSeek((audioRef.current?.currentTime ?? 0) - 5),
+    onSeekForward: () => handleSeek((audioRef.current?.currentTime ?? 0) + 5),
+    onPlaySelection: handlePlaySelection,
+    onVerify: handleVerifySelected,
+    onReject: handleRejectSelected,
+    onQuickVerifyAll: handleQuickVerifyAll,
+    onDeleteSelected: () => {
+      if (selectedDetectionId) handleDeleteDetection(selectedDetectionId);
+    },
+    onNext: () => {
+      if (nextFileId) router.push(`/audio/${deploymentId}/annotate/${nextFileId}`);
+    },
+    onPrev: () => {
+      if (prevFileId) router.push(`/audio/${deploymentId}/annotate/${prevFileId}`);
+    },
+    onSelectDetection: (index) => {
+      if (index < detections.length) {
+        setSelectedDetectionId(detections[index].id);
+      }
+    },
+    onDeselect: () => {
+      setSelectedDetectionId(null);
+      setSearchQuery("");
+    },
+    onAssignSpeciesByIndex: (index) => {
+      if (index < visibleSpecies.length) {
+        handleSelectSpecies(visibleSpecies[index].scientificName);
+      }
+    },
+    detectionCount: detections.length,
+    selectedDetectionId,
+    searchInputRef,
+  });
 
   return (
     <div className="flex flex-1 min-h-0">
+      {/* Hidden audio element */}
+      {audioStreamUrl && (
+        <audio ref={audioRef} src={audioStreamUrl} preload="auto" />
+      )}
+
       {/* Left sidebar — Species list */}
       <aside className="w-56 shrink-0 flex flex-col min-w-0 overflow-hidden border-r bg-background">
         <SpeciesSidebar
@@ -314,12 +444,14 @@ export function AudioAnnotationClient({
                 boxes={boxes}
                 selectedBoxId={selectedDetectionId}
                 editable={isEditor}
+                currentTime={currentTime}
                 onBoxClick={(box) =>
                   setSelectedDetectionId((prev) =>
                     prev === box.id ? null : box.id
                   )
                 }
                 onDrawComplete={handleDrawComplete}
+                onSeekClick={handleSeek}
               />
             </div>
           )}
@@ -328,12 +460,50 @@ export function AudioAnnotationClient({
         {/* Bottom controls */}
         <div className="px-4 py-2 border-t shrink-0 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            {/* Playback controls — TODO: Phase 5 */}
-            <span className="text-xs text-muted-foreground">
-              {metadata
-                ? `${metadata.duration.toFixed(1)}s · ${metadata.sampleRate}Hz · ${metadata.width}×${metadata.height}px`
-                : "Cargando..."}
-            </span>
+            {audioStreamUrl && (
+              <>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  onClick={() => handleSeek((audioRef.current?.currentTime ?? 0) - 5)}
+                  title="Retroceder 5s ( [ )"
+                >
+                  <SkipBack className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={handlePlayPause}
+                  title={isPlaying ? "Pausar (Espacio)" : "Reproducir (Espacio)"}
+                >
+                  {isPlaying ? (
+                    <Pause className="h-4 w-4" />
+                  ) : (
+                    <Play className="h-4 w-4" />
+                  )}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  onClick={() => handleSeek((audioRef.current?.currentTime ?? 0) + 5)}
+                  title="Avanzar 5s ( ] )"
+                >
+                  <SkipForward className="h-3.5 w-3.5" />
+                </Button>
+                <span className="text-xs text-muted-foreground tabular-nums min-w-[4rem]">
+                  {formatTime(currentTime)}
+                  {metadata ? ` / ${formatTime(metadata.duration)}` : ""}
+                </span>
+              </>
+            )}
+            {!audioStreamUrl && metadata && (
+              <span className="text-xs text-muted-foreground">
+                {metadata.duration.toFixed(1)}s · {metadata.sampleRate}Hz
+              </span>
+            )}
           </div>
 
           <div className="flex items-center gap-2">

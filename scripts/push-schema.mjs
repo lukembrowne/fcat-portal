@@ -372,6 +372,35 @@ const statements = [
 
   // iButton indexes
   `CREATE INDEX IF NOT EXISTS idx_ibutton_readings_dep ON ibutton_readings(deployment_id)`,
+
+  // Audio Files (passive audio recorder recordings)
+  `CREATE TABLE IF NOT EXISTS audio_files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    deployment_id INTEGER NOT NULL REFERENCES biochoco_deployments(id) ON DELETE CASCADE,
+    filename TEXT NOT NULL,
+    drive_file_id TEXT,
+    file_size INTEGER,
+    mime_type TEXT,
+    modified_at INTEGER,
+    format TEXT,
+    playable INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+
+  // Audio Files indexes
+  `CREATE INDEX IF NOT EXISTS idx_audio_files_deployment_id ON audio_files(deployment_id)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_audio_files_deployment_drive_file ON audio_files(deployment_id, drive_file_id)`,
+
+  // Upload Count Snapshots (daily aggregate of Drive upload counts)
+  `CREATE TABLE IF NOT EXISTS upload_count_snapshots (
+    date TEXT PRIMARY KEY,
+    total_cameras INTEGER NOT NULL DEFAULT 0,
+    total_audio INTEGER NOT NULL DEFAULT 0,
+    total_ibutton INTEGER NOT NULL DEFAULT 0,
+    deployments_with_uploads INTEGER NOT NULL DEFAULT 0,
+    total_deployments INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
 ];
 
 for (const stmt of statements) {

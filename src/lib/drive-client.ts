@@ -10,6 +10,7 @@ import "server-only";
 import { google, type drive_v3 } from "googleapis";
 import { promises as fs, createReadStream } from "fs";
 import path from "path";
+import type { Readable } from "stream";
 import type { ActionResult } from "./types";
 
 // --- Types ---
@@ -125,22 +126,30 @@ async function countFilesRecursive(
   return count;
 }
 
+export interface DriveFileInfo {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number | null;
+  modifiedTime: string | null;
+}
+
 /**
  * List files in a Drive folder that match the given extensions.
- * Returns file metadata (id, name, mimeType) for each matching file.
+ * Returns file metadata including size and modifiedTime.
  */
 export async function listFolderFiles(
   folderId: string,
   extensions: Set<string>
-): Promise<{ id: string; name: string; mimeType: string }[]> {
+): Promise<DriveFileInfo[]> {
   const drive = getDrive();
-  const files: { id: string; name: string; mimeType: string }[] = [];
+  const files: DriveFileInfo[] = [];
   let pageToken: string | undefined;
 
   do {
     const res = await drive.files.list({
       q: `'${folderId}' in parents and trashed = false and mimeType != 'application/vnd.google-apps.folder'`,
-      fields: "nextPageToken, files(id, name, mimeType)",
+      fields: "nextPageToken, files(id, name, mimeType, size, modifiedTime)",
       pageSize: 100,
       pageToken,
       supportsAllDrives: true,
@@ -155,6 +164,8 @@ export async function listFolderFiles(
           id: file.id,
           name: file.name,
           mimeType: file.mimeType ?? "application/octet-stream",
+          size: file.size ? parseInt(file.size, 10) : null,
+          modifiedTime: file.modifiedTime ?? null,
         });
       }
     }
@@ -304,7 +315,7 @@ const IMAGE_EXTENSIONS = new Set([
 
 const VIDEO_EXTENSIONS = new Set([".mp4", ".avi", ".mov"]);
 
-const AUDIO_EXTENSIONS = new Set([
+export const AUDIO_EXTENSIONS = new Set([
   ".wav", ".mp3", ".flac", ".wac", ".w4v", ".ogg", ".aac",
 ]);
 
@@ -533,6 +544,41 @@ export async function downloadFileToBuffer(
   );
 
   return Buffer.from(res.data as ArrayBuffer);
+}
+
+/**
+ * Stream a file from Drive without buffering the entire file in memory.
+ * Supports Range headers for seeking (used by audio/video players).
+ */
+export async function downloadFileAsStream(
+  fileId: string,
+  rangeHeader?: string
+): Promise<{
+  stream: Readable;
+  contentType: string;
+  contentLength: number | undefined;
+  contentRange: string | undefined;
+  status: number;
+}> {
+  const drive = getDrive();
+  const headers: Record<string, string> = {};
+  if (rangeHeader) headers["Range"] = rangeHeader;
+
+  const res = await drive.files.get(
+    { fileId, alt: "media", supportsAllDrives: true },
+    { responseType: "stream", headers }
+  );
+
+  return {
+    stream: res.data as unknown as Readable,
+    contentType:
+      (res.headers["content-type"] as string) ?? "application/octet-stream",
+    contentLength: res.headers["content-length"]
+      ? parseInt(res.headers["content-length"] as string)
+      : undefined,
+    contentRange: (res.headers["content-range"] as string) ?? undefined,
+    status: res.status,
+  };
 }
 
 // ---------------------------------------------------------------------------

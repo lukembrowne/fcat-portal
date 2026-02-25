@@ -5,6 +5,7 @@
  * - users, projects, user_permissions (auth/permissions)
  * - biochoco_deployments, biochoco_processing_jobs, biochoco_images, biochoco_detections, biochoco_identifications, biochoco_species (camera trap)
  * - ibutton_uploads, ibutton_readings (iButton temperature data)
+ * - audio_files (passive audio recorder recordings)
  * - finance_transactions, finance_budget_items, finance_category_map,
  *   finance_sueldos_grants, finance_sueldos_totals, finance_projections,
  *   finance_uploads (financial dashboard)
@@ -644,6 +645,53 @@ export const ibuttonReadings = sqliteTable(
 );
 
 // ---------------------------------------------------------------------------
+// Audio Files (passive audio recorder recordings)
+// ---------------------------------------------------------------------------
+
+export const audioFiles = sqliteTable(
+  "audio_files",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    deploymentId: integer("deployment_id")
+      .notNull()
+      .references(() => deployments.id, { onDelete: "cascade" }),
+    filename: text("filename").notNull(),
+    driveFileId: text("drive_file_id"),
+    fileSize: integer("file_size"),
+    mimeType: text("mime_type"),
+    modifiedAt: integer("modified_at", { mode: "timestamp" }),
+    format: text("format"),
+    playable: integer("playable", { mode: "boolean" }).notNull().default(true),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [
+    index("idx_audio_files_deployment_id").on(table.deploymentId),
+    uniqueIndex("idx_audio_files_deployment_drive_file").on(
+      table.deploymentId,
+      table.driveFileId
+    ),
+  ]
+);
+
+// ---------------------------------------------------------------------------
+// Upload Count Snapshots (daily aggregate of Drive upload counts)
+// ---------------------------------------------------------------------------
+
+export const uploadCountSnapshots = sqliteTable("upload_count_snapshots", {
+  date: text("date").primaryKey(),
+  totalCameras: integer("total_cameras").notNull().default(0),
+  totalAudio: integer("total_audio").notNull().default(0),
+  totalIbutton: integer("total_ibutton").notNull().default(0),
+  deploymentsWithUploads: integer("deployments_with_uploads").notNull().default(0),
+  totalDeployments: integer("total_deployments").notNull().default(0),
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+
+// ---------------------------------------------------------------------------
 // Type Exports
 // ---------------------------------------------------------------------------
 
@@ -723,3 +771,9 @@ export type ClimateEdit = typeof climateEdits.$inferSelect;
 export type NewClimateEdit = typeof climateEdits.$inferInsert;
 
 export type ClimateResolution = "hourly" | "15min";
+
+export type AudioFile = typeof audioFiles.$inferSelect;
+export type NewAudioFile = typeof audioFiles.$inferInsert;
+
+export type UploadCountSnapshot = typeof uploadCountSnapshots.$inferSelect;
+export type NewUploadCountSnapshot = typeof uploadCountSnapshots.$inferInsert;

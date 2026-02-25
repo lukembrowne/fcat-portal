@@ -69,6 +69,7 @@ export interface AudioFileRow {
   modifiedAt: Date | null;
   format: string | null;
   playable: boolean;
+  detectionCount: number;
 }
 
 export interface AudioStats {
@@ -160,6 +161,7 @@ export async function fetchAudioFiles(
       modifiedAt: audioFiles.modifiedAt,
       format: audioFiles.format,
       playable: audioFiles.playable,
+      detectionCount: sql<number>`(SELECT COUNT(*) FROM audio_detections WHERE audio_file_id = ${audioFiles.id})`,
     })
     .from(audioFiles)
     .where(eq(audioFiles.deploymentId, deploymentId))

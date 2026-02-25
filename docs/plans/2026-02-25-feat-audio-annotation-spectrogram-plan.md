@@ -250,25 +250,24 @@ Wire everything together and handle edge cases.
 
 **Files to modify:**
 
-- [ ] `src/app/audio/[id]/audio-files-shell.tsx` — add "Anotar" button per file row:
+- [x] `src/app/audio/[id]/audio-files-shell.tsx` — add "Anotar" button per file row:
   - Link to `/audio/${deploymentId}/annotate/${file.id}`
   - Show for playable WAV/FLAC/MP3 files only (librosa-compatible)
   - Small icon button next to the play button
-- [ ] `src/app/audio/[id]/annotate/[fileId]/annotation-client.tsx` — polish:
+  - Detection count badge per file row
+- [x] `src/app/audio/actions.ts` — add detectionCount subquery to AudioFileRow
+- [x] `src/app/audio/[id]/annotate/[fileId]/annotation-client.tsx` — polish:
   - Loading skeleton while spectrogram generates (pulsing gray rectangle)
   - Error state if Python fails: show stderr, "Reintentar" button
-  - Error state for non-supported formats: "Formato no compatible para espectrogramas"
-  - Error state for ML venv not ready: "Entorno ML no disponible. Espere unos minutos."
+  - Error state for non-supported formats / ML venv not ready
   - Back button → `/audio/[deploymentId]`
-  - Header: deployment name + filename
-  - Annotation count badge on file rows in the files page
-- [ ] `src/app/audio/[id]/annotate/[fileId]/spectrogram-overlay.tsx` — polish:
+- [ ] `src/app/audio/[id]/annotate/[fileId]/spectrogram-overlay.tsx` — polish (deferred):
   - Time axis labels (every 5s or 10s) rendered in HTML below the spectrogram
   - Frequency axis labels (every 2000Hz) rendered in HTML to the left
   - Tooltip on box hover showing species + time range + freq range
-- [ ] `src/components/species-sidebar.tsx` — no changes needed (already reusable). The audio annotation page passes the same props as camera trap
-- [ ] Verify `min-w-0` applied at every flex level in the annotation layout
-- [ ] Verify build passes (`npm run build`)
+- [x] `src/components/species-sidebar.tsx` — no changes needed (already reusable). The audio annotation page passes the same props as camera trap
+- [x] Verify `min-w-0` applied at every flex level in the annotation layout
+- [x] Verify build passes (`npm run build`)
 
 ## Spectrogram Python Script
 

@@ -15,6 +15,7 @@ import {
   Calendar,
   ChevronRight,
   Play,
+  ScanSearch,
 } from "lucide-react";
 import { scanDeploymentAudio } from "../actions";
 import type { AudioFileRow } from "../actions";
@@ -258,21 +259,40 @@ export function AudioFilesShell({
                           </span>
                         )}
 
+                        {/* Detection count badge */}
+                        {file.detectionCount > 0 && (
+                          <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                            {file.detectionCount}
+                          </Badge>
+                        )}
+
                         {/* Actions */}
                         <div className="flex items-center gap-1 shrink-0">
                           {file.playable && file.driveFileId && (
-                            <Button
-                              size="sm"
-                              variant={
-                                activeFileId === file.driveFileId
-                                  ? "default"
-                                  : "ghost"
-                              }
-                              className="h-7 w-7 p-0"
-                              onClick={() => handlePlay(file.driveFileId!)}
-                            >
-                              <Play className="h-3 w-3" />
-                            </Button>
+                            <>
+                              <Button
+                                size="sm"
+                                variant={
+                                  activeFileId === file.driveFileId
+                                    ? "default"
+                                    : "ghost"
+                                }
+                                className="h-7 w-7 p-0"
+                                onClick={() => handlePlay(file.driveFileId!)}
+                              >
+                                <Play className="h-3 w-3" />
+                              </Button>
+                              <Link href={`/audio/${deployment.id}/annotate/${file.id}`}>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-7 w-7 p-0"
+                                  title="Anotar"
+                                >
+                                  <ScanSearch className="h-3 w-3" />
+                                </Button>
+                              </Link>
+                            </>
                           )}
                           {file.driveFileId && (
                             <a

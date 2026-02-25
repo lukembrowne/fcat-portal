@@ -139,32 +139,32 @@ Add a real-time frequency visualization in the sticky player bar using Web Audio
 
 ### Phase 5: Polish and Edge Cases
 
-- [ ] Handle non-parseable filenames: files without `_YYYYMMDD_HHMMSS` pattern go in "Sin fecha" section, showing full filename instead of just time
-- [ ] Handle empty deployments (0 scanned files): show empty state with scan prompt for editors, "No hay archivos" for viewers
-- [ ] Handle `.wac`/`.w4v` files: hide play button, show download only, no "No compatible" badge needed (just absence of play button)
-- [ ] Test with sidebar open (narrowest viewport) per learnings about `min-w-0` flex issues
-- [ ] Verify `revalidatePath` after scan updates both the deployments list and the files page
+- [x] Handle non-parseable filenames: files without `_YYYYMMDD_HHMMSS` pattern go in "Sin fecha" section, showing full filename instead of just time
+- [x] Handle empty deployments (0 scanned files): show empty state with scan prompt for editors, "No hay archivos" for viewers
+- [x] Handle `.wac`/`.w4v` files: hide play button, show download only, no "No compatible" badge needed (just absence of play button)
+- [x] Test with sidebar open (narrowest viewport) per learnings about `min-w-0` flex issues
+- [x] Verify `revalidatePath` after scan updates both the deployments list and the files page
 
 ## Acceptance Criteria
 
 ### Functional
 
-- [ ] `/audio/` shows TanStack table with sorting, project filter, pagination (25/page)
-- [ ] Rows expand accordion-style showing deployment metadata (lat/lng, dates, file count)
-- [ ] Expanded row has "Ver archivos" link and editor-only scan button
-- [ ] `/audio/[id]` groups files by date with collapsible sections
-- [ ] Date sections default collapsed, most recent expanded
-- [ ] Sticky bottom player appears on file play, persists while scrolling
-- [ ] Custom progress bar shows played + buffered ranges, supports click/drag seeking
-- [ ] Spectrogram renders real-time frequency data in the player bar
-- [ ] Keyboard shortcuts work: Space (play/pause), ArrowLeft/Right (seek 5s)
+- [x] `/audio/` shows TanStack table with sorting, project filter, pagination (25/page)
+- [x] Rows expand accordion-style showing deployment metadata (lat/lng, dates, file count)
+- [x] Expanded row has "Ver archivos" link and editor-only scan button
+- [x] `/audio/[id]` groups files by date with collapsible sections
+- [x] Date sections default collapsed, most recent expanded
+- [x] Sticky bottom player appears on file play, persists while scrolling
+- [x] Custom progress bar shows played + buffered ranges, supports click/drag seeking
+- [x] Spectrogram renders real-time frequency data in the player bar
+- [x] Keyboard shortcuts work: Space (play/pause), ArrowLeft/Right (seek 5s)
 
 ### Non-Functional
 
-- [ ] 5,000 files render without visible lag (collapsed sections = minimal DOM)
-- [ ] No layout regressions with sidebar open/closed
-- [ ] No z-index conflicts with FloatingJobProgress
-- [ ] Build passes (`npm run build`)
+- [x] 5,000 files render without visible lag (collapsed sections = minimal DOM)
+- [x] No layout regressions with sidebar open/closed
+- [x] No z-index conflicts with FloatingJobProgress
+- [x] Build passes (`npm run build`)
 
 ## References
 

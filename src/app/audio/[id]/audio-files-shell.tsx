@@ -1,17 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import {
   AudioLines,
@@ -21,11 +13,41 @@ import {
   Loader2,
   MapPin,
   Calendar,
+  ChevronRight,
+  Play,
 } from "lucide-react";
 import { scanDeploymentAudio } from "../actions";
 import type { AudioFileRow } from "../actions";
-import { formatBytes } from "@/lib/format";
 import { AudioPlayer } from "./audio-player";
+
+/** Parse recording timestamp from filename like `2MM21799_20260119_193500.wav` */
+function parseRecordingTimestamp(filename: string): {
+  date: string;
+  time: string;
+} | null {
+  const match = filename.match(
+    /_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})\./
+  );
+  if (!match) return null;
+  const [, y, mo, d, h, mi, s] = match;
+  return { date: `${y}-${mo}-${d}`, time: `${h}:${mi}:${s}` };
+}
+
+/** Format a YYYY-MM-DD date string in Spanish locale */
+function formatDateHeading(dateStr: string): string {
+  const d = new Date(dateStr + "T12:00:00"); // noon to avoid timezone shifts
+  return d.toLocaleDateString("es-EC", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+}
+
+interface DateGroup {
+  dateKey: string;
+  label: string;
+  files: (AudioFileRow & { time: string | null })[];
+}
 
 interface DeploymentInfo {
   id: number;
@@ -51,6 +73,72 @@ export function AudioFilesShell({
   const [scanning, setScanning] = useState(false);
   const [activeFileId, setActiveFileId] = useState<string | null>(null);
 
+  // Group files by date
+  const dateGroups = useMemo(() => {
+    const groups = new Map<string, (AudioFileRow & { time: string | null })[]>();
+    const noDate: (AudioFileRow & { time: string | null })[] = [];
+
+    for (const file of files) {
+      const parsed = parseRecordingTimestamp(file.filename);
+      if (parsed) {
+        const existing = groups.get(parsed.date) ?? [];
+        existing.push({ ...file, time: parsed.time });
+        groups.set(parsed.date, existing);
+      } else {
+        noDate.push({ ...file, time: null });
+      }
+    }
+
+    // Sort dates descending (most recent first)
+    const sortedKeys = Array.from(groups.keys()).sort((a, b) =>
+      b.localeCompare(a)
+    );
+
+    const result: DateGroup[] = sortedKeys.map((dateKey) => ({
+      dateKey,
+      label: formatDateHeading(dateKey),
+      files: groups.get(dateKey)!.sort((a, b) =>
+        (a.time ?? "").localeCompare(b.time ?? "")
+      ),
+    }));
+
+    // Add "Sin fecha" group at the end if any
+    if (noDate.length > 0) {
+      result.push({
+        dateKey: "__no_date__",
+        label: "Sin fecha",
+        files: noDate.sort((a, b) => a.filename.localeCompare(b.filename)),
+      });
+    }
+
+    return result;
+  }, [files]);
+
+  // Default: only the most recent date expanded
+  const [expandedDates, setExpandedDates] = useState<Set<string>>(() => {
+    if (dateGroups.length > 0) {
+      return new Set([dateGroups[0].dateKey]);
+    }
+    return new Set();
+  });
+
+  function toggleDate(dateKey: string) {
+    setExpandedDates((prev) => {
+      const next = new Set(prev);
+      if (next.has(dateKey)) {
+        next.delete(dateKey);
+      } else {
+        next.add(dateKey);
+      }
+      return next;
+    });
+  }
+
+  function handlePlay(driveFileId: string) {
+    // Spotify behavior: clicking the currently-playing file pauses it
+    setActiveFileId((prev) => (prev === driveFileId ? null : driveFileId));
+  }
+
   async function handleScan() {
     setScanning(true);
     try {
@@ -62,8 +150,12 @@ export function AudioFilesShell({
     setScanning(false);
   }
 
+  const activeFile = activeFileId
+    ? files.find((f) => f.driveFileId === activeFileId) ?? null
+    : null;
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* Header */}
       <div className="flex items-center gap-3">
         <Link href="/audio">
@@ -71,12 +163,12 @@ export function AudioFilesShell({
             <ArrowLeft className="h-4 w-4" />
           </Button>
         </Link>
-        <div className="flex-1">
+        <div className="flex-1 min-w-0">
           <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <AudioLines className="h-6 w-6" />
-            {deployment.name}
+            <AudioLines className="h-6 w-6 shrink-0" />
+            <span className="truncate">{deployment.name}</span>
           </h1>
-          <div className="flex items-center gap-4 text-sm text-muted-foreground mt-1">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground mt-1">
             {deployment.siteName && (
               <span className="flex items-center gap-1">
                 <MapPin className="h-3 w-3" />
@@ -103,120 +195,125 @@ export function AudioFilesShell({
             size="sm"
           >
             {scanning ? (
-              <Loader2 className="h-4 w-4 animate-spin mr-2" />
+              <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
             ) : (
-              <FolderSync className="h-4 w-4 mr-2" />
+              <FolderSync className="h-4 w-4 mr-1.5" />
             )}
             Escanear
           </Button>
         )}
       </div>
 
-      {/* Active player */}
+      {/* Date-grouped sections */}
+      {files.length === 0 ? (
+        <div className="rounded-xl border p-8 text-center text-muted-foreground">
+          {isEditor
+            ? 'No hay archivos escaneados. Haz clic en "Escanear" para buscar archivos en Drive.'
+            : "No hay archivos de audio."}
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {dateGroups.map((group) => {
+            const isExpanded = expandedDates.has(group.dateKey);
+            return (
+              <div key={group.dateKey} className="rounded-xl border overflow-hidden">
+                {/* Date header */}
+                <button
+                  type="button"
+                  onClick={() => toggleDate(group.dateKey)}
+                  className="w-full flex items-center gap-2 px-4 py-2.5 bg-muted/30 hover:bg-muted/50 transition-colors text-left"
+                >
+                  <ChevronRight
+                    className={`h-4 w-4 text-muted-foreground shrink-0 transition-transform ${
+                      isExpanded ? "rotate-90" : ""
+                    }`}
+                  />
+                  <span className="font-medium text-sm">{group.label}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {group.files.length} grabaciones
+                  </span>
+                </button>
+
+                {/* File rows */}
+                {isExpanded && (
+                  <div className="divide-y">
+                    {group.files.map((file) => (
+                      <div
+                        key={file.id}
+                        className="flex items-center gap-3 px-4 py-1.5 text-sm hover:bg-muted/20"
+                      >
+                        {/* Time or filename */}
+                        <span className="font-mono text-xs tabular-nums text-muted-foreground w-16 shrink-0">
+                          {file.time ?? "—"}
+                        </span>
+
+                        {/* Filename (for "Sin fecha" group or always visible) */}
+                        {group.dateKey === "__no_date__" ? (
+                          <span className="font-mono text-xs truncate flex-1 min-w-0">
+                            {file.filename}
+                          </span>
+                        ) : (
+                          <span className="font-mono text-xs truncate flex-1 min-w-0 text-muted-foreground">
+                            {file.filename}
+                          </span>
+                        )}
+
+                        {/* Actions */}
+                        <div className="flex items-center gap-1 shrink-0">
+                          {file.playable && file.driveFileId && (
+                            <Button
+                              size="sm"
+                              variant={
+                                activeFileId === file.driveFileId
+                                  ? "default"
+                                  : "ghost"
+                              }
+                              className="h-7 w-7 p-0"
+                              onClick={() => handlePlay(file.driveFileId!)}
+                            >
+                              <Play className="h-3 w-3" />
+                            </Button>
+                          )}
+                          {file.driveFileId && (
+                            <a
+                              href={`/api/audio/stream?fileId=${encodeURIComponent(file.driveFileId)}&download=true`}
+                              download
+                            >
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-7 w-7 p-0"
+                              >
+                                <Download className="h-3 w-3" />
+                              </Button>
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Footer */}
+      {files.length > 0 && (
+        <p className="text-sm text-muted-foreground">
+          {files.length.toLocaleString()} grabaciones
+        </p>
+      )}
+
+      {/* Audio player (will be replaced by sticky player in Phase 3) */}
       {activeFileId && (
         <AudioPlayer
           fileId={activeFileId}
-          file={files.find((f) => f.driveFileId === activeFileId) ?? null}
+          file={activeFile}
           onClose={() => setActiveFileId(null)}
         />
       )}
-
-      {/* Files table */}
-      <div className="rounded-md border">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Archivo</TableHead>
-              <TableHead>Formato</TableHead>
-              <TableHead className="text-right">Tamaño</TableHead>
-              <TableHead>Fecha</TableHead>
-              <TableHead className="w-[120px]" />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {files.length === 0 ? (
-              <TableRow>
-                <TableCell
-                  colSpan={5}
-                  className="h-24 text-center text-muted-foreground"
-                >
-                  {isEditor
-                    ? 'No hay archivos escaneados. Haz clic en "Escanear" para buscar archivos en Drive.'
-                    : "No hay archivos de audio."}
-                </TableCell>
-              </TableRow>
-            ) : (
-              files.map((file) => (
-                <TableRow key={file.id}>
-                  <TableCell className="font-mono text-sm">
-                    {file.filename}
-                  </TableCell>
-                  <TableCell>
-                    {file.playable ? (
-                      <Badge variant="secondary">
-                        {file.format?.toUpperCase() ?? "—"}
-                      </Badge>
-                    ) : (
-                      <Badge variant="destructive">
-                        No compatible
-                      </Badge>
-                    )}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {file.fileSize ? formatBytes(file.fileSize) : "—"}
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {file.modifiedAt
-                      ? new Date(file.modifiedAt).toLocaleDateString()
-                      : "—"}
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex items-center gap-1 justify-end">
-                      {file.playable && file.driveFileId && (
-                        <Button
-                          size="sm"
-                          variant={
-                            activeFileId === file.driveFileId
-                              ? "default"
-                              : "ghost"
-                          }
-                          onClick={() =>
-                            setActiveFileId(
-                              activeFileId === file.driveFileId
-                                ? null
-                                : file.driveFileId
-                            )
-                          }
-                        >
-                          <AudioLines className="h-3 w-3" />
-                        </Button>
-                      )}
-                      {file.driveFileId && (
-                        <a
-                          href={`/api/audio/stream?fileId=${encodeURIComponent(file.driveFileId)}&download=true`}
-                          download
-                        >
-                          <Button size="sm" variant="ghost">
-                            <Download className="h-3 w-3" />
-                          </Button>
-                        </a>
-                      )}
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </div>
-
-      <div className="text-sm text-muted-foreground">
-        {files.length} archivo(s)
-        {files.length > 0 &&
-          ` — ${formatBytes(
-            files.reduce((sum, f) => sum + (f.fileSize ?? 0), 0)
-          )}`}
-      </div>
     </div>
   );
 }

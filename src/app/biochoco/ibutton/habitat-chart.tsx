@@ -30,13 +30,11 @@ export function HabitatChart({ data }: { data: HabitatSummary[] }) {
     );
   }
 
-  const chartData = data.map((h) => ({
-    name: h.habitatLabel,
-    Min: h.tempMin,
-    Prom: h.tempMean,
-    Max: h.tempMax,
-    fill: HABITAT_COLORS[h.habitatType] ?? "#94a3b8",
-  }));
+  const chartData = [
+    { name: "Mín", ...Object.fromEntries(data.map((h) => [h.habitatLabel, h.tempMin])) },
+    { name: "Prom", ...Object.fromEntries(data.map((h) => [h.habitatLabel, h.tempMean])) },
+    { name: "Máx", ...Object.fromEntries(data.map((h) => [h.habitatLabel, h.tempMax])) },
+  ];
 
   return (
     <Card>
@@ -50,9 +48,6 @@ export function HabitatChart({ data }: { data: HabitatSummary[] }) {
             <XAxis
               dataKey="name"
               tick={{ fontSize: 11 }}
-              angle={-20}
-              textAnchor="end"
-              height={60}
             />
             <YAxis
               tick={{ fontSize: 11 }}
@@ -68,9 +63,14 @@ export function HabitatChart({ data }: { data: HabitatSummary[] }) {
               labelStyle={{ fontWeight: "bold" }}
             />
             <Legend />
-            <Bar dataKey="Min" fill="#3b82f6" name="Mín" />
-            <Bar dataKey="Prom" fill="#f97316" name="Prom" />
-            <Bar dataKey="Max" fill="#ef4444" name="Máx" />
+            {data.map((h) => (
+              <Bar
+                key={h.habitatType}
+                dataKey={h.habitatLabel}
+                fill={HABITAT_COLORS[h.habitatType] ?? "#94a3b8"}
+                name={h.habitatLabel}
+              />
+            ))}
           </BarChart>
         </ResponsiveContainer>
       </CardContent>

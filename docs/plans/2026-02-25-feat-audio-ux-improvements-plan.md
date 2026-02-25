@@ -82,7 +82,7 @@ Replace the inline `<audio>` element with a fixed bottom bar.
 
 **Files to modify:**
 
-- [ ] `src/app/audio/[id]/audio-player.tsx` — full rewrite as sticky player:
+- [x] `src/app/audio/[id]/audio-player.tsx` — full rewrite as sticky player:
   - `position: fixed; bottom: 0; left: 0; right: 0` with appropriate z-index
   - Layout: `[spectrogram canvas] [file info] [play/pause] [progress bar] [time] [download] [close]`
   - Custom progress bar (not native `<audio controls>`):
@@ -98,7 +98,7 @@ Replace the inline `<audio>` element with a fixed bottom bar.
   - Close button (stops audio, hides player)
   - Keyboard: Space = play/pause, ArrowLeft/Right = seek 5s
 
-- [ ] `src/app/audio/[id]/audio-files-shell.tsx` — add bottom padding when player is visible:
+- [x] `src/app/audio/[id]/audio-files-shell.tsx` — add bottom padding when player is visible:
   - Track `activeFileId` state
   - When player visible, add `pb-20` (or dynamic padding matching player height) to the main container
   - Clicking play on a different file switches the player source (does not close/reopen)

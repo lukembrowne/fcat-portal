@@ -155,7 +155,7 @@ export function AudioFilesShell({
     : null;
 
   return (
-    <div className="space-y-4">
+    <div className={`space-y-4 ${activeFileId ? "pb-20" : ""}`}>
       {/* Header */}
       <div className="flex items-center gap-3">
         <Link href="/audio">
@@ -306,7 +306,7 @@ export function AudioFilesShell({
         </p>
       )}
 
-      {/* Audio player (will be replaced by sticky player in Phase 3) */}
+      {/* Sticky bottom audio player */}
       {activeFileId && (
         <AudioPlayer
           fileId={activeFileId}

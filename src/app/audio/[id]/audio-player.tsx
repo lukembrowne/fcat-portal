@@ -4,6 +4,7 @@ import { useRef, useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Download, X, Play, Pause } from "lucide-react";
 import type { AudioFileRow } from "../actions";
+import { Spectrogram } from "./spectrogram";
 
 function formatTime(seconds: number): string {
   if (!isFinite(seconds) || seconds < 0) return "0:00";
@@ -225,6 +226,13 @@ export function AudioPlayer({
 
       {/* Controls */}
       <div className="flex items-center gap-3 px-4 py-2">
+        {/* Spectrogram */}
+        <Spectrogram
+          audioRef={audioRef}
+          isPlaying={isPlaying}
+          onSeek={seekTo}
+        />
+
         {/* Play/Pause */}
         <Button
           size="sm"

@@ -112,7 +112,7 @@ Add a real-time frequency visualization in the sticky player bar using Web Audio
 
 **Files to create:**
 
-- [ ] Create `src/app/audio/[id]/spectrogram.tsx` — Client Component:
+- [x] Create `src/app/audio/[id]/spectrogram.tsx` — Client Component:
   - Create `AudioContext` and `AnalyserNode` on first play
   - Connect: `<audio>` element → `MediaElementAudioSourceNode` → `AnalyserNode` → `audioContext.destination`
   - `AnalyserNode` config: `fftSize: 2048`, `smoothingTimeConstant: 0.8`
@@ -124,7 +124,7 @@ Add a real-time frequency visualization in the sticky player bar using Web Audio
   - Props: `audioRef: RefObject<HTMLAudioElement>`, `isPlaying: boolean`
   - Cleanup: disconnect nodes and close AudioContext on unmount
 
-- [ ] `src/app/audio/[id]/audio-player.tsx` — integrate spectrogram:
+- [x] `src/app/audio/[id]/audio-player.tsx` — integrate spectrogram:
   - Pass `audioRef` and `isPlaying` to `<Spectrogram>` component
   - Position canvas in the player bar layout (left side, before file info)
 

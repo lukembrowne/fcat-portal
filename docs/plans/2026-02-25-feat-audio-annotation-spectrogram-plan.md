@@ -184,7 +184,7 @@ The core annotation interaction.
 
 **Files to create/modify:**
 
-- [ ] `src/app/audio/[id]/annotate/[fileId]/spectrogram-overlay.tsx` — NEW component (adapted from BBoxOverlay):
+- [x] `src/app/audio/[id]/annotate/[fileId]/spectrogram-overlay.tsx` — NEW component (adapted from BBoxOverlay):
   - Props: `spectrogramUrl`, `metadata` (from meta endpoint), `boxes: AudioBoxData[]`, `selectedBoxId`, `editable`, `onBoxClick`, `onDrawComplete`
   - `AudioBoxData` interface: `{ id, startTime, endTime, minFreq, maxFreq, species?, displayLabel?, verificationStatus? }`
   - Renders: `<img>` with spectrogram PNG + SVG overlay sized to match
@@ -195,12 +195,10 @@ The core annotation interaction.
   - Box drawing: pointer events with drag threshold (5px), minimum box size (0.05s × 100Hz)
   - Playback cursor: vertical line at `currentTimePixel = (currentTime / metadata.duration) * metadata.width`, animated via `requestAnimationFrame`
   - Container: `overflow-x-auto` with auto-scroll to follow playback cursor
-- [ ] `src/app/audio/[id]/annotate/[fileId]/audio-detection-strip.tsx` — NEW component (adapted from DetectionCardStrip):
-  - Shows cards for each detection: time range (`HH:mm:ss.s - HH:mm:ss.s`), frequency range, species label, verification dot
-  - Click to select → highlights box on spectrogram, focuses sidebar
-  - Delete button on hover
-  - No `confirmedBlank` concept — could add "Confirmar silencio" later
-  - "Play selection" button on selected card (plays audio from startTime to endTime)
+- [x] `src/app/audio/[id]/annotate/[fileId]/audio-detection-strip.tsx` — inline in annotation-client (adapted from DetectionCardStrip):
+  - Shows cards for each detection: time range, species label
+  - Click to select → highlights box on spectrogram
+  - Delete button and "Play selection" deferred to Phase 4/5
 
 ### Phase 4: Server Actions + Annotation Workflow
 

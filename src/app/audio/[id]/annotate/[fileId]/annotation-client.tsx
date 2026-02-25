@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
 import type { Species } from "@/db/schema";
 import type { SpectrogramMetadata } from "@/lib/audio-cache";
+import { SpectrogramOverlay, type AudioBoxData } from "./spectrogram-overlay";
 
 export interface AudioDetectionData {
   id: number;
@@ -129,12 +130,31 @@ export function AudioAnnotationClient({
     selectedDetection?.identification?.species ??
     null;
 
+  // Build box data for the overlay
+  const boxes: AudioBoxData[] = detections.map((det) => ({
+    id: det.id,
+    startTime: det.startTime,
+    endTime: det.endTime,
+    minFreq: det.minFreq,
+    maxFreq: det.maxFreq,
+    species: det.identification?.correctedSpecies ?? det.identification?.species ?? null,
+    verificationStatus: det.identification?.verificationStatus ?? "unverified",
+  }));
+
   const handleSelectSpecies = useCallback(
     (scientificName: string) => {
       // TODO: Phase 4 — wire up species assignment action
       console.log("Species selected:", scientificName, "for detection:", selectedDetectionId);
     },
     [selectedDetectionId]
+  );
+
+  const handleDrawComplete = useCallback(
+    (box: { startTime: number; endTime: number; minFreq: number; maxFreq: number }) => {
+      // TODO: Phase 4 — wire up createAudioDetection action
+      console.log("Box drawn:", box);
+    },
+    []
   );
 
   // Keyboard navigation
@@ -233,7 +253,6 @@ export function AudioAnnotationClient({
                   onClick={() => {
                     setSpectrogramError(null);
                     setSpectrogramReady(false);
-                    // Re-trigger the metadata check
                     router.refresh();
                   }}
                 >
@@ -243,14 +262,20 @@ export function AudioAnnotationClient({
             </div>
           )}
 
-          {spectrogramReady && (
+          {spectrogramReady && metadata && (
             <div className="h-full flex items-center">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={spectrogramUrl}
-                alt={`Espectrograma de ${filename}`}
-                className="h-full max-h-[512px] w-auto"
-                style={{ imageRendering: "auto" }}
+              <SpectrogramOverlay
+                spectrogramUrl={spectrogramUrl}
+                metadata={metadata}
+                boxes={boxes}
+                selectedBoxId={selectedDetectionId}
+                editable={isEditor}
+                onBoxClick={(box) =>
+                  setSelectedDetectionId((prev) =>
+                    prev === box.id ? null : box.id
+                  )
+                }
+                onDrawComplete={handleDrawComplete}
               />
             </div>
           )}

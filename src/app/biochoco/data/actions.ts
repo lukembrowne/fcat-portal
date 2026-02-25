@@ -9,7 +9,7 @@ import { checkDeploymentUploads, extractFolderId, type UploadStatus } from "@/li
 import type { ScheduleRow } from "@/lib/schedule-types";
 import type { ActionResult } from "@/lib/types";
 import { db } from "@/db";
-import { deployments } from "@/db/schema";
+import { deployments, uploadCountSnapshots } from "@/db/schema";
 import { eq, isNotNull, sql } from "drizzle-orm";
 
 export interface DriveStatusResult {
@@ -217,4 +217,115 @@ export async function refreshSingleUploadCount(
     .where(eq(deployments.name, deploymentName));
 
   return { deploymentId: deploymentName, uploads };
+}
+
+/**
+ * Save a daily snapshot of aggregate upload counts.
+ * Called after "Actualizar Conteo" finishes refreshing all deployments.
+ */
+export async function saveUploadSnapshot(): Promise<void> {
+  await requirePermission("biochoco", "viewer");
+
+  const today = new Date().toISOString().slice(0, 10);
+
+  const rows = await db
+    .select({
+      uploadCameraCount: deployments.uploadCameraCount,
+      uploadAudioCount: deployments.uploadAudioCount,
+      uploadIbuttonCount: deployments.uploadIbuttonCount,
+    })
+    .from(deployments)
+    .where(isNotNull(deployments.driveFolderId));
+
+  let totalCameras = 0;
+  let totalAudio = 0;
+  let totalIbutton = 0;
+  let deploymentsWithUploads = 0;
+
+  for (const r of rows) {
+    const cam = r.uploadCameraCount ?? 0;
+    const aud = r.uploadAudioCount ?? 0;
+    const ibt = r.uploadIbuttonCount ?? 0;
+    totalCameras += cam;
+    totalAudio += aud;
+    totalIbutton += ibt;
+    if (cam > 0 || aud > 0 || ibt > 0) deploymentsWithUploads++;
+  }
+
+  await db
+    .insert(uploadCountSnapshots)
+    .values({
+      date: today,
+      totalCameras,
+      totalAudio,
+      totalIbutton,
+      deploymentsWithUploads,
+      totalDeployments: rows.length,
+    })
+    .onConflictDoUpdate({
+      target: uploadCountSnapshots.date,
+      set: {
+        totalCameras,
+        totalAudio,
+        totalIbutton,
+        deploymentsWithUploads,
+        totalDeployments: rows.length,
+        createdAt: sql`(unixepoch())`,
+      },
+    });
+}
+
+export interface UploadSummary {
+  cameras: number;
+  audio: number;
+  ibutton: number;
+  deltaCameras: number | null;
+  deltaAudio: number | null;
+  deltaIbutton: number | null;
+}
+
+/**
+ * Fetch live upload totals and yesterday's snapshot for delta display.
+ */
+export async function fetchUploadSummary(): Promise<UploadSummary> {
+  await requirePermission("biochoco", "viewer");
+
+  const rows = await db
+    .select({
+      uploadCameraCount: deployments.uploadCameraCount,
+      uploadAudioCount: deployments.uploadAudioCount,
+      uploadIbuttonCount: deployments.uploadIbuttonCount,
+    })
+    .from(deployments)
+    .where(isNotNull(deployments.driveFolderId));
+
+  let cameras = 0;
+  let audio = 0;
+  let ibutton = 0;
+
+  for (const r of rows) {
+    cameras += r.uploadCameraCount ?? 0;
+    audio += r.uploadAudioCount ?? 0;
+    ibutton += r.uploadIbuttonCount ?? 0;
+  }
+
+  // Get yesterday's snapshot
+  const today = new Date().toISOString().slice(0, 10);
+  const yesterdaySnapshots = await db
+    .select()
+    .from(uploadCountSnapshots)
+    .where(sql`${uploadCountSnapshots.date} < ${today}`)
+    .orderBy(sql`${uploadCountSnapshots.date} DESC`)
+    .limit(1);
+
+  const yesterday = yesterdaySnapshots[0] ?? null;
+
+  return {
+    cameras,
+    audio,
+    ibutton,
+    deltaCameras: yesterday ? cameras - yesterday.totalCameras : null,
+    deltaAudio: yesterday ? audio - yesterday.totalAudio : null,
+    deltaIbutton: yesterday ? ibutton - yesterday.totalIbutton : null,
+  };
 }

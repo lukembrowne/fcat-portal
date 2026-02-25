@@ -1,13 +1,17 @@
 import { requirePermission } from "@/lib/auth";
-import { fetchSchedule } from "./actions";
+import { fetchSchedule, fetchUploadSummary } from "./actions";
 import { UploadStatusTable } from "./upload-status-table";
 import { CreateFoldersPanel } from "./create-folders-panel";
 import { DataUploadGuide } from "./data-upload-guide";
+import { UploadSummaryCards } from "./upload-summary-cards";
 
 export default async function BiochocoDataPage() {
   const user = await requirePermission("biochoco", "viewer");
 
-  const result = await fetchSchedule();
+  const [result, summary] = await Promise.all([
+    fetchSchedule(),
+    fetchUploadSummary(),
+  ]);
 
   if (!result.success) {
     return (
@@ -29,9 +33,23 @@ export default async function BiochocoDataPage() {
       (p) => p.projectId === "biochoco" && (p.role === "editor" || p.role === "admin")
     );
 
+  // Compute retrieved deployment stats from schedule data
+  const retrieved = result.data.filter((r) => r.status === "retrieved");
+  const retrievedWithUploads = retrieved.filter(
+    (r) =>
+      (r.uploadCameraCount ?? 0) > 0 ||
+      (r.uploadAudioCount ?? 0) > 0 ||
+      (r.uploadIbuttonCount ?? 0) > 0
+  ).length;
+
   return (
     <div className="space-y-6">
       <DataUploadGuide />
+      <UploadSummaryCards
+        summary={summary}
+        retrievedWithUploads={retrievedWithUploads}
+        totalRetrieved={retrieved.length}
+      />
       {isEditor && <CreateFoldersPanel />}
       <UploadStatusTable schedule={result.data} />
     </div>

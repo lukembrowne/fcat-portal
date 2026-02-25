@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   CheckCircle2,
   XCircle,
@@ -26,7 +27,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import type { ScheduleRow, ScheduleStatus } from "@/lib/schedule-types";
 import type { UploadStatus } from "@/lib/drive-client";
-import { refreshSingleUploadCount, type DriveStatusResult } from "./actions";
+import { refreshSingleUploadCount, saveUploadSnapshot, type DriveStatusResult } from "./actions";
 import { recreateDriveFolder } from "./drive-folder-actions";
 
 // --- Helpers ---
@@ -197,12 +198,14 @@ interface UploadStatusTableProps {
 }
 
 export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
+  const router = useRouter();
   const [search, setSearch] = useState("");
   const [sortField, setSortField] = useState<SortField>("deploymentId");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [page, setPage] = useState(0);
   const [driveCache, setDriveCache] = useState<Map<string, DriveStatusResult>>(() => buildInitialCache(schedule));
   const [progress, setProgress] = useState<{ current: number; total: number; action: "verify" | "recreate" } | null>(null);
+  const [refreshingId, setRefreshingId] = useState<string | null>(null);
 
   const handleSort = useCallback((field: SortField) => {
     setSortField((prev) => {
@@ -260,10 +263,30 @@ export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
         });
         setProgress({ current: i + 1, total: allWithFolders.length, action: "verify" });
       }
+      // Save daily snapshot after all counts are refreshed
+      await saveUploadSnapshot();
+      // Re-run server components so summary cards update
+      router.refresh();
     } finally {
       setProgress(null);
     }
-  }, [schedule]);
+  }, [schedule, router]);
+
+  // Refresh a single row
+  const refreshOne = useCallback(async (deploymentId: string, driveFolderLink: string) => {
+    setRefreshingId(deploymentId);
+    try {
+      const result = await refreshSingleUploadCount(deploymentId, driveFolderLink);
+      setDriveCache((prev) => {
+        const next = new Map(prev);
+        next.set(result.deploymentId, result);
+        return next;
+      });
+      router.refresh();
+    } finally {
+      setRefreshingId(null);
+    }
+  }, [router]);
 
   // Recreate Drive folders for deployments with errors
   const handleRecreate = useCallback(async () => {
@@ -362,6 +385,7 @@ export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-8"></TableHead>
                   <TableHead>
                     <span className="inline-flex items-center gap-1">
                       Instalación
@@ -419,6 +443,22 @@ export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
 
                   return (
                     <TableRow key={row.deploymentId}>
+                      <TableCell className="px-2">
+                        {parentLink && (
+                          <button
+                            onClick={() => refreshOne(row.deploymentId, parentLink)}
+                            disabled={progress !== null || refreshingId !== null}
+                            className="text-muted-foreground hover:text-foreground transition-colors disabled:opacity-30 p-1 rounded hover:bg-muted"
+                            title="Actualizar conteo de esta instalación"
+                          >
+                            {refreshingId === row.deploymentId ? (
+                              <Loader2 className="size-3.5 animate-spin" />
+                            ) : (
+                              <RefreshCw className="size-3.5" />
+                            )}
+                          </button>
+                        )}
+                      </TableCell>
                       <TableCell className="font-medium">{row.deploymentId}</TableCell>
                       <TableCell>{row.siteName || row.siteId}</TableCell>
                       <TableCell className="text-center">

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -10,10 +10,15 @@ import {
   type NameDisplay,
 } from "@/components/species-sidebar";
 import { Button } from "@/components/ui/button";
-import { ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, Loader2, Trash2 } from "lucide-react";
 import type { Species } from "@/db/schema";
 import type { SpectrogramMetadata } from "@/lib/audio-cache";
 import { SpectrogramOverlay, type AudioBoxData } from "./spectrogram-overlay";
+import {
+  createAudioDetection,
+  deleteAudioDetection,
+  assignAudioSpecies,
+} from "@/app/audio/annotation-actions";
 
 export interface AudioDetectionData {
   id: number;
@@ -70,6 +75,7 @@ export function AudioAnnotationClient({
   const [searchQuery, setSearchQuery] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [nameDisplay, setNameDisplay] = useState<NameDisplay>(getStoredDisplay);
+  const [, startTransition] = useTransition();
   const [spectrogramReady, setSpectrogramReady] = useState(false);
   const [spectrogramError, setSpectrogramError] = useState<string | null>(null);
   const [metadata, setMetadata] = useState<SpectrogramMetadata | null>(null);
@@ -143,18 +149,42 @@ export function AudioAnnotationClient({
 
   const handleSelectSpecies = useCallback(
     (scientificName: string) => {
-      // TODO: Phase 4 — wire up species assignment action
-      console.log("Species selected:", scientificName, "for detection:", selectedDetectionId);
+      if (!selectedDetectionId) return;
+      const det = detections.find((d) => d.id === selectedDetectionId);
+      if (!det?.identification) return;
+
+      startTransition(async () => {
+        await assignAudioSpecies(det.identification!.id, scientificName);
+        router.refresh();
+      });
     },
-    [selectedDetectionId]
+    [selectedDetectionId, detections, router]
   );
 
   const handleDrawComplete = useCallback(
     (box: { startTime: number; endTime: number; minFreq: number; maxFreq: number }) => {
-      // TODO: Phase 4 — wire up createAudioDetection action
-      console.log("Box drawn:", box);
+      startTransition(async () => {
+        const result = await createAudioDetection(audioFileId, box);
+        if (result.success) {
+          setSelectedDetectionId(result.data.detectionId);
+        }
+        router.refresh();
+      });
     },
-    []
+    [audioFileId, router]
+  );
+
+  const handleDeleteDetection = useCallback(
+    (detectionId: number) => {
+      startTransition(async () => {
+        await deleteAudioDetection(detectionId);
+        if (selectedDetectionId === detectionId) {
+          setSelectedDetectionId(null);
+        }
+        router.refresh();
+      });
+    },
+    [selectedDetectionId, router]
   );
 
   // Keyboard navigation
@@ -199,34 +229,48 @@ export function AudioAnnotationClient({
 
       {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Detection cards strip — TODO: Phase 3 */}
+        {/* Detection cards strip */}
         {detections.length > 0 && (
           <div className="px-4 py-2 border-b shrink-0">
             <div className="flex gap-2 overflow-x-auto">
               {detections.map((det) => (
-                <button
+                <div
                   key={det.id}
-                  type="button"
+                  className={`shrink-0 flex items-center gap-1 px-3 py-1.5 rounded border text-xs cursor-pointer group ${
+                    selectedDetectionId === det.id
+                      ? "border-primary bg-primary/10"
+                      : "border-border hover:bg-accent"
+                  }`}
                   onClick={() =>
                     setSelectedDetectionId((prev) =>
                       prev === det.id ? null : det.id
                     )
                   }
-                  className={`shrink-0 px-3 py-1.5 rounded border text-xs ${
-                    selectedDetectionId === det.id
-                      ? "border-primary bg-primary/10"
-                      : "border-border hover:bg-accent"
-                  }`}
                 >
-                  {det.startTime.toFixed(1)}s – {det.endTime.toFixed(1)}s
+                  <span>
+                    {det.startTime.toFixed(1)}s – {det.endTime.toFixed(1)}s
+                  </span>
                   {det.identification?.species &&
                     det.identification.species !== "unknown" && (
-                      <span className="ml-1 text-muted-foreground">
+                      <span className="text-muted-foreground">
                         {det.identification.correctedSpecies ??
                           det.identification.species}
                       </span>
                     )}
-                </button>
+                  {isEditor && (
+                    <button
+                      type="button"
+                      className="ml-1 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteDetection(det.id);
+                      }}
+                      title="Eliminar detección"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  )}
+                </div>
               ))}
             </div>
           </div>

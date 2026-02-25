@@ -14,6 +14,9 @@ import {
   images,
   detections,
   identifications,
+  audioFiles,
+  audioDetections,
+  audioIdentifications,
 } from "@/db/schema";
 import { eq, inArray } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
@@ -102,5 +105,30 @@ export async function getDeploymentIdForIdentification(
     .innerJoin(detections, eq(identifications.detectionId, detections.id))
     .innerJoin(images, eq(detections.imageId, images.id))
     .where(eq(identifications.id, identificationId));
+  return row?.deploymentId ?? null;
+}
+
+// --- Audio entity resolution ---
+
+export async function getDeploymentIdForAudioDetection(
+  detectionId: number
+): Promise<number | null> {
+  const [row] = await db
+    .select({ deploymentId: audioFiles.deploymentId })
+    .from(audioDetections)
+    .innerJoin(audioFiles, eq(audioDetections.audioFileId, audioFiles.id))
+    .where(eq(audioDetections.id, detectionId));
+  return row?.deploymentId ?? null;
+}
+
+export async function getDeploymentIdForAudioIdentification(
+  identificationId: number
+): Promise<number | null> {
+  const [row] = await db
+    .select({ deploymentId: audioFiles.deploymentId })
+    .from(audioIdentifications)
+    .innerJoin(audioDetections, eq(audioIdentifications.audioDetectionId, audioDetections.id))
+    .innerJoin(audioFiles, eq(audioDetections.audioFileId, audioFiles.id))
+    .where(eq(audioIdentifications.id, identificationId));
   return row?.deploymentId ?? null;
 }

@@ -206,7 +206,7 @@ Wire up all mutation operations.
 
 **Files to create/modify:**
 
-- [ ] `src/app/audio/annotation-actions.ts` — NEW server actions file:
+- [x] `src/app/audio/annotation-actions.ts` — NEW server actions file:
   - `getAudioFileWithDetections(audioFileId)` — fetch file + detections + identifications (joined)
   - `getAudioFileIds(deploymentId)` — ordered list for prev/next navigation
   - `createAudioDetection(audioFileId, { startTime, endTime, minFreq, maxFreq })` — creates detection + unverified "unknown" identification. Returns `{ detectionId, identificationId }`
@@ -217,7 +217,7 @@ Wire up all mutation operations.
   - `verifyAllAndAdvance(identificationIds[], deploymentId, currentFileId)` — batch verify + find next file
   - `getRecentAudioSpecies(deploymentId, limit=8)` — distinct species from recent audio identifications
   - All actions: `requirePermission("camera-trap", "editor")` + deployment access check via new entity resolution helpers
-- [ ] `src/lib/camera-trap-auth.ts` — add entity resolution helpers:
+- [x] `src/lib/camera-trap-auth.ts` — add entity resolution helpers:
   - `getDeploymentIdForAudioDetection(detectionId)` — audioDetections → audioFiles → deploymentId
   - `getDeploymentIdForAudioIdentification(identificationId)` — audioIdentifications → audioDetections → audioFiles → deploymentId
 

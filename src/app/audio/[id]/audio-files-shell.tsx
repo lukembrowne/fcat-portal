@@ -20,19 +20,7 @@ import {
 import { scanDeploymentAudio } from "../actions";
 import type { AudioFileRow } from "../actions";
 import { AudioPlayer } from "./audio-player";
-
-/** Parse recording timestamp from filename like `2MM21799_20260119_193500.wav` */
-function parseRecordingTimestamp(filename: string): {
-  date: string;
-  time: string;
-} | null {
-  const match = filename.match(
-    /_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})\./
-  );
-  if (!match) return null;
-  const [, y, mo, d, h, mi, s] = match;
-  return { date: `${y}-${mo}-${d}`, time: `${h}:${mi}:${s}` };
-}
+import { parseRecordingTimestamp } from "@/lib/audio-filename";
 
 /** Format a YYYY-MM-DD date string in Spanish locale */
 function formatDateHeading(dateStr: string): string {
@@ -156,7 +144,7 @@ export function AudioFilesShell({
     : null;
 
   return (
-    <div className={`space-y-4 ${activeFileId ? "pb-20" : ""}`}>
+    <div className={`space-y-4 ${activeFileId ? "pb-40" : ""}`}>
       {/* Header */}
       <div className="flex items-center gap-3">
         <Link href="/audio">

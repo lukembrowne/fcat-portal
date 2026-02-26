@@ -12,6 +12,7 @@ import {
 } from "@/db/schema";
 import { eq, and, asc } from "drizzle-orm";
 import { AudioAnnotationClient } from "./annotation-client";
+import { parseRecordingTimestamp } from "@/lib/audio-filename";
 
 interface PageProps {
   params: Promise<{ id: string; fileId: string }>;
@@ -48,6 +49,9 @@ export default async function AudioAnnotatePage({ params }: PageProps) {
 
   if (!audioFile) notFound();
 
+  // Parse recording date/time from filename
+  const recordingTs = parseRecordingTimestamp(audioFile.filename);
+
   // Fetch deployment name
   const [deployment] = await db
     .select({ name: deployments.name })
@@ -61,23 +65,7 @@ export default async function AudioAnnotatePage({ params }: PageProps) {
     .where(eq(audioDetections.audioFileId, audioFileId))
     .orderBy(asc(audioDetections.startTime));
 
-  const detectionIds = detectionsRaw.map((d) => d.id);
-
-  // Fetch identifications for all detections
-  const identificationsRaw =
-    detectionIds.length > 0
-      ? await db
-          .select()
-          .from(audioIdentifications)
-          .where(
-            // Fetch all identifications for this file's detections
-            // SQLite doesn't have IN for dynamic arrays in Drizzle easily,
-            // so we join instead
-            eq(audioIdentifications.audioDetectionId, audioDetections.id)
-          )
-      : [];
-
-  // Actually, let's do it per-detection to keep it simple
+  // Fetch identifications per detection
   const detectionsWithIds = await Promise.all(
     detectionsRaw.map(async (det) => {
       const [ident] = await db
@@ -167,6 +155,8 @@ export default async function AudioAnnotatePage({ params }: PageProps) {
         nextFileId={nextFileId}
         currentIndex={currentIndex}
         totalFiles={fileIds.length}
+        recordingDate={recordingTs?.date ?? null}
+        recordingTime={recordingTs?.time ?? null}
       />
     </div>
   );

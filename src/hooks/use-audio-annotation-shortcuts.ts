@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react";
 
 export const AUDIO_SHORTCUTS = [
   { key: "Espacio", description: "Reproducir/pausar", category: "playback" },
-  { key: "[ / ]", description: "Retroceder/avanzar 5s", category: "playback" },
+  { key: "Q/E o [ / ]", description: "Retroceder/avanzar 5s", category: "playback" },
   { key: "←/→", description: "Archivo anterior/siguiente", category: "navigation" },
   { key: "1-9", description: "Seleccionar detección / asignar especie", category: "navigation" },
   { key: "0", description: "Asignar especie #10", category: "annotation" },
@@ -97,12 +97,14 @@ export function useAudioAnnotationShortcuts(opts: AudioAnnotationShortcutOptions
           o.onPlayPause?.();
           break;
         case "[":
+        case "q":
           if (!hasModifier) {
             e.preventDefault();
             o.onSeekBack?.();
           }
           break;
         case "]":
+        case "e":
           if (!hasModifier) {
             e.preventDefault();
             o.onSeekForward?.();

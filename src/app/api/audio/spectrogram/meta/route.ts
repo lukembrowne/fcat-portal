@@ -13,6 +13,7 @@ import { audioFiles, deployments } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { getCurrentUser } from "@/lib/auth";
 import { getUserCameraTrapProjects } from "@/lib/camera-trap-auth";
+import fs from "fs/promises";
 import {
   ensureAudioCached,
   ensureSpectrogramGenerated,
@@ -89,13 +90,67 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    await ensureAudioCached(audioFileId);
-    const { metadata } = await ensureSpectrogramGenerated(audioFileId);
+    // Check current DB state to determine stage
+    if (!audioFile.cachePath) {
+      // Permanent error: no Drive file to download
+      if (!audioFile.driveFileId) {
+        return NextResponse.json({
+          ready: false,
+          error: "Archivo eliminado de Drive",
+        });
+      }
 
-    return NextResponse.json({
-      ready: true,
-      ...metadata,
-    });
+      // Kick off download in background (fire-and-forget), return stage immediately
+      ensureAudioCached(audioFileId)
+        .then(() => ensureSpectrogramGenerated(audioFileId))
+        .catch((err) =>
+          console.error(`[spectrogram-meta] Background work failed for ${audioFileId}:`, err)
+        );
+
+      return NextResponse.json({
+        ready: false,
+        stage: "downloading",
+        fileSize: audioFile.fileSize,
+      });
+    }
+
+    if (!audioFile.spectrogramPath) {
+      // Audio cached but spectrogram not yet generated — kick off in background
+      ensureSpectrogramGenerated(audioFileId).catch((err) =>
+        console.error(`[spectrogram-meta] Background generation failed for ${audioFileId}:`, err)
+      );
+
+      return NextResponse.json({
+        ready: false,
+        stage: "generating",
+      });
+    }
+
+    // Both exist — verify spectrogram file is actually on disk
+    try {
+      await fs.access(audioFile.spectrogramPath);
+    } catch {
+      // File missing from disk — clear DB path so it regenerates
+      await db
+        .update(audioFiles)
+        .set({ spectrogramPath: null })
+        .where(eq(audioFiles.id, audioFileId));
+
+      ensureSpectrogramGenerated(audioFileId).catch((err) =>
+        console.error(
+          `[spectrogram-meta] Re-generation failed for ${audioFileId}:`,
+          err
+        )
+      );
+
+      return NextResponse.json({
+        ready: false,
+        stage: "generating",
+      });
+    }
+
+    const { metadata } = await ensureSpectrogramGenerated(audioFileId);
+    return NextResponse.json({ ready: true, ...metadata });
   } catch (err) {
     console.error(
       `[spectrogram-meta] Failed for file ${audioFileId}:`,

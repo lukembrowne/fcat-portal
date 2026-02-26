@@ -11,7 +11,7 @@ import {
   type NameDisplay,
 } from "@/components/species-sidebar";
 import { Button } from "@/components/ui/button";
-import { ChevronLeft, ChevronRight, Loader2, Trash2, Play, Pause, SkipBack, SkipForward } from "lucide-react";
+import { Calendar, ChevronLeft, ChevronRight, Loader2, Trash2, Play, Pause, SkipBack, SkipForward } from "lucide-react";
 import type { Species } from "@/db/schema";
 import type { SpectrogramMetadata } from "@/lib/audio-cache";
 import { SpectrogramOverlay, type AudioBoxData } from "./spectrogram-overlay";
@@ -56,12 +56,47 @@ interface AudioAnnotationClientProps {
   nextFileId: number | null;
   currentIndex: number;
   totalFiles: number;
+  recordingDate?: string | null;
+  recordingTime?: string | null;
 }
 
 function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
   return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+/** Format YYYY-MM-DD in Spanish, e.g. "1 de febrero de 2026" */
+function formatSpanishDate(dateStr: string): string {
+  const d = new Date(dateStr + "T12:00:00");
+  return d.toLocaleDateString("es-EC", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+}
+
+/** Format HH:MM:SS to HH:MM */
+function formatTimeShort(time: string): string {
+  return time.slice(0, 5);
+}
+
+function getSpeciesDisplayName(
+  scientificName: string | null | undefined,
+  speciesList: Species[],
+  nameDisplay: NameDisplay
+): string | null {
+  if (!scientificName || scientificName === "unknown") return null;
+  const sp = speciesList.find((s) => s.scientificName === scientificName);
+  if (!sp) return scientificName;
+  switch (nameDisplay) {
+    case "common":
+      return sp.commonName || sp.scientificName;
+    case "spanish":
+      return sp.spanishName || sp.commonName || sp.scientificName;
+    case "scientific":
+      return sp.scientificName;
+  }
 }
 
 export function AudioAnnotationClient({
@@ -78,6 +113,8 @@ export function AudioAnnotationClient({
   nextFileId,
   currentIndex,
   totalFiles,
+  recordingDate,
+  recordingTime,
 }: AudioAnnotationClientProps) {
   const router = useRouter();
   const [selectedDetectionId, setSelectedDetectionId] = useState<number | null>(
@@ -89,13 +126,16 @@ export function AudioAnnotationClient({
   const [, startTransition] = useTransition();
   const [spectrogramReady, setSpectrogramReady] = useState(false);
   const [spectrogramError, setSpectrogramError] = useState<string | null>(null);
+  const [spectrogramStage, setSpectrogramStage] = useState<string | null>(null);
+  const [spectrogramFileSize, setSpectrogramFileSize] = useState<number | null>(null);
   const [metadata, setMetadata] = useState<SpectrogramMetadata | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const audioRef = useRef<HTMLAudioElement>(null);
   const selectionEndRef = useRef<number | null>(null);
 
-  const spectrogramUrl = `/api/audio/spectrogram?fileId=${audioFileId}`;
+  const [retryCount, setRetryCount] = useState(0);
+  const spectrogramUrl = `/api/audio/spectrogram?fileId=${audioFileId}&t=${retryCount}`;
   const audioStreamUrl = driveFileId ? `/api/audio/stream?fileId=${driveFileId}` : null;
 
   // Poll for spectrogram readiness
@@ -114,10 +154,13 @@ export function AudioAnnotationClient({
           setMetadata(data as SpectrogramMetadata);
           setSpectrogramReady(true);
           setSpectrogramError(null);
-        } else if (data.error) {
+          setSpectrogramStage(null);
+        } else if (data.error && !data.stage) {
           setSpectrogramError(data.error);
         } else {
-          // Not ready yet, poll again
+          // Not ready yet — update stage and poll again
+          if (data.stage) setSpectrogramStage(data.stage);
+          if (data.fileSize) setSpectrogramFileSize(data.fileSize);
           setTimeout(checkMeta, 2000);
         }
       } catch {
@@ -131,7 +174,14 @@ export function AudioAnnotationClient({
     return () => {
       cancelled = true;
     };
-  }, [audioFileId]);
+  }, [audioFileId, retryCount]);
+
+  // Handle broken spectrogram image — reset to loading and re-poll
+  const handleImageError = useCallback(() => {
+    setSpectrogramReady(false);
+    setMetadata(null);
+    setRetryCount((c) => c + 1);
+  }, []);
 
   const cycleDisplay = useCallback(() => {
     setNameDisplay((prev) => {
@@ -153,15 +203,19 @@ export function AudioAnnotationClient({
     null;
 
   // Build box data for the overlay
-  const boxes: AudioBoxData[] = detections.map((det) => ({
-    id: det.id,
-    startTime: det.startTime,
-    endTime: det.endTime,
-    minFreq: det.minFreq,
-    maxFreq: det.maxFreq,
-    species: det.identification?.correctedSpecies ?? det.identification?.species ?? null,
-    verificationStatus: det.identification?.verificationStatus ?? "unverified",
-  }));
+  const boxes: AudioBoxData[] = detections.map((det) => {
+    const sciName = det.identification?.correctedSpecies ?? det.identification?.species ?? null;
+    return {
+      id: det.id,
+      startTime: det.startTime,
+      endTime: det.endTime,
+      minFreq: det.minFreq,
+      maxFreq: det.maxFreq,
+      species: sciName,
+      displayLabel: getSpeciesDisplayName(sciName, speciesList, nameDisplay),
+      verificationStatus: det.identification?.verificationStatus ?? "unverified",
+    };
+  });
 
   const handleSelectSpecies = useCallback(
     (scientificName: string) => {
@@ -229,35 +283,55 @@ export function AudioAnnotationClient({
     audio.play();
   }, [selectedDetection]);
 
-  // Stop at selection end
+  // Smooth 60fps cursor updates via requestAnimationFrame
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
 
-    function onTimeUpdate() {
+    let rafId: number | null = null;
+
+    function tick() {
       const a = audioRef.current;
       if (!a) return;
       setCurrentTime(a.currentTime);
+      // Stop at selection end
       if (selectionEndRef.current != null && a.currentTime >= selectionEndRef.current) {
         a.pause();
         selectionEndRef.current = null;
       }
+      rafId = requestAnimationFrame(tick);
     }
 
-    function onPlay() { setIsPlaying(true); }
-    function onPause() { setIsPlaying(false); }
-    function onEnded() { setIsPlaying(false); setCurrentTime(0); }
+    function onPlay() {
+      setIsPlaying(true);
+      rafId = requestAnimationFrame(tick);
+    }
+    function onPause() {
+      setIsPlaying(false);
+      if (rafId != null) { cancelAnimationFrame(rafId); rafId = null; }
+      // Sync final position
+      setCurrentTime(audioRef.current?.currentTime ?? 0);
+    }
+    function onEnded() {
+      setIsPlaying(false);
+      if (rafId != null) { cancelAnimationFrame(rafId); rafId = null; }
+      setCurrentTime(0);
+    }
+    function onSeeked() {
+      setCurrentTime(audioRef.current?.currentTime ?? 0);
+    }
 
-    audio.addEventListener("timeupdate", onTimeUpdate);
     audio.addEventListener("play", onPlay);
     audio.addEventListener("pause", onPause);
     audio.addEventListener("ended", onEnded);
+    audio.addEventListener("seeked", onSeeked);
 
     return () => {
-      audio.removeEventListener("timeupdate", onTimeUpdate);
+      if (rafId != null) cancelAnimationFrame(rafId);
       audio.removeEventListener("play", onPlay);
       audio.removeEventListener("pause", onPause);
       audio.removeEventListener("ended", onEnded);
+      audio.removeEventListener("seeked", onSeeked);
     };
   }, []);
 
@@ -379,14 +453,16 @@ export function AudioAnnotationClient({
                 >
                   <span>
                     {det.startTime.toFixed(1)}s – {det.endTime.toFixed(1)}s
+                    {" · "}
+                    {(det.minFreq / 1000).toFixed(1)}–{(det.maxFreq / 1000).toFixed(1)} kHz
                   </span>
-                  {det.identification?.species &&
-                    det.identification.species !== "unknown" && (
-                      <span className="text-muted-foreground">
-                        {det.identification.correctedSpecies ??
-                          det.identification.species}
-                      </span>
-                    )}
+                  {(() => {
+                    const sciName = det.identification?.correctedSpecies ?? det.identification?.species ?? null;
+                    const label = getSpeciesDisplayName(sciName, speciesList, nameDisplay);
+                    return label ? (
+                      <span className="text-muted-foreground">{label}</span>
+                    ) : null;
+                  })()}
                   {isEditor && (
                     <button
                       type="button"
@@ -406,20 +482,36 @@ export function AudioAnnotationClient({
           </div>
         )}
 
-        {/* Spectrogram display */}
-        <div className="flex-1 min-h-0 overflow-x-auto overflow-y-hidden bg-black relative">
+        {/* Recording context info */}
+        {recordingDate && (
+          <div className="px-4 py-1.5 border-b shrink-0 flex items-center gap-2 text-xs text-muted-foreground">
+            <Calendar className="h-3 w-3" />
+            <span>
+              {formatSpanishDate(recordingDate)}
+              {recordingTime ? ` \u00b7 ${formatTimeShort(recordingTime)}` : ""}
+              {metadata ? ` (${formatTime(metadata.duration)})` : ""}
+            </span>
+          </div>
+        )}
+
+        {/* Spectrogram display — natural height, no flex-1 stretching */}
+        <div className="shrink-0 relative">
           {!spectrogramReady && !spectrogramError && (
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="flex flex-col items-center gap-3 text-white/70">
+            <div className="flex items-center justify-center py-24">
+              <div className="flex flex-col items-center gap-3 text-muted-foreground">
                 <Loader2 className="h-8 w-8 animate-spin" />
-                <p className="text-sm">Generando espectrograma...</p>
+                <p className="text-sm">
+                  {spectrogramStage === "downloading"
+                    ? `Descargando audio${spectrogramFileSize ? ` (${(spectrogramFileSize / 1024 / 1024).toFixed(1)} MB)` : ""}...`
+                    : "Generando espectrograma..."}
+                </p>
               </div>
             </div>
           )}
 
           {spectrogramError && (
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="flex flex-col items-center gap-3 text-white/70 max-w-md text-center">
+            <div className="flex items-center justify-center py-24">
+              <div className="flex flex-col items-center gap-3 text-muted-foreground max-w-md text-center">
                 <p className="text-sm text-red-400">{spectrogramError}</p>
                 <Button
                   variant="outline"
@@ -437,23 +529,22 @@ export function AudioAnnotationClient({
           )}
 
           {spectrogramReady && metadata && (
-            <div className="h-full flex items-center">
-              <SpectrogramOverlay
-                spectrogramUrl={spectrogramUrl}
-                metadata={metadata}
-                boxes={boxes}
-                selectedBoxId={selectedDetectionId}
-                editable={isEditor}
-                currentTime={currentTime}
-                onBoxClick={(box) =>
-                  setSelectedDetectionId((prev) =>
-                    prev === box.id ? null : box.id
-                  )
-                }
-                onDrawComplete={handleDrawComplete}
-                onSeekClick={handleSeek}
-              />
-            </div>
+            <SpectrogramOverlay
+              spectrogramUrl={spectrogramUrl}
+              metadata={metadata}
+              boxes={boxes}
+              selectedBoxId={selectedDetectionId}
+              editable={isEditor}
+              currentTime={currentTime}
+              onBoxClick={(box) =>
+                setSelectedDetectionId((prev) =>
+                  prev === box.id ? null : box.id
+                )
+              }
+              onDrawComplete={handleDrawComplete}
+              onSeekClick={handleSeek}
+              onImageError={handleImageError}
+            />
           )}
         </div>
 

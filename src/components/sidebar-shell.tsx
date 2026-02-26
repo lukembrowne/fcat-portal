@@ -122,7 +122,7 @@ function NavLink({
   if (item.children) {
     const hasActive = isChildActive(item, activeHref);
     return (
-      <Collapsible.Root defaultOpen asChild>
+      <Collapsible.Root defaultOpen={hasActive} asChild>
         <SidebarMenuItem>
           <Collapsible.Trigger asChild>
             <SidebarMenuButton tooltip={item.label} className="group/collapsible">

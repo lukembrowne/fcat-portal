@@ -31,6 +31,19 @@ const SPECTROGRAM_SCRIPT = path.join(
   "generate-spectrogram.py"
 );
 
+// Inflight deduplication — prevents concurrent calls for the same file
+// from spawning duplicate downloads/Python processes.
+const inflight = new Map<string, Promise<unknown>>();
+
+function dedupe<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const existing = inflight.get(key);
+  if (existing) return existing as Promise<T>;
+
+  const promise = fn().finally(() => inflight.delete(key));
+  inflight.set(key, promise);
+  return promise;
+}
+
 function getMlPython(): string {
   return (
     process.env.ML_PYTHON_PATH ||
@@ -56,7 +69,13 @@ export interface SpectrogramMetadata {
  * Ensure an audio file is downloaded from Drive and cached locally.
  * Skips if already cached. Returns the local cache path.
  */
-export async function ensureAudioCached(
+export function ensureAudioCached(
+  audioFileId: number
+): Promise<string> {
+  return dedupe(`audio:${audioFileId}`, () => doEnsureAudioCached(audioFileId));
+}
+
+async function doEnsureAudioCached(
   audioFileId: number
 ): Promise<string> {
   const [file] = await db
@@ -110,7 +129,13 @@ export async function ensureAudioCached(
  * Ensure spectrogram PNG is generated for an audio file.
  * Requires audio to be cached first. Returns metadata + path.
  */
-export async function ensureSpectrogramGenerated(
+export function ensureSpectrogramGenerated(
+  audioFileId: number
+): Promise<{ spectrogramPath: string; metadata: SpectrogramMetadata }> {
+  return dedupe(`spec:${audioFileId}`, () => doEnsureSpectrogramGenerated(audioFileId));
+}
+
+async function doEnsureSpectrogramGenerated(
   audioFileId: number
 ): Promise<{ spectrogramPath: string; metadata: SpectrogramMetadata }> {
   const [file] = await db

@@ -331,15 +331,16 @@ export function AdminClient({ users, projects, ctProjects, ctAccess }: AdminClie
               No hay usuarios registrados.
             </p>
           ) : (
+            <div className="overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Correo</TableHead>
+                  <TableHead className="sticky left-0 z-10 bg-background after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-border">Correo</TableHead>
                   <TableHead>Nombre</TableHead>
                   <TableHead>Tipo</TableHead>
                   <TableHead>Último acceso</TableHead>
                   {projects.map((p) => (
-                    <TableHead key={p.id}>{p.name}</TableHead>
+                    <TableHead key={p.id} className="whitespace-nowrap">{p.name}</TableHead>
                   ))}
                   <TableHead className="w-[80px]" />
                 </TableRow>
@@ -347,7 +348,7 @@ export function AdminClient({ users, projects, ctProjects, ctAccess }: AdminClie
               <TableBody>
                 {users.map((user) => (
                   <TableRow key={user.email}>
-                    <TableCell className="font-mono text-sm">
+                    <TableCell className="font-mono text-sm sticky left-0 z-10 bg-background after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-border">
                       <div className="flex items-center gap-2">
                         {user.email}
                         {user.globalRole === "super_admin" && (
@@ -414,6 +415,7 @@ export function AdminClient({ users, projects, ctProjects, ctAccess }: AdminClie
                 ))}
               </TableBody>
             </Table>
+            </div>
           )}
         </CardContent>
       </Card>

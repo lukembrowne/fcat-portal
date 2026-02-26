@@ -138,11 +138,21 @@ export function AudioAnnotationClient({
   const spectrogramUrl = `/api/audio/spectrogram?fileId=${audioFileId}&t=${retryCount}`;
   const audioStreamUrl = driveFileId ? `/api/audio/stream?fileId=${driveFileId}` : null;
 
-  // Poll for spectrogram readiness
+  // Poll for spectrogram readiness (max ~3 minutes = 90 polls × 2s)
+  const MAX_POLLS = 90;
   useEffect(() => {
     let cancelled = false;
+    let pollCount = 0;
 
     async function checkMeta() {
+      if (pollCount >= MAX_POLLS) {
+        setSpectrogramError(
+          "Tiempo de espera agotado generando espectrograma. Intente de nuevo."
+        );
+        return;
+      }
+      pollCount++;
+
       try {
         const res = await fetch(
           `/api/audio/spectrogram/meta?fileId=${audioFileId}`
@@ -176,11 +186,18 @@ export function AudioAnnotationClient({
     };
   }, [audioFileId, retryCount]);
 
-  // Handle broken spectrogram image — reset to loading and re-poll
+  // Handle broken spectrogram image — reset to loading and re-poll (max 3 retries)
+  const MAX_RETRIES = 3;
   const handleImageError = useCallback(() => {
-    setSpectrogramReady(false);
-    setMetadata(null);
-    setRetryCount((c) => c + 1);
+    setRetryCount((c) => {
+      if (c >= MAX_RETRIES) {
+        setSpectrogramError("No se pudo cargar la imagen del espectrograma.");
+        return c;
+      }
+      setSpectrogramReady(false);
+      setMetadata(null);
+      return c + 1;
+    });
   }, []);
 
   const cycleDisplay = useCallback(() => {

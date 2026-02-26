@@ -29,7 +29,7 @@ export async function GET(request: NextRequest) {
 
   const hasAccess =
     user.globalRole === "super_admin" ||
-    user.permissions.some((p) => p.projectId === "camera-trap");
+    user.permissions.some((p) => p.projectId === "grabaciones");
   if (!hasAccess) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }

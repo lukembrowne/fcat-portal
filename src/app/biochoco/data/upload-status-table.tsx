@@ -191,8 +191,6 @@ function SortButton({ field, current, dir, onSort }: {
 
 // --- Main component ---
 
-const PAGE_SIZE = 15;
-
 interface UploadStatusTableProps {
   schedule: ScheduleRow[];
 }
@@ -202,7 +200,6 @@ export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
   const [search, setSearch] = useState("");
   const [sortField, setSortField] = useState<SortField>("deploymentId");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
-  const [page, setPage] = useState(0);
   const [driveCache, setDriveCache] = useState<Map<string, DriveStatusResult>>(() => buildInitialCache(schedule));
   const [progress, setProgress] = useState<{ current: number; total: number; action: "verify" | "recreate" } | null>(null);
   const [refreshingId, setRefreshingId] = useState<string | null>(null);
@@ -216,7 +213,6 @@ export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
       }
       return field;
     });
-    setPage(0);
   }, []);
 
   // Filter and sort
@@ -233,8 +229,21 @@ export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
     return sortRows(base, sortField, sortDir);
   }, [schedule, search, sortField, sortDir]);
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const pageRows = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  // Summary stats
+  const stats = useMemo(() => {
+    const retrieved = schedule.filter((r) => r.status === "retrieved");
+    const withData = retrieved.filter(
+      (r) =>
+        (r.uploadCameraCount ?? 0) > 0 ||
+        (r.uploadAudioCount ?? 0) > 0 ||
+        (r.uploadIbuttonCount ?? 0) > 0
+    );
+    return {
+      total: schedule.length,
+      retrieved: retrieved.length,
+      withData: withData.length,
+    };
+  }, [schedule]);
 
   // Staleness indicator: earliest checkedAt among all rows, or null if none checked
   const stalenessText = useMemo(() => {
@@ -290,7 +299,7 @@ export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
 
   // Recreate Drive folders for deployments with errors
   const handleRecreate = useCallback(async () => {
-    const failedIds = pageRows
+    const failedIds = filtered
       .filter((r) => driveCache.get(r.deploymentId)?.error)
       .map((r) => r.deploymentId);
 
@@ -314,9 +323,9 @@ export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
     }
     // Re-verify to show fresh counts
     refreshAll();
-  }, [pageRows, driveCache, refreshAll]);
+  }, [filtered, driveCache, refreshAll]);
 
-  const failedCount = pageRows.filter((r) => driveCache.get(r.deploymentId)?.error).length;
+  const failedCount = filtered.filter((r) => driveCache.get(r.deploymentId)?.error).length;
 
   return (
     <div className="container mx-auto px-4 py-8">
@@ -334,7 +343,7 @@ export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
           <Input
             placeholder="Buscar por instalación o sitio..."
             value={search}
-            onChange={(e) => { setSearch(e.target.value); setPage(0); }}
+            onChange={(e) => setSearch(e.target.value)}
             className="pl-9"
           />
         </div>
@@ -351,9 +360,22 @@ export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
         <span className="text-sm text-muted-foreground">
           {stalenessText}
         </span>
-        <span className="text-sm text-muted-foreground">
-          {filtered.length} instalaci{filtered.length !== 1 ? "ones" : "ón"}
-        </span>
+      </div>
+
+      {/* Summary stats */}
+      <div className="grid grid-cols-3 gap-3 mb-4">
+        <div className="rounded-lg border bg-card px-4 py-3">
+          <p className="text-sm text-muted-foreground">Total</p>
+          <p className="text-xl font-bold">{stats.total}</p>
+        </div>
+        <div className="rounded-lg border bg-card px-4 py-3">
+          <p className="text-sm text-muted-foreground">Recuperadas</p>
+          <p className="text-xl font-bold">{stats.retrieved} <span className="text-sm font-normal text-muted-foreground">/ {stats.total}</span></p>
+        </div>
+        <div className="rounded-lg border bg-card px-4 py-3">
+          <p className="text-sm text-muted-foreground">Con datos</p>
+          <p className="text-xl font-bold">{stats.withData} <span className="text-sm font-normal text-muted-foreground">/ {stats.retrieved}</span></p>
+        </div>
       </div>
 
       {failedCount > 0 && (
@@ -437,7 +459,7 @@ export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {pageRows.map((row) => {
+                {filtered.map((row) => {
                   const driveStatus = driveCache.get(row.deploymentId);
                   const parentLink = row.driveFolderLink || null;
 
@@ -498,30 +520,6 @@ export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
             </Table>
           </div>
 
-          {/* Pagination */}
-          {totalPages > 1 && (
-            <div className="flex items-center justify-between mt-4">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={page === 0}
-                onClick={() => setPage((p) => p - 1)}
-              >
-                Anterior
-              </Button>
-              <span className="text-sm text-muted-foreground">
-                Página {page + 1} de {totalPages}
-              </span>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={page >= totalPages - 1}
-                onClick={() => setPage((p) => p + 1)}
-              >
-                Siguiente
-              </Button>
-            </div>
-          )}
         </>
       )}
     </div>

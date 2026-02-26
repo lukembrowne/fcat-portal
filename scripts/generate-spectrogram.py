@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Generate a mel spectrogram PNG from an audio file.
+Generate a mel spectrogram WebP from an audio file.
 
-Usage: python generate-spectrogram.py <input.wav> <output.png>
+Usage: python generate-spectrogram.py <input.wav> <output.webp>
 Outputs JSON metadata to stdout.
 """
 
@@ -26,8 +26,8 @@ N_FFT = 2048
 HOP = 512
 N_MELS = 128
 FMIN = 200.0
-FMAX = 12000.0
-HEIGHT = 512
+FMAX = 24000.0
+HEIGHT = 256
 
 
 def magma_fallback(values):
@@ -66,7 +66,7 @@ def main(wav_path, output_path):
     aspect = img.width / img.height
     new_w = int(HEIGHT * aspect)
     img = img.resize((new_w, HEIGHT), Image.LANCZOS)
-    img.save(output_path, "PNG", optimize=True)
+    img.save(output_path, "WebP", quality=85)
 
     # Output metadata as JSON
     meta = {
@@ -87,7 +87,7 @@ def main(wav_path, output_path):
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
-        print("Usage: python generate-spectrogram.py <input> <output.png>", file=sys.stderr)
+        print("Usage: python generate-spectrogram.py <input> <output.webp>", file=sys.stderr)
         sys.exit(1)
     try:
         main(sys.argv[1], sys.argv[2])

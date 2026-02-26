@@ -98,7 +98,7 @@ export async function GET(request: NextRequest) {
     return new Response(data, {
       status: 200,
       headers: {
-        "Content-Type": "image/png",
+        "Content-Type": "image/webp",
         "Cache-Control": "public, max-age=31536000, immutable",
         "Content-Length": String(data.length),
       },

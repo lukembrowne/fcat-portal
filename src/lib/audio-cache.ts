@@ -145,7 +145,7 @@ export async function ensureSpectrogramGenerated(
 
   const spectrogramPath = file.cachePath.replace(
     /\.[^.]+$/,
-    ".spec.png"
+    ".spec.webp"
   );
 
   const pythonPath = getMlPython();
@@ -193,7 +193,7 @@ function buildMetadataFromDb(file: {
   const sampleRate = file.sampleRate ?? 48000;
   const fmin = 200;
   const fmax = 12000;
-  const height = 512;
+  const height = 256;
   // Reconstruct width from stored metadata
   const nMels = 128;
   const hop = 512;

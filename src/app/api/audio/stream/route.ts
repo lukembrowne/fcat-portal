@@ -97,6 +97,10 @@ export async function GET(request: NextRequest) {
 
     if (result.contentLength != null) {
       headers["Content-Length"] = String(result.contentLength);
+    } else if (!rangeHeader && audioFile.fileSize != null) {
+      // Drive may omit Content-Length for chunked streams; without it the
+      // browser can't determine audio duration. Use the DB file size as fallback.
+      headers["Content-Length"] = String(audioFile.fileSize);
     }
     if (result.contentRange) {
       headers["Content-Range"] = result.contentRange;

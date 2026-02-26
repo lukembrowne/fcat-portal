@@ -32,7 +32,7 @@ export default async function RootLayout({
   const user = await getCurrentUser();
   const cookieStore = await cookies();
   const sidebarState = cookieStore.get("sidebar_state")?.value;
-  const defaultOpen = sidebarState !== "false";
+  const defaultOpen = sidebarState === "true";
 
   return (
     <html lang="es">

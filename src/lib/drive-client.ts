@@ -140,17 +140,21 @@ export interface DriveFileInfo {
  */
 export async function listFolderFiles(
   folderId: string,
-  extensions: Set<string>
+  extensions: Set<string>,
+  depth = 0
 ): Promise<DriveFileInfo[]> {
+  if (depth > 5) return [];
+
   const drive = getDrive();
   const files: DriveFileInfo[] = [];
+  const subfolders: { id: string; name: string }[] = [];
   let pageToken: string | undefined;
 
   do {
     const res = await drive.files.list({
-      q: `'${folderId}' in parents and trashed = false and mimeType != 'application/vnd.google-apps.folder'`,
+      q: `'${folderId}' in parents and trashed = false`,
       fields: "nextPageToken, files(id, name, mimeType, size, modifiedTime)",
-      pageSize: 100,
+      pageSize: 1000,
       pageToken,
       supportsAllDrives: true,
       includeItemsFromAllDrives: true,
@@ -158,20 +162,31 @@ export async function listFolderFiles(
 
     for (const file of res.data.files ?? []) {
       if (!file.id || !file.name) continue;
-      const ext = path.extname(file.name).toLowerCase();
-      if (extensions.has(ext)) {
-        files.push({
-          id: file.id,
-          name: file.name,
-          mimeType: file.mimeType ?? "application/octet-stream",
-          size: file.size ? parseInt(file.size, 10) : null,
-          modifiedTime: file.modifiedTime ?? null,
-        });
+
+      if (file.mimeType === "application/vnd.google-apps.folder") {
+        subfolders.push({ id: file.id, name: file.name });
+      } else {
+        const ext = path.extname(file.name).toLowerCase();
+        if (extensions.has(ext)) {
+          files.push({
+            id: file.id,
+            name: file.name,
+            mimeType: file.mimeType ?? "application/octet-stream",
+            size: file.size ? parseInt(file.size, 10) : null,
+            modifiedTime: file.modifiedTime ?? null,
+          });
+        }
       }
     }
 
     pageToken = res.data.nextPageToken ?? undefined;
   } while (pageToken);
+
+  for (const sub of subfolders) {
+    if (sub.name === "_frames") continue;
+    const subFiles = await listFolderFiles(sub.id, extensions, depth + 1);
+    files.push(...subFiles);
+  }
 
   return files;
 }

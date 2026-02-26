@@ -96,4 +96,5 @@ const dateInstalled =
 
 ## Related
 
-- [ODK Central nested JSON groups not flattened](./odk-nested-json-flattening.md) — related issue with ODK form group nesting
+- See also: [ODK retrieve date restructuring](./odk-retrieve-date-field-restructured-20260224.md) — same pattern, retrieve_sensors form (Feb 24, 2026)
+- See also: [ODK Central nested JSON groups not flattened](./odk-nested-json-flattening.md) — related issue with ODK form group nesting

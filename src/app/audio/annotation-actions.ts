@@ -22,7 +22,7 @@ import type { ActionResult } from "@/lib/types";
 // ---------------------------------------------------------------------------
 
 export async function getAudioFileWithDetections(audioFileId: number) {
-  await requirePermission("camera-trap", "viewer");
+  await requirePermission("grabaciones", "viewer");
 
   const [file] = await db
     .select()
@@ -58,7 +58,7 @@ export async function getAudioFileWithDetections(audioFileId: number) {
 export async function getAudioFileIds(
   deploymentId: number
 ): Promise<number[]> {
-  await requirePermission("camera-trap", "viewer");
+  await requirePermission("grabaciones", "viewer");
 
   const files = await db
     .select({ id: audioFiles.id })
@@ -77,7 +77,7 @@ export async function createAudioDetection(
   audioFileId: number,
   box: { startTime: number; endTime: number; minFreq: number; maxFreq: number }
 ): Promise<ActionResult<{ detectionId: number; identificationId: number }>> {
-  const user = await requirePermission("camera-trap", "editor");
+  const user = await requirePermission("grabaciones", "editor");
 
   try {
     const [file] = await db
@@ -138,7 +138,7 @@ export async function createAudioDetection(
 export async function deleteAudioDetection(
   detectionId: number
 ): Promise<ActionResult> {
-  const user = await requirePermission("camera-trap", "editor");
+  const user = await requirePermission("grabaciones", "editor");
 
   try {
     const depId = await getDeploymentIdForAudioDetection(detectionId);
@@ -163,7 +163,7 @@ export async function assignAudioSpecies(
   identificationId: number,
   newSpecies: string
 ): Promise<ActionResult> {
-  const user = await requirePermission("camera-trap", "editor");
+  const user = await requirePermission("grabaciones", "editor");
 
   try {
     const depId =
@@ -219,7 +219,7 @@ export async function assignAudioSpecies(
 export async function verifyAudioIdentification(
   identificationId: number
 ): Promise<ActionResult> {
-  const user = await requirePermission("camera-trap", "editor");
+  const user = await requirePermission("grabaciones", "editor");
 
   try {
     const depId =
@@ -256,7 +256,7 @@ export async function verifyAudioIdentification(
 export async function rejectAudioIdentification(
   identificationId: number
 ): Promise<ActionResult> {
-  const user = await requirePermission("camera-trap", "editor");
+  const user = await requirePermission("grabaciones", "editor");
 
   try {
     const depId =
@@ -290,7 +290,7 @@ export async function verifyAllAudioAndAdvance(
   deploymentId: number,
   currentFileId: number
 ): Promise<ActionResult<{ nextFileId: number | null }>> {
-  const user = await requirePermission("camera-trap", "editor");
+  const user = await requirePermission("grabaciones", "editor");
 
   try {
     await requireDeploymentAccess(user, deploymentId);
@@ -382,7 +382,7 @@ export async function getRecentAudioSpecies(
   deploymentId: number,
   limit = 8
 ): Promise<ActionResult<typeof species.$inferSelect[]>> {
-  await requirePermission("camera-trap", "viewer");
+  await requirePermission("grabaciones", "viewer");
 
   const recent = await db
     .selectDistinct({

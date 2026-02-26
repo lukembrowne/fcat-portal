@@ -671,6 +671,7 @@ const coreProjects = [
   ["finance", "Finanzas", "Dashboard financiero y gestión de presupuestos"],
   ["climate", "Datos Climáticos", "Datos de la estación meteorológica central de FCAT"],
   ["monitoreo", "Monitoreo Programático", "Seguimiento de actividades sociales y programáticas de FCAT"],
+  ["grabaciones", "Grabaciones", "Grabaciones de audio y detección de especies acústicas"],
 ];
 
 const insertProject = db.prepare(

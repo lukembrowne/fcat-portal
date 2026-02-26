@@ -12,7 +12,7 @@ export default async function AudioDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  const user = await requirePermission("camera-trap", "viewer");
+  const user = await requirePermission("grabaciones", "viewer");
 
   const { id } = await params;
   const deploymentId = parseInt(id, 10);
@@ -24,7 +24,7 @@ export default async function AudioDetailPage({
     user.globalRole === "super_admin" ||
     user.permissions.some(
       (p) =>
-        p.projectId === "camera-trap" &&
+        p.projectId === "grabaciones" &&
         (p.role === "editor" || p.role === "admin")
     );
 

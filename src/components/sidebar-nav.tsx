@@ -152,7 +152,8 @@ export function SidebarNav({ user }: SidebarNavProps) {
     });
   }
 
-  if (hasCameraTrap) {
+  const hasGrabaciones = hasProjectAccess(user, "grabaciones");
+  if (hasGrabaciones) {
     analysisItems.push({
       label: "Grabaciones",
       icon: "audio-lines",

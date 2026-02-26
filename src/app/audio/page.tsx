@@ -6,13 +6,13 @@ import {
 import { AudioDeploymentsShell } from "./audio-deployments-shell";
 
 export default async function AudioPage() {
-  const user = await requirePermission("camera-trap", "viewer");
+  const user = await requirePermission("grabaciones", "viewer");
 
   const isEditor =
     user.globalRole === "super_admin" ||
     user.permissions.some(
       (p) =>
-        p.projectId === "camera-trap" &&
+        p.projectId === "grabaciones" &&
         (p.role === "editor" || p.role === "admin")
     );
 

@@ -19,7 +19,7 @@ interface PageProps {
 }
 
 export default async function AudioAnnotatePage({ params }: PageProps) {
-  const user = await requirePermission("camera-trap", "viewer");
+  const user = await requirePermission("grabaciones", "viewer");
   const { id, fileId } = await params;
   const deploymentId = parseInt(id, 10);
   const audioFileId = parseInt(fileId, 10);
@@ -32,7 +32,7 @@ export default async function AudioAnnotatePage({ params }: PageProps) {
     user.globalRole === "super_admin" ||
     user.permissions.some(
       (p) =>
-        p.projectId === "camera-trap" &&
+        p.projectId === "grabaciones" &&
         (p.role === "editor" || p.role === "admin")
     );
 

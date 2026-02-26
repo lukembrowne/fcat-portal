@@ -85,7 +85,7 @@ export interface AudioStats {
 export async function fetchAudioDeployments(): Promise<
   ActionResult<AudioDeploymentRow[]>
 > {
-  const user = await requirePermission("camera-trap", "viewer");
+  const user = await requirePermission("grabaciones", "viewer");
   const projects = await getUserCameraTrapProjects(user);
   const filter = ctProjectFilter(projects);
 
@@ -127,7 +127,7 @@ export async function fetchAudioDeployments(): Promise<
 }
 
 export async function fetchDistinctAudioProjects(): Promise<AudioProject[]> {
-  await requirePermission("camera-trap", "viewer");
+  await requirePermission("grabaciones", "viewer");
 
   const rows = await db
     .selectDistinct({
@@ -148,7 +148,7 @@ export async function fetchDistinctAudioProjects(): Promise<AudioProject[]> {
 export async function fetchAudioFiles(
   deploymentId: number
 ): Promise<ActionResult<AudioFileRow[]>> {
-  const user = await requirePermission("camera-trap", "viewer");
+  const user = await requirePermission("grabaciones", "viewer");
   await requireDeploymentAccess(user, deploymentId);
 
   const rows = await db
@@ -171,7 +171,7 @@ export async function fetchAudioFiles(
 }
 
 export async function getAudioStats(): Promise<ActionResult<AudioStats>> {
-  await requirePermission("camera-trap", "viewer");
+  await requirePermission("grabaciones", "viewer");
 
   const [stats] = await db
     .select({
@@ -203,7 +203,7 @@ export async function getAudioStats(): Promise<ActionResult<AudioStats>> {
 export async function scanDeploymentAudio(
   deploymentId: number
 ): Promise<ActionResult<{ added: number; updated: number; total: number }>> {
-  const user = await requirePermission("camera-trap", "editor");
+  const user = await requirePermission("grabaciones", "editor");
   await requireDeploymentAccess(user, deploymentId);
 
   // Get the deployment's audio folder ID
@@ -333,7 +333,7 @@ export async function scanDeploymentAudio(
 export async function scanAllAudio(): Promise<
   ActionResult<{ scanned: number; errors: number }>
 > {
-  await requirePermission("camera-trap", "editor");
+  await requirePermission("grabaciones", "editor");
 
   // Get all deployments with audio folders
   const deps = await db

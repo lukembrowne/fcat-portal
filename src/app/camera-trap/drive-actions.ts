@@ -2,12 +2,14 @@
 
 import { db } from "@/db";
 import { deployments, images, videos, cameraTrapProjects } from "@/db/schema";
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and, inArray, sql } from "drizzle-orm";
 import {
   listDeploymentFolders,
   listMediaRecursive,
   isValidFolderId,
+  checkDeploymentUploads,
 } from "@/lib/drive-client";
+import { matchOdkDeployments } from "./odk-actions";
 import { requirePermission } from "@/lib/auth";
 import { getUserCameraTrapProjects, requireDeploymentAccess } from "@/lib/camera-trap-auth";
 import { revalidatePath } from "next/cache";
@@ -132,6 +134,40 @@ export async function syncWithDrive(
       } catch (err) {
         console.error(`[Drive] Auto-scan failed for ${dep.name}:`, err);
         allErrors.push(`Error al escanear ${dep.name}: ${err instanceof Error ? err.message : "Error desconocido"}`);
+      }
+    }
+
+    // Auto-match with ODK to recover site, lat/lng, dates
+    if (allCreated.length > 0) {
+      try {
+        await matchOdkDeployments(allCreated.map((d) => d.id));
+      } catch (err) {
+        console.error("[Drive] Auto ODK match failed:", err);
+      }
+
+      // Auto-refresh biochoco upload counts from Drive subfolders
+      for (const dep of allCreated) {
+        if (!dep.driveFolderId) continue;
+        try {
+          const result = await checkDeploymentUploads(dep.driveFolderId);
+          if (result.success) {
+            const uploads = result.data;
+            await db
+              .update(deployments)
+              .set({
+                uploadCameraCount: uploads.camarasTrampas,
+                uploadAudioCount: uploads.grabadoresDeAudio,
+                uploadIbuttonCount: uploads.ibutton,
+                uploadCameraFolderId: uploads.subfolderIds.camarasTrampas,
+                uploadAudioFolderId: uploads.subfolderIds.grabadoresDeAudio,
+                uploadIbuttonFolderId: uploads.subfolderIds.ibutton,
+                uploadCountsCheckedAt: sql`(unixepoch())`,
+              })
+              .where(eq(deployments.id, dep.id));
+          }
+        } catch (err) {
+          console.error(`[Drive] Upload count refresh failed for ${dep.name}:`, err);
+        }
       }
     }
 

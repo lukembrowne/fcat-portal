@@ -32,6 +32,7 @@ export function BatchDeleteDialog({
     totalImages: number;
     totalDetections: number;
     totalVerified: number;
+    hasUploadCounts: boolean;
   } | null>(null);
   const [deleting, startDeleting] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -92,6 +93,11 @@ export function BatchDeleteDialog({
             {stats.totalVerified > 0 && (
               <p className="text-destructive font-medium">
                 {stats.totalVerified} identificaciones verificadas se perderán
+              </p>
+            )}
+            {stats.hasUploadCounts && (
+              <p className="text-amber-600 dark:text-amber-500 font-medium">
+                Los conteos de archivos subidos (BioChoco) también se perderán
               </p>
             )}
           </div>

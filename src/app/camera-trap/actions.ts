@@ -14,7 +14,7 @@ import {
   cameraTrapProjects,
   activityLog,
 } from "@/db/schema";
-import { eq, desc, inArray, and, gte, ne, sql, count, sum, isNotNull } from "drizzle-orm";
+import { eq, desc, inArray, and, or, gte, ne, sql, count, sum, isNotNull } from "drizzle-orm";
 import { runMLPredictions, checkPytorchWildlife, cancelModelServerJob } from "@/lib/ml-runner";
 import {
   downloadDeploymentForProcessing,
@@ -1432,19 +1432,35 @@ export async function deleteDeployments(
 /** Get cascade stats for a set of deployments (for delete confirmation). */
 export async function getDeploymentsCascadeStats(
   ids: number[]
-): Promise<{ totalImages: number; totalDetections: number; totalVerified: number }> {
+): Promise<{ totalImages: number; totalDetections: number; totalVerified: number; hasUploadCounts: boolean }> {
   const user = await requirePermission("camera-trap", "viewer");
 
-  if (ids.length === 0) return { totalImages: 0, totalDetections: 0, totalVerified: 0 };
+  if (ids.length === 0) return { totalImages: 0, totalDetections: 0, totalVerified: 0, hasUploadCounts: false };
 
   // Verify access to all deployments
   for (const id of ids) {
     try {
       await requireDeploymentAccess(user, id);
     } catch {
-      return { totalImages: 0, totalDetections: 0, totalVerified: 0 };
+      return { totalImages: 0, totalDetections: 0, totalVerified: 0, hasUploadCounts: false };
     }
   }
+
+  // Check if any selected deployments have biochoco upload counts
+  const deploymentsWithCounts = await db
+    .select({ id: deployments.id })
+    .from(deployments)
+    .where(
+      and(
+        inArray(deployments.id, ids),
+        or(
+          isNotNull(deployments.uploadCameraCount),
+          isNotNull(deployments.uploadAudioCount),
+          isNotNull(deployments.uploadIbuttonCount)
+        )
+      )
+    );
+  const hasUploadCounts = deploymentsWithCounts.length > 0;
 
   const [imgStats] = await db
     .select({ cnt: count() })
@@ -1457,7 +1473,7 @@ export async function getDeploymentsCascadeStats(
     .where(inArray(processingJobs.deploymentId, ids));
 
   if (jobRows.length === 0) {
-    return { totalImages: imgStats?.cnt ?? 0, totalDetections: 0, totalVerified: 0 };
+    return { totalImages: imgStats?.cnt ?? 0, totalDetections: 0, totalVerified: 0, hasUploadCounts };
   }
 
   const jobIds = jobRows.map((j) => j.id);
@@ -1492,6 +1508,7 @@ export async function getDeploymentsCascadeStats(
     totalImages: imgStats?.cnt ?? 0,
     totalDetections: detStats?.cnt ?? 0,
     totalVerified,
+    hasUploadCounts,
   };
 }
 

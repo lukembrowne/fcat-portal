@@ -1,3 +1,18 @@
+# Detect social media / messaging crawlers for link previews
+map $http_user_agent $is_social_crawler {
+    default                         0;
+    "~*facebookexternalhit"         1;
+    "~*Facebot"                     1;
+    "~*Twitterbot"                  1;
+    "~*LinkedInBot"                 1;
+    "~*WhatsApp"                    1;
+    "~*TelegramBot"                 1;
+    "~*Slackbot"                    1;
+    "~*Discordbot"                  1;
+    "~*Applebot"                    1;
+    "~*iMessageBot"                 1;
+}
+
 # HTTP to HTTPS redirect
 server {
     listen 80;
@@ -48,6 +63,11 @@ server {
 
     # ===== Main app - requires authentication =====
     location / {
+        # Serve OG metadata to social crawlers without requiring auth
+        if ($is_social_crawler) {
+            return 200 '<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>Portal FCAT</title><meta property="og:title" content="Portal FCAT"><meta property="og:description" content="Plataforma interna de FCAT para personal y colaboradores"><meta property="og:image" content="https://portal.fcat-ecuador.org/logo-fcat.png"><meta property="og:image:width" content="1577"><meta property="og:image:height" content="889"><meta property="og:url" content="https://portal.fcat-ecuador.org"><meta property="og:type" content="website"><meta property="og:site_name" content="Portal FCAT"></head><body></body></html>';
+        }
+
         # Check with oauth2-proxy before allowing access
         auth_request /oauth2/auth;
         error_page 401 = /oauth2/sign_in;

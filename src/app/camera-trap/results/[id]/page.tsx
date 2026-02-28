@@ -228,6 +228,12 @@ export default async function JobResultsPage({ params }: PageProps) {
         images={gridImages}
         jobId={jobId}
         speciesList={sortedSpecies}
+        isAdmin={
+          user.globalRole === "super_admin" ||
+          user.permissions.some(
+            (p) => p.projectId === "camera-trap" && p.role === "admin"
+          )
+        }
       />
     </div>
   );

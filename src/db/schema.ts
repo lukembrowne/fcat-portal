@@ -245,6 +245,9 @@ export const images = sqliteTable(
     confirmedBlank: integer("confirmed_blank", { mode: "boolean" })
       .notNull()
       .default(false),
+    compressed: integer("compressed", { mode: "boolean" })
+      .notNull()
+      .default(false),
     starred: integer("starred", { mode: "boolean" })
       .notNull()
       .default(false),
@@ -731,6 +734,31 @@ export const audioIdentifications = sqliteTable(
 );
 
 // ---------------------------------------------------------------------------
+// Share Tokens (public share links for camera trap deployments)
+// ---------------------------------------------------------------------------
+
+export const shareTokens = sqliteTable(
+  "share_tokens",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    token: text("token").notNull().unique(),
+    deploymentId: integer("deployment_id")
+      .notNull()
+      .references(() => deployments.id, { onDelete: "cascade" }),
+    createdBy: text("created_by").notNull(),
+    label: text("label"),
+    revokedAt: integer("revoked_at", { mode: "timestamp" }),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [
+    index("idx_share_tokens_token").on(table.token),
+    index("idx_share_tokens_deployment").on(table.deploymentId),
+  ]
+);
+
+// ---------------------------------------------------------------------------
 // Upload Count Snapshots (daily aggregate of Drive upload counts)
 // ---------------------------------------------------------------------------
 
@@ -838,3 +866,6 @@ export type NewAudioIdentification = typeof audioIdentifications.$inferInsert;
 
 export type UploadCountSnapshot = typeof uploadCountSnapshots.$inferSelect;
 export type NewUploadCountSnapshot = typeof uploadCountSnapshots.$inferInsert;
+
+export type ShareToken = typeof shareTokens.$inferSelect;
+export type NewShareToken = typeof shareTokens.$inferInsert;

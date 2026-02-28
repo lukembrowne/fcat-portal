@@ -13,6 +13,7 @@ import {
   species,
   cameraTrapProjects,
   activityLog,
+  shareTokens,
 } from "@/db/schema";
 import { eq, desc, inArray, and, or, gte, ne, sql, count, sum, isNotNull } from "drizzle-orm";
 import { runMLPredictions, checkPytorchWildlife, cancelModelServerJob } from "@/lib/ml-runner";
@@ -21,7 +22,7 @@ import {
   downloadVideosForProcessing,
   cleanupJobTempDir,
 } from "@/lib/drive-downloader";
-import { uploadFramesToDrive } from "@/lib/drive-client";
+import { uploadFramesToDrive, trashFile } from "@/lib/drive-client";
 import { extractFrames, cancelFrameExtraction } from "@/lib/frame-extractor";
 import { requirePermission } from "@/lib/auth";
 import {
@@ -33,7 +34,8 @@ import {
 } from "@/lib/camera-trap-auth";
 import { revalidatePath } from "next/cache";
 import type { ActionResult, VerificationStats, TaxonomicRank } from "@/lib/types";
-import type { Deployment, ProcessingJob, Species, NewSpecies } from "@/db/schema";
+import type { Deployment, ProcessingJob, Species, NewSpecies, ShareToken } from "@/db/schema";
+import crypto from "crypto";
 import { ML_DEFAULTS } from "@/lib/ml-defaults";
 
 const CAMERA_TRAP_PATH = "/camera-trap";
@@ -1425,6 +1427,129 @@ export async function deleteDeployments(
     return {
       success: false,
       error: error instanceof Error ? error.message : "Error al eliminar",
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Delete blank images from Drive (soft-delete to trash)
+// ---------------------------------------------------------------------------
+
+const DELETE_BATCH_SIZE = 5;
+const CACHE_BASE = path.join(process.cwd(), "data", "cache", "ct-images");
+const THUMBNAIL_BASE = path.join(process.cwd(), "data", "thumbnails");
+
+export async function deleteImagesFromDrive(
+  imageIds: number[],
+): Promise<ActionResult<{ deleted: number; failed: number }>> {
+  const user = await requirePermission("camera-trap", "admin");
+
+  try {
+    if (imageIds.length === 0) {
+      return { success: true, data: { deleted: 0, failed: 0 } };
+    }
+
+    // Query images and verify they exist
+    const imagesToDelete = await db
+      .select()
+      .from(images)
+      .where(inArray(images.id, imageIds));
+
+    if (imagesToDelete.length === 0) {
+      return { success: false, error: "No se encontraron imágenes" };
+    }
+
+    // Verify access to all deployments
+    const deploymentIds = [...new Set(imagesToDelete.map((img) => img.deploymentId))];
+    for (const depId of deploymentIds) {
+      await requireDeploymentAccess(user, depId);
+    }
+
+    // Safety check: skip images that have any detections (including manual)
+    const imageIdsWithDetections = new Set(
+      (
+        await db
+          .select({ imageId: detections.imageId })
+          .from(detections)
+          .where(inArray(detections.imageId, imageIds))
+      ).map((d) => d.imageId),
+    );
+
+    const safeImages = imagesToDelete.filter(
+      (img) => !imageIdsWithDetections.has(img.id) && img.driveFileId,
+    );
+
+    let deleted = 0;
+    let failed = 0;
+
+    // Process in batches
+    for (let i = 0; i < safeImages.length; i += DELETE_BATCH_SIZE) {
+      const batch = safeImages.slice(i, i + DELETE_BATCH_SIZE);
+
+      const results = await Promise.allSettled(
+        batch.map(async (img) => {
+          // Soft-delete to Drive trash
+          await trashFile(img.driveFileId!);
+
+          // Clean up local cache
+          const cachePath = img.path || path.join(CACHE_BASE, String(img.deploymentId), img.filename);
+          try { await fs.unlink(cachePath); } catch { /* may not exist */ }
+
+          // Clean up thumbnail
+          const thumbPath = path.join(THUMBNAIL_BASE, String(img.deploymentId), `${img.id}.jpg`);
+          try { await fs.unlink(thumbPath); } catch { /* may not exist */ }
+
+          // Delete image row from DB (CASCADE removes detections/identifications)
+          await db.delete(images).where(eq(images.id, img.id));
+        }),
+      );
+
+      for (const result of results) {
+        if (result.status === "fulfilled") {
+          deleted++;
+        } else {
+          console.error("[DeleteImages] Failed:", result.reason);
+          failed++;
+        }
+      }
+    }
+
+    // Update deployment totalImages counts
+    for (const depId of deploymentIds) {
+      const [{ total }] = await db
+        .select({ total: count() })
+        .from(images)
+        .where(eq(images.deploymentId, depId));
+
+      await db
+        .update(deployments)
+        .set({ totalImages: total, updatedAt: new Date() })
+        .where(eq(deployments.id, depId));
+    }
+
+    // Activity log
+    await db.insert(activityLog).values({
+      userEmail: user.email,
+      action: "delete_images_drive",
+      projectId: "camera-trap",
+      targetType: "image",
+      details: JSON.stringify({
+        deleted,
+        failed,
+        skippedWithDetections: imageIdsWithDetections.size,
+        deploymentIds,
+        imageIds: safeImages.map((img) => img.id),
+      }),
+    });
+
+    revalidatePath(CAMERA_TRAP_PATH);
+    revalidatePath("/camera-trap/results");
+    return { success: true, data: { deleted, failed } };
+  } catch (err) {
+    console.error("[DeleteImages] Failed:", err);
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : "Error al eliminar imágenes",
     };
   }
 }
@@ -3074,6 +3199,36 @@ export async function toggleStarred(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Preview (without processing)
+// ---------------------------------------------------------------------------
+
+export async function getDeploymentImages(deploymentId: number) {
+  const user = await requirePermission("camera-trap", "viewer");
+  await requireDeploymentAccess(user, deploymentId);
+
+  return db
+    .select()
+    .from(images)
+    .where(eq(images.deploymentId, deploymentId))
+    .orderBy(images.filename);
+}
+
+export async function getDeploymentImageIds(
+  deploymentId: number
+): Promise<number[]> {
+  const user = await requirePermission("camera-trap", "viewer");
+  await requireDeploymentAccess(user, deploymentId);
+
+  const rows = await db
+    .select({ id: images.id })
+    .from(images)
+    .where(eq(images.deploymentId, deploymentId))
+    .orderBy(images.filename);
+
+  return rows.map((r) => r.id);
+}
+
 export async function getStarredImages() {
   const user = await requirePermission("camera-trap", "viewer");
   const ctProjects = await getUserCameraTrapProjects(user);
@@ -3097,5 +3252,109 @@ export async function getStarredImages() {
     .innerJoin(deployments, eq(images.deploymentId, deployments.id))
     .where(and(eq(images.starred, true), ctProjectFilter(ctProjects)))
     .orderBy(desc(images.starredAt));
+}
+
+// ---------------------------------------------------------------------------
+// Share Links (public share tokens for landowner access)
+// ---------------------------------------------------------------------------
+
+export async function createShareLink(
+  deploymentId: number,
+  label?: string
+): Promise<ActionResult<{ token: string; url: string }>> {
+  const user = await requirePermission("camera-trap", "editor");
+  await requireDeploymentAccess(user, deploymentId);
+
+  try {
+    const token = crypto.randomUUID();
+
+    const [result] = await db
+      .insert(shareTokens)
+      .values({
+        token,
+        deploymentId,
+        createdBy: user.email,
+        label: label?.trim() || null,
+      })
+      .returning();
+
+    await db.insert(activityLog).values({
+      userEmail: user.email,
+      action: "create_share_link",
+      projectId: "camera-trap",
+      targetType: "deployment",
+      targetId: String(deploymentId),
+      details: JSON.stringify({ tokenId: result.id, label: result.label }),
+    });
+
+    const url = `${process.env.NEXT_PUBLIC_BASE_URL || "https://portal.fcat-ecuador.org"}/public/share/${token}`;
+
+    revalidatePath(`/camera-trap/${deploymentId}`);
+    return { success: true, data: { token, url } };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Error al crear enlace",
+    };
+  }
+}
+
+export async function revokeShareLink(
+  tokenId: number
+): Promise<ActionResult<void>> {
+  const user = await requirePermission("camera-trap", "editor");
+
+  try {
+    const [existing] = await db
+      .select()
+      .from(shareTokens)
+      .where(eq(shareTokens.id, tokenId));
+
+    if (!existing) {
+      return { success: false, error: "Enlace no encontrado" };
+    }
+
+    await requireDeploymentAccess(user, existing.deploymentId);
+
+    await db
+      .update(shareTokens)
+      .set({ revokedAt: new Date() })
+      .where(eq(shareTokens.id, tokenId));
+
+    await db.insert(activityLog).values({
+      userEmail: user.email,
+      action: "revoke_share_link",
+      projectId: "camera-trap",
+      targetType: "deployment",
+      targetId: String(existing.deploymentId),
+      details: JSON.stringify({ tokenId, label: existing.label }),
+    });
+
+    revalidatePath(`/camera-trap/${existing.deploymentId}`);
+    return { success: true, data: undefined };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Error al revocar enlace",
+    };
+  }
+}
+
+export async function getDeploymentShareLinks(
+  deploymentId: number
+): Promise<ShareToken[]> {
+  const user = await requirePermission("camera-trap", "editor");
+  await requireDeploymentAccess(user, deploymentId);
+
+  return db
+    .select()
+    .from(shareTokens)
+    .where(
+      and(
+        eq(shareTokens.deploymentId, deploymentId),
+        sql`${shareTokens.revokedAt} IS NULL`
+      )
+    )
+    .orderBy(desc(shareTokens.createdAt));
 }
 

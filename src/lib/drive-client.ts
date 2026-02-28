@@ -10,7 +10,7 @@ import "server-only";
 import { google, type drive_v3 } from "googleapis";
 import { promises as fs, createReadStream } from "fs";
 import path from "path";
-import type { Readable } from "stream";
+import { Readable } from "stream";
 import type { ActionResult } from "./types";
 
 // --- Types ---
@@ -824,4 +824,74 @@ export async function uploadFramesToDrive(
 
   console.log(`[Drive] Uploaded ${result.size}/${frames.length} frames to _frames/`);
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Update / Delete File Operations
+// ---------------------------------------------------------------------------
+
+const RATE_LIMIT_DELAYS = [1000, 2000, 4000];
+
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  label: string,
+): Promise<T> {
+  for (let attempt = 0; attempt <= RATE_LIMIT_DELAYS.length; attempt++) {
+    try {
+      return await fn();
+    } catch (err: unknown) {
+      const status = (err as { code?: number })?.code;
+      if ((status === 429 || status === 403) && attempt < RATE_LIMIT_DELAYS.length) {
+        const delay = RATE_LIMIT_DELAYS[attempt];
+        console.warn(`[Drive] Rate limited on ${label}, retrying in ${delay}ms (attempt ${attempt + 1})`);
+        await new Promise((r) => setTimeout(r, delay));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error("Unreachable");
+}
+
+/**
+ * Replace the content of an existing file on Drive.
+ * Used for image compression — uploads new content while keeping the same file ID.
+ */
+export async function updateFileContent(
+  fileId: string,
+  buffer: Buffer,
+  mimeType: string,
+): Promise<void> {
+  const drive = getDrive();
+
+  await withRetry(
+    () =>
+      drive.files.update({
+        fileId,
+        media: {
+          mimeType,
+          body: Readable.from(buffer),
+        },
+        supportsAllDrives: true,
+      }),
+    `updateFileContent(${fileId})`,
+  );
+}
+
+/**
+ * Soft-delete a file to Drive trash (recoverable for 30 days).
+ * Used for blank image deletion — safer than permanent delete.
+ */
+export async function trashFile(fileId: string): Promise<void> {
+  const drive = getDrive();
+
+  await withRetry(
+    () =>
+      drive.files.update({
+        fileId,
+        requestBody: { trashed: true },
+        supportsAllDrives: true,
+      }),
+    `trashFile(${fileId})`,
+  );
 }

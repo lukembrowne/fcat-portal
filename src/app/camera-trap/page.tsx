@@ -19,6 +19,12 @@ export default async function CameraTrapPage() {
       (p) => p.projectId === "camera-trap" && (p.role === "editor" || p.role === "admin")
     );
 
+  const isAdmin =
+    user.globalRole === "super_admin" ||
+    user.permissions.some(
+      (p) => p.projectId === "camera-trap" && p.role === "admin"
+    );
+
   return (
     <div className="max-w-7xl mx-auto min-w-0">
       {/* Header */}
@@ -40,6 +46,7 @@ export default async function CameraTrapPage() {
         deployments={allDeployments}
         distinctProjects={distinctProjects}
         canEdit={canEdit}
+        isAdmin={isAdmin}
       />
     </div>
   );

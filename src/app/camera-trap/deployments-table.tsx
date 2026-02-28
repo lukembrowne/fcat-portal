@@ -41,6 +41,8 @@ import {
   RefreshCw,
   Loader2,
   Eye,
+  Images,
+  Play,
   Info,
   Download,
 } from "lucide-react";
@@ -78,12 +80,14 @@ interface DeploymentsTableProps {
   deployments: DeploymentRow[];
   distinctProjects: CtProject[];
   canEdit: boolean;
+  isAdmin: boolean;
 }
 
 export function DeploymentsTable({
   deployments: initialDeployments,
   distinctProjects,
   canEdit,
+  isAdmin,
 }: DeploymentsTableProps) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [globalFilter, setGlobalFilter] = useState("");
@@ -100,6 +104,7 @@ export function DeploymentsTable({
   const [batchEditOpen, setBatchEditOpen] = useState(false);
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
   const [processing, startProcessing] = useTransition();
+  const [processingRowId, setProcessingRowId] = useState<number | null>(null);
   const [exporting, setExporting] = useState(false);
   const router = useRouter();
 
@@ -285,6 +290,63 @@ export function DeploymentsTable({
         enableGlobalFilter: false,
       },
       {
+        id: "preview",
+        header: "",
+        cell: ({ row }) => {
+          const hasImages = (row.original.totalImages ?? 0) > 0;
+          if (!hasImages) return null;
+          return (
+            <Link
+              href={`/camera-trap/${row.original.id}/preview`}
+              onClick={(e) => e.stopPropagation()}
+              className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 hover:underline whitespace-nowrap"
+            >
+              <Images className="h-3.5 w-3.5" />
+              Imagenes
+            </Link>
+          );
+        },
+        enableSorting: false,
+        enableGlobalFilter: false,
+      },
+      ...(canEdit
+        ? [
+            {
+              id: "process",
+              header: "",
+              cell: ({ row }: { row: { original: DeploymentRow } }) => {
+                const d = row.original;
+                const hasImages = (d.totalImages ?? 0) > 0;
+                const canProcess =
+                  hasImages &&
+                  d.status !== "unscanned" &&
+                  d.status !== "processing";
+                if (!canProcess) return null;
+                const isProcessing = processingRowId === d.id;
+                return (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleRowProcess(d.id);
+                    }}
+                    disabled={isProcessing || processing}
+                    className="inline-flex items-center gap-1 text-xs text-green-600 hover:text-green-800 whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isProcessing ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Play className="h-3.5 w-3.5" />
+                    )}
+                    Procesar
+                  </button>
+                );
+              },
+              enableSorting: false,
+              enableGlobalFilter: false,
+            } satisfies ColumnDef<DeploymentRow>,
+          ]
+        : []),
+      {
         id: "results",
         header: "",
         cell: ({ row }) => {
@@ -332,7 +394,7 @@ export function DeploymentsTable({
     );
 
     return cols;
-  }, []);
+  }, [canEdit, processingRowId, processing]);
 
   // Accordion behavior: only allow one expanded row at a time
   const handleExpandedChange = useCallback((updater: ExpandedState | ((old: ExpandedState) => ExpandedState)) => {
@@ -447,6 +509,17 @@ export function DeploymentsTable({
         setRowSelection({});
         window.dispatchEvent(new Event("job-started"));
       }
+    });
+  };
+
+  const handleRowProcess = (deploymentId: number) => {
+    setProcessingRowId(deploymentId);
+    startProcessing(async () => {
+      const result = await queueProcessing([deploymentId]);
+      if (result.success) {
+        window.dispatchEvent(new Event("job-started"));
+      }
+      setProcessingRowId(null);
     });
   };
 
@@ -721,6 +794,7 @@ export function DeploymentsTable({
                         <DeploymentExpandedRow
                           deployment={row.original}
                           canEdit={canEdit}
+                          isAdmin={isAdmin}
                           distinctProjects={distinctProjects}
                           cachedJobs={jobsCacheRef.current.get(row.original.id)}
                           onCacheJobs={handleCacheJobs}

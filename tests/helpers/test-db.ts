@@ -161,7 +161,8 @@ const CAMERA_TRAP_DDL = `
     confirmed_blank INTEGER NOT NULL DEFAULT 0,
     starred INTEGER NOT NULL DEFAULT 0,
     starred_by TEXT,
-    starred_at INTEGER
+    starred_at INTEGER,
+    compressed INTEGER NOT NULL DEFAULT 0
   );
 
   CREATE TABLE biochoco_detections (

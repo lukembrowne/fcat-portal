@@ -1,18 +1,22 @@
 "use server";
 
 import { db } from "@/db";
-import { deployments, images, videos, cameraTrapProjects } from "@/db/schema";
+import { deployments, images, videos, cameraTrapProjects, activityLog } from "@/db/schema";
 import { eq, and, inArray, sql } from "drizzle-orm";
 import {
   listDeploymentFolders,
   listMediaRecursive,
   isValidFolderId,
   checkDeploymentUploads,
+  downloadFileToBuffer,
+  updateFileContent,
 } from "@/lib/drive-client";
 import { matchOdkDeployments } from "./odk-actions";
 import { requirePermission } from "@/lib/auth";
 import { getUserCameraTrapProjects, requireDeploymentAccess } from "@/lib/camera-trap-auth";
 import { revalidatePath } from "next/cache";
+import path from "path";
+import { promises as fs } from "fs";
 import type { ActionResult } from "@/lib/types";
 import type { Deployment } from "@/db/schema";
 
@@ -281,6 +285,168 @@ export async function scanDeploymentImages(
     return {
       success: false,
       error: err instanceof Error ? err.message : "Error al escanear imágenes",
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Compress deployment images — re-encode JPEGs at quality 85
+// ---------------------------------------------------------------------------
+
+const COMPRESSION_QUALITY = 85;
+const COMPRESSION_BATCH_SIZE = 5;
+const CACHE_BASE = path.join(process.cwd(), "data", "cache", "ct-images");
+const THUMBNAIL_DIR = path.join(process.cwd(), "data", "thumbnails");
+
+const JPEG_EXTENSIONS = new Set([".jpg", ".jpeg"]);
+
+export async function compressDeploymentImages(
+  deploymentId: number,
+): Promise<ActionResult<{ compressed: number; skipped: number; failed: number; savedBytes: number }>> {
+  const user = await requirePermission("camera-trap", "admin");
+
+  try {
+    await requireDeploymentAccess(user, deploymentId);
+
+    const [deployment] = await db
+      .select()
+      .from(deployments)
+      .where(eq(deployments.id, deploymentId));
+
+    if (!deployment) {
+      return { success: false, error: "Instalación no encontrada" };
+    }
+
+    // Guard: don't compress during processing
+    if (deployment.status === "processing") {
+      return { success: false, error: "No se puede comprimir mientras se está procesando" };
+    }
+
+    if (!["processed", "verified", "verified_empty"].includes(deployment.status)) {
+      return { success: false, error: "La instalación debe estar procesada para comprimir" };
+    }
+
+    // Get uncompressed images with Drive file IDs
+    const uncompressedImages = await db
+      .select()
+      .from(images)
+      .where(
+        and(
+          eq(images.deploymentId, deploymentId),
+          eq(images.compressed, false),
+          sql`${images.driveFileId} IS NOT NULL`,
+        ),
+      );
+
+    // Filter to JPEG only
+    const jpegImages = uncompressedImages.filter((img) => {
+      const ext = path.extname(img.filename).toLowerCase();
+      return JPEG_EXTENSIONS.has(ext);
+    });
+
+    const skipped = uncompressedImages.length - jpegImages.length;
+    let compressed = 0;
+    let failed = 0;
+    let savedBytes = 0;
+
+    // Process in batches
+    for (let i = 0; i < jpegImages.length; i += COMPRESSION_BATCH_SIZE) {
+      const batch = jpegImages.slice(i, i + COMPRESSION_BATCH_SIZE);
+
+      const results = await Promise.allSettled(
+        batch.map(async (img) => {
+          const sharp = (await import("sharp")).default;
+
+          // Download: try local cache first, then Drive
+          let originalBuffer: Buffer;
+          const cachePath = img.path || path.join(CACHE_BASE, String(deploymentId), img.filename);
+
+          try {
+            originalBuffer = await fs.readFile(cachePath);
+          } catch {
+            // Not in cache, download from Drive
+            originalBuffer = await downloadFileToBuffer(img.driveFileId!);
+          }
+
+          const originalSize = originalBuffer.length;
+
+          // Re-encode at quality 85
+          const compressedBuffer = await sharp(originalBuffer)
+            .jpeg({ quality: COMPRESSION_QUALITY })
+            .toBuffer();
+
+          const newSize = compressedBuffer.length;
+
+          // Only upload if actually smaller
+          if (newSize >= originalSize) {
+            // Already well-compressed, just mark it
+            await db
+              .update(images)
+              .set({ compressed: true })
+              .where(eq(images.id, img.id));
+            return { saved: 0 };
+          }
+
+          // Upload compressed version back to Drive
+          await updateFileContent(img.driveFileId!, compressedBuffer, "image/jpeg");
+
+          // Update local cache with compressed version
+          try {
+            await fs.mkdir(path.dirname(cachePath), { recursive: true });
+            await fs.writeFile(cachePath, compressedBuffer);
+          } catch {
+            // Cache update is best-effort
+          }
+
+          // Delete thumbnail so it regenerates on next request
+          const thumbPath = path.join(THUMBNAIL_DIR, String(deploymentId), `${img.id}.jpg`);
+          try {
+            await fs.unlink(thumbPath);
+          } catch {
+            // Thumbnail may not exist
+          }
+
+          // Update DB
+          await db
+            .update(images)
+            .set({
+              compressed: true,
+              fileSize: newSize,
+            })
+            .where(eq(images.id, img.id));
+
+          return { saved: originalSize - newSize };
+        }),
+      );
+
+      for (const result of results) {
+        if (result.status === "fulfilled") {
+          compressed++;
+          savedBytes += result.value.saved;
+        } else {
+          console.error("[Compress] Image failed:", result.reason);
+          failed++;
+        }
+      }
+    }
+
+    // Activity log
+    await db.insert(activityLog).values({
+      userEmail: user.email,
+      action: "compress_images",
+      projectId: "camera-trap",
+      targetType: "deployment",
+      targetId: String(deploymentId),
+      details: JSON.stringify({ compressed, skipped, failed, savedBytes }),
+    });
+
+    revalidatePath(CAMERA_TRAP_PATH);
+    return { success: true, data: { compressed, skipped, failed, savedBytes } };
+  } catch (err) {
+    console.error("[Compress] Failed:", err);
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : "Error al comprimir imágenes",
     };
   }
 }

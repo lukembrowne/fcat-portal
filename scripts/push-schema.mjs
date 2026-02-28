@@ -431,6 +431,19 @@ const statements = [
     total_deployments INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
   )`,
+
+  // Share Tokens (public share links for camera trap deployments)
+  `CREATE TABLE IF NOT EXISTS share_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token TEXT NOT NULL UNIQUE,
+    deployment_id INTEGER NOT NULL REFERENCES biochoco_deployments(id) ON DELETE CASCADE,
+    created_by TEXT NOT NULL,
+    label TEXT,
+    revoked_at INTEGER,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_share_tokens_token ON share_tokens(token)`,
+  `CREATE INDEX IF NOT EXISTS idx_share_tokens_deployment ON share_tokens(deployment_id)`,
 ];
 
 for (const stmt of statements) {
@@ -485,6 +498,8 @@ const migrations = [
   `ALTER TABLE audio_files ADD COLUMN sample_rate INTEGER`,
   `ALTER TABLE audio_files ADD COLUMN cache_path TEXT`,
   `ALTER TABLE audio_files ADD COLUMN spectrogram_path TEXT`,
+  // Image compression tracking (2026-02-28)
+  `ALTER TABLE biochoco_images ADD COLUMN compressed INTEGER NOT NULL DEFAULT 0`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }

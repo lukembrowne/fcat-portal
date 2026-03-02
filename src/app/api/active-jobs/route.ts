@@ -32,6 +32,7 @@ export async function GET() {
     deploymentId: job.deploymentId,
     deploymentName: deploymentMap.get(job.deploymentId) || "Desconocida",
     status: job.status,
+    jobType: job.jobType,
     totalImages: job.totalImages,
     processedImages: job.processedImages,
     statusMessage: job.statusMessage,

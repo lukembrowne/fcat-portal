@@ -7,6 +7,7 @@ export interface ActiveJob {
   deploymentId: number;
   deploymentName: string;
   status: string;
+  jobType: string;
   totalImages: number;
   processedImages: number;
   statusMessage: string | null;

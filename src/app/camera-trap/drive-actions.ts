@@ -294,7 +294,7 @@ export async function scanDeploymentImages(
 // ---------------------------------------------------------------------------
 
 const COMPRESSION_QUALITY = 85;
-const COMPRESSION_BATCH_SIZE = 5;
+const COMPRESSION_BATCH_SIZE = 50;
 const CACHE_BASE = path.join(process.cwd(), "data", "cache", "ct-images");
 const THUMBNAIL_DIR = path.join(process.cwd(), "data", "thumbnails");
 
@@ -446,36 +446,57 @@ async function compressJobInternal(
         return;
       }
 
+      const batchStart = Date.now();
+      let batchDownloads = 0;
+      let batchCacheHits = 0;
+      let batchUploads = 0;
+      let batchSkippedLarger = 0;
+
       const results = await Promise.allSettled(
         batch.map(async (img) => {
           const sharp = (await import("sharp")).default;
 
           let originalBuffer: Buffer;
+          let fromCache = false;
           const cachePath = img.path || path.join(CACHE_BASE, String(deploymentId), img.filename);
 
+          const dlStart = Date.now();
           try {
             originalBuffer = await fs.readFile(cachePath);
+            fromCache = true;
+            batchCacheHits++;
           } catch {
             originalBuffer = await downloadFileToBuffer(img.driveFileId!);
+            batchDownloads++;
           }
+          const dlMs = Date.now() - dlStart;
 
           const originalSize = originalBuffer.length;
+          const origMB = (originalSize / (1024 * 1024)).toFixed(1);
 
+          const compressStart = Date.now();
           const compressedBuffer = await sharp(originalBuffer)
             .jpeg({ quality: COMPRESSION_QUALITY })
             .toBuffer();
+          const compressMs = Date.now() - compressStart;
 
           const newSize = compressedBuffer.length;
+          const newMB = (newSize / (1024 * 1024)).toFixed(1);
 
           if (newSize >= originalSize) {
+            batchSkippedLarger++;
             await db
               .update(images)
               .set({ compressed: true })
               .where(eq(images.id, img.id));
+            console.log(`[compress]   ${img.filename}: ${origMB}MB → ${newMB}MB (no savings, skipped) [${fromCache ? "cache" : "download"}:${dlMs}ms, sharp:${compressMs}ms]`);
             return { saved: 0 };
           }
 
+          const uploadStart = Date.now();
           await updateFileContent(img.driveFileId!, compressedBuffer, "image/jpeg");
+          const uploadMs = Date.now() - uploadStart;
+          batchUploads++;
 
           try {
             await fs.mkdir(path.dirname(cachePath), { recursive: true });
@@ -496,6 +517,9 @@ async function compressJobInternal(
             .set({ compressed: true, fileSize: newSize })
             .where(eq(images.id, img.id));
 
+          const savedMBImg = ((originalSize - newSize) / (1024 * 1024)).toFixed(1);
+          console.log(`[compress]   ${img.filename}: ${origMB}MB → ${newMB}MB (saved ${savedMBImg}MB) [${fromCache ? "cache" : "download"}:${dlMs}ms, sharp:${compressMs}ms, upload:${uploadMs}ms]`);
+
           return { saved: originalSize - newSize };
         }),
       );
@@ -505,13 +529,21 @@ async function compressJobInternal(
           compressed++;
           savedBytes += result.value.saved;
         } else {
-          console.error("[compress] Image failed:", result.reason);
+          console.error("[compress]   FAILED:", result.reason);
           failed++;
         }
       }
 
       const processedSoFar = compressed + failed;
       const savedMB = (savedBytes / (1024 * 1024)).toFixed(1);
+      const batchMs = Date.now() - batchStart;
+      const batchSec = (batchMs / 1000).toFixed(1);
+      const totalElapsedSec = (Date.now() - startTime) / 1000;
+      const imgsPerMin = totalElapsedSec > 0 ? ((processedSoFar / totalElapsedSec) * 60).toFixed(0) : "—";
+      const remaining = jpegImages.length - processedSoFar;
+      const etaMin = totalElapsedSec > 0 && processedSoFar > 0
+        ? ((remaining / (processedSoFar / totalElapsedSec)) / 60).toFixed(1)
+        : "—";
 
       // Update job progress
       await db
@@ -524,7 +556,7 @@ async function compressJobInternal(
         .where(eq(processingJobs.id, jobId));
 
       console.log(
-        `[compress] Deployment ${deploymentId}: batch ${batchNum}/${totalBatches} — ${processedSoFar}/${jpegImages.length} images, ${savedMB} MB saved so far`
+        `[compress] Deployment ${deploymentId}: batch ${batchNum}/${totalBatches} done in ${batchSec}s — ${processedSoFar}/${jpegImages.length} images, ${savedMB} MB saved total [cache:${batchCacheHits}, downloads:${batchDownloads}, uploads:${batchUploads}, skipped:${batchSkippedLarger}] — ${imgsPerMin} img/min, ETA ${etaMin} min`
       );
     }
 

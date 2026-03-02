@@ -11,6 +11,7 @@ interface PreviewImageViewerProps {
   deploymentId: number;
   deploymentName: string | null;
   filename: string;
+  timestamp?: string | null;
   prevImageId: number | null;
   nextImageId: number | null;
   currentIndex: number;
@@ -24,6 +25,7 @@ export function PreviewImageViewer({
   deploymentId,
   deploymentName,
   filename,
+  timestamp,
   prevImageId,
   nextImageId,
   currentIndex,
@@ -94,6 +96,9 @@ export function PreviewImageViewer({
             </p>
           )}
           <h1 className="text-xl font-bold truncate">{filename}</h1>
+          {timestamp && (
+            <p className="text-sm text-muted-foreground">{timestamp}</p>
+          )}
           {children}
         </div>
         <div className="flex items-center gap-2">

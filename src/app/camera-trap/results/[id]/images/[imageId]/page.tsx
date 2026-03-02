@@ -25,6 +25,26 @@ export default async function ImageDetailPage({ params }: PageProps) {
 
   const { image, deploymentName, detections: rawDetections } = data;
 
+  // Format timestamp for display
+  const rawTimestamp = image.exifTimestamp
+    ? new Date(image.exifTimestamp)
+    : image.fileModified
+      ? new Date(image.fileModified)
+      : null;
+  const timestamp =
+    rawTimestamp && !isNaN(rawTimestamp.getTime())
+      ? rawTimestamp.toLocaleDateString("es-EC", {
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+        }) +
+        ", " +
+        rawTimestamp.toLocaleTimeString("es-EC", {
+          hour: "2-digit",
+          minute: "2-digit",
+        })
+      : null;
+
   const [imageIds, speciesList, recentSpeciesResult] = await Promise.all([
     getJobImageIds(jobId),
     getSpeciesList(),
@@ -92,6 +112,9 @@ export default async function ImageDetailPage({ params }: PageProps) {
             <p className="text-sm text-muted-foreground truncate">{deploymentName}</p>
           )}
           <h1 className="text-xl font-bold truncate">{image.filename}</h1>
+          {timestamp && (
+            <p className="text-sm text-muted-foreground">{timestamp}</p>
+          )}
           {image.videoId && (
             <VideoFrameLabel videoId={image.videoId} frameIndex={image.frameIndex} />
           )}

@@ -24,6 +24,26 @@ export default async function PreviewImagePage({ params }: PageProps) {
 
   const { image, deploymentName } = data;
 
+  // Format timestamp for display
+  const rawTimestamp = image.exifTimestamp
+    ? new Date(image.exifTimestamp)
+    : image.fileModified
+      ? new Date(image.fileModified)
+      : null;
+  const timestamp =
+    rawTimestamp && !isNaN(rawTimestamp.getTime())
+      ? rawTimestamp.toLocaleDateString("es-EC", {
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+        }) +
+        ", " +
+        rawTimestamp.toLocaleTimeString("es-EC", {
+          hour: "2-digit",
+          minute: "2-digit",
+        })
+      : null;
+
   // Verify image belongs to this deployment
   if (image.deploymentId !== deploymentId) notFound();
 
@@ -59,6 +79,7 @@ export default async function PreviewImagePage({ params }: PageProps) {
         deploymentId={deploymentId}
         deploymentName={deploymentName}
         filename={image.filename}
+        timestamp={timestamp}
         prevImageId={prevImageId}
         nextImageId={nextImageId}
         currentIndex={currentIndex}

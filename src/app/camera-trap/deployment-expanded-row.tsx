@@ -76,7 +76,6 @@ export function DeploymentExpandedRow({
   const [verifying, startVerifying] = useTransition();
   const [deleteJobId, setDeleteJobId] = useState<number | null>(null);
   const [compressing, startCompressing] = useTransition();
-  const [compressionResult, setCompressionResult] = useState<string | null>(null);
 
   // QA inline editing state
   const [excluded, setExcluded] = useState(deployment.excluded);
@@ -191,19 +190,12 @@ export function DeploymentExpandedRow({
 
   const handleCompress = () => {
     startCompressing(async () => {
-      setCompressionResult(null);
       const result = await compressDeploymentImages(deployment.id);
       if (result.success) {
-        const { compressed, skipped, failed, savedBytes } = result.data;
-        const savedMB = (savedBytes / (1024 * 1024)).toFixed(1);
-        setCompressionResult(
-          `Comprimidas: ${compressed}, Omitidas: ${skipped}, Errores: ${failed}, Ahorro: ${savedMB} MB`
-        );
-        setTimeout(() => setCompressionResult(null), 8000);
+        window.dispatchEvent(new Event("job-started"));
         router.refresh();
       } else {
-        setCompressionResult(`Error: ${result.error}`);
-        setTimeout(() => setCompressionResult(null), 5000);
+        alert(result.error);
       }
     });
   };
@@ -481,7 +473,7 @@ export function DeploymentExpandedRow({
                   )}
                 </>
               )}
-              {isAdmin && ["processed", "verified", "verified_empty"].includes(deployment.status) && (deployment.totalImages ?? 0) > 0 && (
+              {isAdmin && deployment.status !== "processing" && (deployment.totalImages ?? 0) > 0 && (
                 <Button
                   variant="outline"
                   size="sm"
@@ -496,11 +488,6 @@ export function DeploymentExpandedRow({
                   )}
                   Comprimir Imágenes
                 </Button>
-              )}
-              {compressionResult && (
-                <span className={`text-xs ${compressionResult.startsWith("Error") ? "text-destructive" : "text-green-600"}`}>
-                  {compressionResult}
-                </span>
               )}
             </div>
           </div>

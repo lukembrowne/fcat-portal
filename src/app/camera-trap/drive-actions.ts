@@ -2,7 +2,7 @@
 
 import { db } from "@/db";
 import { deployments, images, videos, cameraTrapProjects, activityLog, processingJobs } from "@/db/schema";
-import { eq, and, inArray, sql } from "drizzle-orm";
+import { eq, and, inArray, sql, count, sum } from "drizzle-orm";
 import {
   listDeploymentFolders,
   listMediaRecursive,
@@ -10,6 +10,8 @@ import {
   checkDeploymentUploads,
   downloadFileToBuffer,
   updateFileContent,
+  getFileRevisions,
+  downloadFileRevision,
 } from "@/lib/drive-client";
 import { matchOdkDeployments } from "./odk-actions";
 import { requirePermission } from "@/lib/auth";
@@ -480,6 +482,21 @@ async function compressJobInternal(
             .toBuffer();
           const compressMs = Date.now() - compressStart;
 
+          // Validate compressed output: dimensions must match and format must be JPEG
+          const [origMeta, compMeta] = await Promise.all([
+            sharp(originalBuffer).metadata(),
+            sharp(compressedBuffer).metadata(),
+          ]);
+          if (
+            origMeta.width !== compMeta.width ||
+            origMeta.height !== compMeta.height ||
+            compMeta.format !== "jpeg"
+          ) {
+            throw new Error(
+              `Validation failed: ${origMeta.width}x${origMeta.height} → ${compMeta.width}x${compMeta.height} ${compMeta.format}`,
+            );
+          }
+
           const newSize = compressedBuffer.length;
           const newMB = (newSize / (1024 * 1024)).toFixed(1);
 
@@ -487,7 +504,7 @@ async function compressJobInternal(
             batchSkippedLarger++;
             await db
               .update(images)
-              .set({ compressed: true })
+              .set({ compressed: true, originalFileSize: originalSize })
               .where(eq(images.id, img.id));
             console.log(`[compress]   ${img.filename}: ${origMB}MB → ${newMB}MB (no savings, skipped) [${fromCache ? "cache" : "download"}:${dlMs}ms, sharp:${compressMs}ms]`);
             return { saved: 0 };
@@ -514,7 +531,7 @@ async function compressJobInternal(
 
           await db
             .update(images)
-            .set({ compressed: true, fileSize: newSize })
+            .set({ compressed: true, fileSize: newSize, originalFileSize: originalSize })
             .where(eq(images.id, img.id));
 
           const savedMBImg = ((originalSize - newSize) / (1024 * 1024)).toFixed(1);
@@ -600,6 +617,327 @@ async function compressJobInternal(
         completedAt: new Date(),
         errorMessage: err instanceof Error ? err.message : "Error desconocido",
         statusMessage: "Error en compresión",
+      })
+      .where(eq(processingJobs.id, jobId));
+
+    revalidatePath(CAMERA_TRAP_PATH);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Compression Preview (read-only stats for confirmation dialog)
+// ---------------------------------------------------------------------------
+
+export async function getCompressionPreview(
+  deploymentId: number,
+): Promise<ActionResult<{ count: number; totalSizeMB: number }>> {
+  await requirePermission("camera-trap", "admin");
+
+  const result = await db
+    .select({
+      cnt: count(),
+      totalSize: sum(images.fileSize),
+    })
+    .from(images)
+    .where(
+      and(
+        eq(images.deploymentId, deploymentId),
+        eq(images.compressed, false),
+        sql`${images.driveFileId} IS NOT NULL`,
+        sql`lower(${images.filename}) LIKE '%.jpg' OR lower(${images.filename}) LIKE '%.jpeg'`,
+      ),
+    );
+
+  const row = result[0];
+  return {
+    success: true,
+    data: {
+      count: row?.cnt ?? 0,
+      totalSizeMB: Math.round(((row?.totalSize as number | null) ?? 0) / (1024 * 1024) * 10) / 10,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Revert Preview (read-only stats for confirmation dialog)
+// ---------------------------------------------------------------------------
+
+export async function getRevertPreview(
+  deploymentId: number,
+): Promise<ActionResult<{ count: number; savedMB: number }>> {
+  await requirePermission("camera-trap", "admin");
+
+  const result = await db
+    .select({
+      cnt: count(),
+      totalOriginal: sum(images.originalFileSize),
+      totalCurrent: sum(images.fileSize),
+    })
+    .from(images)
+    .where(
+      and(
+        eq(images.deploymentId, deploymentId),
+        eq(images.compressed, true),
+        sql`${images.originalFileSize} IS NOT NULL`,
+        sql`${images.driveFileId} IS NOT NULL`,
+      ),
+    );
+
+  const row = result[0];
+  const origTotal = (row?.totalOriginal as number | null) ?? 0;
+  const curTotal = (row?.totalCurrent as number | null) ?? 0;
+  return {
+    success: true,
+    data: {
+      count: row?.cnt ?? 0,
+      savedMB: Math.round((origTotal - curTotal) / (1024 * 1024) * 10) / 10,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Revert Compression — restore originals from Drive revision history
+// ---------------------------------------------------------------------------
+
+const REVERT_BATCH_SIZE = 50;
+
+export async function revertCompression(
+  deploymentId: number,
+): Promise<ActionResult<{ jobId: number }>> {
+  const user = await requirePermission("camera-trap", "admin");
+
+  try {
+    await requireDeploymentAccess(user, deploymentId);
+
+    const [deployment] = await db
+      .select()
+      .from(deployments)
+      .where(eq(deployments.id, deploymentId));
+
+    if (!deployment) {
+      return { success: false, error: "Instalación no encontrada" };
+    }
+
+    if (deployment.status === "processing") {
+      return { success: false, error: "No se puede revertir mientras se está procesando" };
+    }
+
+    // Check for already-active revert or compression job
+    const [existingJob] = await db
+      .select()
+      .from(processingJobs)
+      .where(
+        and(
+          eq(processingJobs.deploymentId, deploymentId),
+          inArray(processingJobs.jobType, ["compression", "revert_compression"]),
+          inArray(processingJobs.status, ["pending", "processing"]),
+        ),
+      );
+
+    if (existingJob) {
+      return { success: false, error: "Ya hay una compresión o reversión en curso" };
+    }
+
+    // Count revertible images
+    const revertible = await db
+      .select({ cnt: count() })
+      .from(images)
+      .where(
+        and(
+          eq(images.deploymentId, deploymentId),
+          eq(images.compressed, true),
+          sql`${images.originalFileSize} IS NOT NULL`,
+          sql`${images.driveFileId} IS NOT NULL`,
+        ),
+      );
+
+    const revertCount = revertible[0]?.cnt ?? 0;
+    if (revertCount === 0) {
+      return { success: false, error: "No hay imágenes para revertir" };
+    }
+
+    const [job] = await db
+      .insert(processingJobs)
+      .values({
+        deploymentId,
+        jobType: "revert_compression",
+        status: "pending",
+        totalImages: revertCount,
+        processedImages: 0,
+        failedImages: 0,
+        createdBy: user.email,
+        statusMessage: "Preparando reversión...",
+      })
+      .returning();
+
+    // Fire and forget
+    revertJobInternal(job.id, deploymentId, user.email);
+
+    revalidatePath(CAMERA_TRAP_PATH);
+    return { success: true, data: { jobId: job.id } };
+  } catch (err) {
+    console.error("[revert] Enqueue failed:", err);
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : "Error al iniciar reversión",
+    };
+  }
+}
+
+async function revertJobInternal(
+  jobId: number,
+  deploymentId: number,
+  userEmail: string,
+): Promise<void> {
+  const startTime = Date.now();
+
+  try {
+    await db
+      .update(processingJobs)
+      .set({
+        status: "processing",
+        startedAt: new Date(),
+        statusMessage: "Revirtiendo compresión...",
+      })
+      .where(eq(processingJobs.id, jobId));
+
+    const revertibleImages = await db
+      .select()
+      .from(images)
+      .where(
+        and(
+          eq(images.deploymentId, deploymentId),
+          eq(images.compressed, true),
+          sql`${images.originalFileSize} IS NOT NULL`,
+          sql`${images.driveFileId} IS NOT NULL`,
+        ),
+      );
+
+    let reverted = 0;
+    let failed = 0;
+    const totalBatches = Math.ceil(revertibleImages.length / REVERT_BATCH_SIZE);
+
+    console.log(`[revert] Deployment ${deploymentId}: starting — ${revertibleImages.length} images to revert`);
+
+    for (let i = 0; i < revertibleImages.length; i += REVERT_BATCH_SIZE) {
+      const batchNum = Math.floor(i / REVERT_BATCH_SIZE) + 1;
+      const batch = revertibleImages.slice(i, i + REVERT_BATCH_SIZE);
+
+      // Check if job was cancelled
+      const [currentJob] = await db
+        .select({ status: processingJobs.status })
+        .from(processingJobs)
+        .where(eq(processingJobs.id, jobId));
+
+      if (currentJob?.status === "cancelled") {
+        console.log(`[revert] Deployment ${deploymentId}: cancelled by user`);
+        return;
+      }
+
+      const results = await Promise.allSettled(
+        batch.map(async (img) => {
+          const sharp = (await import("sharp")).default;
+
+          // Get revisions — we need at least 2 (original + compressed)
+          const revisions = await getFileRevisions(img.driveFileId!);
+          if (revisions.length < 2) {
+            throw new Error(`Only ${revisions.length} revision(s) — no pre-compression original`);
+          }
+
+          // Take second-to-last revision (the pre-compression original)
+          const originalRevision = revisions[revisions.length - 2];
+          const originalBuffer = await downloadFileRevision(img.driveFileId!, originalRevision.id);
+
+          // Validate the restored file is a valid image
+          const meta = await sharp(originalBuffer).metadata();
+          if (!meta.width || !meta.height) {
+            throw new Error("Restored revision is not a valid image");
+          }
+
+          // Upload restored original back to Drive
+          await updateFileContent(img.driveFileId!, originalBuffer, "image/jpeg");
+
+          // Delete cached/thumbnail files
+          const cachePath = img.path || path.join(CACHE_BASE, String(deploymentId), img.filename);
+          try { await fs.unlink(cachePath); } catch { /* may not exist */ }
+          const thumbPath = path.join(THUMBNAIL_DIR, String(deploymentId), `${img.id}.jpg`);
+          try { await fs.unlink(thumbPath); } catch { /* may not exist */ }
+
+          // Update DB: reset compressed state
+          await db
+            .update(images)
+            .set({
+              compressed: false,
+              fileSize: originalBuffer.length,
+              originalFileSize: null,
+            })
+            .where(eq(images.id, img.id));
+
+          console.log(`[revert]   ${img.filename}: restored (${(originalBuffer.length / (1024 * 1024)).toFixed(1)}MB)`);
+        }),
+      );
+
+      for (const result of results) {
+        if (result.status === "fulfilled") {
+          reverted++;
+        } else {
+          console.error("[revert]   FAILED:", result.reason);
+          failed++;
+        }
+      }
+
+      const processedSoFar = reverted + failed;
+      await db
+        .update(processingJobs)
+        .set({
+          processedImages: processedSoFar,
+          failedImages: failed,
+          statusMessage: `Revirtiendo... ${processedSoFar} de ${revertibleImages.length}`,
+        })
+        .where(eq(processingJobs.id, jobId));
+
+      console.log(
+        `[revert] Deployment ${deploymentId}: batch ${batchNum}/${totalBatches} — ${processedSoFar}/${revertibleImages.length}`
+      );
+    }
+
+    const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(0);
+
+    await db
+      .update(processingJobs)
+      .set({
+        status: "completed",
+        completedAt: new Date(),
+        processedImages: reverted + failed,
+        failedImages: failed,
+        statusMessage: `Revertidas: ${reverted}, Errores: ${failed}`,
+      })
+      .where(eq(processingJobs.id, jobId));
+
+    await db.insert(activityLog).values({
+      userEmail,
+      action: "revert_compression",
+      projectId: "camera-trap",
+      targetType: "deployment",
+      targetId: String(deploymentId),
+      details: JSON.stringify({ reverted, failed }),
+    });
+
+    console.log(
+      `[revert] Deployment ${deploymentId}: complete — ${reverted} reverted, ${failed} failed (${elapsedSec}s)`
+    );
+
+    revalidatePath(CAMERA_TRAP_PATH);
+  } catch (err) {
+    console.error(`[revert] Deployment ${deploymentId}: FAILED —`, err);
+
+    await db
+      .update(processingJobs)
+      .set({
+        status: "failed",
+        completedAt: new Date(),
+        errorMessage: err instanceof Error ? err.message : "Error desconocido",
+        statusMessage: "Error en reversión",
       })
       .where(eq(processingJobs.id, jobId));
 

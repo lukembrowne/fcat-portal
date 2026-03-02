@@ -488,26 +488,16 @@ export async function downloadFile(
   fileId: string,
   destPath: string
 ): Promise<void> {
-  const drive = getDrive();
+  await withRetry(async () => {
+    const drive = getDrive();
+    const res = await drive.files.get(
+      { fileId, alt: "media", supportsAllDrives: true },
+      { responseType: "arraybuffer" },
+    );
 
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const res = await drive.files.get(
-        { fileId, alt: "media", supportsAllDrives: true },
-        { responseType: "arraybuffer" }
-      );
-
-      await fs.mkdir(path.dirname(destPath), { recursive: true });
-      await fs.writeFile(destPath, Buffer.from(res.data as ArrayBuffer));
-      return;
-    } catch (err) {
-      if (attempt === 0) {
-        console.warn(`[Drive] Download retry for ${fileId}:`, err instanceof Error ? err.message : err);
-        continue;
-      }
-      throw err;
-    }
-  }
+    await fs.mkdir(path.dirname(destPath), { recursive: true });
+    await fs.writeFile(destPath, Buffer.from(res.data as ArrayBuffer));
+  }, `downloadFile(${fileId})`);
 }
 
 /**

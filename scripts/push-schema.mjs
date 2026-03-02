@@ -79,6 +79,7 @@ const statements = [
     classifier_model TEXT,
     confidence_threshold REAL DEFAULT 0.1,
     status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'processing', 'completed', 'failed', 'cancelled')),
+    job_type TEXT NOT NULL DEFAULT 'ml',
     pid INTEGER,
     total_images INTEGER NOT NULL DEFAULT 0,
     processed_images INTEGER NOT NULL DEFAULT 0,
@@ -500,6 +501,8 @@ const migrations = [
   `ALTER TABLE audio_files ADD COLUMN spectrogram_path TEXT`,
   // Image compression tracking (2026-02-28)
   `ALTER TABLE biochoco_images ADD COLUMN compressed INTEGER NOT NULL DEFAULT 0`,
+  // Job type column for compression vs ML jobs (2026-03-02)
+  `ALTER TABLE biochoco_processing_jobs ADD COLUMN job_type TEXT NOT NULL DEFAULT 'ml'`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }

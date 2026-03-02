@@ -194,6 +194,7 @@ export const processingJobs = sqliteTable("biochoco_processing_jobs", {
   })
     .notNull()
     .default("pending"),
+  jobType: text("job_type").notNull().default("ml"),
   pid: integer("pid"),
   totalImages: integer("total_images").notNull().default(0),
   processedImages: integer("processed_images").notNull().default(0),

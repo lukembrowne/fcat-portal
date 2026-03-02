@@ -115,6 +115,7 @@ const CAMERA_TRAP_DDL = `
     classifier_model TEXT,
     confidence_threshold REAL DEFAULT 0.1,
     status TEXT NOT NULL DEFAULT 'pending',
+    job_type TEXT NOT NULL DEFAULT 'ml',
     pid INTEGER,
     total_images INTEGER NOT NULL DEFAULT 0,
     processed_images INTEGER NOT NULL DEFAULT 0,

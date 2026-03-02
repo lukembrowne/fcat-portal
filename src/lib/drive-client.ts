@@ -93,14 +93,17 @@ async function countFilesRecursive(
   let pageToken: string | undefined;
 
   do {
-    const res = await drive.files.list({
-      q: `'${folderId}' in parents and trashed = false`,
-      fields: "nextPageToken, files(id, name, mimeType)",
-      pageSize: 1000,
-      pageToken,
-      supportsAllDrives: true,
-      includeItemsFromAllDrives: true,
-    });
+    const res = await withRetry(
+      () => drive.files.list({
+        q: `'${folderId}' in parents and trashed = false`,
+        fields: "nextPageToken, files(id, name, mimeType)",
+        pageSize: 1000,
+        pageToken,
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+      }),
+      `files.list(${folderId})`,
+    );
 
     for (const file of res.data.files ?? []) {
       if (!file.id || !file.name) continue;
@@ -151,14 +154,17 @@ export async function listFolderFiles(
   let pageToken: string | undefined;
 
   do {
-    const res = await drive.files.list({
-      q: `'${folderId}' in parents and trashed = false`,
-      fields: "nextPageToken, files(id, name, mimeType, size, modifiedTime)",
-      pageSize: 1000,
-      pageToken,
-      supportsAllDrives: true,
-      includeItemsFromAllDrives: true,
-    });
+    const res = await withRetry(
+      () => drive.files.list({
+        q: `'${folderId}' in parents and trashed = false`,
+        fields: "nextPageToken, files(id, name, mimeType, size, modifiedTime)",
+        pageSize: 1000,
+        pageToken,
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+      }),
+      `files.list(${folderId})`,
+    );
 
     for (const file of res.data.files ?? []) {
       if (!file.id || !file.name) continue;
@@ -367,14 +373,17 @@ export async function listDeploymentFolders(
   let pageToken: string | undefined;
 
   do {
-    const res = await drive.files.list({
-      q: `'${rootFolderId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
-      fields: "nextPageToken, files(id, name)",
-      pageSize: 1000,
-      pageToken,
-      supportsAllDrives: true,
-      includeItemsFromAllDrives: true,
-    });
+    const res = await withRetry(
+      () => drive.files.list({
+        q: `'${rootFolderId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+        fields: "nextPageToken, files(id, name)",
+        pageSize: 1000,
+        pageToken,
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+      }),
+      `files.list(${rootFolderId})`,
+    );
 
     for (const file of res.data.files ?? []) {
       if (file.id && file.name) {
@@ -422,14 +431,17 @@ export async function listMediaRecursive(
   // List all files and subfolders in this folder
   let pageToken: string | undefined;
   do {
-    const res = await drive.files.list({
-      q: `'${folderId}' in parents and trashed = false`,
-      fields: "nextPageToken, files(id, name, mimeType, size, modifiedTime)",
-      pageSize: 1000,
-      pageToken,
-      supportsAllDrives: true,
-      includeItemsFromAllDrives: true,
-    });
+    const res = await withRetry(
+      () => drive.files.list({
+        q: `'${folderId}' in parents and trashed = false`,
+        fields: "nextPageToken, files(id, name, mimeType, size, modifiedTime)",
+        pageSize: 1000,
+        pageToken,
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+      }),
+      `files.list(${folderId})`,
+    );
 
     for (const file of res.data.files ?? []) {
       if (!file.id || !file.name) continue;

@@ -551,14 +551,14 @@ export async function downloadDeploymentImages(
 export async function downloadFileToBuffer(
   fileId: string
 ): Promise<Buffer> {
-  const drive = getDrive();
-
-  const res = await drive.files.get(
-    { fileId, alt: "media", supportsAllDrives: true },
-    { responseType: "arraybuffer" }
-  );
-
-  return Buffer.from(res.data as ArrayBuffer);
+  return withRetry(async () => {
+    const drive = getDrive();
+    const res = await drive.files.get(
+      { fileId, alt: "media", supportsAllDrives: true },
+      { responseType: "arraybuffer" },
+    );
+    return Buffer.from(res.data as ArrayBuffer);
+  }, `downloadFileToBuffer(${fileId})`);
 }
 
 /**

@@ -1010,6 +1010,7 @@ export interface DeploymentRow {
   jobCount: number;
   totalDetections: number | null;
   distinctSpecies: number | null;
+  revertibleImageCount: number;
 }
 
 export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
@@ -1083,6 +1084,24 @@ export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
     }
   }
 
+  // Batch: revertible image counts per deployment
+  const revertibleCounts = await db
+    .select({
+      deploymentId: images.deploymentId,
+      cnt: count(),
+    })
+    .from(images)
+    .where(
+      and(
+        inArray(images.deploymentId, deploymentIds),
+        eq(images.compressed, true),
+        sql`${images.originalFileSize} IS NOT NULL`,
+        sql`${images.driveFileId} IS NOT NULL`,
+      ),
+    )
+    .groupBy(images.deploymentId);
+  const revertCountMap = new Map(revertibleCounts.map((r) => [r.deploymentId, r.cnt]));
+
   // Batch: detection counts and species counts per latest completed job
   const completedJobIds = [...completedJobMap.values()];
   const detCountMap = new Map<number, number>();
@@ -1147,6 +1166,7 @@ export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
       jobCount: jobInfo?.cnt ?? 0,
       totalDetections: completedJobId != null ? (detCountMap.get(completedJobId) ?? 0) : null,
       distinctSpecies: completedJobId != null ? (specCountMap.get(completedJobId) ?? 0) : null,
+      revertibleImageCount: revertCountMap.get(d.id) ?? 0,
     };
   });
 }
@@ -1337,8 +1357,8 @@ export async function bulkUpdateMetadata(
     if (fields.siteName !== undefined) updates.siteName = fields.siteName;
     if (fields.latitude !== undefined) updates.latitude = fields.latitude;
     if (fields.longitude !== undefined) updates.longitude = fields.longitude;
-    if (fields.dateStart !== undefined) updates.dateStart = fields.dateStart;
-    if (fields.dateEnd !== undefined) updates.dateEnd = fields.dateEnd;
+    if (fields.dateStart !== undefined) updates.dateStart = fields.dateStart || null;
+    if (fields.dateEnd !== undefined) updates.dateEnd = fields.dateEnd || null;
     if (fields.excluded !== undefined) updates.excluded = fields.excluded;
     if (fields.qaNotes !== undefined) updates.qaNotes = fields.qaNotes;
 
@@ -1435,7 +1455,7 @@ export async function deleteDeployments(
 // Delete blank images from Drive (soft-delete to trash)
 // ---------------------------------------------------------------------------
 
-const DELETE_BATCH_SIZE = 5;
+const DELETE_BATCH_SIZE = 50;
 const CACHE_BASE = path.join(process.cwd(), "data", "cache", "ct-images");
 const THUMBNAIL_BASE = path.join(process.cwd(), "data", "thumbnails");
 
@@ -2153,7 +2173,7 @@ export async function getJobImageIds(jobId: number): Promise<number[]> {
     .select({ id: images.id })
     .from(images)
     .where(eq(images.jobId, jobId))
-    .orderBy(images.id);
+    .orderBy(sql`COALESCE(${images.exifTimestamp}, ${images.fileModified})`, images.filename);
 
   return rows.map((r) => r.id);
 }
@@ -3211,7 +3231,7 @@ export async function getDeploymentImages(deploymentId: number) {
     .select()
     .from(images)
     .where(eq(images.deploymentId, deploymentId))
-    .orderBy(images.filename);
+    .orderBy(sql`COALESCE(${images.exifTimestamp}, ${images.fileModified})`, images.filename);
 }
 
 export async function getDeploymentImageIds(
@@ -3224,7 +3244,7 @@ export async function getDeploymentImageIds(
     .select({ id: images.id })
     .from(images)
     .where(eq(images.deploymentId, deploymentId))
-    .orderBy(images.filename);
+    .orderBy(sql`COALESCE(${images.exifTimestamp}, ${images.fileModified})`, images.filename);
 
   return rows.map((r) => r.id);
 }

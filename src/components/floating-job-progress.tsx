@@ -15,6 +15,7 @@ interface SSEData {
   total: number;
   failed: number;
   statusMessage?: string;
+  jobType?: string;
   startedAt?: string | null;
 }
 
@@ -155,7 +156,7 @@ export function FloatingJobProgress() {
   const jobId = sseData?.jobId || activeJob?.jobId;
   const deploymentName = activeJob?.deploymentName || "Instalación";
   const isTerminal = isTerminalStatus;
-  const jobType = activeJob?.jobType ?? "ml";
+  const jobType = sseData?.jobType ?? activeJob?.jobType ?? "ml";
   const isCompression = jobType === "compression";
   const isAnalyzing = status === "processing" && (sseData?.processed ?? 0) > 0;
   const processed = sseData?.processed ?? activeJob?.processedImages ?? 0;

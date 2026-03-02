@@ -64,6 +64,7 @@ export async function GET(request: Request) {
             total: job.totalImages,
             failed: job.failedImages,
             statusMessage: job.statusMessage,
+            jobType: job.jobType,
             startedAt: job.startedAt?.toISOString() ?? null,
           });
 

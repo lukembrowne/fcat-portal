@@ -155,6 +155,8 @@ export function FloatingJobProgress() {
   const jobId = sseData?.jobId || activeJob?.jobId;
   const deploymentName = activeJob?.deploymentName || "Instalación";
   const isTerminal = isTerminalStatus;
+  const jobType = activeJob?.jobType ?? "ml";
+  const isCompression = jobType === "compression";
   const isAnalyzing = status === "processing" && (sseData?.processed ?? 0) > 0;
   const processed = sseData?.processed ?? activeJob?.processedImages ?? 0;
   const total = sseData?.total ?? activeJob?.totalImages ?? 0;
@@ -231,7 +233,9 @@ export function FloatingJobProgress() {
           <span>
             {hasQueue
               ? `Procesando ${currentQueuePosition} de ${totalQueueSize}`
-              : `Trabajo #${jobId}`}
+              : isCompression
+                ? "Comprimiendo..."
+                : `Trabajo #${jobId}`}
           </span>
           <ChevronUp className="h-3 w-3" />
         </button>
@@ -248,7 +252,9 @@ export function FloatingJobProgress() {
           <p className="text-xs text-muted-foreground">
             {hasQueue
               ? `Procesando ${currentQueuePosition} de ${totalQueueSize}`
-              : `Trabajo #${jobId}`}
+              : isCompression
+                ? "Compresión de imágenes"
+                : `Trabajo #${jobId}`}
           </p>
         </div>
         <div className="flex items-center gap-1 ml-2 shrink-0">
@@ -338,13 +344,17 @@ export function FloatingJobProgress() {
         <div className="flex items-center gap-2">
           {!isTerminal && (
             <>
-              <Link
-                href={`/camera-trap/process?jobId=${jobId}`}
-                className="text-xs text-primary hover:underline"
-              >
-                Ver detalles
-              </Link>
-              <span className="text-muted-foreground">·</span>
+              {!isCompression && (
+                <>
+                  <Link
+                    href={`/camera-trap/process?jobId=${jobId}`}
+                    className="text-xs text-primary hover:underline"
+                  >
+                    Ver detalles
+                  </Link>
+                  <span className="text-muted-foreground">·</span>
+                </>
+              )}
               <button
                 onClick={handleCancel}
                 disabled={cancelling}
@@ -358,7 +368,7 @@ export function FloatingJobProgress() {
               </button>
             </>
           )}
-          {status === "completed" && (
+          {status === "completed" && !isCompression && (
             <Link
               href={`/camera-trap/results/${jobId}`}
               className="text-xs font-medium text-green-600 hover:underline"
@@ -366,13 +376,23 @@ export function FloatingJobProgress() {
               Ver resultados
             </Link>
           )}
-          {(status === "failed" || status === "cancelled") && (
+          {status === "completed" && isCompression && (
+            <span className="text-xs font-medium text-green-600">
+              Compresión completada
+            </span>
+          )}
+          {(status === "failed" || status === "cancelled") && !isCompression && (
             <Link
               href={`/camera-trap/process?jobId=${jobId}`}
               className="text-xs text-muted-foreground hover:underline"
             >
               Ver detalles
             </Link>
+          )}
+          {(status === "failed" || status === "cancelled") && isCompression && (
+            <span className="text-xs text-muted-foreground">
+              {status === "failed" ? "Compresión fallida" : "Compresión cancelada"}
+            </span>
           )}
         </div>
       </div>

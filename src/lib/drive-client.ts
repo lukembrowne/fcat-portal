@@ -121,9 +121,13 @@ async function countFilesRecursive(
     pageToken = res.data.nextPageToken ?? undefined;
   } while (pageToken);
 
-  for (const sub of subfolders) {
-    if (sub.name === "_frames") continue;
-    count += await countFilesRecursive(sub.id, extensions, depth + 1);
+  const subCounts = await Promise.all(
+    subfolders
+      .filter((sub) => sub.name !== "_frames")
+      .map((sub) => countFilesRecursive(sub.id, extensions, depth + 1))
+  );
+  for (const subCount of subCounts) {
+    count += subCount;
   }
 
   return count;
@@ -188,9 +192,12 @@ export async function listFolderFiles(
     pageToken = res.data.nextPageToken ?? undefined;
   } while (pageToken);
 
-  for (const sub of subfolders) {
-    if (sub.name === "_frames") continue;
-    const subFiles = await listFolderFiles(sub.id, extensions, depth + 1);
+  const subResults = await Promise.all(
+    subfolders
+      .filter((sub) => sub.name !== "_frames")
+      .map((sub) => listFolderFiles(sub.id, extensions, depth + 1))
+  );
+  for (const subFiles of subResults) {
     files.push(...subFiles);
   }
 
@@ -481,10 +488,15 @@ export async function listMediaRecursive(
   } while (pageToken);
 
   // Recurse into subfolders (skip _frames/ — our uploaded video frames)
-  for (const sub of subfolders) {
-    if (sub.name === "_frames") continue;
-    const subPath = pathPrefix ? `${pathPrefix}/${sub.name}` : sub.name;
-    const subResult = await listMediaRecursive(sub.id, subPath);
+  const subResults = await Promise.all(
+    subfolders
+      .filter((sub) => sub.name !== "_frames")
+      .map((sub) => {
+        const subPath = pathPrefix ? `${pathPrefix}/${sub.name}` : sub.name;
+        return listMediaRecursive(sub.id, subPath);
+      })
+  );
+  for (const subResult of subResults) {
     imageFiles.push(...subResult.images);
     videoFiles.push(...subResult.videos);
   }

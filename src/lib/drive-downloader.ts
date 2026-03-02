@@ -25,6 +25,7 @@ const CACHE_BASE = path.join(process.cwd(), "data", "cache", "ct-images");
 const THUMBNAIL_DIR = path.join(process.cwd(), "data", "thumbnails");
 const THUMBNAIL_WIDTH = 400;
 const THUMBNAIL_QUALITY = 80;
+const THUMB_BATCH_SIZE = 20;
 const CT_CACHE_MAX_BYTES =
   parseInt(process.env.CT_IMAGE_CACHE_MAX_GB || "30", 10) * 1024 * 1024 * 1024;
 
@@ -113,45 +114,54 @@ export async function downloadDeploymentForProcessing(
     pathMap.set(fileId, localPath);
   }
 
-  // Write cache paths into images.path and generate thumbnails
-  const thumbDir = path.join(THUMBNAIL_DIR, String(deploymentId));
-  await fs.mkdir(thumbDir, { recursive: true });
-
-  let progressCount = 0;
+  // Write cache paths into images.path
   for (const img of driveImages) {
     const localPath = pathMap.get(img.driveFileId!);
     if (!localPath) continue;
 
-    // Write cache path so ML runner and image proxy can use it
     await db
       .update(images)
       .set({ path: localPath })
       .where(eq(images.id, img.id));
+  }
 
-    progressCount++;
+  // Generate thumbnails in batches of THUMB_BATCH_SIZE
+  const thumbDir = path.join(THUMBNAIL_DIR, String(deploymentId));
+  await fs.mkdir(thumbDir, { recursive: true });
+
+  const imagesWithPaths = driveImages.filter((img) => pathMap.has(img.driveFileId!));
+
+  for (let i = 0; i < imagesWithPaths.length; i += THUMB_BATCH_SIZE) {
+    const batch = imagesWithPaths.slice(i, i + THUMB_BATCH_SIZE);
+    await Promise.all(
+      batch.map(async (img) => {
+        const localPath = pathMap.get(img.driveFileId!)!;
+        const thumbPath = path.join(thumbDir, `${img.id}.jpg`);
+        try {
+          await fs.access(thumbPath);
+        } catch {
+          // Thumbnail doesn't exist — generate from downloaded/cached image
+          try {
+            const imgData = await fs.readFile(localPath);
+            const thumb = await sharp(imgData)
+              .resize(THUMBNAIL_WIDTH)
+              .jpeg({ quality: THUMBNAIL_QUALITY })
+              .toBuffer();
+            await fs.writeFile(thumbPath, thumb);
+          } catch (err) {
+            console.warn(
+              `[drive-downloader] Thumbnail generation failed for image ${img.id}:`,
+              err instanceof Error ? err.message : err
+            );
+          }
+        }
+      })
+    );
     if (onProgress) {
-      await onProgress(progressCount, driveImages.length);
-    }
-
-    // Generate thumbnail if it doesn't exist
-    const thumbPath = path.join(thumbDir, `${img.id}.jpg`);
-    try {
-      await fs.access(thumbPath);
-    } catch {
-      // Thumbnail doesn't exist — generate from downloaded/cached image
-      try {
-        const imgData = await fs.readFile(localPath);
-        const thumb = await sharp(imgData)
-          .resize(THUMBNAIL_WIDTH)
-          .jpeg({ quality: THUMBNAIL_QUALITY })
-          .toBuffer();
-        await fs.writeFile(thumbPath, thumb);
-      } catch (err) {
-        console.warn(
-          `[drive-downloader] Thumbnail generation failed for image ${img.id}:`,
-          err instanceof Error ? err.message : err
-        );
-      }
+      await onProgress(
+        Math.min(i + THUMB_BATCH_SIZE, imagesWithPaths.length),
+        imagesWithPaths.length
+      );
     }
   }
 

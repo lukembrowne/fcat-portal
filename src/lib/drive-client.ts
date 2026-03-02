@@ -794,7 +794,7 @@ export async function uploadFramesToDrive(
 ): Promise<Map<string, string>> {
   const framesFolderId = await findOrCreateSubfolder(deploymentFolderId, "_frames");
   const result = new Map<string, string>();
-  const BATCH_SIZE = 5;
+  const BATCH_SIZE = 20;
 
   for (let i = 0; i < frames.length; i += BATCH_SIZE) {
     const batch = frames.slice(i, i + BATCH_SIZE);

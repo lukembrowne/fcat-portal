@@ -522,7 +522,7 @@ export async function downloadDeploymentImages(
   let failed = 0;
   const pathMap = new Map<string, string>(); // driveFileId → local path
 
-  const BATCH_SIZE = 10;
+  const BATCH_SIZE = 50;
 
   for (let i = 0; i < imageFiles.length; i += BATCH_SIZE) {
     const batch = imageFiles.slice(i, i + BATCH_SIZE);
@@ -827,7 +827,7 @@ export async function uploadFramesToDrive(
 }
 
 // ---------------------------------------------------------------------------
-// Update / Delete File Operations
+// Retry Helper (shared by update, revision, and trash operations)
 // ---------------------------------------------------------------------------
 
 const RATE_LIMIT_DELAYS = [1000, 2000, 4000];
@@ -852,6 +852,65 @@ async function withRetry<T>(
   }
   throw new Error("Unreachable");
 }
+
+// ---------------------------------------------------------------------------
+// File Revision Helpers (for compression undo)
+// ---------------------------------------------------------------------------
+
+export interface DriveRevision {
+  id: string;
+  modifiedTime: string | null;
+  size: number | null;
+}
+
+/**
+ * List all revisions for a file, sorted oldest-first.
+ * Used to find the pre-compression original.
+ */
+export async function getFileRevisions(fileId: string): Promise<DriveRevision[]> {
+  const drive = getDrive();
+
+  const res = await withRetry(
+    () =>
+      drive.revisions.list({
+        fileId,
+        fields: "revisions(id, modifiedTime, size)",
+      }),
+    `getFileRevisions(${fileId})`,
+  );
+
+  return (res.data.revisions ?? []).map((r) => ({
+    id: r.id!,
+    modifiedTime: r.modifiedTime ?? null,
+    size: r.size ? parseInt(r.size, 10) : null,
+  }));
+}
+
+/**
+ * Download a specific revision of a file as a Buffer.
+ * Used to restore the pre-compression original.
+ */
+export async function downloadFileRevision(
+  fileId: string,
+  revisionId: string,
+): Promise<Buffer> {
+  const drive = getDrive();
+
+  const res = await withRetry(
+    () =>
+      drive.revisions.get(
+        { fileId, revisionId, alt: "media" },
+        { responseType: "arraybuffer" },
+      ),
+    `downloadFileRevision(${fileId}, ${revisionId})`,
+  );
+
+  return Buffer.from(res.data as ArrayBuffer);
+}
+
+// ---------------------------------------------------------------------------
+// Update / Delete File Operations
+// ---------------------------------------------------------------------------
 
 /**
  * Replace the content of an existing file on Drive.

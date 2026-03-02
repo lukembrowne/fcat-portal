@@ -1,7 +1,7 @@
 "use server";
 
 import { db } from "@/db";
-import { deployments, images, videos, cameraTrapProjects, activityLog } from "@/db/schema";
+import { deployments, images, videos, cameraTrapProjects, activityLog, processingJobs } from "@/db/schema";
 import { eq, and, inArray, sql } from "drizzle-orm";
 import {
   listDeploymentFolders,
@@ -302,7 +302,7 @@ const JPEG_EXTENSIONS = new Set([".jpg", ".jpeg"]);
 
 export async function compressDeploymentImages(
   deploymentId: number,
-): Promise<ActionResult<{ compressed: number; skipped: number; failed: number; savedBytes: number }>> {
+): Promise<ActionResult<{ jobId: number }>> {
   const user = await requirePermission("camera-trap", "admin");
 
   try {
@@ -317,16 +317,28 @@ export async function compressDeploymentImages(
       return { success: false, error: "Instalación no encontrada" };
     }
 
-    // Guard: don't compress during processing
+    // Guard: don't compress during active ML processing
     if (deployment.status === "processing") {
       return { success: false, error: "No se puede comprimir mientras se está procesando" };
     }
 
-    if (!["processed", "verified", "verified_empty"].includes(deployment.status)) {
-      return { success: false, error: "La instalación debe estar procesada para comprimir" };
+    // Check for an already-active compression job on this deployment
+    const [existingJob] = await db
+      .select()
+      .from(processingJobs)
+      .where(
+        and(
+          eq(processingJobs.deploymentId, deploymentId),
+          eq(processingJobs.jobType, "compression"),
+          inArray(processingJobs.status, ["pending", "processing"]),
+        ),
+      );
+
+    if (existingJob) {
+      return { success: false, error: "Ya hay una compresión en curso para esta instalación" };
     }
 
-    // Get uncompressed images with Drive file IDs
+    // Count uncompressed JPEG images
     const uncompressedImages = await db
       .select()
       .from(images)
@@ -338,7 +350,74 @@ export async function compressDeploymentImages(
         ),
       );
 
-    // Filter to JPEG only
+    const jpegCount = uncompressedImages.filter((img) => {
+      const ext = path.extname(img.filename).toLowerCase();
+      return JPEG_EXTENSIONS.has(ext);
+    }).length;
+
+    if (jpegCount === 0) {
+      return { success: false, error: "No hay imágenes para comprimir" };
+    }
+
+    // Create compression job
+    const [job] = await db
+      .insert(processingJobs)
+      .values({
+        deploymentId,
+        jobType: "compression",
+        status: "pending",
+        totalImages: jpegCount,
+        processedImages: 0,
+        failedImages: 0,
+        createdBy: user.email,
+        statusMessage: "Preparando compresión...",
+      })
+      .returning();
+
+    // Fire and forget
+    compressJobInternal(job.id, deploymentId, user.email);
+
+    revalidatePath(CAMERA_TRAP_PATH);
+    return { success: true, data: { jobId: job.id } };
+  } catch (err) {
+    console.error("[compress] Enqueue failed:", err);
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : "Error al iniciar compresión",
+    };
+  }
+}
+
+async function compressJobInternal(
+  jobId: number,
+  deploymentId: number,
+  userEmail: string,
+): Promise<void> {
+  const startTime = Date.now();
+
+  try {
+    // Mark as processing
+    await db
+      .update(processingJobs)
+      .set({
+        status: "processing",
+        startedAt: new Date(),
+        statusMessage: "Comprimiendo imágenes...",
+      })
+      .where(eq(processingJobs.id, jobId));
+
+    // Get uncompressed JPEG images
+    const uncompressedImages = await db
+      .select()
+      .from(images)
+      .where(
+        and(
+          eq(images.deploymentId, deploymentId),
+          eq(images.compressed, false),
+          sql`${images.driveFileId} IS NOT NULL`,
+        ),
+      );
+
     const jpegImages = uncompressedImages.filter((img) => {
       const ext = path.extname(img.filename).toLowerCase();
       return JPEG_EXTENSIONS.has(ext);
@@ -348,38 +427,47 @@ export async function compressDeploymentImages(
     let compressed = 0;
     let failed = 0;
     let savedBytes = 0;
+    const totalBatches = Math.ceil(jpegImages.length / COMPRESSION_BATCH_SIZE);
 
-    // Process in batches
+    console.log(`[compress] Deployment ${deploymentId}: starting — ${jpegImages.length} images to compress`);
+
     for (let i = 0; i < jpegImages.length; i += COMPRESSION_BATCH_SIZE) {
+      const batchNum = Math.floor(i / COMPRESSION_BATCH_SIZE) + 1;
       const batch = jpegImages.slice(i, i + COMPRESSION_BATCH_SIZE);
+
+      // Check if job was cancelled
+      const [currentJob] = await db
+        .select({ status: processingJobs.status })
+        .from(processingJobs)
+        .where(eq(processingJobs.id, jobId));
+
+      if (currentJob?.status === "cancelled") {
+        console.log(`[compress] Deployment ${deploymentId}: cancelled by user`);
+        return;
+      }
 
       const results = await Promise.allSettled(
         batch.map(async (img) => {
           const sharp = (await import("sharp")).default;
 
-          // Download: try local cache first, then Drive
           let originalBuffer: Buffer;
           const cachePath = img.path || path.join(CACHE_BASE, String(deploymentId), img.filename);
 
           try {
             originalBuffer = await fs.readFile(cachePath);
           } catch {
-            // Not in cache, download from Drive
             originalBuffer = await downloadFileToBuffer(img.driveFileId!);
           }
 
           const originalSize = originalBuffer.length;
 
-          // Re-encode at quality 85
           const compressedBuffer = await sharp(originalBuffer)
             .jpeg({ quality: COMPRESSION_QUALITY })
             .toBuffer();
 
           const newSize = compressedBuffer.length;
 
-          // Only upload if actually smaller
           if (newSize >= originalSize) {
-            // Already well-compressed, just mark it
             await db
               .update(images)
               .set({ compressed: true })
@@ -387,10 +475,8 @@ export async function compressDeploymentImages(
             return { saved: 0 };
           }
 
-          // Upload compressed version back to Drive
           await updateFileContent(img.driveFileId!, compressedBuffer, "image/jpeg");
 
-          // Update local cache with compressed version
           try {
             await fs.mkdir(path.dirname(cachePath), { recursive: true });
             await fs.writeFile(cachePath, compressedBuffer);
@@ -398,7 +484,6 @@ export async function compressDeploymentImages(
             // Cache update is best-effort
           }
 
-          // Delete thumbnail so it regenerates on next request
           const thumbPath = path.join(THUMBNAIL_DIR, String(deploymentId), `${img.id}.jpg`);
           try {
             await fs.unlink(thumbPath);
@@ -406,13 +491,9 @@ export async function compressDeploymentImages(
             // Thumbnail may not exist
           }
 
-          // Update DB
           await db
             .update(images)
-            .set({
-              compressed: true,
-              fileSize: newSize,
-            })
+            .set({ compressed: true, fileSize: newSize })
             .where(eq(images.id, img.id));
 
           return { saved: originalSize - newSize };
@@ -424,15 +505,47 @@ export async function compressDeploymentImages(
           compressed++;
           savedBytes += result.value.saved;
         } else {
-          console.error("[Compress] Image failed:", result.reason);
+          console.error("[compress] Image failed:", result.reason);
           failed++;
         }
       }
+
+      const processedSoFar = compressed + failed;
+      const savedMB = (savedBytes / (1024 * 1024)).toFixed(1);
+
+      // Update job progress
+      await db
+        .update(processingJobs)
+        .set({
+          processedImages: processedSoFar,
+          failedImages: failed,
+          statusMessage: `Comprimiendo... ${processedSoFar} de ${jpegImages.length}`,
+        })
+        .where(eq(processingJobs.id, jobId));
+
+      console.log(
+        `[compress] Deployment ${deploymentId}: batch ${batchNum}/${totalBatches} — ${processedSoFar}/${jpegImages.length} images, ${savedMB} MB saved so far`
+      );
     }
+
+    const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(0);
+    const totalSavedMB = (savedBytes / (1024 * 1024)).toFixed(1);
+
+    // Mark completed
+    await db
+      .update(processingJobs)
+      .set({
+        status: "completed",
+        completedAt: new Date(),
+        processedImages: compressed + failed,
+        failedImages: failed,
+        statusMessage: `Comprimidas: ${compressed}, Omitidas: ${skipped}, Errores: ${failed}, Ahorro: ${totalSavedMB} MB`,
+      })
+      .where(eq(processingJobs.id, jobId));
 
     // Activity log
     await db.insert(activityLog).values({
-      userEmail: user.email,
+      userEmail,
       action: "compress_images",
       projectId: "camera-trap",
       targetType: "deployment",
@@ -440,13 +553,24 @@ export async function compressDeploymentImages(
       details: JSON.stringify({ compressed, skipped, failed, savedBytes }),
     });
 
+    console.log(
+      `[compress] Deployment ${deploymentId}: complete — ${compressed} compressed, ${skipped} skipped, ${failed} failed, ${totalSavedMB} MB saved (${elapsedSec}s)`
+    );
+
     revalidatePath(CAMERA_TRAP_PATH);
-    return { success: true, data: { compressed, skipped, failed, savedBytes } };
   } catch (err) {
-    console.error("[Compress] Failed:", err);
-    return {
-      success: false,
-      error: err instanceof Error ? err.message : "Error al comprimir imágenes",
-    };
+    console.error(`[compress] Deployment ${deploymentId}: FAILED —`, err);
+
+    await db
+      .update(processingJobs)
+      .set({
+        status: "failed",
+        completedAt: new Date(),
+        errorMessage: err instanceof Error ? err.message : "Error desconocido",
+        statusMessage: "Error en compresión",
+      })
+      .where(eq(processingJobs.id, jobId));
+
+    revalidatePath(CAMERA_TRAP_PATH);
   }
 }

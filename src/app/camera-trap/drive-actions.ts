@@ -217,42 +217,50 @@ export async function scanDeploymentImages(
 
     const media = await listMediaRecursive(deployment.driveFolderId);
 
-    // INSERT OR IGNORE via onConflictDoNothing on (deploymentId, driveFileId)
-    for (const img of media.images) {
+    // Batch insert images (groups of 100) with onConflictDoNothing
+    const IMG_INSERT_BATCH = 100;
+    for (let i = 0; i < media.images.length; i += IMG_INSERT_BATCH) {
+      const batch = media.images.slice(i, i + IMG_INSERT_BATCH);
       try {
         await db
           .insert(images)
-          .values({
-            deploymentId,
-            filename: img.name,
-            driveFileId: img.id,
-            fileSize: img.size,
-            fileModified: img.modifiedTime
-              ? new Date(img.modifiedTime)
-              : undefined,
-            status: "pending",
-          })
+          .values(
+            batch.map((img) => ({
+              deploymentId,
+              filename: img.name,
+              driveFileId: img.id,
+              fileSize: img.size,
+              fileModified: img.modifiedTime
+                ? new Date(img.modifiedTime)
+                : undefined,
+              status: "pending" as const,
+            }))
+          )
           .onConflictDoNothing();
       } catch {
         // Skip duplicates or other insert errors
       }
     }
 
-    // Insert video rows
-    for (const vid of media.videos) {
+    // Batch insert videos (groups of 100) with onConflictDoNothing
+    const VID_INSERT_BATCH = 100;
+    for (let i = 0; i < media.videos.length; i += VID_INSERT_BATCH) {
+      const batch = media.videos.slice(i, i + VID_INSERT_BATCH);
       try {
         await db
           .insert(videos)
-          .values({
-            deploymentId,
-            filename: vid.name,
-            driveFileId: vid.id,
-            fileSize: vid.size,
-            fileModified: vid.modifiedTime
-              ? new Date(vid.modifiedTime)
-              : undefined,
-            status: "pending",
-          })
+          .values(
+            batch.map((vid) => ({
+              deploymentId,
+              filename: vid.name,
+              driveFileId: vid.id,
+              fileSize: vid.size,
+              fileModified: vid.modifiedTime
+                ? new Date(vid.modifiedTime)
+                : undefined,
+              status: "pending" as const,
+            }))
+          )
           .onConflictDoNothing();
       } catch {
         // Skip duplicates or other insert errors

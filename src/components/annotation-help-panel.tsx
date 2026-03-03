@@ -69,6 +69,10 @@ export function AnnotationHelpPanel() {
               <ShortcutRow keys="r" desc="Rechazar detección" />
               <ShortcutRow keys="d / ⌫ / Supr" desc="Eliminar detección" />
               <ShortcutRow keys="b" desc="Confirmar/desconfirmar vacía" />
+              <ShortcutRow keys="h" desc="Ocultar/mostrar cajas" />
+              <ShortcutRow keys="Scroll" desc="Zoom" />
+              <ShortcutRow keys="Espacio+arrastrar" desc="Mover vista" />
+              <ShortcutRow keys="z" desc="Restablecer zoom" />
               <ShortcutRow keys="Esc" desc="Deseleccionar / limpiar búsqueda" />
             </div>
           </div>

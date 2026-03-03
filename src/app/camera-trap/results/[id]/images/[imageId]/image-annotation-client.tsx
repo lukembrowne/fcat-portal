@@ -24,6 +24,7 @@ import {
 import { useState, useCallback, useRef, useTransition, useMemo, useOptimistic } from "react";
 import Link from "next/link";
 import { useAnnotationShortcuts } from "@/hooks/use-annotation-shortcuts";
+import { useImageZoom } from "@/hooks/use-image-zoom";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -43,7 +44,10 @@ import {
   createSpecies,
   toggleConfirmedBlank,
   toggleStarred,
+  toggleSetupTag,
+  applySetupTagDate,
 } from "@/app/camera-trap/actions";
+import { Camera } from "lucide-react";
 import type { Species } from "@/db/schema";
 import type { TaxonomicRank } from "@/lib/types";
 
@@ -61,6 +65,7 @@ interface ImageAnnotationClientProps {
   confirmedBlank: boolean;
   starred: boolean;
   starredBy: string | null;
+  setupTag: "deployment" | "retrieval" | null;
 }
 
 export function ImageAnnotationClient({
@@ -77,9 +82,11 @@ export function ImageAnnotationClient({
   confirmedBlank,
   starred,
   starredBy,
+  setupTag,
 }: ImageAnnotationClientProps) {
   const router = useRouter();
   const [selectedBoxId, setSelectedBoxId] = useState<number | null>(null);
+  const [bboxesHidden, setBboxesHidden] = useState(false);
   const [deleteDialogDetectionId, setDeleteDialogDetectionId] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -88,6 +95,13 @@ export function ImageAnnotationClient({
   const [nameDisplay, setNameDisplay] = useState<NameDisplay>(getStoredDisplay);
   const [isConfirmedBlank, setOptimisticBlank] = useOptimistic(confirmedBlank);
   const [isStarred, setOptimisticStarred] = useOptimistic(starred);
+  const [currentSetupTag, setOptimisticSetupTag] = useOptimistic(setupTag);
+  const [dateSuggestion, setDateSuggestion] = useState<{
+    field: "validStart" | "validEnd";
+    value: string;
+    deploymentId: number;
+  } | null>(null);
+  const [suggestionDismissed, setSuggestionDismissed] = useState(false);
 
   const cycleDisplay = useCallback(() => {
     setNameDisplay((prev) => {
@@ -139,6 +153,9 @@ export function ImageAnnotationClient({
     type: "mammal",
   });
   const [addSpeciesError, setAddSpeciesError] = useState<string | null>(null);
+
+  const isDialogOpen = deleteDialogDetectionId !== null || addSpeciesOpen;
+  const { containerRef: zoomContainerRef, wrapperRef: zoomWrapperRef, style: zoomStyle, panHandlers, scale: zoomScale, isPanning, resetZoom } = useImageZoom({ disabled: isDialogOpen });
 
   const selectedDetection = detections.find((d) => d.id === selectedBoxId) ?? null;
 
@@ -229,6 +246,9 @@ export function ImageAnnotationClient({
         );
         if (result.success) {
           router.refresh();
+        } else {
+          console.error("assignSpecies failed:", result.error);
+          alert(result.error);
         }
       });
     },
@@ -307,6 +327,37 @@ export function ImageAnnotationClient({
     });
   }, [addSpeciesForm, router]);
 
+  const handleToggleSetupTag = useCallback(
+    (tag: "deployment" | "retrieval") => {
+      const newTag = currentSetupTag === tag ? null : tag;
+      setOptimisticSetupTag(newTag);
+      setSuggestionDismissed(false);
+      startTransition(async () => {
+        const result = await toggleSetupTag(imageId, tag);
+        if (result.success && result.data.suggestion) {
+          setDateSuggestion(result.data.suggestion);
+        } else {
+          setDateSuggestion(null);
+        }
+        router.refresh();
+      });
+    },
+    [imageId, currentSetupTag, router]
+  );
+
+  const handleApplyDate = useCallback(() => {
+    if (!dateSuggestion) return;
+    startTransition(async () => {
+      await applySetupTagDate(
+        dateSuggestion.deploymentId,
+        dateSuggestion.field,
+        dateSuggestion.value
+      );
+      setDateSuggestion(null);
+      router.refresh();
+    });
+  }, [dateSuggestion, router]);
+
   // --- Keyboard shortcuts ---
 
   useAnnotationShortcuts({
@@ -317,14 +368,20 @@ export function ImageAnnotationClient({
     onDeleteSelected: handleDeleteSelected,
     onToggleConfirmedBlank: handleToggleConfirmedBlank,
     onToggleStarred: handleToggleStarred,
-    isDialogOpen: deleteDialogDetectionId !== null || addSpeciesOpen,
+    onToggleSetupDeployment: () => handleToggleSetupTag("deployment"),
+    onToggleSetupRetrieval: () => handleToggleSetupTag("retrieval"),
+    onToggleBboxes: () => setBboxesHidden((prev) => !prev),
+    onResetZoom: resetZoom,
+    isDialogOpen,
     onNext: () => {
       if (nextImageId) {
+        resetZoom();
         router.push(`/camera-trap/results/${jobId}/images/${nextImageId}`);
       }
     },
     onPrev: () => {
       if (prevImageId) {
+        resetZoom();
         router.push(`/camera-trap/results/${jobId}/images/${prevImageId}`);
       }
     },
@@ -391,19 +448,86 @@ export function ImageAnnotationClient({
             speciesList={speciesList}
           />
 
+          {/* Setup tag buttons */}
+          <div className="flex items-center gap-2">
+            <Button
+              variant={currentSetupTag === "deployment" ? "default" : "outline"}
+              size="sm"
+              className={`h-7 text-xs gap-1.5 ${currentSetupTag === "deployment" ? "bg-blue-600 hover:bg-blue-700 text-white" : ""}`}
+              onClick={() => handleToggleSetupTag("deployment")}
+              title="Marcar como instalación (i)"
+            >
+              <Camera className="size-3.5" />
+              Instalación
+            </Button>
+            <Button
+              variant={currentSetupTag === "retrieval" ? "default" : "outline"}
+              size="sm"
+              className={`h-7 text-xs gap-1.5 ${currentSetupTag === "retrieval" ? "bg-orange-600 hover:bg-orange-700 text-white" : ""}`}
+              onClick={() => handleToggleSetupTag("retrieval")}
+              title="Marcar como recogida (t)"
+            >
+              <Camera className="size-3.5" />
+              Recogida
+            </Button>
+          </div>
+
+          {/* Date suggestion banner */}
+          {dateSuggestion && !suggestionDismissed && (
+            <div className="flex items-center gap-3 px-3 py-2 rounded-md border bg-blue-50 border-blue-200 text-sm">
+              <div className="flex-1">
+                <span className="text-blue-800">
+                  Timestamp: {dateSuggestion.value.replace("T", " ")}
+                  {" — "}
+                  ¿Usar como{" "}
+                  {dateSuggestion.field === "validStart"
+                    ? "fecha de inicio válida"
+                    : "fecha de fin válida"}
+                  ?
+                </span>
+              </div>
+              <Button
+                variant="default"
+                size="sm"
+                className="h-7 text-xs bg-blue-600 hover:bg-blue-700"
+                onClick={handleApplyDate}
+              >
+                Aplicar
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => setSuggestionDismissed(true)}
+              >
+                Cerrar
+              </Button>
+            </div>
+          )}
+
           {/* Image with bbox overlay */}
-          <div className="flex-1 min-h-0 rounded-lg overflow-hidden border bg-black flex items-center">
-            <BBoxOverlay
-              src={src}
-              alt={alt}
-              boxes={displayBoxes}
-              selectedBoxId={selectedBoxId}
-              onBoxClick={(box) =>
-                setSelectedBoxId((prev) => (prev === box.id ? null : box.id))
-              }
-              editable
-              onDrawComplete={handleDrawComplete}
-            />
+          <div
+            ref={zoomContainerRef}
+            className={`flex-1 min-h-0 rounded-lg overflow-hidden border bg-black flex items-center relative ${isPanning ? "cursor-grab" : ""}`}
+          >
+            <div ref={zoomWrapperRef} style={zoomStyle} {...panHandlers}>
+              <BBoxOverlay
+                src={src}
+                alt={alt}
+                boxes={bboxesHidden ? [] : displayBoxes}
+                selectedBoxId={selectedBoxId}
+                onBoxClick={(box) =>
+                  setSelectedBoxId((prev) => (prev === box.id ? null : box.id))
+                }
+                editable={!isPanning}
+                onDrawComplete={handleDrawComplete}
+              />
+            </div>
+            {zoomScale > 1 && (
+              <span className="absolute top-2 right-2 px-1.5 py-0.5 text-xs font-mono bg-black/60 text-white rounded">
+                {zoomScale.toFixed(1)}x
+              </span>
+            )}
           </div>
 
           {/* Help panel + star + back link */}

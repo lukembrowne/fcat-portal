@@ -13,6 +13,10 @@ export const SHORTCUTS = [
   { key: "d / ⌫ / Supr", description: "Eliminar detección", category: "annotation" },
   { key: "b", description: "Confirmar/desconfirmar imagen vacía", category: "annotation" },
   { key: "s", description: "Destacar/quitar destacado", category: "annotation" },
+  { key: "i", description: "Marcar como instalación", category: "annotation" },
+  { key: "t", description: "Marcar como recogida (retiro)", category: "annotation" },
+  { key: "h", description: "Ocultar/mostrar cajas", category: "annotation" },
+  { key: "z", description: "Restablecer zoom", category: "navigation" },
 ] as const;
 
 interface AnnotationShortcutOptions {
@@ -27,6 +31,10 @@ interface AnnotationShortcutOptions {
   onDeleteSelected?: () => void;
   onToggleConfirmedBlank?: () => void;
   onToggleStarred?: () => void;
+  onToggleSetupDeployment?: () => void;
+  onToggleSetupRetrieval?: () => void;
+  onToggleBboxes?: () => void;
+  onResetZoom?: () => void;
   onAssignSpeciesByIndex?: (index: number) => void;
   isDialogOpen?: boolean;
   detectionCount?: number;
@@ -134,6 +142,30 @@ export function useAnnotationShortcuts(opts: AnnotationShortcutOptions) {
           if (!hasModifier && !o.isDialogOpen) {
             e.preventDefault();
             o.onToggleStarred?.();
+          }
+          break;
+        case "i":
+          if (!hasModifier && !o.isDialogOpen) {
+            e.preventDefault();
+            o.onToggleSetupDeployment?.();
+          }
+          break;
+        case "t":
+          if (!hasModifier && !o.isDialogOpen) {
+            e.preventDefault();
+            o.onToggleSetupRetrieval?.();
+          }
+          break;
+        case "h":
+          if (!hasModifier && !o.isDialogOpen) {
+            e.preventDefault();
+            o.onToggleBboxes?.();
+          }
+          break;
+        case "z":
+          if (!hasModifier && !o.isDialogOpen) {
+            e.preventDefault();
+            o.onResetZoom?.();
           }
           break;
         case "d":

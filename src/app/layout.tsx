@@ -7,6 +7,7 @@ import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar";
 import { SidebarNav } from "@/components/sidebar-nav";
 import { TopHeader } from "@/components/top-header";
 import { FloatingJobProgress } from "@/components/floating-job-progress";
+import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -53,6 +54,7 @@ export default async function RootLayout({
         ) : (
           <main className="container mx-auto px-4 py-6">{children}</main>
         )}
+        <Toaster position="bottom-left" />
         <Script
           defer
           src="https://analytics.fcat-ecuador.org/script.js"

@@ -15,6 +15,9 @@ interface ProgressData {
   error?: string;
   statusMessage?: string;
   startedAt?: string | null;
+  downloadedImages?: number;
+  downloadTotal?: number;
+  cachedImages?: number;
 }
 
 interface ProgressTrackerProps {
@@ -132,9 +135,35 @@ export function ProgressTracker({
     return () => clearInterval(id);
   }, [startedAtStr, progressStatus]);
 
-  const percentage = progress
-    ? Math.round((progress.processed / Math.max(progress.total, 1)) * 100)
-    : 0;
+  const dlTotal = progress?.downloadTotal ?? 0;
+  const dlDone = progress?.downloadedImages ?? 0;
+  const isDownloading = (progress?.status === "processing") && dlTotal > 0 && dlDone < dlTotal;
+
+  const percentage = isDownloading
+    ? dlTotal > 0 ? Math.round((dlDone / dlTotal) * 100) : 0
+    : progress
+      ? Math.round((progress.processed / Math.max(progress.total, 1)) * 100)
+      : 0;
+
+  // ETA for download phase OR processing phase (compression/ML/revert)
+  let etaStr: string | null = null;
+  if (isDownloading && dlDone > 0 && startedAtStr) {
+    const elapsedMs = Date.now() - new Date(startedAtStr).getTime();
+    const rate = dlDone / (elapsedMs / 1000);
+    const remaining = dlTotal - dlDone;
+    const etaMs = rate > 0 ? (remaining / rate) * 1000 : 0;
+    if (etaMs > 0) {
+      etaStr = `~${formatDuration(etaMs)} restante`;
+    }
+  } else if (progress?.status === "processing" && (progress?.processed ?? 0) > 0 && (progress?.processed ?? 0) < (progress?.total ?? 0) && startedAtStr) {
+    const elapsedMs = Date.now() - new Date(startedAtStr).getTime();
+    const rate = (progress?.processed ?? 0) / (elapsedMs / 1000);
+    const remaining = (progress?.total ?? 0) - (progress?.processed ?? 0);
+    const etaMs = rate > 0 ? (remaining / rate) * 1000 : 0;
+    if (etaMs > 0) {
+      etaStr = `~${formatDuration(etaMs)} restante`;
+    }
+  }
 
   // Use statusMessage from backend during active processing, static labels for terminal states
   const terminalLabels: Record<string, string> = {
@@ -145,6 +174,7 @@ export function ProgressTracker({
   const status = progress?.status || "pending";
   const isTerminal = status in terminalLabels;
   const isAnalyzing = status === "processing" && progress?.processed !== undefined && progress.processed > 0;
+  const hasProgress = isDownloading || isAnalyzing;
   const statusLabel = isTerminal
     ? terminalLabels[status]
     : progress?.statusMessage || (status === "pending" ? "Esperando inicio..." : "Procesando imágenes...");
@@ -173,7 +203,7 @@ export function ProgressTracker({
 
         <div className="space-y-2">
           <div className="h-4 bg-muted rounded-full overflow-hidden">
-            {status === "processing" && !isAnalyzing ? (
+            {status === "processing" && !hasProgress ? (
               <div className="h-full w-full bg-primary/30 rounded-full relative overflow-hidden">
                 <div className="absolute inset-0 bg-primary/60 rounded-full animate-pulse" />
               </div>
@@ -193,10 +223,14 @@ export function ProgressTracker({
               />
             )}
           </div>
-          {isAnalyzing || isTerminal ? (
+          {hasProgress || isTerminal ? (
             <div className="flex justify-between text-sm text-muted-foreground">
               <span>
-                {progress?.processed || 0} de {progress?.total || 0} imágenes
+                {isDownloading
+                  ? <>{dlDone} de {dlTotal} archivos</>
+                  : <>{progress?.processed || 0} de {progress?.total || 0} imágenes</>
+                }
+                {etaStr && <> · {etaStr}</>}
                 {elapsed && <> · {elapsed}</>}
               </span>
               <span>{percentage}%</span>

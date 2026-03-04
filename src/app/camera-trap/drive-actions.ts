@@ -283,7 +283,7 @@ export async function scanDeploymentImages(
       .set({
         totalImages: totalImageRows.length,
         totalVideos: totalVideoRows.length,
-        status: "scanned",
+        ...(deployment.status === "unscanned" ? { status: "scanned" as const } : {}),
         updatedAt: new Date(),
       })
       .where(eq(deployments.id, deploymentId));
@@ -304,7 +304,7 @@ export async function scanDeploymentImages(
 // ---------------------------------------------------------------------------
 
 const COMPRESSION_QUALITY = 85;
-const COMPRESSION_BATCH_SIZE = 50;
+const COMPRESSION_BATCH_SIZE = 10;
 const CACHE_BASE = path.join(process.cwd(), "data", "cache", "ct-images");
 const THUMBNAIL_DIR = path.join(process.cwd(), "data", "thumbnails");
 
@@ -398,6 +398,144 @@ export async function compressDeploymentImages(
   }
 }
 
+/**
+ * Compress a batch of JPEG images. Reusable by both standalone compression
+ * jobs and the optional compress-before-ML flow.
+ *
+ * @param uploadToDrive - true: upload compressed to Drive + delete thumbnail (standalone).
+ *                        false: write to cache only, skip Drive upload (inline during ML processing).
+ */
+export async function compressImageBatch(
+  imgs: Array<{ id: number; filename: string; path: string | null; driveFileId: string | null; deploymentId: number }>,
+  options: { uploadToDrive: boolean; jobId: number; deploymentId: number },
+  onProgress?: (compressed: number, failed: number, savedBytes: number) => Promise<void>,
+): Promise<{ compressed: number; failed: number; savedBytes: number }> {
+  let compressed = 0;
+  let failed = 0;
+  let savedBytes = 0;
+  const totalBatches = Math.ceil(imgs.length / COMPRESSION_BATCH_SIZE);
+  const startTime = Date.now();
+
+  for (let i = 0; i < imgs.length; i += COMPRESSION_BATCH_SIZE) {
+    const batchNum = Math.floor(i / COMPRESSION_BATCH_SIZE) + 1;
+    const batch = imgs.slice(i, i + COMPRESSION_BATCH_SIZE);
+
+    // Check if job was cancelled
+    const [currentJob] = await db
+      .select({ status: processingJobs.status })
+      .from(processingJobs)
+      .where(eq(processingJobs.id, options.jobId));
+
+    if (currentJob?.status === "cancelled") {
+      console.log(`[compress] Deployment ${options.deploymentId}: cancelled by user`);
+      break;
+    }
+
+    const batchStart = Date.now();
+
+    const results = await Promise.allSettled(
+      batch.map(async (img) => {
+        const sharp = (await import("sharp")).default;
+
+        let originalBuffer: Buffer;
+        const cachePath = img.path || path.join(CACHE_BASE, String(options.deploymentId), img.filename);
+
+        try {
+          originalBuffer = await fs.readFile(cachePath);
+        } catch {
+          if (!img.driveFileId) throw new Error(`No cache and no driveFileId for ${img.filename}`);
+          originalBuffer = await downloadFileToBuffer(img.driveFileId);
+        }
+
+        const originalSize = originalBuffer.length;
+
+        const compressedBuffer = await sharp(originalBuffer)
+          .jpeg({ quality: COMPRESSION_QUALITY })
+          .toBuffer();
+
+        // Validate compressed output
+        const [origMeta, compMeta] = await Promise.all([
+          sharp(originalBuffer).metadata(),
+          sharp(compressedBuffer).metadata(),
+        ]);
+        if (
+          origMeta.width !== compMeta.width ||
+          origMeta.height !== compMeta.height ||
+          compMeta.format !== "jpeg"
+        ) {
+          throw new Error(
+            `Validation failed: ${origMeta.width}x${origMeta.height} → ${compMeta.width}x${compMeta.height} ${compMeta.format}`,
+          );
+        }
+
+        const newSize = compressedBuffer.length;
+
+        if (newSize >= originalSize) {
+          await db
+            .update(images)
+            .set({ compressed: true, originalFileSize: originalSize })
+            .where(eq(images.id, img.id));
+          return { saved: 0 };
+        }
+
+        // Upload to Drive only for standalone compression
+        if (options.uploadToDrive && img.driveFileId) {
+          await updateFileContent(img.driveFileId, compressedBuffer, "image/jpeg");
+        }
+
+        // Always write to cache
+        try {
+          await fs.mkdir(path.dirname(cachePath), { recursive: true });
+          await fs.writeFile(cachePath, compressedBuffer);
+        } catch {
+          // Cache update is best-effort
+        }
+
+        // Delete thumbnail only for standalone (Drive originals changed)
+        if (options.uploadToDrive) {
+          const thumbPath = path.join(THUMBNAIL_DIR, String(options.deploymentId), `${img.id}.jpg`);
+          try { await fs.unlink(thumbPath); } catch { /* may not exist */ }
+        }
+
+        await db
+          .update(images)
+          .set({ compressed: true, fileSize: newSize, originalFileSize: originalSize })
+          .where(eq(images.id, img.id));
+
+        return { saved: originalSize - newSize };
+      }),
+    );
+
+    for (const result of results) {
+      if (result.status === "fulfilled") {
+        compressed++;
+        savedBytes += result.value.saved;
+      } else {
+        console.error("[compress]   FAILED:", result.reason);
+        failed++;
+      }
+    }
+
+    const batchMs = Date.now() - batchStart;
+    const batchSec = (batchMs / 1000).toFixed(1);
+    const processedSoFar = compressed + failed;
+    const savedMB = (savedBytes / (1024 * 1024)).toFixed(1);
+    const totalElapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    const rate = processedSoFar / ((Date.now() - startTime) / 1000);
+    const etaSec = rate > 0 ? ((imgs.length - processedSoFar) / rate).toFixed(0) : "?";
+    const rssMB = (process.memoryUsage.rss() / (1024 * 1024)).toFixed(0);
+    console.log(
+      `[compress] Deployment ${options.deploymentId}: batch ${batchNum}/${totalBatches} — ${processedSoFar}/${imgs.length} (${batchSec}s batch, ${totalElapsed}s total, ~${etaSec}s remaining, ${savedMB} MB saved, RSS: ${rssMB}MB)`
+    );
+
+    if (onProgress) {
+      await onProgress(compressed, failed, savedBytes);
+    }
+  }
+
+  return { compressed, failed, savedBytes };
+}
+
 async function compressJobInternal(
   jobId: number,
   deploymentId: number,
@@ -406,16 +544,6 @@ async function compressJobInternal(
   const startTime = Date.now();
 
   try {
-    // Mark as processing
-    await db
-      .update(processingJobs)
-      .set({
-        status: "processing",
-        startedAt: new Date(),
-        statusMessage: "Comprimiendo imágenes...",
-      })
-      .where(eq(processingJobs.id, jobId));
-
     // Get uncompressed JPEG images
     const uncompressedImages = await db
       .select()
@@ -434,159 +562,38 @@ async function compressJobInternal(
     });
 
     const skipped = uncompressedImages.length - jpegImages.length;
-    let compressed = 0;
-    let failed = 0;
-    let savedBytes = 0;
-    const totalBatches = Math.ceil(jpegImages.length / COMPRESSION_BATCH_SIZE);
+
+    // Mark as processing with count
+    await db
+      .update(processingJobs)
+      .set({
+        status: "processing",
+        startedAt: new Date(),
+        statusMessage: `Comprimiendo... 0 de ${jpegImages.length}`,
+      })
+      .where(eq(processingJobs.id, jobId));
 
     console.log(`[compress] Deployment ${deploymentId}: starting — ${jpegImages.length} images to compress`);
 
-    for (let i = 0; i < jpegImages.length; i += COMPRESSION_BATCH_SIZE) {
-      const batchNum = Math.floor(i / COMPRESSION_BATCH_SIZE) + 1;
-      const batch = jpegImages.slice(i, i + COMPRESSION_BATCH_SIZE);
-
-      // Check if job was cancelled
-      const [currentJob] = await db
-        .select({ status: processingJobs.status })
-        .from(processingJobs)
-        .where(eq(processingJobs.id, jobId));
-
-      if (currentJob?.status === "cancelled") {
-        console.log(`[compress] Deployment ${deploymentId}: cancelled by user`);
-        return;
-      }
-
-      const batchStart = Date.now();
-      let batchDownloads = 0;
-      let batchCacheHits = 0;
-      let batchUploads = 0;
-      let batchSkippedLarger = 0;
-
-      const results = await Promise.allSettled(
-        batch.map(async (img) => {
-          const sharp = (await import("sharp")).default;
-
-          let originalBuffer: Buffer;
-          let fromCache = false;
-          const cachePath = img.path || path.join(CACHE_BASE, String(deploymentId), img.filename);
-
-          const dlStart = Date.now();
-          try {
-            originalBuffer = await fs.readFile(cachePath);
-            fromCache = true;
-            batchCacheHits++;
-          } catch {
-            originalBuffer = await downloadFileToBuffer(img.driveFileId!);
-            batchDownloads++;
-          }
-          const dlMs = Date.now() - dlStart;
-
-          const originalSize = originalBuffer.length;
-          const origMB = (originalSize / (1024 * 1024)).toFixed(1);
-
-          const compressStart = Date.now();
-          const compressedBuffer = await sharp(originalBuffer)
-            .jpeg({ quality: COMPRESSION_QUALITY })
-            .toBuffer();
-          const compressMs = Date.now() - compressStart;
-
-          // Validate compressed output: dimensions must match and format must be JPEG
-          const [origMeta, compMeta] = await Promise.all([
-            sharp(originalBuffer).metadata(),
-            sharp(compressedBuffer).metadata(),
-          ]);
-          if (
-            origMeta.width !== compMeta.width ||
-            origMeta.height !== compMeta.height ||
-            compMeta.format !== "jpeg"
-          ) {
-            throw new Error(
-              `Validation failed: ${origMeta.width}x${origMeta.height} → ${compMeta.width}x${compMeta.height} ${compMeta.format}`,
-            );
-          }
-
-          const newSize = compressedBuffer.length;
-          const newMB = (newSize / (1024 * 1024)).toFixed(1);
-
-          if (newSize >= originalSize) {
-            batchSkippedLarger++;
-            await db
-              .update(images)
-              .set({ compressed: true, originalFileSize: originalSize })
-              .where(eq(images.id, img.id));
-            console.log(`[compress]   ${img.filename}: ${origMB}MB → ${newMB}MB (no savings, skipped) [${fromCache ? "cache" : "download"}:${dlMs}ms, sharp:${compressMs}ms]`);
-            return { saved: 0 };
-          }
-
-          const uploadStart = Date.now();
-          await updateFileContent(img.driveFileId!, compressedBuffer, "image/jpeg");
-          const uploadMs = Date.now() - uploadStart;
-          batchUploads++;
-
-          try {
-            await fs.mkdir(path.dirname(cachePath), { recursive: true });
-            await fs.writeFile(cachePath, compressedBuffer);
-          } catch {
-            // Cache update is best-effort
-          }
-
-          const thumbPath = path.join(THUMBNAIL_DIR, String(deploymentId), `${img.id}.jpg`);
-          try {
-            await fs.unlink(thumbPath);
-          } catch {
-            // Thumbnail may not exist
-          }
-
-          await db
-            .update(images)
-            .set({ compressed: true, fileSize: newSize, originalFileSize: originalSize })
-            .where(eq(images.id, img.id));
-
-          const savedMBImg = ((originalSize - newSize) / (1024 * 1024)).toFixed(1);
-          console.log(`[compress]   ${img.filename}: ${origMB}MB → ${newMB}MB (saved ${savedMBImg}MB) [${fromCache ? "cache" : "download"}:${dlMs}ms, sharp:${compressMs}ms, upload:${uploadMs}ms]`);
-
-          return { saved: originalSize - newSize };
-        }),
-      );
-
-      for (const result of results) {
-        if (result.status === "fulfilled") {
-          compressed++;
-          savedBytes += result.value.saved;
-        } else {
-          console.error("[compress]   FAILED:", result.reason);
-          failed++;
-        }
-      }
-
-      const processedSoFar = compressed + failed;
-      const savedMB = (savedBytes / (1024 * 1024)).toFixed(1);
-      const batchMs = Date.now() - batchStart;
-      const batchSec = (batchMs / 1000).toFixed(1);
-      const totalElapsedSec = (Date.now() - startTime) / 1000;
-      const imgsPerMin = totalElapsedSec > 0 ? ((processedSoFar / totalElapsedSec) * 60).toFixed(0) : "—";
-      const remaining = jpegImages.length - processedSoFar;
-      const etaMin = totalElapsedSec > 0 && processedSoFar > 0
-        ? ((remaining / (processedSoFar / totalElapsedSec)) / 60).toFixed(1)
-        : "—";
-
-      // Update job progress
-      await db
-        .update(processingJobs)
-        .set({
-          processedImages: processedSoFar,
-          failedImages: failed,
-          statusMessage: `Comprimiendo... ${processedSoFar} de ${jpegImages.length}`,
-        })
-        .where(eq(processingJobs.id, jobId));
-
-      console.log(
-        `[compress] Deployment ${deploymentId}: batch ${batchNum}/${totalBatches} done in ${batchSec}s — ${processedSoFar}/${jpegImages.length} images, ${savedMB} MB saved total [cache:${batchCacheHits}, downloads:${batchDownloads}, uploads:${batchUploads}, skipped:${batchSkippedLarger}] — ${imgsPerMin} img/min, ETA ${etaMin} min`
-      );
-    }
+    const result = await compressImageBatch(
+      jpegImages.map((img) => ({ ...img, deploymentId })),
+      { uploadToDrive: true, jobId, deploymentId },
+      async (compressed, failed, savedBytes) => {
+        const processedSoFar = compressed + failed;
+        const savedMB = (savedBytes / (1024 * 1024)).toFixed(1);
+        await db
+          .update(processingJobs)
+          .set({
+            processedImages: processedSoFar,
+            failedImages: failed,
+            statusMessage: `Comprimiendo... ${processedSoFar} de ${jpegImages.length} · ${savedMB} MB ahorrado`,
+          })
+          .where(eq(processingJobs.id, jobId));
+      },
+    );
 
     const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(0);
-    const totalSavedMB = (savedBytes / (1024 * 1024)).toFixed(1);
+    const totalSavedMB = (result.savedBytes / (1024 * 1024)).toFixed(1);
 
     // Mark completed
     await db
@@ -594,9 +601,9 @@ async function compressJobInternal(
       .set({
         status: "completed",
         completedAt: new Date(),
-        processedImages: compressed + failed,
-        failedImages: failed,
-        statusMessage: `Comprimidas: ${compressed}, Omitidas: ${skipped}, Errores: ${failed}, Ahorro: ${totalSavedMB} MB`,
+        processedImages: result.compressed + result.failed,
+        failedImages: result.failed,
+        statusMessage: `Comprimidas: ${result.compressed}, Omitidas: ${skipped}, Errores: ${result.failed}, Ahorro: ${totalSavedMB} MB`,
       })
       .where(eq(processingJobs.id, jobId));
 
@@ -607,14 +614,12 @@ async function compressJobInternal(
       projectId: "camera-trap",
       targetType: "deployment",
       targetId: String(deploymentId),
-      details: JSON.stringify({ compressed, skipped, failed, savedBytes }),
+      details: JSON.stringify({ compressed: result.compressed, skipped, failed: result.failed, savedBytes: result.savedBytes }),
     });
 
     console.log(
-      `[compress] Deployment ${deploymentId}: complete — ${compressed} compressed, ${skipped} skipped, ${failed} failed, ${totalSavedMB} MB saved (${elapsedSec}s)`
+      `[compress] Deployment ${deploymentId}: complete — ${result.compressed} compressed, ${skipped} skipped, ${result.failed} failed, ${totalSavedMB} MB saved (${elapsedSec}s)`
     );
-
-    revalidatePath(CAMERA_TRAP_PATH);
   } catch (err) {
     console.error(`[compress] Deployment ${deploymentId}: FAILED —`, err);
 
@@ -627,8 +632,6 @@ async function compressJobInternal(
         statusMessage: "Error en compresión",
       })
       .where(eq(processingJobs.id, jobId));
-
-    revalidatePath(CAMERA_TRAP_PATH);
   }
 }
 
@@ -650,6 +653,44 @@ export async function getCompressionPreview(
     .where(
       and(
         eq(images.deploymentId, deploymentId),
+        eq(images.compressed, false),
+        sql`${images.driveFileId} IS NOT NULL`,
+        sql`lower(${images.filename}) LIKE '%.jpg' OR lower(${images.filename}) LIKE '%.jpeg'`,
+      ),
+    );
+
+  const row = result[0];
+  return {
+    success: true,
+    data: {
+      count: row?.cnt ?? 0,
+      totalSizeMB: Math.round(((row?.totalSize as number | null) ?? 0) / (1024 * 1024) * 10) / 10,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Compression Preview — batch (aggregate stats across multiple deployments)
+// ---------------------------------------------------------------------------
+
+export async function getCompressionPreviewBatch(
+  deploymentIds: number[],
+): Promise<ActionResult<{ count: number; totalSizeMB: number }>> {
+  await requirePermission("camera-trap", "admin");
+
+  if (deploymentIds.length === 0) {
+    return { success: true, data: { count: 0, totalSizeMB: 0 } };
+  }
+
+  const result = await db
+    .select({
+      cnt: count(),
+      totalSize: sum(images.fileSize),
+    })
+    .from(images)
+    .where(
+      and(
+        inArray(images.deploymentId, deploymentIds),
         eq(images.compressed, false),
         sql`${images.driveFileId} IS NOT NULL`,
         sql`lower(${images.filename}) LIKE '%.jpg' OR lower(${images.filename}) LIKE '%.jpeg'`,
@@ -707,7 +748,7 @@ export async function getRevertPreview(
 // Revert Compression — restore originals from Drive revision history
 // ---------------------------------------------------------------------------
 
-const REVERT_BATCH_SIZE = 50;
+const REVERT_BATCH_SIZE = 10;
 
 export async function revertCompression(
   deploymentId: number,
@@ -904,8 +945,12 @@ async function revertJobInternal(
         })
         .where(eq(processingJobs.id, jobId));
 
+      const batchElapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+      const revertRate = processedSoFar / ((Date.now() - startTime) / 1000);
+      const revertEtaSec = revertRate > 0 ? ((revertibleImages.length - processedSoFar) / revertRate).toFixed(0) : "?";
+      const revertRssMB = (process.memoryUsage.rss() / (1024 * 1024)).toFixed(0);
       console.log(
-        `[revert] Deployment ${deploymentId}: batch ${batchNum}/${totalBatches} — ${processedSoFar}/${revertibleImages.length}`
+        `[revert] Deployment ${deploymentId}: batch ${batchNum}/${totalBatches} — ${processedSoFar}/${revertibleImages.length} (${batchElapsed}s total, ~${revertEtaSec}s remaining, RSS: ${revertRssMB}MB)`
       );
     }
 
@@ -934,8 +979,6 @@ async function revertJobInternal(
     console.log(
       `[revert] Deployment ${deploymentId}: complete — ${reverted} reverted, ${failed} failed (${elapsedSec}s)`
     );
-
-    revalidatePath(CAMERA_TRAP_PATH);
   } catch (err) {
     console.error(`[revert] Deployment ${deploymentId}: FAILED —`, err);
 
@@ -948,7 +991,5 @@ async function revertJobInternal(
         statusMessage: "Error en reversión",
       })
       .where(eq(processingJobs.id, jobId));
-
-    revalidatePath(CAMERA_TRAP_PATH);
   }
 }

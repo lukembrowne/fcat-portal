@@ -17,6 +17,9 @@ interface SSEData {
   statusMessage?: string;
   jobType?: string;
   startedAt?: string | null;
+  downloadedImages?: number;
+  downloadTotal?: number;
+  cachedImages?: number;
 }
 
 export function FloatingJobProgress() {
@@ -158,10 +161,38 @@ export function FloatingJobProgress() {
   const isTerminal = isTerminalStatus;
   const jobType = sseData?.jobType ?? activeJob?.jobType ?? "ml";
   const isCompression = jobType === "compression";
+  const isRevert = jobType === "revert_compression";
+  const isCompressionLike = isCompression || isRevert;
+  const dlTotal = sseData?.downloadTotal ?? activeJob?.downloadTotal ?? 0;
+  const dlDone = sseData?.downloadedImages ?? activeJob?.downloadedImages ?? 0;
+  const isDownloading = status === "processing" && dlTotal > 0 && dlDone < dlTotal;
   const isAnalyzing = status === "processing" && (sseData?.processed ?? 0) > 0;
+  const hasProgress = isDownloading || isAnalyzing;
   const processed = sseData?.processed ?? activeJob?.processedImages ?? 0;
   const total = sseData?.total ?? activeJob?.totalImages ?? 0;
-  const percentage = total > 0 ? Math.round((processed / total) * 100) : 0;
+  const percentage = isDownloading
+    ? dlTotal > 0 ? Math.round((dlDone / dlTotal) * 100) : 0
+    : total > 0 ? Math.round((processed / total) * 100) : 0;
+
+  // ETA for download phase OR processing phase (compression/ML/revert)
+  let etaStr: string | null = null;
+  if (isDownloading && dlDone > 0 && startedAtStr) {
+    const elapsedMs = Date.now() - new Date(startedAtStr).getTime();
+    const rate = dlDone / (elapsedMs / 1000);
+    const remaining = dlTotal - dlDone;
+    const etaMs = rate > 0 ? (remaining / rate) * 1000 : 0;
+    if (etaMs > 0) {
+      etaStr = `~${formatDuration(etaMs)} restante`;
+    }
+  } else if (status === "processing" && processed > 0 && processed < total && startedAtStr) {
+    const elapsedMs = Date.now() - new Date(startedAtStr).getTime();
+    const rate = processed / (elapsedMs / 1000);
+    const remaining = total - processed;
+    const etaMs = rate > 0 ? (remaining / rate) * 1000 : 0;
+    if (etaMs > 0) {
+      etaStr = `~${formatDuration(etaMs)} restante`;
+    }
+  }
 
   const statusMessage = isTerminal
     ? status === "completed"
@@ -236,7 +267,9 @@ export function FloatingJobProgress() {
               ? `Procesando ${currentQueuePosition} de ${totalQueueSize}`
               : isCompression
                 ? "Comprimiendo..."
-                : `Trabajo #${jobId}`}
+                : isRevert
+                  ? "Revirtiendo..."
+                  : `Trabajo #${jobId}`}
           </span>
           <ChevronUp className="h-3 w-3" />
         </button>
@@ -255,7 +288,9 @@ export function FloatingJobProgress() {
               ? `Procesando ${currentQueuePosition} de ${totalQueueSize}`
               : isCompression
                 ? "Compresión de imágenes"
-                : `Trabajo #${jobId}`}
+                : isRevert
+                  ? "Revirtiendo compresión"
+                  : `Trabajo #${jobId}`}
           </p>
         </div>
         <div className="flex items-center gap-1 ml-2 shrink-0">
@@ -286,7 +321,7 @@ export function FloatingJobProgress() {
         {/* Progress bar */}
         <div className="space-y-1">
           <div className="h-2 bg-muted rounded-full overflow-hidden">
-            {status === "processing" && !isAnalyzing ? (
+            {status === "processing" && !hasProgress ? (
               <div className="h-full w-full bg-primary/30 rounded-full relative overflow-hidden">
                 <div className="absolute inset-0 bg-primary/60 rounded-full animate-pulse" />
               </div>
@@ -300,13 +335,17 @@ export function FloatingJobProgress() {
               />
             )}
           </div>
-          {(isAnalyzing || isTerminal) && (
+          {(hasProgress || isTerminal) && (
             <p className="text-xs text-muted-foreground">
-              {processed} de {total} imágenes · {percentage}%
+              {isDownloading
+                ? <>{dlDone} de {dlTotal} archivos · {percentage}%</>
+                : <>{processed} de {total} imágenes · {percentage}%</>
+              }
+              {etaStr && <> · {etaStr}</>}
               {elapsed && <> · {elapsed}</>}
             </p>
           )}
-          {!isAnalyzing && !isTerminal && elapsed && (
+          {!hasProgress && !isTerminal && elapsed && (
             <p className="text-xs text-muted-foreground">{elapsed}</p>
           )}
         </div>
@@ -345,7 +384,7 @@ export function FloatingJobProgress() {
         <div className="flex items-center gap-2">
           {!isTerminal && (
             <>
-              {!isCompression && (
+              {!isCompressionLike && (
                 <>
                   <Link
                     href={`/camera-trap/process?jobId=${jobId}`}
@@ -369,7 +408,7 @@ export function FloatingJobProgress() {
               </button>
             </>
           )}
-          {status === "completed" && !isCompression && (
+          {status === "completed" && !isCompressionLike && (
             <Link
               href={`/camera-trap/results/${jobId}`}
               className="text-xs font-medium text-green-600 hover:underline"
@@ -382,7 +421,12 @@ export function FloatingJobProgress() {
               Compresión completada
             </span>
           )}
-          {(status === "failed" || status === "cancelled") && !isCompression && (
+          {status === "completed" && isRevert && (
+            <span className="text-xs font-medium text-green-600">
+              Reversión completada
+            </span>
+          )}
+          {(status === "failed" || status === "cancelled") && !isCompressionLike && (
             <Link
               href={`/camera-trap/process?jobId=${jobId}`}
               className="text-xs text-muted-foreground hover:underline"
@@ -393,6 +437,11 @@ export function FloatingJobProgress() {
           {(status === "failed" || status === "cancelled") && isCompression && (
             <span className="text-xs text-muted-foreground">
               {status === "failed" ? "Compresión fallida" : "Compresión cancelada"}
+            </span>
+          )}
+          {(status === "failed" || status === "cancelled") && isRevert && (
+            <span className="text-xs text-muted-foreground">
+              {status === "failed" ? "Reversión fallida" : "Reversión cancelada"}
             </span>
           )}
         </div>

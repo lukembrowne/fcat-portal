@@ -2,7 +2,15 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
+
+const GRID_CLASSES: Record<number, string> = {
+  2: "grid-cols-1 sm:grid-cols-2",
+  3: "grid-cols-2 md:grid-cols-3",
+  4: "grid-cols-2 md:grid-cols-3 lg:grid-cols-4",
+  6: "grid-cols-3 md:grid-cols-4 lg:grid-cols-6",
+};
 
 export interface ImageGridItem {
   id: number;
@@ -15,6 +23,7 @@ export interface ImageGridItem {
   videoFilename?: string | null;
   confirmedBlank?: boolean;
   starred?: boolean;
+  setupTag?: string | null;
   detections: {
     id: number;
     species: string | null;
@@ -31,9 +40,50 @@ interface ImageGridProps {
   selectable?: boolean;
   selectedIds?: Set<number>;
   onToggleSelect?: (id: number) => void;
+  columns?: number;
 }
 
-export function ImageGrid({ images, jobId, basePath, selectable, selectedIds, onToggleSelect }: ImageGridProps) {
+export function ImageGrid({ images, jobId, basePath, selectable, selectedIds, onToggleSelect, columns = 4 }: ImageGridProps) {
+  const pathname = usePathname();
+  const gridClass = GRID_CLASSES[columns] ?? GRID_CLASSES[4];
+
+  // Restore scroll position on mount.
+  // The sidebar is position:fixed and SidebarProvider uses min-h-svh,
+  // so the window is the actual scroll container (not <main>).
+  // Polls via rAF because after revalidatePath the Router Cache is
+  // invalidated and the grid re-fetches through Suspense, so content
+  // may not be rendered yet when this effect first runs.
+  useEffect(() => {
+    const key = `grid-scroll:${pathname}`;
+    const saved = sessionStorage.getItem(key);
+    if (!saved) return;
+    const scrollY = parseInt(saved, 10);
+
+    let cancelled = false;
+    let attempts = 0;
+    let settled = 0;
+    const tryRestore = () => {
+      if (cancelled) return;
+      if (Math.abs(window.scrollY - scrollY) >= 5) {
+        window.scrollTo(0, scrollY);
+        settled = 0;
+      } else if (++settled >= 3) {
+        sessionStorage.removeItem(key);
+        return;
+      }
+      if (++attempts < 120) requestAnimationFrame(tryRestore);
+      else sessionStorage.removeItem(key);
+    };
+    requestAnimationFrame(tryRestore);
+
+    return () => { cancelled = true; };
+  }, [pathname]);
+
+  // Save scroll position before navigating to an image
+  const saveScroll = useCallback(() => {
+    sessionStorage.setItem(`grid-scroll:${pathname}`, String(window.scrollY));
+  }, [pathname]);
+
   if (images.length === 0) {
     return (
       <p className="text-muted-foreground text-center py-8">
@@ -73,7 +123,7 @@ export function ImageGrid({ images, jobId, basePath, selectable, selectedIds, on
               Imágenes ({standaloneImages.length})
             </h3>
           )}
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+          <div className={`grid ${gridClass} gap-3`}>
             {standaloneImages.map((img) => (
               <ImageCard
                 key={img.id}
@@ -83,6 +133,7 @@ export function ImageGrid({ images, jobId, basePath, selectable, selectedIds, on
                 selectable={selectable}
                 selected={selectedIds?.has(img.id)}
                 onToggleSelect={onToggleSelect}
+                onBeforeNavigate={saveScroll}
               />
             ))}
           </div>
@@ -96,7 +147,7 @@ export function ImageGrid({ images, jobId, basePath, selectable, selectedIds, on
             </svg>
             {group.filename} ({group.frames.length} cuadros)
           </h3>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+          <div className={`grid ${gridClass} gap-3`}>
             {group.frames.map((img) => (
               <ImageCard
                 key={img.id}
@@ -106,6 +157,7 @@ export function ImageGrid({ images, jobId, basePath, selectable, selectedIds, on
                 selectable={selectable}
                 selected={selectedIds?.has(img.id)}
                 onToggleSelect={onToggleSelect}
+                onBeforeNavigate={saveScroll}
               />
             ))}
           </div>
@@ -122,6 +174,7 @@ function ImageCard({
   selectable,
   selected,
   onToggleSelect,
+  onBeforeNavigate,
 }: {
   image: ImageGridItem;
   jobId?: number;
@@ -129,6 +182,7 @@ function ImageCard({
   selectable?: boolean;
   selected?: boolean;
   onToggleSelect?: (id: number) => void;
+  onBeforeNavigate?: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [isVisible, setIsVisible] = useState(false);
@@ -197,16 +251,39 @@ function ImageCard({
         <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-2 pt-6">
           <Badge
             variant="secondary"
-            className="bg-white/90 text-xs truncate max-w-full"
+            className={`text-xs truncate max-w-full ${
+              topSpecies.verificationStatus === "verified" || topSpecies.verificationStatus === "corrected"
+                ? "bg-blue-100 text-blue-800 border border-blue-300"
+                : topSpecies.verificationStatus === "rejected"
+                  ? "bg-red-100 text-red-700 border border-red-300"
+                  : "bg-white/90"
+            }`}
           >
-            {topSpecies.species}{" "}
-            {topSpecies.confidence != null &&
-              `${(topSpecies.confidence * 100).toFixed(0)}%`}
+            {topSpecies.species}
+            {topSpecies.verificationStatus === "verified" || topSpecies.verificationStatus === "corrected"
+              ? " ✓"
+              : topSpecies.verificationStatus === "rejected"
+                ? " ✗"
+                : topSpecies.confidence != null
+                  ? ` ${(topSpecies.confidence * 100).toFixed(0)}%`
+                  : null}
           </Badge>
         </div>
       )}
 
-      {image.confirmedBlank ? (
+      {image.setupTag === "deployment" ? (
+        <div className="absolute top-2 right-2">
+          <Badge variant="outline" className="bg-blue-50 border-blue-300 text-blue-700 text-xs">
+            Instalación
+          </Badge>
+        </div>
+      ) : image.setupTag === "retrieval" ? (
+        <div className="absolute top-2 right-2">
+          <Badge variant="outline" className="bg-orange-50 border-orange-300 text-orange-700 text-xs">
+            Recogida
+          </Badge>
+        </div>
+      ) : image.confirmedBlank ? (
         <div className="absolute top-2 right-2">
           <Badge variant="outline" className="bg-green-50 border-green-300 text-green-700 text-xs">
             Vacía ✓
@@ -273,5 +350,5 @@ function ImageCard({
     </div>
   );
 
-  return <Link href={href}>{cardContent}</Link>;
+  return <Link href={href} onClick={onBeforeNavigate}>{cardContent}</Link>;
 }

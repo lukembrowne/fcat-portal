@@ -174,17 +174,18 @@ export function DetectionCardStrip({
               <span className="text-[10px] text-muted-foreground ml-auto">
                 {confidence}%
               </span>
-              <button
-                type="button"
+              <div
+                role="button"
+                tabIndex={-1}
                 onClick={(e) => {
                   e.stopPropagation();
                   onDeleteDetection(det.id);
                 }}
-                className="p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-destructive/10 hover:text-destructive transition-opacity flex-shrink-0"
+                className="p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-destructive/10 hover:text-destructive transition-opacity flex-shrink-0 cursor-pointer"
                 title="Eliminar detección"
               >
                 <Trash2 className="h-3 w-3" />
-              </button>
+              </div>
             </div>
 
             {/* Species + status */}

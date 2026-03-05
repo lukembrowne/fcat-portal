@@ -76,6 +76,7 @@ interface JobContext {
   failedCount: number;
   totalDetections: number;
   resolve: (result: MLRunResult) => void;
+  startedAt: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -384,6 +385,17 @@ function spawnModelServer(): void {
       } else if (msg.type === "error" && !msg.image) {
         console.error(`[ml-runner] ${msg.message}`);
       } else if (msg.type === "complete") {
+        const elapsedSec = ((Date.now() - job.startedAt) / 1000).toFixed(1);
+        const mem = process.memoryUsage();
+        const rssMB = (mem.rss / 1024 / 1024).toFixed(0);
+        const heapMB = (mem.heapUsed / 1024 / 1024).toFixed(0);
+        console.log(
+          `[ml-runner] Job ${job.jobId} complete: ${job.processedCount} processed, ` +
+          `${job.failedCount} failed, ${job.totalDetections} detections in ${elapsedSec}s ` +
+          `(RSS: ${rssMB}MB, heap: ${heapMB}MB)` +
+          (msg.cancelled ? " [CANCELLED]" : "")
+        );
+
         const result: MLRunResult = {
           success: !msg.cancelled,
           totalProcessed: job.processedCount,
@@ -600,6 +612,7 @@ export async function runMLPredictions(
       failedCount: 0,
       totalDetections: 0,
       resolve,
+      startedAt: Date.now(),
     };
 
     serverStatus = "busy";

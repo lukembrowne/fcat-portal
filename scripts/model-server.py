@@ -26,6 +26,7 @@ import json
 import sys
 import os
 import select
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 
@@ -207,6 +208,8 @@ def process_job(config, detector, classifier):
     processed = 0
     cancelled = False
 
+    job_start = time.monotonic()
+
     emit({"type": "info", "message": f"Job config: {total} images, batch_size={batch_size}, num_workers={num_workers}, {num_batches} batches"})
 
     for batch_start in range(0, total, batch_size):
@@ -217,6 +220,7 @@ def process_job(config, detector, classifier):
 
         batch_paths = image_paths[batch_start:batch_start + batch_size]
         batch_num = batch_start // batch_size + 1
+        batch_start_time = time.monotonic()
 
         # Pre-load images in parallel using thread pool
         if num_workers > 0:
@@ -227,11 +231,14 @@ def process_job(config, detector, classifier):
             emit({"type": "info", "message": f"Batch {batch_num}/{num_batches}: loading {len(batch_paths)} images sequentially"})
             loaded_batch = [load_image_safe(p) for p in batch_paths]
 
+        load_elapsed = time.monotonic() - batch_start_time
         failed_in_batch = sum(1 for item in loaded_batch if item["error"])
         if failed_in_batch > 0:
             emit({"type": "info", "message": f"Batch {batch_num}: {failed_in_batch}/{len(batch_paths)} images failed to load"})
 
         # Process each pre-loaded image
+        batch_detections = 0
+        batch_species = {}
         for i, item in enumerate(loaded_batch):
             # Also check cancel between individual images for responsiveness
             if check_cancel():
@@ -264,7 +271,15 @@ def process_job(config, detector, classifier):
                     "detections": detections_list,
                 })
                 total_detections += len(detections_list)
+                batch_detections += len(detections_list)
                 processed += 1
+
+                # Track species found in this batch
+                for det in detections_list:
+                    clf = det.get("classification")
+                    if clf and clf.get("species"):
+                        sp = clf["species"]
+                        batch_species[sp] = batch_species.get(sp, 0) + 1
 
             except Exception as e:
                 emit({
@@ -276,6 +291,36 @@ def process_job(config, detector, classifier):
 
         if cancelled:
             break
+
+        # Batch summary
+        batch_elapsed = time.monotonic() - batch_start_time
+        infer_elapsed = batch_elapsed - load_elapsed
+        imgs_per_sec = len(batch_paths) / batch_elapsed if batch_elapsed > 0 else 0
+        species_str = ", ".join(f"{sp}={n}" for sp, n in sorted(batch_species.items())) if batch_species else "none"
+        job_elapsed = time.monotonic() - job_start
+        emit({
+            "type": "info",
+            "message": (
+                f"Batch {batch_num}/{num_batches} done: "
+                f"{len(batch_paths)} imgs in {batch_elapsed:.1f}s "
+                f"(load {load_elapsed:.1f}s, infer {infer_elapsed:.1f}s, "
+                f"{imgs_per_sec:.1f} img/s) — "
+                f"{batch_detections} detections [{species_str}] — "
+                f"cumulative: {processed}/{total} ({total_detections} det, {job_elapsed:.0f}s elapsed)"
+            ),
+        })
+
+    job_elapsed = time.monotonic() - job_start
+    overall_rate = processed / job_elapsed if job_elapsed > 0 else 0
+
+    emit({
+        "type": "info",
+        "message": (
+            f"Job complete: {processed}/{total} images in {job_elapsed:.1f}s "
+            f"({overall_rate:.1f} img/s), {total_detections} total detections"
+            + (", CANCELLED" if cancelled else "")
+        ),
+    })
 
     complete_msg = {
         "type": "complete",

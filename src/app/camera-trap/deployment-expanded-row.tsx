@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useTransition } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -10,28 +9,14 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { StatusBadge } from "@/components/status-badge";
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import {
-  ExternalLink,
-  Pencil,
-  Play,
-  ScanSearch,
   Loader2,
   Trash2,
-  CheckCircle,
-  Undo2,
   Save,
-  Archive,
 } from "lucide-react";
 import type { DeploymentRow } from "./actions";
 import { DeploymentEditForm } from "./deployment-edit-form";
-import { getDeployment, queueProcessing, markVerifiedEmpty, undoVerifiedEmpty, updateDeploymentQa } from "./actions";
+import { getDeployment, updateDeploymentQa } from "./actions";
 import { DeleteJobDialog } from "./delete-job-dialog";
-import { scanDeploymentImages, compressDeploymentImages } from "./drive-actions";
 
 interface JobInfo {
   id: number;
@@ -52,7 +37,6 @@ interface CtProject {
 interface DeploymentExpandedRowProps {
   deployment: DeploymentRow;
   canEdit: boolean;
-  isAdmin: boolean;
   distinctProjects: CtProject[];
   cachedJobs: JobInfo[] | undefined;
   onCacheJobs: (deploymentId: number, jobs: JobInfo[]) => void;
@@ -61,21 +45,15 @@ interface DeploymentExpandedRowProps {
 export function DeploymentExpandedRow({
   deployment,
   canEdit,
-  isAdmin,
   distinctProjects,
   cachedJobs,
   onCacheJobs,
 }: DeploymentExpandedRowProps) {
-  const router = useRouter();
   const [editing, setEditing] = useState(false);
   const [jobs, setJobs] = useState<JobInfo[]>(cachedJobs ?? []);
   const [loadingJobs, setLoadingJobs] = useState(!cachedJobs);
   const [jobsError, setJobsError] = useState(false);
-  const [scanning, startScanning] = useTransition();
-  const [processingAction, startProcessing] = useTransition();
-  const [verifying, startVerifying] = useTransition();
   const [deleteJobId, setDeleteJobId] = useState<number | null>(null);
-  const [compressing, startCompressing] = useTransition();
 
   // QA inline editing state
   const [excluded, setExcluded] = useState(deployment.excluded);
@@ -123,6 +101,18 @@ export function DeploymentExpandedRow({
     setQaNotes(deployment.qaNotes ?? "");
   }, [deployment.excluded, deployment.validStart, deployment.validEnd, deployment.qaNotes]);
 
+  // Listen for "expand-and-edit" event from overflow menu
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail === deployment.id) {
+        setEditing(true);
+      }
+    };
+    window.addEventListener("expand-and-edit", handler);
+    return () => window.removeEventListener("expand-and-edit", handler);
+  }, [deployment.id]);
+
   useEffect(() => {
     if (cachedJobs) return;
     let cancelled = false;
@@ -154,51 +144,6 @@ export function DeploymentExpandedRow({
       cancelled = true;
     };
   }, [deployment.id, cachedJobs, onCacheJobs]);
-
-  const handleScan = () => {
-    startScanning(async () => {
-      await scanDeploymentImages(deployment.id);
-    });
-  };
-
-  const handleProcess = () => {
-    startProcessing(async () => {
-      await queueProcessing([deployment.id]);
-      window.dispatchEvent(new Event("job-started"));
-    });
-  };
-
-  const handleVerifyEmpty = () => {
-    startVerifying(async () => {
-      const result = await markVerifiedEmpty(deployment.id);
-      if (!result.success) {
-        console.error("[markVerifiedEmpty]", result.error);
-      }
-      router.refresh();
-    });
-  };
-
-  const handleUndoVerify = () => {
-    startVerifying(async () => {
-      const result = await undoVerifiedEmpty(deployment.id);
-      if (!result.success) {
-        console.error("[undoVerifiedEmpty]", result.error);
-      }
-      router.refresh();
-    });
-  };
-
-  const handleCompress = () => {
-    startCompressing(async () => {
-      const result = await compressDeploymentImages(deployment.id);
-      if (result.success) {
-        window.dispatchEvent(new Event("job-started"));
-        router.refresh();
-      } else {
-        alert(result.error);
-      }
-    });
-  };
 
   const handleJobDeleted = (jobId: number) => {
     const updated = jobs.filter((j) => j.id !== jobId);
@@ -376,120 +321,6 @@ export function DeploymentExpandedRow({
               )}
             </div>
 
-            <div className="flex items-center gap-2 flex-wrap">
-              {deployment.driveFolderId && (
-                <a
-                  href={`https://drive.google.com/drive/folders/${deployment.driveFolderId}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 text-xs text-blue-600 hover:underline"
-                >
-                  <ExternalLink className="h-3 w-3" />
-                  Abrir en Drive
-                </a>
-              )}
-              {canEdit && (
-                <>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setEditing(true)}
-                    className="h-7 text-xs"
-                  >
-                    <Pencil className="h-3 w-3 mr-1" />
-                    Editar
-                  </Button>
-                  {(deployment.status === "unscanned" || deployment.status === "scanned") && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handleScan}
-                      disabled={scanning}
-                      className="h-7 text-xs"
-                    >
-                      {scanning ? (
-                        <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-                      ) : (
-                        <ScanSearch className="h-3 w-3 mr-1" />
-                      )}
-                      Buscar imágenes
-                    </Button>
-                  )}
-                  {deployment.status !== "processing" && (
-                    <Button
-                      size="sm"
-                      onClick={handleProcess}
-                      disabled={processingAction}
-                      className="h-7 text-xs"
-                    >
-                      {processingAction ? (
-                        <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-                      ) : (
-                        <Play className="h-3 w-3 mr-1" />
-                      )}
-                      Procesar
-                    </Button>
-                  )}
-                  {deployment.status === "processed" && (deployment.totalDetections ?? 0) === 0 && (
-                    <TooltipProvider>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={handleVerifyEmpty}
-                            disabled={verifying}
-                            className="h-7 text-xs"
-                          >
-                            {verifying ? (
-                              <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-                            ) : (
-                              <CheckCircle className="h-3 w-3 mr-1" />
-                            )}
-                            Verificar vacío
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent side="top" className="max-w-xs">
-                          Confirma que esta instalación no tiene detecciones de fauna. Úsalo después de revisar las fotos y verificar que realmente no hay animales.
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                  )}
-                  {deployment.status === "verified_empty" && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handleUndoVerify}
-                      disabled={verifying}
-                      className="h-7 text-xs"
-                    >
-                      {verifying ? (
-                        <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-                      ) : (
-                        <Undo2 className="h-3 w-3 mr-1" />
-                      )}
-                      Deshacer verificación
-                    </Button>
-                  )}
-                </>
-              )}
-              {isAdmin && deployment.status !== "processing" && (deployment.totalImages ?? 0) > 0 && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleCompress}
-                  disabled={compressing}
-                  className="h-7 text-xs"
-                >
-                  {compressing ? (
-                    <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-                  ) : (
-                    <Archive className="h-3 w-3 mr-1" />
-                  )}
-                  Comprimir Imágenes
-                </Button>
-              )}
-            </div>
           </div>
 
           {/* Right: Processing History */}

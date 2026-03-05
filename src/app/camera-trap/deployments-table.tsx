@@ -1,19 +1,18 @@
 "use client";
 
 import { useState, useMemo, useCallback, useRef, useTransition, useEffect, Fragment } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   useReactTable,
   getCoreRowModel,
   getSortedRowModel,
-  getPaginationRowModel,
+
   getFilteredRowModel,
   getExpandedRowModel,
   flexRender,
   type ColumnDef,
   type SortingState,
-  type PaginationState,
+
   type RowSelectionState,
   type ExpandedState,
 } from "@tanstack/react-table";
@@ -33,16 +32,10 @@ import {
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
-  ChevronLeft,
   ChevronRight,
-  ChevronsLeft,
-  ChevronsRight,
   Search,
   RefreshCw,
   Loader2,
-  Eye,
-  Images,
-  Play,
   Info,
   Download,
 } from "lucide-react";
@@ -54,11 +47,12 @@ import {
 } from "@/components/ui/tooltip";
 import type { DeploymentRow } from "./actions";
 import { DeploymentExpandedRow } from "./deployment-expanded-row";
+import { DeploymentRowActions } from "./deployment-row-actions";
 import { BatchEditDialog } from "./batch-edit-dialog";
 import { BatchDeleteDialog } from "./batch-delete-dialog";
 import { syncWithDrive, scanDeploymentImages } from "./drive-actions";
 import { matchOdkDeployments } from "./odk-actions";
-import { queueProcessing } from "./actions";
+import { ProcessConfirmDialog } from "./process-confirm-dialog";
 
 interface JobInfo {
   id: number;
@@ -91,10 +85,7 @@ export function DeploymentsTable({
 }: DeploymentsTableProps) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [globalFilter, setGlobalFilter] = useState("");
-  const [pagination, setPagination] = useState<PaginationState>({
-    pageIndex: 0,
-    pageSize: 25,
-  });
+
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
   const [expanded, setExpanded] = useState<ExpandedState>({});
   const [projectFilter, setProjectFilter] = useState<string>("");
@@ -103,8 +94,7 @@ export function DeploymentsTable({
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [batchEditOpen, setBatchEditOpen] = useState(false);
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
-  const [processing, startProcessing] = useTransition();
-  const [processingRowId, setProcessingRowId] = useState<number | null>(null);
+  const [processDialogIds, setProcessDialogIds] = useState<number[] | null>(null);
   const [exporting, setExporting] = useState(false);
   const router = useRouter();
 
@@ -290,79 +280,25 @@ export function DeploymentsTable({
         enableGlobalFilter: false,
       },
       {
-        id: "preview",
+        id: "actions",
         header: "",
-        cell: ({ row }) => {
-          const hasImages = (row.original.totalImages ?? 0) > 0;
-          if (!hasImages) return null;
-          return (
-            <Link
-              href={`/camera-trap/${row.original.id}/preview`}
-              onClick={(e) => e.stopPropagation()}
-              className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 hover:underline whitespace-nowrap"
-            >
-              <Images className="h-3.5 w-3.5" />
-              Imagenes
-            </Link>
-          );
-        },
-        enableSorting: false,
-        enableGlobalFilter: false,
-      },
-      ...(canEdit
-        ? [
-            {
-              id: "process",
-              header: "",
-              cell: ({ row }: { row: { original: DeploymentRow } }) => {
-                const d = row.original;
-                const hasImages = (d.totalImages ?? 0) > 0;
-                const canProcess =
-                  hasImages &&
-                  d.status !== "unscanned" &&
-                  d.status !== "processing";
-                if (!canProcess) return null;
-                const isProcessing = processingRowId === d.id;
-                return (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleRowProcess(d.id);
-                    }}
-                    disabled={isProcessing || processing}
-                    className="inline-flex items-center gap-1 text-xs text-green-600 hover:text-green-800 whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {isProcessing ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Play className="h-3.5 w-3.5" />
-                    )}
-                    Procesar
-                  </button>
-                );
-              },
-              enableSorting: false,
-              enableGlobalFilter: false,
-            } satisfies ColumnDef<DeploymentRow>,
-          ]
-        : []),
-      {
-        id: "results",
-        header: "",
-        cell: ({ row }) => {
-          const jobId = row.original.lastCompletedJobId;
-          if (!jobId) return null;
-          return (
-            <Link
-              href={`/camera-trap/results/${jobId}`}
-              onClick={(e) => e.stopPropagation()}
-              className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 hover:underline whitespace-nowrap"
-            >
-              <Eye className="h-3.5 w-3.5" />
-              Resultados
-            </Link>
-          );
-        },
+        cell: ({ row }) => (
+          <DeploymentRowActions
+            deployment={row.original}
+            canEdit={canEdit}
+            isAdmin={isAdmin}
+            onExpandAndEdit={() => {
+              // Expand the row first, then trigger edit mode
+              if (!row.getIsExpanded()) {
+                row.toggleExpanded();
+              }
+              // Dispatch event for the expanded row to pick up
+              setTimeout(() => {
+                window.dispatchEvent(new CustomEvent("expand-and-edit", { detail: row.original.id }));
+              }, 50);
+            }}
+          />
+        ),
         enableSorting: false,
         enableGlobalFilter: false,
       },
@@ -394,7 +330,7 @@ export function DeploymentsTable({
     );
 
     return cols;
-  }, [canEdit, processingRowId, processing]);
+  }, [canEdit, isAdmin]);
 
   // Accordion behavior: only allow one expanded row at a time
   const handleExpandedChange = useCallback((updater: ExpandedState | ((old: ExpandedState) => ExpandedState)) => {
@@ -416,19 +352,18 @@ export function DeploymentsTable({
   const table = useReactTable({
     data: filteredData,
     columns,
-    state: { sorting, globalFilter, pagination, rowSelection, expanded },
+    state: { sorting, globalFilter, rowSelection, expanded },
     onSortingChange: setSorting,
     onGlobalFilterChange: setGlobalFilter,
-    onPaginationChange: (updater) => {
-      setPagination(updater);
-      setExpanded({}); // Collapse on page change
-    },
+
+
     onRowSelectionChange: setRowSelection,
     onExpandedChange: handleExpandedChange,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
+
+
     getExpandedRowModel: getExpandedRowModel(),
     autoResetExpanded: false,
     enableRowSelection: true,
@@ -503,24 +438,12 @@ export function DeploymentsTable({
   };
 
   const handleBatchProcess = () => {
-    startProcessing(async () => {
-      const result = await queueProcessing(selectedIds);
-      if (result.success) {
-        setRowSelection({});
-        window.dispatchEvent(new Event("job-started"));
-      }
-    });
+    setProcessDialogIds(selectedIds);
   };
 
-  const handleRowProcess = (deploymentId: number) => {
-    setProcessingRowId(deploymentId);
-    startProcessing(async () => {
-      const result = await queueProcessing([deploymentId]);
-      if (result.success) {
-        window.dispatchEvent(new Event("job-started"));
-      }
-      setProcessingRowId(null);
-    });
+  const handleProcessStarted = () => {
+    setRowSelection({});
+    window.dispatchEvent(new Event("job-started"));
   };
 
   const handleExport = async () => {
@@ -588,10 +511,7 @@ export function DeploymentsTable({
 
         <select
           value={projectFilter}
-          onChange={(e) => {
-            setProjectFilter(e.target.value);
-            setPagination((p) => ({ ...p, pageIndex: 0 }));
-          }}
+          onChange={(e) => setProjectFilter(e.target.value)}
           className="h-9 rounded-md border border-input bg-background px-3 text-sm"
         >
           <option value="">Todos los proyectos</option>
@@ -604,10 +524,7 @@ export function DeploymentsTable({
 
         <select
           value={statusFilter}
-          onChange={(e) => {
-            setStatusFilter(e.target.value);
-            setPagination((p) => ({ ...p, pageIndex: 0 }));
-          }}
+          onChange={(e) => setStatusFilter(e.target.value)}
           className="h-9 rounded-md border border-input bg-background px-3 text-sm"
         >
           <option value="">Todos los estados</option>
@@ -658,11 +575,7 @@ export function DeploymentsTable({
                   variant="default"
                   size="sm"
                   onClick={handleBatchProcess}
-                  disabled={processing}
                 >
-                  {processing ? (
-                    <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-                  ) : null}
                   Procesar Seleccionados
                 </Button>
                 <Button
@@ -794,7 +707,6 @@ export function DeploymentsTable({
                         <DeploymentExpandedRow
                           deployment={row.original}
                           canEdit={canEdit}
-                          isAdmin={isAdmin}
                           distinctProjects={distinctProjects}
                           cachedJobs={jobsCacheRef.current.get(row.original.id)}
                           onCacheJobs={handleCacheJobs}
@@ -809,55 +721,11 @@ export function DeploymentsTable({
         </Table>
       </div>
 
-      {/* Pagination */}
-      <div className="flex items-center justify-between text-sm">
-        <p className="text-muted-foreground">
-          {table.getFilteredRowModel().rows.length} instalaciones
-          {(globalFilter || projectFilter || statusFilter) && " (filtradas)"}
-        </p>
-        <div className="flex items-center gap-1.5">
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-8 w-8 p-0"
-            onClick={() => table.firstPage()}
-            disabled={!table.getCanPreviousPage()}
-          >
-            <ChevronsLeft className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-8 w-8 p-0"
-            onClick={() => table.previousPage()}
-            disabled={!table.getCanPreviousPage()}
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </Button>
-          <span className="px-2 text-muted-foreground">
-            {table.getState().pagination.pageIndex + 1} /{" "}
-            {table.getPageCount()}
-          </span>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-8 w-8 p-0"
-            onClick={() => table.nextPage()}
-            disabled={!table.getCanNextPage()}
-          >
-            <ChevronRight className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-8 w-8 p-0"
-            onClick={() => table.lastPage()}
-            disabled={!table.getCanNextPage()}
-          >
-            <ChevronsRight className="h-4 w-4" />
-          </Button>
-        </div>
-      </div>
+      {/* Row count */}
+      <p className="text-sm text-muted-foreground">
+        {table.getFilteredRowModel().rows.length} instalaciones
+        {(globalFilter || projectFilter || statusFilter) && " (filtradas)"}
+      </p>
 
       {/* Batch dialogs */}
       {canEdit && (
@@ -876,6 +744,12 @@ export function DeploymentsTable({
             selectedIds={selectedIds}
             selectedCount={selectedRows.length}
             onComplete={() => setRowSelection({})}
+          />
+          <ProcessConfirmDialog
+            deploymentIds={processDialogIds}
+            isAdmin={isAdmin}
+            onClose={() => setProcessDialogIds(null)}
+            onStarted={handleProcessStarted}
           />
         </>
       )}

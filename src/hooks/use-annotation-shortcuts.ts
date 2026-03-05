@@ -6,7 +6,7 @@ export const SHORTCUTS = [
   { key: "←/→", description: "Imagen anterior/siguiente", category: "navigation" },
   { key: "1-9", description: "Seleccionar detección / asignar especie", category: "navigation" },
   { key: "0", description: "Asignar especie #10", category: "annotation" },
-  { key: "Esc", description: "Deseleccionar / limpiar búsqueda", category: "navigation" },
+  { key: "Esc", description: "Deseleccionar / volver a cuadrícula", category: "navigation" },
   { key: "Enter", description: "Verificar todo y avanzar", category: "annotation" },
   { key: "v", description: "Verificar detección", category: "annotation" },
   { key: "r", description: "Rechazar detección", category: "annotation" },
@@ -28,6 +28,7 @@ interface AnnotationShortcutOptions {
   onPrev?: () => void;
   onSelectDetection?: (index: number) => void;
   onDeselect?: () => void;
+  onEscapeBack?: () => void;
   onDeleteSelected?: () => void;
   onToggleConfirmedBlank?: () => void;
   onToggleStarred?: () => void;
@@ -63,18 +64,19 @@ export function useAnnotationShortcuts(opts: AnnotationShortcutOptions) {
       const searchInput = o.searchInputRef?.current;
       const isSearchFocused = searchInput && document.activeElement === searchInput;
 
-      // Escape: two-level behavior
+      // Escape: three-level behavior
       if (e.key === "Escape") {
         if (isSearchFocused && searchInput.value) {
-          // Clear search text, keep focus
-          // The parent manages searchQuery state, so we trigger the input's change
-          // Actually, we need to use the callback. Let's just blur + deselect.
-          // Better: the parent clears search on Escape via onDeselect which handles both.
           searchInput.value = "";
           searchInput.dispatchEvent(new Event("input", { bubbles: true }));
           return;
         }
-        o.onDeselect?.();
+        if (o.selectedDetectionId != null) {
+          o.onDeselect?.();
+          return;
+        }
+        // Nothing selected — navigate back to grid
+        o.onEscapeBack?.();
         return;
       }
 

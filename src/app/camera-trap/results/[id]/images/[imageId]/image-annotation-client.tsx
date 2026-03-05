@@ -394,6 +394,9 @@ export function ImageAnnotationClient({
       setSelectedBoxId(null);
       setSearchQuery("");
     },
+    onEscapeBack: () => {
+      router.push(`/camera-trap/results/${jobId}`, { scroll: false });
+    },
     onAssignSpeciesByIndex: (index) => {
       if (index < visibleSpecies.length) {
         handleSelectSpecies(visibleSpecies[index].scientificName);
@@ -554,7 +557,7 @@ export function ImageAnnotationClient({
               {isStarred ? "Destacada" : "Destacar"}
             </Button>
             <Button asChild variant="outline" size="sm" className="shrink-0">
-              <Link href={`/camera-trap/results/${jobId}`}>
+              <Link href={`/camera-trap/results/${jobId}`} scroll={false}>
                 Volver a Cuadrícula
               </Link>
             </Button>

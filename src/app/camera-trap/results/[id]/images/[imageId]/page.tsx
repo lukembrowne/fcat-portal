@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { requirePermission } from "@/lib/auth";
-import { getImageWithDetections, getJobImageIds, getSpeciesList, getRecentSpecies } from "@/app/camera-trap/actions";
+import { getImageWithDetections, getJobImageIds, getSpeciesList, getFrequentSpecies } from "@/app/camera-trap/actions";
 import { db } from "@/db";
 import { videos } from "@/db/schema";
 import { eq } from "drizzle-orm";
@@ -45,12 +45,12 @@ export default async function ImageDetailPage({ params }: PageProps) {
         })
       : null;
 
-  const [imageIds, speciesList, recentSpeciesResult] = await Promise.all([
+  const [imageIds, speciesList, frequentSpeciesResult] = await Promise.all([
     getJobImageIds(jobId),
     getSpeciesList(),
-    getRecentSpecies(image.deploymentId),
+    getFrequentSpecies(image.deploymentId),
   ]);
-  const recentSpecies = recentSpeciesResult.success ? recentSpeciesResult.data : [];
+  const frequentSpecies = frequentSpeciesResult.success ? frequentSpeciesResult.data : [];
   const currentIndex = imageIds.indexOf(imgId);
   const prevImageId = currentIndex > 0 ? imageIds[currentIndex - 1] : null;
   const nextImageId =
@@ -150,7 +150,7 @@ export default async function ImageDetailPage({ params }: PageProps) {
         boxes={boxes}
         detections={annotationDetections}
         speciesList={speciesList}
-        recentSpecies={recentSpecies}
+        frequentSpecies={frequentSpecies}
         jobId={jobId}
         imageId={imgId}
         prevImageId={prevImageId}

@@ -35,7 +35,7 @@ const TYPE_ORDER = ["mammal", "bird", "reptile", "amphibian", "insect", "system"
 
 interface SpeciesSidebarProps {
   speciesList: Species[];
-  recentSpecies: Species[];
+  frequentSpecies: Species[];
   selectedDetectionId: number | null;
   currentSpecies: string | null;
   searchQuery: string;
@@ -61,7 +61,7 @@ function groupByType(speciesList: Species[]): [string, Species[]][] {
 
 export function SpeciesSidebar({
   speciesList,
-  recentSpecies,
+  frequentSpecies,
   selectedDetectionId,
   currentSpecies,
   searchQuery,
@@ -85,14 +85,14 @@ export function SpeciesSidebar({
 
   const grouped = useMemo(() => groupByType(filteredSpecies), [filteredSpecies]);
 
-  const showRecent = recentSpecies.length > 0 && !searchQuery.trim();
+  const showFrequent = frequentSpecies.length > 0 && !searchQuery.trim();
   const isDisabled = selectedDetectionId === null;
 
   // Build flat visible list for hotkey numbering
   const flatVisible = useMemo(() => {
     const result: Species[] = [];
-    if (showRecent) {
-      result.push(...recentSpecies);
+    if (showFrequent) {
+      result.push(...frequentSpecies);
     }
     for (const [, items] of grouped) {
       result.push(...items);
@@ -104,7 +104,7 @@ export function SpeciesSidebar({
       seen.add(sp.scientificName);
       return true;
     });
-  }, [showRecent, recentSpecies, grouped]);
+  }, [showFrequent, frequentSpecies, grouped]);
 
   // Hotkey index map: scientificName → 1-based hotkey number (1-10)
   const hotkeyMap = useMemo(() => {
@@ -148,12 +148,12 @@ export function SpeciesSidebar({
           </p>
         )}
 
-        {showRecent && (
+        {showFrequent && (
           <div className="mb-1">
-            <p className="text-xs font-medium text-muted-foreground px-2 py-1">
-              Recientes
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-2 py-1">
+              Frecuentes
             </p>
-            {recentSpecies.map((sp) => (
+            {frequentSpecies.map((sp) => (
               <SpeciesRow
                 key={`recent-${sp.id}`}
                 species={sp}
@@ -167,9 +167,9 @@ export function SpeciesSidebar({
           </div>
         )}
 
-        {grouped.map(([type, items]) => (
-          <div key={type} className="mb-1">
-            <p className="text-xs font-medium text-muted-foreground px-2 py-1">
+        {grouped.map(([type, items], index) => (
+          <div key={type} className={`mb-1${index > 0 || showFrequent ? " border-t border-border mt-2 pt-2" : ""}`}>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-2 py-1">
               {TYPE_LABELS[type] || type}
             </p>
             {items.map((sp) => (
@@ -264,7 +264,7 @@ function SpeciesRow({
 /** Returns the flat visible species list for hotkey mapping from outside the component */
 export function getVisibleSpecies(
   speciesList: Species[],
-  recentSpecies: Species[],
+  frequentSpecies: Species[],
   searchQuery: string
 ): Species[] {
   const filtered = searchQuery.trim()
@@ -279,11 +279,11 @@ export function getVisibleSpecies(
     : speciesList;
 
   const grouped = groupByType(filtered);
-  const showRecent = recentSpecies.length > 0 && !searchQuery.trim();
+  const showFrequent = frequentSpecies.length > 0 && !searchQuery.trim();
 
   const result: Species[] = [];
-  if (showRecent) {
-    result.push(...recentSpecies);
+  if (showFrequent) {
+    result.push(...frequentSpecies);
   }
   for (const [, items] of grouped) {
     result.push(...items);

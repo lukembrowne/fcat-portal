@@ -149,7 +149,7 @@ export default async function AudioAnnotatePage({ params }: PageProps) {
         format={audioFile.format}
         detections={detectionsWithIds}
         speciesList={speciesList}
-        recentSpecies={[]}
+        frequentSpecies={[]}
         isEditor={isEditor}
         prevFileId={prevFileId}
         nextFileId={nextFileId}

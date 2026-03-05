@@ -31,7 +31,7 @@ export interface DetectionWithIdentification {
 interface AnnotationToolbarProps {
   detections: DetectionWithIdentification[];
   speciesList: Species[];
-  recentSpecies?: Species[];
+  frequentSpecies?: Species[];
   selectedDetectionId?: number | null;
   onDetectionSelect?: (detectionId: number) => void;
   onActionComplete?: () => void;
@@ -53,7 +53,7 @@ const VERIFICATION_STYLES: Record<string, { variant: "default" | "secondary" | "
 export function AnnotationToolbar({
   detections,
   speciesList,
-  recentSpecies = [],
+  frequentSpecies = [],
   selectedDetectionId,
   onDetectionSelect,
   onActionComplete,
@@ -189,7 +189,7 @@ export function AnnotationToolbar({
               <div className="pt-1" onClick={(e) => e.stopPropagation()}>
                 <SpeciesCombobox
                   species={speciesList}
-                  recentSpecies={recentSpecies}
+                  frequentSpecies={frequentSpecies}
                   onSelect={(scientificName) => handleCorrect(ident.id, scientificName)}
                   disabled={isPending}
                 />

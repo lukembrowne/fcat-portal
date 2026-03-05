@@ -3231,35 +3231,36 @@ export async function getSpeciesUsageCount(
   return { success: true, data: usage?.cnt ?? 0 };
 }
 
-export async function getRecentSpecies(
+export async function getFrequentSpecies(
   deploymentId: number,
   limit = 8
 ): Promise<ActionResult<Species[]>> {
   await requirePermission("camera-trap", "viewer");
 
-  const recent = await db
-    .selectDistinct({ scientificName: identifications.correctedSpecies })
+  const rows = await db
+    .select({
+      id: species.id,
+      scientificName: species.scientificName,
+      commonName: species.commonName,
+      spanishName: species.spanishName,
+      type: species.type,
+      taxonomicRank: species.taxonomicRank,
+    })
     .from(identifications)
     .innerJoin(detections, eq(detections.id, identifications.detectionId))
     .innerJoin(images, eq(images.id, detections.imageId))
+    .innerJoin(species, eq(species.scientificName, identifications.correctedSpecies))
     .where(
       and(
         eq(images.deploymentId, deploymentId),
         isNotNull(identifications.correctedSpecies)
       )
     )
-    .orderBy(desc(identifications.verifiedAt))
+    .groupBy(identifications.correctedSpecies)
+    .orderBy(desc(sql`count(*)`))
     .limit(limit);
 
-  const recentNames = recent.map((r) => r.scientificName).filter(Boolean) as string[];
-  if (recentNames.length === 0) return { success: true, data: [] };
-
-  const speciesList = await db
-    .select()
-    .from(species)
-    .where(inArray(species.scientificName, recentNames));
-
-  return { success: true, data: speciesList };
+  return { success: true, data: rows as Species[] };
 }
 
 export async function deleteDetection(

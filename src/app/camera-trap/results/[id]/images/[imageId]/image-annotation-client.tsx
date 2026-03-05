@@ -21,7 +21,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { useState, useCallback, useRef, useTransition, useMemo, useOptimistic } from "react";
+import { useState, useCallback, useRef, useTransition, useMemo, useOptimistic, useEffect } from "react";
 import Link from "next/link";
 import { useAnnotationShortcuts } from "@/hooks/use-annotation-shortcuts";
 import { useImageZoom } from "@/hooks/use-image-zoom";
@@ -57,7 +57,7 @@ interface ImageAnnotationClientProps {
   boxes: BBoxData[];
   detections: DetectionWithIdentification[];
   speciesList: Species[];
-  recentSpecies: Species[];
+  frequentSpecies: Species[];
   jobId: number;
   imageId: number;
   prevImageId: number | null;
@@ -74,7 +74,7 @@ export function ImageAnnotationClient({
   boxes,
   detections,
   speciesList,
-  recentSpecies,
+  frequentSpecies,
   jobId,
   imageId,
   prevImageId,
@@ -165,10 +165,19 @@ export function ImageAnnotationClient({
     return selectedDetection.identification.correctedSpecies || selectedDetection.identification.species;
   }, [selectedDetection]);
 
+  // Auto-focus species search when a detection is selected
+  useEffect(() => {
+    if (selectedBoxId !== null) {
+      searchInputRef.current?.focus();
+    } else {
+      searchInputRef.current?.blur();
+    }
+  }, [selectedBoxId]);
+
   // Visible species list for hotkey assignment
   const visibleSpecies = useMemo(
-    () => getVisibleSpecies(speciesList, recentSpecies, searchQuery),
-    [speciesList, recentSpecies, searchQuery]
+    () => getVisibleSpecies(speciesList, frequentSpecies, searchQuery),
+    [speciesList, frequentSpecies, searchQuery]
   );
 
   // Detection pending deletion (for dialog)
@@ -228,6 +237,7 @@ export function ImageAnnotationClient({
       startTransition(async () => {
         const result = await createManualDetection(imageId, bbox);
         if (result.success) {
+          setSearchQuery("");
           setSelectedBoxId(result.data.detectionId);
           router.refresh();
         }
@@ -422,7 +432,7 @@ export function ImageAnnotationClient({
         <aside className="w-56 shrink-0 flex flex-col min-w-0 overflow-hidden border rounded-lg bg-background">
           <SpeciesSidebar
             speciesList={speciesList}
-            recentSpecies={recentSpecies}
+            frequentSpecies={frequentSpecies}
             selectedDetectionId={selectedBoxId}
             currentSpecies={currentSpecies}
             searchQuery={searchQuery}

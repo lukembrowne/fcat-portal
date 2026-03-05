@@ -50,7 +50,7 @@ interface AudioAnnotationClientProps {
   format: string | null;
   detections: AudioDetectionData[];
   speciesList: Species[];
-  recentSpecies: Species[];
+  frequentSpecies: Species[];
   isEditor: boolean;
   prevFileId: number | null;
   nextFileId: number | null;
@@ -107,7 +107,7 @@ export function AudioAnnotationClient({
   format,
   detections,
   speciesList,
-  recentSpecies,
+  frequentSpecies,
   isEditor,
   prevFileId,
   nextFileId,
@@ -133,6 +133,15 @@ export function AudioAnnotationClient({
   const [currentTime, setCurrentTime] = useState(0);
   const audioRef = useRef<HTMLAudioElement>(null);
   const selectionEndRef = useRef<number | null>(null);
+
+  // Auto-focus species search when a detection is selected
+  useEffect(() => {
+    if (selectedDetectionId !== null) {
+      searchInputRef.current?.focus();
+    } else {
+      searchInputRef.current?.blur();
+    }
+  }, [selectedDetectionId]);
 
   const [retryCount, setRetryCount] = useState(0);
   const spectrogramUrl = `/api/audio/spectrogram?fileId=${audioFileId}&t=${retryCount}`;
@@ -385,7 +394,7 @@ export function AudioAnnotationClient({
   }, [detections, deploymentId, audioFileId, router]);
 
   // Visible species for number-key assignment
-  const visibleSpecies = getVisibleSpecies(speciesList, recentSpecies, searchQuery);
+  const visibleSpecies = getVisibleSpecies(speciesList, frequentSpecies, searchQuery);
 
   // Keyboard shortcuts
   useAudioAnnotationShortcuts({
@@ -436,7 +445,7 @@ export function AudioAnnotationClient({
       <aside className="w-56 shrink-0 flex flex-col min-w-0 overflow-hidden border-r bg-background">
         <SpeciesSidebar
           speciesList={speciesList}
-          recentSpecies={recentSpecies}
+          frequentSpecies={frequentSpecies}
           selectedDetectionId={selectedDetectionId}
           currentSpecies={currentSpecies}
           searchQuery={searchQuery}

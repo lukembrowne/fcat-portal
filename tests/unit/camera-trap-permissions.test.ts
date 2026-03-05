@@ -175,7 +175,7 @@ describe("camera-trap action permission guards", () => {
       ["getJobVerificationStats", actions.getJobVerificationStats, [1]],
       ["getDeploymentVerificationStats", actions.getDeploymentVerificationStats, [1]],
       ["getSpeciesUsageCount", actions.getSpeciesUsageCount, [1]],
-      ["getRecentSpecies", actions.getRecentSpecies, []],
+      ["getFrequentSpecies", actions.getFrequentSpecies, []],
     ];
 
     for (const [name, fn, args] of viewerActions) {

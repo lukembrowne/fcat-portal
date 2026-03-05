@@ -39,7 +39,7 @@ const RANK_BADGES: Record<string, { short: string; className: string }> = {
 
 interface SpeciesComboboxProps {
   species: Species[];
-  recentSpecies?: Species[];
+  frequentSpecies?: Species[];
   onSelect: (scientificName: string) => void;
   disabled?: boolean;
 }
@@ -58,7 +58,7 @@ function groupByType(speciesList: Species[]): [string, Species[]][] {
 
 export function SpeciesCombobox({
   species: speciesList,
-  recentSpecies = [],
+  frequentSpecies = [],
   onSelect,
   disabled,
 }: SpeciesComboboxProps) {
@@ -96,9 +96,9 @@ export function SpeciesCombobox({
           <CommandList>
             <CommandEmpty>No se encontraron especies.</CommandEmpty>
 
-            {recentSpecies.length > 0 && !search && (
-              <CommandGroup heading="Recientes">
-                {recentSpecies.map((sp) => (
+            {frequentSpecies.length > 0 && !search && (
+              <CommandGroup heading="Frecuentes">
+                {frequentSpecies.map((sp) => (
                   <SpeciesItem
                     key={`recent-${sp.id}`}
                     species={sp}

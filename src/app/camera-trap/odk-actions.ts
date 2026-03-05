@@ -141,7 +141,7 @@ export async function matchOdkDeployments(
         (retInfo?.retrieval_date as string) ??
         (sel?.fecha_recuperacion as string) ??
         (sub.fecha_recuperacion as string) ??
-        "";
+        null;
       if (!depId || !dateRetrieved) continue;
       const key = normalize(depId);
       const existing = retrievalMap.get(key);

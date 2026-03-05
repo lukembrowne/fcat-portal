@@ -6,8 +6,8 @@ import { ImageGrid, type ImageGridItem } from "@/components/image-grid";
 import { requirePermission } from "@/lib/auth";
 import { requireDeploymentAccess } from "@/lib/camera-trap-auth";
 import { db } from "@/db";
-import { deployments, images, videos } from "@/db/schema";
-import { eq, sql } from "drizzle-orm";
+import { deployments, images, videos, IMAGE_TIMESTAMP_ORDER } from "@/db/schema";
+import { eq } from "drizzle-orm";
 import { PreviewProcessButton } from "./preview-process-button";
 
 interface PageProps {
@@ -38,7 +38,7 @@ export default async function PreviewPage({ params }: PageProps) {
     .select()
     .from(images)
     .where(eq(images.deploymentId, deploymentId))
-    .orderBy(sql`COALESCE(${images.exifTimestamp}, ${images.fileModified})`, images.filename);
+    .orderBy(IMAGE_TIMESTAMP_ORDER, images.filename);
 
   const depVideos = await db
     .select()

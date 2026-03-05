@@ -210,43 +210,33 @@ describe("countDeletableImages", () => {
   it("counts confirmedBlank images correctly", async () => {
     seedDeletableImages(db, seed.deployment.id, seed.job.id);
 
-    const result = await actions.countDeletableImages(seed.job.id, {
-      confirmedBlank: true,
-      noDetections: false,
-      unverifiedDetections: false,
-    });
+    const result = await actions.countDeletableImages(seed.job.id);
 
     expect(result.success).toBe(true);
     if (!result.success) return;
     // Images 1 (blank+no dets) and 3 (blank+all rejected) are deletable
     expect(result.data.confirmedBlankCount).toBe(2);
-    expect(result.data.totalCount).toBe(2);
+    expect(result.data.unionSizes["cb"]).toBe(2);
+    // 3 from seedTestData + 6 from seedDeletableImages
+    expect(result.data.jobTotalCount).toBe(9);
   });
 
   it("counts noDetections images correctly", async () => {
     seedDeletableImages(db, seed.deployment.id, seed.job.id);
 
-    const result = await actions.countDeletableImages(seed.job.id, {
-      confirmedBlank: false,
-      noDetections: true,
-      unverifiedDetections: false,
-    });
+    const result = await actions.countDeletableImages(seed.job.id);
 
     expect(result.success).toBe(true);
     if (!result.success) return;
     // Images 1 and 2 have no detections
     expect(result.data.noDetectionsCount).toBe(2);
-    expect(result.data.totalCount).toBe(2);
+    expect(result.data.unionSizes["nd"]).toBe(2);
   });
 
   it("deduplicates union of both scopes", async () => {
     seedDeletableImages(db, seed.deployment.id, seed.job.id);
 
-    const result = await actions.countDeletableImages(seed.job.id, {
-      confirmedBlank: true,
-      noDetections: true,
-      unverifiedDetections: false,
-    });
+    const result = await actions.countDeletableImages(seed.job.id);
 
     expect(result.success).toBe(true);
     if (!result.success) return;
@@ -254,54 +244,42 @@ describe("countDeletableImages", () => {
     // confirmedBlank: 1, 3. noDetections: 1, 2. Union: 1, 2, 3
     expect(result.data.confirmedBlankCount).toBe(2);
     expect(result.data.noDetectionsCount).toBe(2);
-    expect(result.data.totalCount).toBe(3);
+    expect(result.data.unionSizes["cb_nd"]).toBe(3);
   });
 
   it("excludes images with setupTag", async () => {
     seedDeletableImages(db, seed.deployment.id, seed.job.id);
 
-    const result = await actions.countDeletableImages(seed.job.id, {
-      confirmedBlank: true,
-      noDetections: true,
-      unverifiedDetections: false,
-    });
+    const result = await actions.countDeletableImages(seed.job.id);
 
     expect(result.success).toBe(true);
     if (!result.success) return;
     // Image 5 (setupTag) should NOT be in counts
-    expect(result.data.totalCount).toBe(3); // not 4
+    expect(result.data.unionSizes["cb_nd"]).toBe(3); // not 4
   });
 
   it("excludes images without driveFileId", async () => {
     seedDeletableImages(db, seed.deployment.id, seed.job.id);
 
-    const result = await actions.countDeletableImages(seed.job.id, {
-      confirmedBlank: true,
-      noDetections: true,
-      unverifiedDetections: false,
-    });
+    const result = await actions.countDeletableImages(seed.job.id);
 
     expect(result.success).toBe(true);
     if (!result.success) return;
     // Image 6 (no driveFileId) should NOT be in counts
-    expect(result.data.totalCount).toBe(3); // not 4+
+    expect(result.data.unionSizes["cb_nd"]).toBe(3); // not 4+
   });
 
   it("counts unverifiedDetections images correctly", async () => {
     seedDeletableImages(db, seed.deployment.id, seed.job.id);
 
-    const result = await actions.countDeletableImages(seed.job.id, {
-      confirmedBlank: false,
-      noDetections: false,
-      unverifiedDetections: true,
-    });
+    const result = await actions.countDeletableImages(seed.job.id);
 
     expect(result.success).toBe(true);
     if (!result.success) return;
     // Image 4 has detections with all-unverified identifications
     // Image 3 has rejected identifications (not unverified) → excluded
     expect(result.data.unverifiedDetectionsCount).toBe(1);
-    expect(result.data.totalCount).toBe(1);
+    expect(result.data.unionSizes["ud"]).toBe(1);
   });
 
   it("excludes images with verified identifications from unverifiedDetections", async () => {
@@ -319,11 +297,7 @@ describe("countDeletableImages", () => {
       .where(eq(schema.identifications.detectionId, dets[0].id))
       .run();
 
-    const result = await actions.countDeletableImages(seed.job.id, {
-      confirmedBlank: false,
-      noDetections: false,
-      unverifiedDetections: true,
-    });
+    const result = await actions.countDeletableImages(seed.job.id);
 
     expect(result.success).toBe(true);
     if (!result.success) return;
@@ -331,20 +305,23 @@ describe("countDeletableImages", () => {
     expect(result.data.unverifiedDetectionsCount).toBe(0);
   });
 
-  it("returns zeros when no scope selected", async () => {
+  it("pre-computes all union sizes", async () => {
     seedDeletableImages(db, seed.deployment.id, seed.job.id);
 
-    const result = await actions.countDeletableImages(seed.job.id, {
-      confirmedBlank: false,
-      noDetections: false,
-      unverifiedDetections: false,
-    });
+    const result = await actions.countDeletableImages(seed.job.id);
 
     expect(result.success).toBe(true);
     if (!result.success) return;
-    expect(result.data.confirmedBlankCount).toBe(0);
-    expect(result.data.noDetectionsCount).toBe(0);
-    expect(result.data.totalCount).toBe(0);
+    // Verify all 7 union keys are present
+    expect(result.data.unionSizes).toHaveProperty("cb");
+    expect(result.data.unionSizes).toHaveProperty("nd");
+    expect(result.data.unionSizes).toHaveProperty("ud");
+    expect(result.data.unionSizes).toHaveProperty("cb_nd");
+    expect(result.data.unionSizes).toHaveProperty("cb_ud");
+    expect(result.data.unionSizes).toHaveProperty("nd_ud");
+    expect(result.data.unionSizes).toHaveProperty("cb_nd_ud");
+    // All-three union should be >= any single or pair
+    expect(result.data.unionSizes["cb_nd_ud"]).toBeGreaterThanOrEqual(result.data.unionSizes["cb_nd"]);
   });
 });
 

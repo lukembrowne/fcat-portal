@@ -14,6 +14,7 @@ import {
   cameraTrapProjects,
   activityLog,
   shareTokens,
+  IMAGE_TIMESTAMP_ORDER,
 } from "@/db/schema";
 import { eq, desc, inArray, and, or, gte, ne, sql, count, sum, isNotNull } from "drizzle-orm";
 import { runMLPredictions, checkPytorchWildlife, cancelModelServerJob } from "@/lib/ml-runner";
@@ -1551,9 +1552,10 @@ export async function deleteDeployments(
 // Delete blank images from Drive (soft-delete to trash)
 // ---------------------------------------------------------------------------
 
+import { thumbnailPath as thumbPathFn } from "@/lib/thumbnail";
+
 const DELETE_BATCH_SIZE = 50;
 const CACHE_BASE = path.join(process.cwd(), "data", "cache", "ct-images");
-const THUMBNAIL_BASE = path.join(process.cwd(), "data", "thumbnails");
 
 export async function deleteImagesFromDrive(
   imageIds: number[],
@@ -1612,7 +1614,7 @@ export async function deleteImagesFromDrive(
           try { await fs.unlink(cachePath); } catch { /* may not exist */ }
 
           // Clean up thumbnail
-          const thumbPath = path.join(THUMBNAIL_BASE, String(img.deploymentId), `${img.id}.jpg`);
+          const thumbPath = thumbPathFn(img.deploymentId, img.id);
           try { await fs.unlink(thumbPath); } catch { /* may not exist */ }
 
           // Delete image row from DB (CASCADE removes detections/identifications)
@@ -1699,131 +1701,176 @@ export async function checkSetupRetrievalTags(
   }
 }
 
+// Shared eligibility computation for bulk delete operations
+interface EligibilitySets {
+  eligible: { id: number; confirmedBlank: boolean | null; setupTag: string | null; driveFileId: string | null; deploymentId: number; filename: string; path: string | null }[];
+  detectionsByImg: Map<number, number[]>;
+  imagesWithOnlyRejected: Set<number>;
+  detectionsWithVerifiedOrCorrectedOrRejected: Set<number>;
+  jobTotalCount: number;
+}
+
+async function computeEligibilitySets(jobId: number): Promise<EligibilitySets> {
+  const jobImages = await db
+    .select({
+      id: images.id,
+      confirmedBlank: images.confirmedBlank,
+      setupTag: images.setupTag,
+      driveFileId: images.driveFileId,
+      deploymentId: images.deploymentId,
+      filename: images.filename,
+      path: images.path,
+    })
+    .from(images)
+    .where(eq(images.jobId, jobId));
+
+  const eligible = jobImages.filter(
+    (img) => !img.setupTag && img.driveFileId
+  );
+
+  const imageIds = eligible.map((img) => img.id);
+  const imageDetectionRows =
+    imageIds.length > 0
+      ? await db
+          .select({ imageId: detections.imageId, id: detections.id })
+          .from(detections)
+          .where(inArray(detections.imageId, imageIds))
+      : [];
+
+  const detectionsByImg = new Map<number, number[]>();
+  for (const row of imageDetectionRows) {
+    const existing = detectionsByImg.get(row.imageId) || [];
+    existing.push(row.id);
+    detectionsByImg.set(row.imageId, existing);
+  }
+
+  const allDetectionIds = imageDetectionRows.map((d) => d.id);
+  const nonRejectedIdents =
+    allDetectionIds.length > 0
+      ? await db
+          .select({ detectionId: identifications.detectionId })
+          .from(identifications)
+          .where(
+            and(
+              inArray(identifications.detectionId, allDetectionIds),
+              ne(identifications.verificationStatus, "rejected")
+            )
+          )
+      : [];
+
+  const detectionsWithNonRejected = new Set(
+    nonRejectedIdents.map((i) => i.detectionId)
+  );
+
+  const imagesWithOnlyRejected = new Set<number>();
+  for (const [imgId, detIds] of detectionsByImg.entries()) {
+    const hasNonRejected = detIds.some((id) => detectionsWithNonRejected.has(id));
+    if (!hasNonRejected) {
+      imagesWithOnlyRejected.add(imgId);
+    }
+  }
+
+  const detectionsWithVerifiedOrCorrectedOrRejected = new Set<number>();
+  if (allDetectionIds.length > 0) {
+    const nonUnverifiedIdents = await db
+      .select({ detectionId: identifications.detectionId })
+      .from(identifications)
+      .where(
+        and(
+          inArray(identifications.detectionId, allDetectionIds),
+          ne(identifications.verificationStatus, "unverified")
+        )
+      );
+    for (const i of nonUnverifiedIdents) {
+      detectionsWithVerifiedOrCorrectedOrRejected.add(i.detectionId);
+    }
+  }
+
+  return {
+    eligible,
+    detectionsByImg,
+    imagesWithOnlyRejected,
+    detectionsWithVerifiedOrCorrectedOrRejected,
+    jobTotalCount: jobImages.length,
+  };
+}
+
+// Classify eligible images into the three deletion scopes
+function classifyByScope(
+  sets: EligibilitySets,
+): { confirmedBlank: Set<number>; noDetections: Set<number>; unverifiedDetections: Set<number> } {
+  const confirmedBlank = new Set<number>();
+  const noDetections = new Set<number>();
+  const unverifiedDetections = new Set<number>();
+
+  for (const img of sets.eligible) {
+    const detCount = sets.detectionsByImg.get(img.id)?.length ?? 0;
+
+    if (img.confirmedBlank) {
+      if (detCount === 0 || sets.imagesWithOnlyRejected.has(img.id)) {
+        confirmedBlank.add(img.id);
+      }
+    }
+
+    if (detCount === 0) {
+      noDetections.add(img.id);
+    }
+
+    if (detCount > 0) {
+      const detIds = sets.detectionsByImg.get(img.id)!;
+      const hasNonUnverified = detIds.some((id) =>
+        sets.detectionsWithVerifiedOrCorrectedOrRejected.has(id)
+      );
+      if (!hasNonUnverified) {
+        unverifiedDetections.add(img.id);
+      }
+    }
+  }
+
+  return { confirmedBlank, noDetections, unverifiedDetections };
+}
+
+export interface BulkDeleteCounts {
+  confirmedBlankCount: number;
+  noDetectionsCount: number;
+  unverifiedDetectionsCount: number;
+  /** Pre-computed union sizes for all 7 checkbox combinations (keyed like "cb", "nd", "cb_nd", etc.) */
+  unionSizes: Record<string, number>;
+  jobTotalCount: number;
+}
+
 export async function countDeletableImages(
   jobId: number,
-  scope: { confirmedBlank: boolean; noDetections: boolean; unverifiedDetections: boolean }
-): Promise<ActionResult<{ confirmedBlankCount: number; noDetectionsCount: number; unverifiedDetectionsCount: number; totalCount: number }>> {
+): Promise<ActionResult<BulkDeleteCounts>> {
   await requirePermission("camera-trap", "admin");
 
   try {
-    // Get all images for this job
-    const jobImages = await db
-      .select({
-        id: images.id,
-        confirmedBlank: images.confirmedBlank,
-        setupTag: images.setupTag,
-        driveFileId: images.driveFileId,
-      })
-      .from(images)
-      .where(eq(images.jobId, jobId));
+    const sets = await computeEligibilitySets(jobId);
+    const { confirmedBlank: cb, noDetections: nd, unverifiedDetections: ud } = classifyByScope(sets);
 
-    // Exclude images with setupTag or without driveFileId
-    const eligible = jobImages.filter(
-      (img) => !img.setupTag && img.driveFileId
-    );
-
-    // Get all detection counts per image
-    const imageIds = eligible.map((img) => img.id);
-    const imageDetectionRows =
-      imageIds.length > 0
-        ? await db
-            .select({ imageId: detections.imageId, id: detections.id })
-            .from(detections)
-            .where(inArray(detections.imageId, imageIds))
-        : [];
-
-    const detectionsByImg = new Map<number, number[]>();
-    for (const row of imageDetectionRows) {
-      const existing = detectionsByImg.get(row.imageId) || [];
-      existing.push(row.id);
-      detectionsByImg.set(row.imageId, existing);
-    }
-
-    // For confirmedBlank scope: check if all identifications are rejected
-    const allDetectionIds = imageDetectionRows.map((d) => d.id);
-    const nonRejectedIdents =
-      allDetectionIds.length > 0
-        ? await db
-            .select({ detectionId: identifications.detectionId })
-            .from(identifications)
-            .where(
-              and(
-                inArray(identifications.detectionId, allDetectionIds),
-                ne(identifications.verificationStatus, "rejected")
-              )
-            )
-        : [];
-
-    const detectionsWithNonRejected = new Set(
-      nonRejectedIdents.map((i) => i.detectionId)
-    );
-
-    // Images with detections where ALL are rejected (safe to delete for confirmedBlank scope)
-    const imagesWithOnlyRejected = new Set<number>();
-    for (const [imgId, detIds] of detectionsByImg.entries()) {
-      const hasNonRejected = detIds.some((id) => detectionsWithNonRejected.has(id));
-      if (!hasNonRejected) {
-        imagesWithOnlyRejected.add(imgId);
-      }
-    }
-
-    // For unverifiedDetections scope: find images where ALL identifications are unverified
-    // (none verified, corrected, or rejected)
-    const detectionsWithVerifiedOrCorrectedOrRejected = new Set<number>();
-    if (scope.unverifiedDetections && allDetectionIds.length > 0) {
-      const nonUnverifiedIdents = await db
-        .select({ detectionId: identifications.detectionId })
-        .from(identifications)
-        .where(
-          and(
-            inArray(identifications.detectionId, allDetectionIds),
-            ne(identifications.verificationStatus, "unverified")
-          )
-        );
-      for (const i of nonUnverifiedIdents) {
-        detectionsWithVerifiedOrCorrectedOrRejected.add(i.detectionId);
-      }
-    }
-
-    const confirmedBlankSet = new Set<number>();
-    const noDetectionsSet = new Set<number>();
-    const unverifiedDetectionsSet = new Set<number>();
-
-    for (const img of eligible) {
-      const detCount = detectionsByImg.get(img.id)?.length ?? 0;
-
-      if (scope.confirmedBlank && img.confirmedBlank) {
-        // Allow if no detections OR all detections have only rejected identifications
-        if (detCount === 0 || imagesWithOnlyRejected.has(img.id)) {
-          confirmedBlankSet.add(img.id);
-        }
-      }
-
-      if (scope.noDetections && detCount === 0) {
-        noDetectionsSet.add(img.id);
-      }
-
-      if (scope.unverifiedDetections && detCount > 0) {
-        const detIds = detectionsByImg.get(img.id)!;
-        const hasNonUnverified = detIds.some((id) =>
-          detectionsWithVerifiedOrCorrectedOrRejected.has(id)
-        );
-        if (!hasNonUnverified) {
-          unverifiedDetectionsSet.add(img.id);
-        }
-      }
-    }
-
-    // Union of selected scopes
-    const totalSet = new Set([...confirmedBlankSet, ...noDetectionsSet, ...unverifiedDetectionsSet]);
+    // Pre-compute union sizes for all 7 non-empty checkbox combinations
+    const union = (...sets: Set<number>[]) => {
+      const merged = new Set<number>();
+      for (const s of sets) for (const id of s) merged.add(id);
+      return merged.size;
+    };
 
     return {
       success: true,
       data: {
-        confirmedBlankCount: confirmedBlankSet.size,
-        noDetectionsCount: noDetectionsSet.size,
-        unverifiedDetectionsCount: unverifiedDetectionsSet.size,
-        totalCount: totalSet.size,
+        confirmedBlankCount: cb.size,
+        noDetectionsCount: nd.size,
+        unverifiedDetectionsCount: ud.size,
+        unionSizes: {
+          cb: cb.size,
+          nd: nd.size,
+          ud: ud.size,
+          cb_nd: union(cb, nd),
+          cb_ud: union(cb, ud),
+          nd_ud: union(nd, ud),
+          cb_nd_ud: union(cb, nd, ud),
+        },
+        jobTotalCount: sets.jobTotalCount,
       },
     };
   } catch (error) {
@@ -1841,107 +1888,17 @@ export async function bulkDeleteBlankImages(
   const user = await requirePermission("camera-trap", "admin");
 
   try {
-    // Get all images for this job
-    const jobImages = await db
-      .select()
-      .from(images)
-      .where(eq(images.jobId, jobId));
+    const sets = await computeEligibilitySets(jobId);
+    const classified = classifyByScope(sets);
 
-    // Exclude images with setupTag or without driveFileId
-    const eligible = jobImages.filter(
-      (img) => !img.setupTag && img.driveFileId
-    );
-
-    const imageIds = eligible.map((img) => img.id);
-
-    // Get detections for eligible images
-    const imageDetectionRows =
-      imageIds.length > 0
-        ? await db
-            .select({ imageId: detections.imageId, id: detections.id })
-            .from(detections)
-            .where(inArray(detections.imageId, imageIds))
-        : [];
-
-    const detectionsByImg = new Map<number, number[]>();
-    for (const row of imageDetectionRows) {
-      const existing = detectionsByImg.get(row.imageId) || [];
-      existing.push(row.id);
-      detectionsByImg.set(row.imageId, existing);
-    }
-
-    // Check which detections have only rejected identifications
-    const allDetectionIds = imageDetectionRows.map((d) => d.id);
-    const nonRejectedIdents =
-      allDetectionIds.length > 0
-        ? await db
-            .select({ detectionId: identifications.detectionId })
-            .from(identifications)
-            .where(
-              and(
-                inArray(identifications.detectionId, allDetectionIds),
-                ne(identifications.verificationStatus, "rejected")
-              )
-            )
-        : [];
-
-    const detectionsWithNonRejected = new Set(
-      nonRejectedIdents.map((i) => i.detectionId)
-    );
-
-    const imagesWithOnlyRejected = new Set<number>();
-    for (const [imgId, detIds] of detectionsByImg.entries()) {
-      const hasNonRejected = detIds.some((id) => detectionsWithNonRejected.has(id));
-      if (!hasNonRejected) {
-        imagesWithOnlyRejected.add(imgId);
-      }
-    }
-
-    // For unverifiedDetections: find detections with any non-unverified identification
-    const detectionsWithVerifiedOrCorrectedOrRejected = new Set<number>();
-    if (scope.unverifiedDetections && allDetectionIds.length > 0) {
-      const nonUnverifiedIdents = await db
-        .select({ detectionId: identifications.detectionId })
-        .from(identifications)
-        .where(
-          and(
-            inArray(identifications.detectionId, allDetectionIds),
-            ne(identifications.verificationStatus, "unverified")
-          )
-        );
-      for (const i of nonUnverifiedIdents) {
-        detectionsWithVerifiedOrCorrectedOrRejected.add(i.detectionId);
-      }
-    }
-
-    // Build the set of images to delete
+    // Build the set of images to delete based on selected scopes
     const toDelete = new Set<number>();
-    for (const img of eligible) {
-      const detCount = detectionsByImg.get(img.id)?.length ?? 0;
+    if (scope.confirmedBlank) for (const id of classified.confirmedBlank) toDelete.add(id);
+    if (scope.noDetections) for (const id of classified.noDetections) toDelete.add(id);
+    if (scope.unverifiedDetections) for (const id of classified.unverifiedDetections) toDelete.add(id);
 
-      if (scope.confirmedBlank && img.confirmedBlank) {
-        if (detCount === 0 || imagesWithOnlyRejected.has(img.id)) {
-          toDelete.add(img.id);
-        }
-      }
-
-      if (scope.noDetections && detCount === 0) {
-        toDelete.add(img.id);
-      }
-
-      if (scope.unverifiedDetections && detCount > 0) {
-        const detIds = detectionsByImg.get(img.id)!;
-        const hasNonUnverified = detIds.some((id) =>
-          detectionsWithVerifiedOrCorrectedOrRejected.has(id)
-        );
-        if (!hasNonUnverified) {
-          toDelete.add(img.id);
-        }
-      }
-    }
-
-    const imagesToDelete = eligible.filter((img) => toDelete.has(img.id));
-    const skipped = eligible.length - imagesToDelete.length;
+    const imagesToDelete = sets.eligible.filter((img) => toDelete.has(img.id));
+    const skipped = sets.eligible.length - imagesToDelete.length;
     const totalBatches = Math.ceil(imagesToDelete.length / DELETE_BATCH_SIZE);
 
     console.log(
@@ -1965,11 +1922,11 @@ export async function bulkDeleteBlankImages(
           try { await fs.unlink(cachePath); } catch { /* may not exist */ }
 
           // Clean up thumbnail
-          const thumbPath = path.join(THUMBNAIL_BASE, String(img.deploymentId), `${img.id}.jpg`);
+          const thumbPath = thumbPathFn(img.deploymentId, img.id);
           try { await fs.unlink(thumbPath); } catch { /* may not exist */ }
 
           // Delete detections first (if any), then the image
-          const imgDets = detectionsByImg.get(img.id);
+          const imgDets = sets.detectionsByImg.get(img.id);
           if (imgDets && imgDets.length > 0) {
             await db.delete(identifications).where(
               inArray(identifications.detectionId, imgDets)
@@ -2642,7 +2599,7 @@ export async function getJobImageIds(jobId: number): Promise<number[]> {
     .select({ id: images.id })
     .from(images)
     .where(eq(images.jobId, jobId))
-    .orderBy(sql`COALESCE(${images.exifTimestamp}, ${images.fileModified})`, images.filename);
+    .orderBy(IMAGE_TIMESTAMP_ORDER, images.filename);
 
   return rows.map((r) => r.id);
 }
@@ -3648,7 +3605,7 @@ export async function toggleSetupTag(
     suggestion: { field: "validStart" | "validEnd"; value: string; deploymentId: number } | null;
   }>
 > {
-  await requirePermission("camera-trap", "editor");
+  const user = await requirePermission("camera-trap", "editor");
 
   try {
     const [image] = await db
@@ -3665,6 +3622,8 @@ export async function toggleSetupTag(
     if (!image) {
       return { success: false, error: "Imagen no encontrada" };
     }
+
+    await requireDeploymentAccess(user, image.deploymentId);
 
     // Toggle: if already set to this tag, clear it
     const newValue = image.setupTag === tag ? null : tag;
@@ -3713,6 +3672,10 @@ export async function applySetupTagDate(
   value: string
 ): Promise<ActionResult<void>> {
   const user = await requirePermission("camera-trap", "editor");
+
+  if (field !== "validStart" && field !== "validEnd") {
+    return { success: false, error: "Campo no válido" };
+  }
 
   try {
     await requireDeploymentAccess(user, deploymentId);
@@ -3797,7 +3760,7 @@ export async function getDeploymentImages(deploymentId: number) {
     .select()
     .from(images)
     .where(eq(images.deploymentId, deploymentId))
-    .orderBy(sql`COALESCE(${images.exifTimestamp}, ${images.fileModified})`, images.filename);
+    .orderBy(IMAGE_TIMESTAMP_ORDER, images.filename);
 }
 
 export async function getDeploymentImageIds(
@@ -3810,7 +3773,7 @@ export async function getDeploymentImageIds(
     .select({ id: images.id })
     .from(images)
     .where(eq(images.deploymentId, deploymentId))
-    .orderBy(sql`COALESCE(${images.exifTimestamp}, ${images.fileModified})`, images.filename);
+    .orderBy(IMAGE_TIMESTAMP_ORDER, images.filename);
 
   return rows.map((r) => r.id);
 }

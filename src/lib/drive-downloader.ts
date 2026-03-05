@@ -19,12 +19,10 @@ import { db } from "@/db";
 import { images, videos } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { downloadDeploymentImages } from "./drive-client";
+import { THUMBNAIL_DIR, THUMBNAIL_WIDTH, THUMBNAIL_QUALITY, thumbnailPath } from "./thumbnail";
 
 const TEMP_BASE = path.join(process.cwd(), "data", "tmp");
 const CACHE_BASE = path.join(process.cwd(), "data", "cache", "ct-images");
-const THUMBNAIL_DIR = path.join(process.cwd(), "data", "thumbnails");
-const THUMBNAIL_WIDTH = 400;
-const THUMBNAIL_QUALITY = 80;
 const THUMB_BATCH_SIZE = 20;
 const CT_CACHE_MAX_BYTES =
   parseInt(process.env.CT_IMAGE_CACHE_MAX_GB || "30", 10) * 1024 * 1024 * 1024;
@@ -156,9 +154,9 @@ export async function downloadDeploymentForProcessing(
     await Promise.all(
       batch.map(async (img) => {
         const localPath = pathMap.get(img.driveFileId!)!;
-        const thumbPath = path.join(thumbDir, `${img.id}.jpg`);
+        const tp = thumbnailPath(deploymentId, img.id);
         try {
-          await fs.access(thumbPath);
+          await fs.access(tp);
         } catch {
           // Thumbnail doesn't exist — generate from downloaded/cached image
           try {
@@ -167,7 +165,7 @@ export async function downloadDeploymentForProcessing(
               .resize(THUMBNAIL_WIDTH)
               .jpeg({ quality: THUMBNAIL_QUALITY })
               .toBuffer();
-            await fs.writeFile(thumbPath, thumb);
+            await fs.writeFile(tp, thumb);
           } catch (err) {
             console.warn(
               `[drive-downloader] Thumbnail generation failed for image ${img.id}:`,

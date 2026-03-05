@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useTransition } from "react";
+import { useState, useCallback, useTransition } from "react";
 import {
   Dialog,
   DialogContent,
@@ -12,6 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Loader2, AlertTriangle } from "lucide-react";
 import { deleteDeployments, getDeploymentsCascadeStats } from "./actions";
+import { useConfirmPreview } from "@/hooks/use-confirm-preview";
 
 interface DeleteConfirmDialogProps {
   deploymentId: number | null;
@@ -26,27 +27,13 @@ export function DeleteConfirmDialog({
   onClose,
   onDeleted,
 }: DeleteConfirmDialogProps) {
-  const [stats, setStats] = useState<{
-    totalImages: number;
-    totalDetections: number;
-    totalVerified: number;
-    hasUploadCounts: boolean;
-  } | null>(null);
+  const fetchStats = useCallback(
+    (id: number) => getDeploymentsCascadeStats([id]),
+    []
+  );
+  const stats = useConfirmPreview(deploymentId, fetchStats, { raw: true });
   const [deleting, startDeleting] = useTransition();
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!deploymentId) {
-      setStats(null);
-      setError(null);
-      return;
-    }
-    let cancelled = false;
-    getDeploymentsCascadeStats([deploymentId]).then((result) => {
-      if (!cancelled) setStats(result);
-    });
-    return () => { cancelled = true; };
-  }, [deploymentId]);
 
   const handleDelete = () => {
     if (!deploymentId) return;

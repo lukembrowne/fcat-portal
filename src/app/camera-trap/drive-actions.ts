@@ -303,10 +303,11 @@ export async function scanDeploymentImages(
 // Compress deployment images — re-encode JPEGs at quality 85
 // ---------------------------------------------------------------------------
 
+import { thumbnailPath as thumbPath } from "@/lib/thumbnail";
+
 const COMPRESSION_QUALITY = 85;
 const COMPRESSION_BATCH_SIZE = 10;
 const CACHE_BASE = path.join(process.cwd(), "data", "cache", "ct-images");
-const THUMBNAIL_DIR = path.join(process.cwd(), "data", "thumbnails");
 
 const JPEG_EXTENSIONS = new Set([".jpg", ".jpeg"]);
 
@@ -493,8 +494,8 @@ export async function compressImageBatch(
 
         // Delete thumbnail only for standalone (Drive originals changed)
         if (options.uploadToDrive) {
-          const thumbPath = path.join(THUMBNAIL_DIR, String(options.deploymentId), `${img.id}.jpg`);
-          try { await fs.unlink(thumbPath); } catch { /* may not exist */ }
+          const tp = thumbPath(options.deploymentId, img.id);
+          try { await fs.unlink(tp); } catch { /* may not exist */ }
         }
 
         await db
@@ -909,8 +910,8 @@ async function revertJobInternal(
           // Delete cached/thumbnail files
           const cachePath = img.path || path.join(CACHE_BASE, String(deploymentId), img.filename);
           try { await fs.unlink(cachePath); } catch { /* may not exist */ }
-          const thumbPath = path.join(THUMBNAIL_DIR, String(deploymentId), `${img.id}.jpg`);
-          try { await fs.unlink(thumbPath); } catch { /* may not exist */ }
+          const tp = thumbPath(deploymentId, img.id);
+          try { await fs.unlink(tp); } catch { /* may not exist */ }
 
           // Update DB: reset compressed state
           await db

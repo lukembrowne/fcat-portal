@@ -13,6 +13,10 @@ map $http_user_agent $is_social_crawler {
     "~*iMessageBot"                 1;
 }
 
+# Rate limiting for unauthenticated public endpoints
+limit_req_zone $binary_remote_addr zone=public_api:10m rate=10r/s;
+limit_req_zone $binary_remote_addr zone=public_pages:10m rate=5r/s;
+
 # HTTP to HTTPS redirect
 server {
     listen 80;
@@ -63,6 +67,7 @@ server {
 
     # ===== Public pages (no auth) — share links, public dashboard =====
     location /public/ {
+        limit_req zone=public_pages burst=15 nodelay;
         proxy_pass http://127.0.0.1:3003;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -76,6 +81,7 @@ server {
 
     # ===== Public API (no auth) — serves images for share links =====
     location /api/public/ {
+        limit_req zone=public_api burst=30 nodelay;
         proxy_pass http://127.0.0.1:3003;
         proxy_http_version 1.1;
         proxy_set_header Host $host;

@@ -13,8 +13,9 @@ import {
   videos,
   detections,
   identifications,
+  IMAGE_TIMESTAMP_ORDER,
 } from "@/db/schema";
-import { eq, inArray, sql } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { ResultsClient } from "./results-client";
 
 interface PageProps {
@@ -56,7 +57,7 @@ export default async function JobResultsPage({ params }: PageProps) {
     .select()
     .from(images)
     .where(eq(images.jobId, jobId))
-    .orderBy(sql`COALESCE(${images.exifTimestamp}, ${images.fileModified})`, images.filename);
+    .orderBy(IMAGE_TIMESTAMP_ORDER, images.filename);
 
   const imageIds = jobImages.map((img) => img.id);
   const jobDetections =

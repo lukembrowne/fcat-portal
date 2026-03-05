@@ -876,3 +876,10 @@ export type NewUploadCountSnapshot = typeof uploadCountSnapshots.$inferInsert;
 
 export type ShareToken = typeof shareTokens.$inferSelect;
 export type NewShareToken = typeof shareTokens.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// Query helpers
+// ---------------------------------------------------------------------------
+
+/** Standard ordering for camera trap images: EXIF timestamp -> file modified */
+export const IMAGE_TIMESTAMP_ORDER = sql`COALESCE(${images.exifTimestamp}, ${images.fileModified})`;

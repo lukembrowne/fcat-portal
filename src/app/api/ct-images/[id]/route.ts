@@ -13,19 +13,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { promises as fs } from "fs";
 import path from "path";
-import sharp from "sharp";
 import { db } from "@/db";
 import { images, deployments } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { getCurrentUser } from "@/lib/auth";
 import { getUserCameraTrapProjects } from "@/lib/camera-trap-auth";
 import { downloadFileToBuffer } from "@/lib/drive-client";
+import { getOrGenerateThumbnail } from "@/lib/thumbnail";
 
 export const dynamic = "force-dynamic";
-
-const THUMBNAIL_DIR = path.join(process.cwd(), "data", "thumbnails");
-const THUMBNAIL_WIDTH = 400;
-const THUMBNAIL_QUALITY = 80;
 
 const MIME_TYPES: Record<string, string> = {
   ".jpg": "image/jpeg",
@@ -111,63 +107,17 @@ export async function GET(
 
   // --- Thumbnail ---
   if (size === "thumb") {
-    const thumbPath = path.join(
-      THUMBNAIL_DIR,
-      String(image.deploymentId),
-      `${image.id}.jpg`
-    );
-
-    // Check cache
     try {
-      const thumbData = await fs.readFile(thumbPath);
-      return new NextResponse(new Uint8Array(thumbData), {
-        headers: { ...headers, "Content-Type": "image/jpeg" },
-      });
-    } catch {
-      // Cache miss — generate thumbnail
-    }
-
-    // Need Drive file ID to download
-    if (!image.driveFileId) {
-      // Fallback: serve from local path if available
-      if (image.path) {
-        try {
-          const data = await fs.readFile(image.path);
-          const thumb = await sharp(data)
-            .resize(THUMBNAIL_WIDTH)
-            .jpeg({ quality: THUMBNAIL_QUALITY })
-            .toBuffer();
-
-          await fs.mkdir(path.dirname(thumbPath), { recursive: true });
-          await fs.writeFile(thumbPath, thumb);
-
-          return new NextResponse(new Uint8Array(thumb), {
-            headers: { ...headers, "Content-Type": "image/jpeg" },
-          });
-        } catch {
-          return NextResponse.json(
-            { error: "Failed to generate thumbnail" },
-            { status: 500 }
-          );
-        }
-      }
-      return NextResponse.json(
-        { error: "No image source available" },
-        { status: 404 }
+      const thumb = await getOrGenerateThumbnail(
+        image.id,
+        image.deploymentId,
+        image.path,
+        image.driveFileId,
+        downloadFileToBuffer,
       );
-    }
-
-    try {
-      const buffer = await downloadFileToBuffer(image.driveFileId);
-      const thumb = await sharp(buffer)
-        .resize(THUMBNAIL_WIDTH)
-        .jpeg({ quality: THUMBNAIL_QUALITY })
-        .toBuffer();
-
-      // Cache the thumbnail
-      await fs.mkdir(path.dirname(thumbPath), { recursive: true });
-      await fs.writeFile(thumbPath, thumb);
-
+      if (!thumb) {
+        return NextResponse.json({ error: "No image source available" }, { status: 404 });
+      }
       return new NextResponse(new Uint8Array(thumb), {
         headers: { ...headers, "Content-Type": "image/jpeg" },
       });

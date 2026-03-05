@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { cache } from "react";
 import { db } from "@/db";
 import {
   shareTokens,
@@ -16,9 +17,11 @@ interface PageProps {
   params: Promise<{ token: string }>;
 }
 
-async function getShareData(token: string) {
-  // Validate token format
-  if (!token || token.includes("/") || token.includes("\\") || token.includes("..")) {
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const getShareData = cache(async function getShareData(token: string) {
+  // Validate token format (UUID v4)
+  if (!token || !UUID_REGEX.test(token)) {
     return null;
   }
 
@@ -137,7 +140,7 @@ async function getShareData(token: string) {
     speciesSummary,
     token,
   };
-}
+});
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { token } = await params;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { Loader2 } from "lucide-react";
 import { getCompressionPreview, compressDeploymentImages } from "./drive-actions";
+import { useConfirmPreview } from "@/hooks/use-confirm-preview";
 
 interface CompressConfirmDialogProps {
   deploymentId: number | null;
@@ -24,22 +25,8 @@ export function CompressConfirmDialog({
   onClose,
   onStarted,
 }: CompressConfirmDialogProps) {
-  const [preview, setPreview] = useState<{ count: number; totalSizeMB: number } | null>(null);
+  const preview = useConfirmPreview(deploymentId, getCompressionPreview);
   const [starting, setStarting] = useState(false);
-
-  useEffect(() => {
-    if (!deploymentId) {
-      setPreview(null);
-      return;
-    }
-    let cancelled = false;
-    getCompressionPreview(deploymentId).then((result) => {
-      if (!cancelled && result.success) {
-        setPreview(result.data);
-      }
-    });
-    return () => { cancelled = true; };
-  }, [deploymentId]);
 
   const handleConfirm = async () => {
     if (!deploymentId) return;

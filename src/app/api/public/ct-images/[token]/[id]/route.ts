@@ -9,19 +9,13 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { promises as fs } from "fs";
-import path from "path";
-import sharp from "sharp";
 import { db } from "@/db";
 import { shareTokens, images } from "@/db/schema";
 import { eq, and, sql } from "drizzle-orm";
 import { downloadFileToBuffer } from "@/lib/drive-client";
+import { getOrGenerateThumbnail } from "@/lib/thumbnail";
 
 export const dynamic = "force-dynamic";
-
-const THUMBNAIL_DIR = path.join(process.cwd(), "data", "thumbnails");
-const THUMBNAIL_WIDTH = 400;
-const THUMBNAIL_QUALITY = 80;
 
 export async function GET(
   request: NextRequest,
@@ -30,7 +24,8 @@ export async function GET(
   const { token, id: idParam } = await params;
 
   // Validate token format (UUID v4)
-  if (!token || token.includes("/") || token.includes("\\") || token.includes("..")) {
+  const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (!token || !UUID_REGEX.test(token)) {
     return NextResponse.json({ error: "Bad request" }, { status: 400 });
   }
 
@@ -40,98 +35,50 @@ export async function GET(
     return NextResponse.json({ error: "Invalid image ID" }, { status: 400 });
   }
 
-  // Look up the share token
-  const [shareToken] = await db
-    .select()
-    .from(shareTokens)
-    .where(
+  // Look up share token + image in a single query
+  const [image] = await db
+    .select({
+      id: images.id,
+      deploymentId: images.deploymentId,
+      path: images.path,
+      driveFileId: images.driveFileId,
+    })
+    .from(images)
+    .innerJoin(
+      shareTokens,
       and(
+        eq(shareTokens.deploymentId, images.deploymentId),
         eq(shareTokens.token, token),
         sql`${shareTokens.revokedAt} IS NULL`
       )
-    );
-
-  if (!shareToken) {
-    return NextResponse.json({ error: "Invalid or revoked token" }, { status: 403 });
-  }
-
-  // Look up the image and verify it belongs to the token's deployment
-  const [image] = await db
-    .select()
-    .from(images)
-    .where(
-      and(
-        eq(images.id, imageId),
-        eq(images.deploymentId, shareToken.deploymentId)
-      )
-    );
+    )
+    .where(eq(images.id, imageId));
 
   if (!image) {
-    return NextResponse.json({ error: "Image not found" }, { status: 404 });
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
   const headers: Record<string, string> = {
     "Cache-Control": "public, max-age=31536000, immutable",
     "Content-Type": "image/jpeg",
+    "X-Content-Type-Options": "nosniff",
   };
 
-  // Always serve as thumbnail
-  const thumbPath = path.join(
-    THUMBNAIL_DIR,
-    String(image.deploymentId),
-    `${image.id}.jpg`
-  );
-
-  // Check cache
+  // Serve thumbnail
   try {
-    const thumbData = await fs.readFile(thumbPath);
-    return new NextResponse(new Uint8Array(thumbData), { headers });
-  } catch {
-    // Cache miss — generate thumbnail
-  }
-
-  // Generate from local path
-  if (image.path) {
-    try {
-      const data = await fs.readFile(image.path);
-      const thumb = await sharp(data)
-        .resize(THUMBNAIL_WIDTH)
-        .jpeg({ quality: THUMBNAIL_QUALITY })
-        .toBuffer();
-
-      await fs.mkdir(path.dirname(thumbPath), { recursive: true });
-      await fs.writeFile(thumbPath, thumb);
-
-      return new NextResponse(new Uint8Array(thumb), { headers });
-    } catch {
-      // Fall through to Drive
-    }
-  }
-
-  // Generate from Drive
-  if (!image.driveFileId) {
-    return NextResponse.json(
-      { error: "No image source available" },
-      { status: 404 }
+    const thumb = await getOrGenerateThumbnail(
+      image.id,
+      image.deploymentId,
+      image.path,
+      image.driveFileId,
+      downloadFileToBuffer,
     );
-  }
-
-  try {
-    const buffer = await downloadFileToBuffer(image.driveFileId);
-    const thumb = await sharp(buffer)
-      .resize(THUMBNAIL_WIDTH)
-      .jpeg({ quality: THUMBNAIL_QUALITY })
-      .toBuffer();
-
-    await fs.mkdir(path.dirname(thumbPath), { recursive: true });
-    await fs.writeFile(thumbPath, thumb);
-
+    if (!thumb) {
+      return NextResponse.json({ error: "No image source available" }, { status: 404 });
+    }
     return new NextResponse(new Uint8Array(thumb), { headers });
   } catch (err) {
     console.error(`[public-ct-images] Thumbnail generation failed for image ${imageId}:`, err);
-    return NextResponse.json(
-      { error: "Failed to load image" },
-      { status: 502 }
-    );
+    return NextResponse.json({ error: "Failed to load image" }, { status: 502 });
   }
 }

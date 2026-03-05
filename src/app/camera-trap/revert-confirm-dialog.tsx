@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { Loader2 } from "lucide-react";
 import { getRevertPreview, revertCompression } from "./drive-actions";
+import { useConfirmPreview } from "@/hooks/use-confirm-preview";
 
 interface RevertConfirmDialogProps {
   deploymentId: number | null;
@@ -24,22 +25,8 @@ export function RevertConfirmDialog({
   onClose,
   onStarted,
 }: RevertConfirmDialogProps) {
-  const [preview, setPreview] = useState<{ count: number; savedMB: number } | null>(null);
+  const preview = useConfirmPreview(deploymentId, getRevertPreview);
   const [starting, setStarting] = useState(false);
-
-  useEffect(() => {
-    if (!deploymentId) {
-      setPreview(null);
-      return;
-    }
-    let cancelled = false;
-    getRevertPreview(deploymentId).then((result) => {
-      if (!cancelled && result.success) {
-        setPreview(result.data);
-      }
-    });
-    return () => { cancelled = true; };
-  }, [deploymentId]);
 
   const handleConfirm = async () => {
     if (!deploymentId) return;

@@ -70,8 +70,16 @@ export function getDb(): BetterSQLite3Database<typeof schema> {
 
   _db = drizzle(sqlite, { schema });
 
-  // Recover stuck jobs on startup
-  recoverStuckJobs(_db);
+  // Recover stuck jobs on startup — only once per process.
+  // globalThis survives hot reload; module-level _db does not.
+  // Without this guard, hot reload re-runs recoverStuckJobs, which marks
+  // actively-running jobs as "failed" while their Promises keep going (zombie jobs).
+  const RECOVERY_KEY = "__portal_jobs_recovered";
+  const g = globalThis as unknown as Record<string, boolean>;
+  if (!g[RECOVERY_KEY]) {
+    recoverStuckJobs(_db);
+    g[RECOVERY_KEY] = true;
+  }
 
   return _db;
 }
@@ -154,9 +162,16 @@ function recoverStuckJobs(database: BetterSQLite3Database<typeof schema>) {
       .all();
 
     for (const job of stuckJobs) {
+      console.warn(
+        `[db] Recovering stuck job ${job.id}: deployment=${job.deploymentId}, type=${job.jobType}, phase="${job.statusMessage}", started=${job.startedAt}`
+      );
+
       database
         .update(schema.processingJobs)
-        .set({ status: "failed", errorMessage: "Job interrupted by server restart" })
+        .set({
+          status: "failed",
+          errorMessage: `Job interrupted by server restart (phase: ${job.statusMessage || "unknown"})`,
+        })
         .where(eq(schema.processingJobs.id, job.id))
         .run();
 

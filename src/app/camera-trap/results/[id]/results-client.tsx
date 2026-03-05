@@ -1,14 +1,16 @@
 "use client";
 
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { ImageGrid, type ImageGridItem } from "@/components/image-grid";
-import { BatchDeleteImagesDialog } from "@/app/camera-trap/batch-delete-images-dialog";
+import { BulkDeleteBlanksDialog } from "./bulk-delete-blanks-dialog";
 import { cn } from "@/lib/utils";
-import { CheckSquare, XSquare, Trash2 } from "lucide-react";
+import { Trash2 } from "lucide-react";
+
+const COLUMN_OPTIONS = [2, 3, 4, 6] as const;
 
 interface ResultsClientProps {
   images: ImageGridItem[];
@@ -31,6 +33,16 @@ export function ResultsClient({
   speciesList,
   isAdmin,
 }: ResultsClientProps) {
+  const [gridColumns, setGridColumns] = useState(4);
+  useEffect(() => {
+    const saved = localStorage.getItem("grid-columns");
+    if (saved) setGridColumns(parseInt(saved, 10));
+  }, []);
+  const handleColumnChange = (cols: number) => {
+    setGridColumns(cols);
+    localStorage.setItem("grid-columns", String(cols));
+  };
+
   const [selectedSpecies, setSelectedSpecies] = useState<string | null>(null);
   const [confidenceRange, setConfidenceRange] = useState<[number, number]>([
     0, 1,
@@ -38,12 +50,17 @@ export function ResultsClient({
   const [verificationFilter, setVerificationFilter] = useState("all");
   const [showEmpty, setShowEmpty] = useState(true);
   const [showStarredOnly, setShowStarredOnly] = useState(false);
-  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [showBlanksOnly, setShowBlanksOnly] = useState(false);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
 
   const filteredImages = useMemo(() => {
     return images.filter((img) => {
       if (showStarredOnly && !img.starred) return false;
+
+      if (showBlanksOnly) {
+        const isBlank = img.confirmedBlank || img.detections.length === 0;
+        if (!isBlank) return false;
+      }
 
       if (selectedSpecies) {
         const hasSpecies = img.detections.some(
@@ -75,38 +92,7 @@ export function ResultsClient({
 
       return true;
     });
-  }, [images, selectedSpecies, confidenceRange, verificationFilter, showEmpty, showStarredOnly]);
-
-  const handleToggleSelect = useCallback((id: number) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
-  }, []);
-
-  const handleSelectAllBlanks = useCallback(() => {
-    const blankIds = filteredImages
-      .filter(
-        (img) =>
-          img.status === "processed" &&
-          img.detections.length === 0,
-      )
-      .map((img) => img.id);
-    setSelectedIds(new Set(blankIds));
-  }, [filteredImages]);
-
-  const handleClearSelection = useCallback(() => {
-    setSelectedIds(new Set());
-  }, []);
-
-  const handleDeleteComplete = useCallback(() => {
-    setSelectedIds(new Set());
-  }, []);
+  }, [images, selectedSpecies, confidenceRange, verificationFilter, showEmpty, showStarredOnly, showBlanksOnly]);
 
   const clearFilters = () => {
     setSelectedSpecies(null);
@@ -114,6 +100,7 @@ export function ResultsClient({
     setVerificationFilter("all");
     setShowEmpty(true);
     setShowStarredOnly(false);
+    setShowBlanksOnly(false);
   };
 
   const hasActiveFilters =
@@ -122,11 +109,8 @@ export function ResultsClient({
     confidenceRange[1] < 1 ||
     verificationFilter !== "all" ||
     !showEmpty ||
-    showStarredOnly;
-
-  const blankCount = filteredImages.filter(
-    (img) => img.status === "processed" && img.detections.length === 0,
-  ).length;
+    showStarredOnly ||
+    showBlanksOnly;
 
   return (
     <div className="grid gap-6 lg:grid-cols-[240px_1fr]">
@@ -236,6 +220,37 @@ export function ResultsClient({
               />
               Solo destacadas
             </label>
+
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                checked={showBlanksOnly}
+                onChange={(e) => setShowBlanksOnly(e.target.checked)}
+                className="accent-primary"
+              />
+              Solo vacías
+            </label>
+
+            {isAdmin && (
+              <>
+                <div className="border-t pt-3 mt-1">
+                  <Label className="text-xs text-muted-foreground uppercase tracking-wide">
+                    Herramientas
+                  </Label>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full mt-2 text-xs text-destructive border-destructive/30 hover:bg-destructive/10"
+                    onClick={() => {
+                      setBulkDeleteOpen(true);
+                    }}
+                  >
+                    <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+                    Eliminar vacías
+                  </Button>
+                </div>
+              </>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -249,68 +264,37 @@ export function ResultsClient({
               ` de ${images.length}`}
             )
           </h2>
+          <div className="flex items-center gap-1 border rounded-md p-0.5">
+            {COLUMN_OPTIONS.map((cols) => (
+              <button
+                key={cols}
+                className={cn(
+                  "px-2 py-1 text-xs rounded transition-colors",
+                  gridColumns === cols
+                    ? "bg-primary text-primary-foreground"
+                    : "hover:bg-accent"
+                )}
+                onClick={() => handleColumnChange(cols)}
+                title={`${cols} columnas`}
+              >
+                {cols}
+              </button>
+            ))}
+          </div>
         </div>
         <ImageGrid
           images={filteredImages}
           jobId={jobId}
-          selectable={isAdmin}
-          selectedIds={selectedIds}
-          onToggleSelect={handleToggleSelect}
+          columns={gridColumns}
         />
-
-        {/* Floating selection action bar */}
-        {isAdmin && selectedIds.size > 0 && (
-          <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-background border rounded-lg shadow-lg px-4 py-3 flex items-center gap-3">
-            <span className="text-sm font-medium">
-              {selectedIds.size} seleccionadas
-            </span>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleClearSelection}
-              className="h-8 text-xs"
-            >
-              <XSquare className="h-3.5 w-3.5 mr-1" />
-              Deseleccionar
-            </Button>
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={() => setDeleteDialogOpen(true)}
-              className="h-8 text-xs"
-            >
-              <Trash2 className="h-3.5 w-3.5 mr-1" />
-              Eliminar de Drive
-            </Button>
-          </div>
-        )}
-
-        {/* Select all blanks bar (shown when no selection and blanks exist) */}
-        {isAdmin && selectedIds.size === 0 && blankCount > 0 && (
-          <div className="mt-4 flex items-center gap-3 p-3 rounded-lg border bg-muted/50">
-            <span className="text-sm text-muted-foreground">
-              {blankCount} imágenes vacías en esta vista
-            </span>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleSelectAllBlanks}
-              className="h-8 text-xs"
-            >
-              <CheckSquare className="h-3.5 w-3.5 mr-1" />
-              Seleccionar todas las vacías
-            </Button>
-          </div>
-        )}
       </div>
 
-      <BatchDeleteImagesDialog
-        open={deleteDialogOpen}
-        onOpenChange={setDeleteDialogOpen}
-        selectedIds={[...selectedIds]}
-        selectedCount={selectedIds.size}
-        onComplete={handleDeleteComplete}
-      />
+      {isAdmin && bulkDeleteOpen && (
+        <BulkDeleteBlanksDialog
+          onClose={() => setBulkDeleteOpen(false)}
+          jobId={jobId}
+        />
+      )}
     </div>
   );
 }

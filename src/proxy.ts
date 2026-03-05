@@ -34,7 +34,7 @@ export function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    // Match all paths except static files
-    "/((?!_next/static|_next/image|favicon.ico).*)",
+    // Match all paths except static files and public routes
+    "/((?!_next/static|_next/image|favicon.ico|public|api/public).*)",
   ],
 };

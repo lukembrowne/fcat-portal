@@ -210,6 +210,10 @@ export const processingJobs = sqliteTable("biochoco_processing_jobs", {
   frameExtractionRate: real("frame_extraction_rate").default(1.0),
   totalVideos: integer("total_videos").default(0),
   extractedFrames: integer("extracted_frames").default(0),
+  compressFirst: integer("compress_first", { mode: "boolean" }).default(false),
+  downloadedImages: integer("downloaded_images").default(0),
+  downloadTotal: integer("download_total").default(0),
+  cachedImages: integer("cached_images").default(0),
 });
 
 // ---------------------------------------------------------------------------
@@ -249,11 +253,13 @@ export const images = sqliteTable(
     compressed: integer("compressed", { mode: "boolean" })
       .notNull()
       .default(false),
+    originalFileSize: integer("original_file_size"),
     starred: integer("starred", { mode: "boolean" })
       .notNull()
       .default(false),
     starredBy: text("starred_by"),
     starredAt: integer("starred_at", { mode: "timestamp" }),
+    setupTag: text("setup_tag"),  // 'deployment' | 'retrieval' | null
   },
   (table) => [
     index("idx_biochoco_images_deployment_id").on(table.deploymentId),

@@ -51,7 +51,8 @@ export async function createProcessingJob(
     classifierModel?: string;
     confidenceThreshold?: number;
     frameExtractionRate?: number;
-  }
+  },
+  options?: { compressFirst?: boolean }
 ): Promise<ActionResult<{ jobId: number }>> {
   const user = await requirePermission("camera-trap", "editor");
 
@@ -90,6 +91,7 @@ export async function createProcessingJob(
         classifierModel: modelConfig?.classifierModel || ML_DEFAULTS.classifierModel,
         confidenceThreshold: modelConfig?.confidenceThreshold ?? ML_DEFAULTS.confidenceThreshold,
         frameExtractionRate: modelConfig?.frameExtractionRate ?? 1.0,
+        compressFirst: options?.compressFirst ?? false,
         status: "pending",
         totalImages: deploymentImages.length,
         totalVideos: deploymentVideos.length,
@@ -121,6 +123,19 @@ export async function createProcessingJob(
       error: error instanceof Error ? error.message : "Error al crear trabajo",
     };
   }
+}
+
+/**
+ * Check if a job is still in an expected active state. Returns false if the
+ * job was externally marked as failed/cancelled (e.g., by stuck job recovery
+ * during a hot-reload or server restart).
+ */
+async function isJobStillActive(jobId: number): Promise<boolean> {
+  const [job] = await db
+    .select({ status: processingJobs.status })
+    .from(processingJobs)
+    .where(eq(processingJobs.id, jobId));
+  return job?.status === "processing" || job?.status === "pending";
 }
 
 /**
@@ -173,23 +188,45 @@ async function processJobInternal(
 
     // For Drive deployments: download images + videos to persistent cache
     if (deployment.driveFolderId) {
+      // Cancellation check — read job status from DB between download batches
+      const checkCancelled = async (): Promise<boolean> => {
+        const [j] = await db.select({ status: processingJobs.status })
+          .from(processingJobs).where(eq(processingJobs.id, jobId));
+        return !j || j.status !== "processing";
+      };
+
       // --- Download images ---
-      await db
-        .update(processingJobs)
-        .set({ statusMessage: "Descargando imágenes de Drive..." })
-        .where(eq(processingJobs.id, jobId));
+      console.log(
+        `[process] Job ${jobId}: starting image download phase`
+      );
 
       const downloadResult = await downloadDeploymentForProcessing(
         deployment.id,
         jobId,
-        async (downloaded, total) => {
-          await db
-            .update(processingJobs)
-            .set({
-              statusMessage: `Descargando imágenes... (${downloaded} de ${total})`,
-            })
-            .where(eq(processingJobs.id, jobId));
-        }
+        async (event) => {
+          if (event.phase === "preflight") {
+            const msg = event.cached > 0
+              ? `${event.cached} en caché, descargando ${event.toDownload}...`
+              : `Descargando ${event.toDownload} imágenes de Drive...`;
+            await db.update(processingJobs).set({
+              cachedImages: event.cached,
+              downloadTotal: event.toDownload,
+              statusMessage: event.toDownload === 0 ? `${event.cached} imágenes en caché` : msg,
+            }).where(eq(processingJobs.id, jobId));
+          } else if (event.phase === "downloading") {
+            await db.update(processingJobs).set({
+              downloadedImages: event.downloaded,
+              statusMessage: event.failed > 0
+                ? `Descargando... ${event.downloaded} de ${event.total} (${event.failed} fallidos)`
+                : `Descargando... ${event.downloaded} de ${event.total}`,
+            }).where(eq(processingJobs.id, jobId));
+          } else if (event.phase === "thumbnails") {
+            await db.update(processingJobs).set({
+              statusMessage: `Generando miniaturas... ${event.generated} de ${event.total}`,
+            }).where(eq(processingJobs.id, jobId));
+          }
+        },
+        checkCancelled,
       );
       cacheDir = downloadResult.cacheDir;
 
@@ -200,22 +237,30 @@ async function processJobInternal(
         .where(eq(videos.deploymentId, deployment.id));
 
       if (deploymentVideos.length > 0) {
-        await db
-          .update(processingJobs)
-          .set({ statusMessage: "Descargando videos de Drive..." })
-          .where(eq(processingJobs.id, jobId));
+        console.log(
+          `[process] Job ${jobId}: starting video download phase`
+        );
 
         await downloadVideosForProcessing(
           deployment.id,
           jobId,
-          async (downloaded, total) => {
-            await db
-              .update(processingJobs)
-              .set({
-                statusMessage: `Descargando videos... (${downloaded} de ${total})`,
-              })
-              .where(eq(processingJobs.id, jobId));
-          }
+          async (event) => {
+            if (event.phase === "preflight") {
+              const msg = event.cached > 0
+                ? `${event.cached} videos en caché, descargando ${event.toDownload}...`
+                : `Descargando ${event.toDownload} videos de Drive...`;
+              await db.update(processingJobs).set({
+                statusMessage: event.toDownload === 0 ? `${event.cached} videos en caché` : msg,
+              }).where(eq(processingJobs.id, jobId));
+            } else if (event.phase === "downloading") {
+              await db.update(processingJobs).set({
+                statusMessage: event.failed > 0
+                  ? `Descargando videos... ${event.downloaded} de ${event.total} (${event.failed} fallidos)`
+                  : `Descargando videos... ${event.downloaded} de ${event.total}`,
+              }).where(eq(processingJobs.id, jobId));
+            }
+          },
+          checkCancelled,
         );
       }
 
@@ -427,6 +472,57 @@ async function processJobInternal(
           })
           .where(eq(processingJobs.id, jobId));
       }
+    }
+
+    // --- Zombie check: bail out if job was externally killed (e.g., hot-reload recovery) ---
+    if (!(await isJobStillActive(jobId))) {
+      console.warn(`[processJob] Job ${jobId} is no longer active after download phase — aborting`);
+      return { success: false, error: "Job was externally terminated" };
+    }
+
+    // --- Optional compression phase (compress in cache before ML) ---
+    if (job.compressFirst) {
+      await db
+        .update(processingJobs)
+        .set({ statusMessage: "Comprimiendo imágenes..." })
+        .where(eq(processingJobs.id, jobId));
+
+      // Get uncompressed JPEG images for this deployment
+      const uncompressedJpegs = (await db
+        .select()
+        .from(images)
+        .where(
+          and(
+            eq(images.deploymentId, deployment.id),
+            eq(images.compressed, false),
+          ),
+        )).filter((img) => {
+        const ext = path.extname(img.filename).toLowerCase();
+        return ext === ".jpg" || ext === ".jpeg";
+      });
+
+      if (uncompressedJpegs.length > 0) {
+        const { compressImageBatch } = await import("./drive-actions");
+        await compressImageBatch(
+          uncompressedJpegs.map((img) => ({ ...img, deploymentId: deployment.id })),
+          { uploadToDrive: true, jobId, deploymentId: deployment.id },
+          async (compressed, failed) => {
+            const processedSoFar = compressed + failed;
+            await db
+              .update(processingJobs)
+              .set({
+                statusMessage: `Comprimiendo... (${processedSoFar} de ${uncompressedJpegs.length})`,
+              })
+              .where(eq(processingJobs.id, jobId));
+          },
+        );
+      }
+    }
+
+    // --- Zombie check before ML phase ---
+    if (!(await isJobStillActive(jobId))) {
+      console.warn(`[processJob] Job ${jobId} is no longer active after compression phase — aborting`);
+      return { success: false, error: "Job was externally terminated" };
     }
 
     // Re-fetch job images (paths may have been updated by download + frame extraction)
@@ -1578,10 +1674,35 @@ export async function deleteImagesFromDrive(
 // Bulk delete blank images
 // ---------------------------------------------------------------------------
 
+export async function checkSetupRetrievalTags(
+  jobId: number
+): Promise<ActionResult<{ hasDeployment: boolean; hasRetrieval: boolean }>> {
+  await requirePermission("camera-trap", "admin");
+  try {
+    const tags = await db
+      .select({ setupTag: images.setupTag })
+      .from(images)
+      .where(and(eq(images.jobId, jobId), isNotNull(images.setupTag)));
+    const tagSet = new Set(tags.map((t) => t.setupTag));
+    return {
+      success: true,
+      data: {
+        hasDeployment: tagSet.has("deployment"),
+        hasRetrieval: tagSet.has("retrieval"),
+      },
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Error al verificar etiquetas",
+    };
+  }
+}
+
 export async function countDeletableImages(
   jobId: number,
-  scope: { confirmedBlank: boolean; noDetections: boolean }
-): Promise<ActionResult<{ confirmedBlankCount: number; noDetectionsCount: number; totalCount: number }>> {
+  scope: { confirmedBlank: boolean; noDetections: boolean; unverifiedDetections: boolean }
+): Promise<ActionResult<{ confirmedBlankCount: number; noDetectionsCount: number; unverifiedDetectionsCount: number; totalCount: number }>> {
   await requirePermission("camera-trap", "admin");
 
   try {
@@ -1646,8 +1767,27 @@ export async function countDeletableImages(
       }
     }
 
+    // For unverifiedDetections scope: find images where ALL identifications are unverified
+    // (none verified, corrected, or rejected)
+    const detectionsWithVerifiedOrCorrectedOrRejected = new Set<number>();
+    if (scope.unverifiedDetections && allDetectionIds.length > 0) {
+      const nonUnverifiedIdents = await db
+        .select({ detectionId: identifications.detectionId })
+        .from(identifications)
+        .where(
+          and(
+            inArray(identifications.detectionId, allDetectionIds),
+            ne(identifications.verificationStatus, "unverified")
+          )
+        );
+      for (const i of nonUnverifiedIdents) {
+        detectionsWithVerifiedOrCorrectedOrRejected.add(i.detectionId);
+      }
+    }
+
     const confirmedBlankSet = new Set<number>();
     const noDetectionsSet = new Set<number>();
+    const unverifiedDetectionsSet = new Set<number>();
 
     for (const img of eligible) {
       const detCount = detectionsByImg.get(img.id)?.length ?? 0;
@@ -1662,16 +1802,27 @@ export async function countDeletableImages(
       if (scope.noDetections && detCount === 0) {
         noDetectionsSet.add(img.id);
       }
+
+      if (scope.unverifiedDetections && detCount > 0) {
+        const detIds = detectionsByImg.get(img.id)!;
+        const hasNonUnverified = detIds.some((id) =>
+          detectionsWithVerifiedOrCorrectedOrRejected.has(id)
+        );
+        if (!hasNonUnverified) {
+          unverifiedDetectionsSet.add(img.id);
+        }
+      }
     }
 
     // Union of selected scopes
-    const totalSet = new Set([...confirmedBlankSet, ...noDetectionsSet]);
+    const totalSet = new Set([...confirmedBlankSet, ...noDetectionsSet, ...unverifiedDetectionsSet]);
 
     return {
       success: true,
       data: {
         confirmedBlankCount: confirmedBlankSet.size,
         noDetectionsCount: noDetectionsSet.size,
+        unverifiedDetectionsCount: unverifiedDetectionsSet.size,
         totalCount: totalSet.size,
       },
     };
@@ -1685,7 +1836,7 @@ export async function countDeletableImages(
 
 export async function bulkDeleteBlankImages(
   jobId: number,
-  scope: { confirmedBlank: boolean; noDetections: boolean }
+  scope: { confirmedBlank: boolean; noDetections: boolean; unverifiedDetections: boolean }
 ): Promise<ActionResult<{ deleted: number; failed: number; skipped: number }>> {
   const user = await requirePermission("camera-trap", "admin");
 
@@ -1746,6 +1897,23 @@ export async function bulkDeleteBlankImages(
       }
     }
 
+    // For unverifiedDetections: find detections with any non-unverified identification
+    const detectionsWithVerifiedOrCorrectedOrRejected = new Set<number>();
+    if (scope.unverifiedDetections && allDetectionIds.length > 0) {
+      const nonUnverifiedIdents = await db
+        .select({ detectionId: identifications.detectionId })
+        .from(identifications)
+        .where(
+          and(
+            inArray(identifications.detectionId, allDetectionIds),
+            ne(identifications.verificationStatus, "unverified")
+          )
+        );
+      for (const i of nonUnverifiedIdents) {
+        detectionsWithVerifiedOrCorrectedOrRejected.add(i.detectionId);
+      }
+    }
+
     // Build the set of images to delete
     const toDelete = new Set<number>();
     for (const img of eligible) {
@@ -1759,6 +1927,16 @@ export async function bulkDeleteBlankImages(
 
       if (scope.noDetections && detCount === 0) {
         toDelete.add(img.id);
+      }
+
+      if (scope.unverifiedDetections && detCount > 0) {
+        const detIds = detectionsByImg.get(img.id)!;
+        const hasNonUnverified = detIds.some((id) =>
+          detectionsWithVerifiedOrCorrectedOrRejected.has(id)
+        );
+        if (!hasNonUnverified) {
+          toDelete.add(img.id);
+        }
       }
     }
 
@@ -2060,7 +2238,8 @@ export async function undoVerifiedEmpty(
 // ---------------------------------------------------------------------------
 
 export async function queueProcessing(
-  deploymentIds: number[]
+  deploymentIds: number[],
+  options?: { compressFirst?: boolean }
 ): Promise<ActionResult<{ jobIds: number[] }>> {
   const user = await requirePermission("camera-trap", "editor");
 
@@ -2094,7 +2273,7 @@ export async function queueProcessing(
       }
 
       // Create job
-      const result = await createProcessingJob(depId);
+      const result = await createProcessingJob(depId, undefined, options);
       if (result.success) {
         jobIds.push(result.data.jobId);
       }
@@ -3199,11 +3378,8 @@ export async function assignSpecies(
       return { success: false, error: "Identificación no encontrada" };
     }
 
-    if (ident.verificationStatus === "rejected") {
-      return { success: false, error: "No se puede asignar especie a una detección rechazada" };
-    }
-
     // If species matches original ML prediction → verify; otherwise → correct
+    // Also allow re-assigning species to rejected detections (un-rejects them)
     const isMatch = newSpecies === ident.species;
 
     await db
@@ -3214,16 +3390,7 @@ export async function assignSpecies(
         verifiedBy: user.email,
         verifiedAt: new Date(),
       })
-      .where(
-        and(
-          eq(identifications.id, identificationId),
-          inArray(identifications.verificationStatus, [
-            "unverified",
-            "verified",
-            "corrected",
-          ])
-        )
-      );
+      .where(eq(identifications.id, identificationId));
 
     revalidatePath(CAMERA_TRAP_PATH);
     return { success: true, data: undefined };
@@ -3464,6 +3631,115 @@ export async function toggleConfirmedBlank(
     return {
       success: false,
       error: error instanceof Error ? error.message : "Error al actualizar",
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Setup tagging (deployment / retrieval)
+// ---------------------------------------------------------------------------
+
+export async function toggleSetupTag(
+  imageId: number,
+  tag: "deployment" | "retrieval"
+): Promise<
+  ActionResult<{
+    setupTag: string | null;
+    suggestion: { field: "validStart" | "validEnd"; value: string; deploymentId: number } | null;
+  }>
+> {
+  await requirePermission("camera-trap", "editor");
+
+  try {
+    const [image] = await db
+      .select({
+        id: images.id,
+        deploymentId: images.deploymentId,
+        setupTag: images.setupTag,
+        exifTimestamp: images.exifTimestamp,
+        fileModified: images.fileModified,
+      })
+      .from(images)
+      .where(eq(images.id, imageId));
+
+    if (!image) {
+      return { success: false, error: "Imagen no encontrada" };
+    }
+
+    // Toggle: if already set to this tag, clear it
+    const newValue = image.setupTag === tag ? null : tag;
+
+    await db
+      .update(images)
+      .set({ setupTag: newValue })
+      .where(eq(images.id, imageId));
+
+    // Build date suggestion when setting a tag
+    let suggestion: { field: "validStart" | "validEnd"; value: string; deploymentId: number } | null = null;
+
+    if (newValue) {
+      const timestamp = image.exifTimestamp
+        ? new Date(image.exifTimestamp)
+        : image.fileModified
+          ? new Date(image.fileModified)
+          : null;
+
+      if (timestamp && !isNaN(timestamp.getTime())) {
+        // Format as YYYY-MM-DDTHH:mm (datetime-local input format)
+        const pad = (n: number) => String(n).padStart(2, "0");
+        const formatted = `${timestamp.getFullYear()}-${pad(timestamp.getMonth() + 1)}-${pad(timestamp.getDate())}T${pad(timestamp.getHours())}:${pad(timestamp.getMinutes())}`;
+
+        suggestion = {
+          field: tag === "deployment" ? "validStart" : "validEnd",
+          deploymentId: image.deploymentId,
+          value: formatted,
+        };
+      }
+    }
+
+    revalidatePath(CAMERA_TRAP_PATH);
+    return { success: true, data: { setupTag: newValue, suggestion } };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Error al actualizar",
+    };
+  }
+}
+
+export async function applySetupTagDate(
+  deploymentId: number,
+  field: "validStart" | "validEnd",
+  value: string
+): Promise<ActionResult<void>> {
+  const user = await requirePermission("camera-trap", "editor");
+
+  try {
+    await requireDeploymentAccess(user, deploymentId);
+
+    await db
+      .update(deployments)
+      .set({
+        [field]: value,
+        updatedAt: new Date(),
+      })
+      .where(eq(deployments.id, deploymentId));
+
+    await db.insert(activityLog).values({
+      userEmail: user.email,
+      action: "apply_setup_tag_date",
+      projectId: "camera-trap",
+      targetType: "deployment",
+      targetId: String(deploymentId),
+      details: JSON.stringify({ field, value }),
+    });
+
+    revalidatePath(CAMERA_TRAP_PATH);
+    return { success: true, data: undefined };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Error al actualizar fecha",
     };
   }
 }

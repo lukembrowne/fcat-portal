@@ -7,7 +7,7 @@ import { requirePermission } from "@/lib/auth";
 import { requireDeploymentAccess } from "@/lib/camera-trap-auth";
 import { db } from "@/db";
 import { deployments, images, videos } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { PreviewProcessButton } from "./preview-process-button";
 
 interface PageProps {
@@ -38,7 +38,7 @@ export default async function PreviewPage({ params }: PageProps) {
     .select()
     .from(images)
     .where(eq(images.deploymentId, deploymentId))
-    .orderBy(images.filename);
+    .orderBy(sql`COALESCE(${images.exifTimestamp}, ${images.fileModified})`, images.filename);
 
   const depVideos = await db
     .select()

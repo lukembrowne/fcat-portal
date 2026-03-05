@@ -12,6 +12,9 @@ export interface ActiveJob {
   processedImages: number;
   statusMessage: string | null;
   startedAt: string | null;
+  downloadedImages: number;
+  downloadTotal: number;
+  cachedImages: number;
 }
 
 const POLL_INTERVAL = 3000;

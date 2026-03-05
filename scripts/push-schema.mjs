@@ -79,6 +79,7 @@ const statements = [
     classifier_model TEXT,
     confidence_threshold REAL DEFAULT 0.1,
     status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'processing', 'completed', 'failed', 'cancelled')),
+    status_message TEXT,
     job_type TEXT NOT NULL DEFAULT 'ml',
     pid INTEGER,
     total_images INTEGER NOT NULL DEFAULT 0,
@@ -87,6 +88,13 @@ const statements = [
     error_message TEXT,
     started_at INTEGER,
     completed_at INTEGER,
+    frame_extraction_rate REAL DEFAULT 1.0,
+    total_videos INTEGER DEFAULT 0,
+    extracted_frames INTEGER DEFAULT 0,
+    compress_first INTEGER DEFAULT 0,
+    downloaded_images INTEGER DEFAULT 0,
+    download_total INTEGER DEFAULT 0,
+    cached_images INTEGER DEFAULT 0,
     created_at INTEGER NOT NULL DEFAULT (unixepoch()),
     created_by TEXT
   )`,
@@ -503,6 +511,16 @@ const migrations = [
   `ALTER TABLE biochoco_images ADD COLUMN compressed INTEGER NOT NULL DEFAULT 0`,
   // Job type column for compression vs ML jobs (2026-03-02)
   `ALTER TABLE biochoco_processing_jobs ADD COLUMN job_type TEXT NOT NULL DEFAULT 'ml'`,
+  // Original file size for compression revert (2026-03-02)
+  `ALTER TABLE biochoco_images ADD COLUMN original_file_size INTEGER`,
+  // Optional compression before ML processing (2026-03-02)
+  `ALTER TABLE biochoco_processing_jobs ADD COLUMN compress_first INTEGER DEFAULT 0`,
+  // Setup tag for deployment/retrieval images (2026-03-03)
+  `ALTER TABLE biochoco_images ADD COLUMN setup_tag TEXT`,
+  // Download progress tracking (2026-03-04)
+  `ALTER TABLE biochoco_processing_jobs ADD COLUMN downloaded_images INTEGER DEFAULT 0`,
+  `ALTER TABLE biochoco_processing_jobs ADD COLUMN download_total INTEGER DEFAULT 0`,
+  `ALTER TABLE biochoco_processing_jobs ADD COLUMN cached_images INTEGER DEFAULT 0`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }

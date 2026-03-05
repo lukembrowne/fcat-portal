@@ -14,7 +14,7 @@ import {
   detections,
   identifications,
 } from "@/db/schema";
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import { ResultsClient } from "./results-client";
 
 interface PageProps {
@@ -55,7 +55,8 @@ export default async function JobResultsPage({ params }: PageProps) {
   const jobImages = await db
     .select()
     .from(images)
-    .where(eq(images.jobId, jobId));
+    .where(eq(images.jobId, jobId))
+    .orderBy(sql`COALESCE(${images.exifTimestamp}, ${images.fileModified})`, images.filename);
 
   const imageIds = jobImages.map((img) => img.id);
   const jobDetections =
@@ -132,6 +133,7 @@ export default async function JobResultsPage({ params }: PageProps) {
       videoFilename: vid?.filename ?? null,
       confirmedBlank: img.confirmedBlank ?? false,
       starred: img.starred ?? false,
+      setupTag: img.setupTag ?? null,
       detections: imgDets.map((det) => {
         const ident = identByDetection.get(det.id);
         return {

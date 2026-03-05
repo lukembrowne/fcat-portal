@@ -158,6 +158,7 @@ export default async function ImageDetailPage({ params }: PageProps) {
         confirmedBlank={image.confirmedBlank}
         starred={image.starred}
         starredBy={image.starredBy}
+        setupTag={image.setupTag as "deployment" | "retrieval" | null}
       />
     </div>
   );

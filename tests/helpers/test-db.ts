@@ -128,7 +128,11 @@ const CAMERA_TRAP_DDL = `
     created_by TEXT,
     frame_extraction_rate REAL DEFAULT 1.0,
     total_videos INTEGER DEFAULT 0,
-    extracted_frames INTEGER DEFAULT 0
+    extracted_frames INTEGER DEFAULT 0,
+    compress_first INTEGER DEFAULT 0,
+    downloaded_images INTEGER DEFAULT 0,
+    download_total INTEGER DEFAULT 0,
+    cached_images INTEGER DEFAULT 0
   );
 
   CREATE TABLE biochoco_videos (
@@ -163,7 +167,9 @@ const CAMERA_TRAP_DDL = `
     starred INTEGER NOT NULL DEFAULT 0,
     starred_by TEXT,
     starred_at INTEGER,
-    compressed INTEGER NOT NULL DEFAULT 0
+    compressed INTEGER NOT NULL DEFAULT 0,
+    original_file_size INTEGER,
+    setup_tag TEXT
   );
 
   CREATE TABLE biochoco_detections (

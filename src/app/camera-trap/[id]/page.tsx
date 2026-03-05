@@ -4,15 +4,16 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/status-badge";
 import { requirePermission } from "@/lib/auth";
-import { getDeployment } from "../actions";
+import { getDeployment, getDeploymentShareLinks } from "../actions";
 import { ProcessButton } from "./process-button";
+import { ShareLinksSection } from "./share-links-section";
 
 interface PageProps {
   params: Promise<{ id: string }>;
 }
 
 export default async function DeploymentDetailPage({ params }: PageProps) {
-  await requirePermission("camera-trap", "viewer");
+  const user = await requirePermission("camera-trap", "viewer");
   const { id } = await params;
   const deploymentId = parseInt(id, 10);
 
@@ -35,6 +36,22 @@ export default async function DeploymentDetailPage({ params }: PageProps) {
   const latestJob = jobs[0];
   const canProcess =
     !latestJob || ["completed", "failed", "cancelled"].includes(latestJob.status);
+
+  // Check if user is editor+ for share links
+  const isEditor =
+    user.globalRole === "super_admin" ||
+    user.permissions.some(
+      (p) => p.projectId === "camera-trap" && (p.role === "editor" || p.role === "admin")
+    );
+
+  let shareLinks: Awaited<ReturnType<typeof getDeploymentShareLinks>> = [];
+  if (isEditor) {
+    try {
+      shareLinks = await getDeploymentShareLinks(deploymentId);
+    } catch {
+      // User may not have CT project access — hide section
+    }
+  }
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -168,6 +185,20 @@ export default async function DeploymentDetailPage({ params }: PageProps) {
           )}
         </CardContent>
       </Card>
+
+      {/* Share Links — editors+ only */}
+      {isEditor && (
+        <ShareLinksSection
+          deploymentId={deploymentId}
+          shareLinks={shareLinks.map((link) => ({
+            id: link.id,
+            token: link.token,
+            label: link.label,
+            createdBy: link.createdBy,
+            createdAt: link.createdAt?.toISOString() ?? null,
+          }))}
+        />
+      )}
     </div>
   );
 }

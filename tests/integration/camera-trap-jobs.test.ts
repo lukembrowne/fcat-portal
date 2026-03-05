@@ -101,6 +101,10 @@ describe("createProcessingJob", () => {
     expect(job.createdBy).toBe(testUser.email);
     expect(job.detectorModel).toBe("MDV6-yolov9-c");
     expect(job.classifierModel).toBe("AI4GAmazonRainforest");
+    // Download progress columns default to 0
+    expect(job.downloadedImages).toBe(0);
+    expect(job.downloadTotal).toBe(0);
+    expect(job.cachedImages).toBe(0);
   });
 
   it("links existing images to the new job", async () => {
@@ -297,5 +301,111 @@ describe("deleteJob", () => {
     const dets = db.select().from(schema.detections).all();
     const manual = dets.find((d) => d.modelVersion === "manual");
     expect(manual).toBeDefined();
+  });
+});
+
+// === compressFirst option ===
+
+describe("createProcessingJob with compressFirst", () => {
+  it("creates job with compressFirst=true when option passed", async () => {
+    const result = await actions.createProcessingJob(seed.deployment.id, undefined, {
+      compressFirst: true,
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    const [job] = db
+      .select()
+      .from(schema.processingJobs)
+      .where(eq(schema.processingJobs.id, result.data.jobId))
+      .all();
+
+    expect(job.compressFirst).toBe(true);
+  });
+
+  it("creates job with compressFirst=false by default", async () => {
+    const result = await actions.createProcessingJob(seed.deployment.id);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    const [job] = db
+      .select()
+      .from(schema.processingJobs)
+      .where(eq(schema.processingJobs.id, result.data.jobId))
+      .all();
+
+    expect(job.compressFirst).toBe(false);
+  });
+});
+
+describe("queueProcessing with compressFirst", () => {
+  it("passes compressFirst to created jobs", async () => {
+    // Use an unscanned deployment with a drive folder so it goes through auto-scan
+    const [dep] = db
+      .insert(schema.deployments)
+      .values({
+        projectId: "camera-trap",
+        name: "QUEUE-TEST-001",
+        status: "scanned",
+        cameraTrapProjectId: seed.ctProject.id,
+      })
+      .returning()
+      .all();
+
+    // Add an image so the job gets created
+    db.insert(schema.images)
+      .values({
+        deploymentId: dep.id,
+        filename: "IMG_001.jpg",
+        status: "pending",
+      })
+      .run();
+
+    const result = await actions.queueProcessing([dep.id], { compressFirst: true });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    expect(result.data.jobIds.length).toBe(1);
+
+    const [job] = db
+      .select()
+      .from(schema.processingJobs)
+      .where(eq(schema.processingJobs.id, result.data.jobIds[0]))
+      .all();
+
+    expect(job.compressFirst).toBe(true);
+  });
+
+  it("defaults to compressFirst=false when options omitted", async () => {
+    const [dep] = db
+      .insert(schema.deployments)
+      .values({
+        projectId: "camera-trap",
+        name: "QUEUE-TEST-002",
+        status: "scanned",
+        cameraTrapProjectId: seed.ctProject.id,
+      })
+      .returning()
+      .all();
+
+    db.insert(schema.images)
+      .values({
+        deploymentId: dep.id,
+        filename: "IMG_001.jpg",
+        status: "pending",
+      })
+      .run();
+
+    const result = await actions.queueProcessing([dep.id]);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    const [job] = db
+      .select()
+      .from(schema.processingJobs)
+      .where(eq(schema.processingJobs.id, result.data.jobIds[0]))
+      .all();
+
+    expect(job.compressFirst).toBe(false);
   });
 });

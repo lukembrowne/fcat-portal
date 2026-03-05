@@ -238,15 +238,21 @@ describe("assignSpecies", () => {
     expect(updated.correctedSpecies).toBe("Panthera onca");
   });
 
-  it("rejects assigning species to a rejected identification", async () => {
+  it("allows re-assigning species to a rejected identification (un-rejects it)", async () => {
     const identId = seed.identifications[0].id;
     await actions.rejectIdentification(identId);
 
     const result = await actions.assignSpecies(identId, "Panthera onca");
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error).toContain("rechazada");
-    }
+    expect(result.success).toBe(true);
+
+    // Should be corrected now, not rejected
+    const [updated] = testDbRef.current
+      .select()
+      .from(schema.identifications)
+      .where(eq(schema.identifications.id, identId))
+      .all();
+    expect(updated.verificationStatus).toBe("corrected");
+    expect(updated.correctedSpecies).toBe("Panthera onca");
   });
 
   it("returns error for non-existent identification", async () => {

@@ -213,6 +213,7 @@ describe("countDeletableImages", () => {
     const result = await actions.countDeletableImages(seed.job.id, {
       confirmedBlank: true,
       noDetections: false,
+      unverifiedDetections: false,
     });
 
     expect(result.success).toBe(true);
@@ -228,6 +229,7 @@ describe("countDeletableImages", () => {
     const result = await actions.countDeletableImages(seed.job.id, {
       confirmedBlank: false,
       noDetections: true,
+      unverifiedDetections: false,
     });
 
     expect(result.success).toBe(true);
@@ -243,6 +245,7 @@ describe("countDeletableImages", () => {
     const result = await actions.countDeletableImages(seed.job.id, {
       confirmedBlank: true,
       noDetections: true,
+      unverifiedDetections: false,
     });
 
     expect(result.success).toBe(true);
@@ -260,6 +263,7 @@ describe("countDeletableImages", () => {
     const result = await actions.countDeletableImages(seed.job.id, {
       confirmedBlank: true,
       noDetections: true,
+      unverifiedDetections: false,
     });
 
     expect(result.success).toBe(true);
@@ -274,6 +278,7 @@ describe("countDeletableImages", () => {
     const result = await actions.countDeletableImages(seed.job.id, {
       confirmedBlank: true,
       noDetections: true,
+      unverifiedDetections: false,
     });
 
     expect(result.success).toBe(true);
@@ -282,12 +287,57 @@ describe("countDeletableImages", () => {
     expect(result.data.totalCount).toBe(3); // not 4+
   });
 
+  it("counts unverifiedDetections images correctly", async () => {
+    seedDeletableImages(db, seed.deployment.id, seed.job.id);
+
+    const result = await actions.countDeletableImages(seed.job.id, {
+      confirmedBlank: false,
+      noDetections: false,
+      unverifiedDetections: true,
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    // Image 4 has detections with all-unverified identifications
+    // Image 3 has rejected identifications (not unverified) → excluded
+    expect(result.data.unverifiedDetectionsCount).toBe(1);
+    expect(result.data.totalCount).toBe(1);
+  });
+
+  it("excludes images with verified identifications from unverifiedDetections", async () => {
+    const seeded = seedDeletableImages(db, seed.deployment.id, seed.job.id);
+
+    // Image 4 (index 3) has unverified detection — mark it as verified
+    const img4 = seeded.images[3];
+    const dets = db
+      .select()
+      .from(schema.detections)
+      .where(eq(schema.detections.imageId, img4.id))
+      .all();
+    db.update(schema.identifications)
+      .set({ verificationStatus: "verified" })
+      .where(eq(schema.identifications.detectionId, dets[0].id))
+      .run();
+
+    const result = await actions.countDeletableImages(seed.job.id, {
+      confirmedBlank: false,
+      noDetections: false,
+      unverifiedDetections: true,
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    // Image 4 now has a verified identification → excluded
+    expect(result.data.unverifiedDetectionsCount).toBe(0);
+  });
+
   it("returns zeros when no scope selected", async () => {
     seedDeletableImages(db, seed.deployment.id, seed.job.id);
 
     const result = await actions.countDeletableImages(seed.job.id, {
       confirmedBlank: false,
       noDetections: false,
+      unverifiedDetections: false,
     });
 
     expect(result.success).toBe(true);
@@ -307,6 +357,7 @@ describe("bulkDeleteBlankImages", () => {
     const result = await actions.bulkDeleteBlankImages(seed.job.id, {
       confirmedBlank: true,
       noDetections: false,
+      unverifiedDetections: false,
     });
 
     expect(result.success).toBe(true);
@@ -334,6 +385,7 @@ describe("bulkDeleteBlankImages", () => {
     const result = await actions.bulkDeleteBlankImages(seed.job.id, {
       confirmedBlank: false,
       noDetections: true,
+      unverifiedDetections: false,
     });
 
     expect(result.success).toBe(true);
@@ -347,6 +399,7 @@ describe("bulkDeleteBlankImages", () => {
     await actions.bulkDeleteBlankImages(seed.job.id, {
       confirmedBlank: true,
       noDetections: false,
+      unverifiedDetections: false,
     });
 
     expect(mockTrashFile).toHaveBeenCalledTimes(2);
@@ -361,6 +414,7 @@ describe("bulkDeleteBlankImages", () => {
     await actions.bulkDeleteBlankImages(seed.job.id, {
       confirmedBlank: true,
       noDetections: false,
+      unverifiedDetections: false,
     });
 
     // Image 3's detection + identification should be deleted
@@ -386,6 +440,7 @@ describe("bulkDeleteBlankImages", () => {
     await actions.bulkDeleteBlankImages(seed.job.id, {
       confirmedBlank: true,
       noDetections: true,
+      unverifiedDetections: false,
     });
 
     const remaining = db
@@ -407,6 +462,7 @@ describe("bulkDeleteBlankImages", () => {
     await actions.bulkDeleteBlankImages(seed.job.id, {
       confirmedBlank: true,
       noDetections: true,
+      unverifiedDetections: false,
     });
 
     const [dep] = db
@@ -426,6 +482,7 @@ describe("bulkDeleteBlankImages", () => {
     await actions.bulkDeleteBlankImages(seed.job.id, {
       confirmedBlank: true,
       noDetections: false,
+      unverifiedDetections: false,
     });
 
     const logs = db
@@ -443,7 +500,32 @@ describe("bulkDeleteBlankImages", () => {
     const details = JSON.parse(deleteLog!.details!);
     expect(details.jobId).toBe(seed.job.id);
     expect(details.deleted).toBe(2);
-    expect(details.scope).toEqual({ confirmedBlank: true, noDetections: false });
+    expect(details.scope).toEqual({ confirmedBlank: true, noDetections: false, unverifiedDetections: false });
+  });
+
+  it("deletes unverifiedDetections images (all identifications unverified)", async () => {
+    seedDeletableImages(db, seed.deployment.id, seed.job.id);
+
+    const result = await actions.bulkDeleteBlankImages(seed.job.id, {
+      confirmedBlank: false,
+      noDetections: false,
+      unverifiedDetections: true,
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    // Only image 4 has detections with all-unverified identifications
+    expect(result.data.deleted).toBe(1);
+
+    const remaining = db
+      .select()
+      .from(schema.images)
+      .where(eq(schema.images.jobId, seed.job.id))
+      .all();
+    const filenames = remaining.map((i) => i.filename);
+    expect(filenames).not.toContain("BLANK_KEEP_004.jpg");
+    // Image 3 has rejected identifications, not unverified → stays
+    expect(filenames).toContain("BLANK_REJ_003.jpg");
   });
 
   it("handles Drive trashFile failures gracefully", async () => {
@@ -457,11 +539,69 @@ describe("bulkDeleteBlankImages", () => {
     const result = await actions.bulkDeleteBlankImages(seed.job.id, {
       confirmedBlank: true,
       noDetections: false,
+      unverifiedDetections: false,
     });
 
     expect(result.success).toBe(true);
     if (!result.success) return;
     expect(result.data.deleted).toBe(1);
     expect(result.data.failed).toBe(1);
+  });
+});
+
+// === checkSetupRetrievalTags ===
+
+describe("checkSetupRetrievalTags", () => {
+  it("returns false for both when no tags set", async () => {
+    seedDeletableImages(db, seed.deployment.id, seed.job.id);
+
+    // Remove the setupTag from image 5 so there are none
+    db.update(schema.images)
+      .set({ setupTag: null })
+      .where(eq(schema.images.jobId, seed.job.id))
+      .run();
+
+    const result = await actions.checkSetupRetrievalTags(seed.job.id);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.hasDeployment).toBe(false);
+    expect(result.data.hasRetrieval).toBe(false);
+  });
+
+  it("detects deployment tag", async () => {
+    seedDeletableImages(db, seed.deployment.id, seed.job.id);
+
+    // Set one image as deployment
+    const imgs = db.select().from(schema.images).where(eq(schema.images.jobId, seed.job.id)).all();
+    db.update(schema.images)
+      .set({ setupTag: "deployment" })
+      .where(eq(schema.images.id, imgs[0].id))
+      .run();
+
+    const result = await actions.checkSetupRetrievalTags(seed.job.id);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.hasDeployment).toBe(true);
+    expect(result.data.hasRetrieval).toBe(false);
+  });
+
+  it("detects both tags when set", async () => {
+    seedDeletableImages(db, seed.deployment.id, seed.job.id);
+
+    const imgs = db.select().from(schema.images).where(eq(schema.images.jobId, seed.job.id)).all();
+    db.update(schema.images)
+      .set({ setupTag: "deployment" })
+      .where(eq(schema.images.id, imgs[0].id))
+      .run();
+    db.update(schema.images)
+      .set({ setupTag: "retrieval" })
+      .where(eq(schema.images.id, imgs[1].id))
+      .run();
+
+    const result = await actions.checkSetupRetrievalTags(seed.job.id);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.hasDeployment).toBe(true);
+    expect(result.data.hasRetrieval).toBe(true);
   });
 });

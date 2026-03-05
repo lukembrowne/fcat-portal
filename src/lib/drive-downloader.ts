@@ -29,6 +29,11 @@ const THUMB_BATCH_SIZE = 20;
 const CT_CACHE_MAX_BYTES =
   parseInt(process.env.CT_IMAGE_CACHE_MAX_GB || "30", 10) * 1024 * 1024 * 1024;
 
+export type DownloadProgressEvent =
+  | { phase: "preflight"; cached: number; toDownload: number }
+  | { phase: "downloading"; downloaded: number; failed: number; total: number }
+  | { phase: "thumbnails"; generated: number; total: number };
+
 /**
  * Download all images for a deployment from Drive to a persistent cache directory.
  * Skips images that already exist in cache. Also generates thumbnails.
@@ -38,7 +43,8 @@ const CT_CACHE_MAX_BYTES =
 export async function downloadDeploymentForProcessing(
   deploymentId: number,
   jobId: number,
-  onProgress?: (downloaded: number, total: number) => Promise<void>
+  onProgress?: (event: DownloadProgressEvent) => Promise<void>,
+  isCancelled?: () => Promise<boolean>,
 ): Promise<{
   cacheDir: string;
   downloaded: number;
@@ -89,24 +95,38 @@ export async function downloadDeploymentForProcessing(
     }
   }
 
-  // Pre-flight: estimate download size
+  // Pre-flight: estimate download size and report
   const downloadSize = toDownload.reduce((sum, f) => sum + f.size, 0);
   console.log(
-    `[drive-downloader] Job ${jobId}: ${alreadyCached.size} cached, ${toDownload.length} to download (~${(downloadSize / 1024 / 1024).toFixed(1)} MB)`
+    `[drive-downloader] Job ${jobId}, deployment ${deploymentId}: ${alreadyCached.size} cached, ${toDownload.length} to download (~${(downloadSize / 1024 / 1024).toFixed(1)} MB)`
   );
+
+  if (onProgress) {
+    await onProgress({ phase: "preflight", cached: alreadyCached.size, toDownload: toDownload.length });
+  }
 
   // Download only missing images
   let downloaded = 0;
   let failed = 0;
   const pathMap = new Map<string, string>();
+  const downloadStart = Date.now();
 
   if (toDownload.length > 0) {
-    const result = await downloadDeploymentImages(toDownload, cacheDir);
+    const result = await downloadDeploymentImages(toDownload, cacheDir, (dl, fl, total) => {
+      downloaded = dl;
+      failed = fl;
+      onProgress?.({ phase: "downloading", downloaded: dl, failed: fl, total });
+    }, isCancelled);
     downloaded = result.downloaded;
     failed = result.failed;
     for (const [fileId, localPath] of result.pathMap) {
       pathMap.set(fileId, localPath);
     }
+
+    const dlSec = ((Date.now() - downloadStart) / 1000).toFixed(1);
+    console.log(
+      `[drive-downloader] Job ${jobId}: download complete — ${downloaded} ok, ${failed} failed (${dlSec}s)`
+    );
   }
 
   // Merge cached paths into the map
@@ -158,15 +178,16 @@ export async function downloadDeploymentForProcessing(
       })
     );
     if (onProgress) {
-      await onProgress(
-        Math.min(i + THUMB_BATCH_SIZE, imagesWithPaths.length),
-        imagesWithPaths.length
-      );
+      await onProgress({
+        phase: "thumbnails",
+        generated: Math.min(i + THUMB_BATCH_SIZE, imagesWithPaths.length),
+        total: imagesWithPaths.length,
+      });
     }
   }
 
   console.log(
-    `[drive-downloader] Job ${jobId}: ${alreadyCached.size} cached, ${downloaded} downloaded, ${failed} failed`
+    `[drive-downloader] Job ${jobId}: thumbnails complete — ${imagesWithPaths.length} generated`
   );
 
   return { cacheDir, downloaded, skipped: alreadyCached.size, failed };
@@ -179,7 +200,8 @@ export async function downloadDeploymentForProcessing(
 export async function downloadVideosForProcessing(
   deploymentId: number,
   jobId: number,
-  onProgress?: (downloaded: number, total: number) => Promise<void>
+  onProgress?: (event: DownloadProgressEvent) => Promise<void>,
+  isCancelled?: () => Promise<boolean>,
 ): Promise<{
   cacheDir: string;
   downloaded: number;
@@ -229,8 +251,12 @@ export async function downloadVideosForProcessing(
 
   const downloadSize = toDownload.reduce((sum, f) => sum + f.size, 0);
   console.log(
-    `[drive-downloader] Job ${jobId} videos: ${alreadyCached.size} cached, ${toDownload.length} to download (~${(downloadSize / 1024 / 1024).toFixed(1)} MB)`
+    `[drive-downloader] Job ${jobId} videos, deployment ${deploymentId}: ${alreadyCached.size} cached, ${toDownload.length} to download (~${(downloadSize / 1024 / 1024).toFixed(1)} MB)`
   );
+
+  if (onProgress) {
+    await onProgress({ phase: "preflight", cached: alreadyCached.size, toDownload: toDownload.length });
+  }
 
   // Download missing videos (lower parallelism — videos are larger)
   let downloaded = 0;
@@ -238,7 +264,11 @@ export async function downloadVideosForProcessing(
   const pathMap = new Map<string, string>();
 
   if (toDownload.length > 0) {
-    const result = await downloadDeploymentImages(toDownload, cacheDir);
+    const result = await downloadDeploymentImages(toDownload, cacheDir, (dl, fl, total) => {
+      downloaded = dl;
+      failed = fl;
+      onProgress?.({ phase: "downloading", downloaded: dl, failed: fl, total });
+    }, isCancelled);
     downloaded = result.downloaded;
     failed = result.failed;
     for (const [fileId, localPath] of result.pathMap) {
@@ -252,7 +282,6 @@ export async function downloadVideosForProcessing(
   }
 
   // Write cache paths into videos.path
-  let progressCount = 0;
   for (const vid of driveVideos) {
     const localPath = pathMap.get(vid.driveFileId!);
     if (!localPath) continue;
@@ -261,11 +290,6 @@ export async function downloadVideosForProcessing(
       .update(videos)
       .set({ path: localPath })
       .where(eq(videos.id, vid.id));
-
-    progressCount++;
-    if (onProgress) {
-      await onProgress(progressCount, driveVideos.length);
-    }
   }
 
   console.log(

@@ -37,6 +37,9 @@ export async function GET() {
     processedImages: job.processedImages,
     statusMessage: job.statusMessage,
     startedAt: job.startedAt?.toISOString() ?? null,
+    downloadedImages: job.downloadedImages ?? 0,
+    downloadTotal: job.downloadTotal ?? 0,
+    cachedImages: job.cachedImages ?? 0,
   }));
 
   return Response.json(result);

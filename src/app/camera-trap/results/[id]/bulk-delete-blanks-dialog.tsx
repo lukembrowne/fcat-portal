@@ -15,6 +15,7 @@ import { AlertTriangle, Info, Trash2 } from "lucide-react";
 import {
   countDeletableImages,
   bulkDeleteBlankImages,
+  checkSetupRetrievalTags,
 } from "@/app/camera-trap/actions";
 
 type Step = "select" | "confirm" | "result";
@@ -33,10 +34,16 @@ export function BulkDeleteBlanksDialog({
   const [step, setStep] = useState<Step>("select");
   const [confirmedBlankChecked, setConfirmedBlankChecked] = useState(true);
   const [noDetectionsChecked, setNoDetectionsChecked] = useState(false);
+  const [unverifiedDetectionsChecked, setUnverifiedDetectionsChecked] = useState(false);
   const [counts, setCounts] = useState<{
     confirmedBlankCount: number;
     noDetectionsCount: number;
+    unverifiedDetectionsCount: number;
     totalCount: number;
+  } | null>(null);
+  const [setupTags, setSetupTags] = useState<{
+    hasDeployment: boolean;
+    hasRetrieval: boolean;
   } | null>(null);
   const [result, setResult] = useState<{
     deleted: number;
@@ -44,12 +51,18 @@ export function BulkDeleteBlanksDialog({
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch initial counts on mount
+  // Fetch setup/retrieval tags and initial counts on mount
   useEffect(() => {
     let cancelled = false;
+    checkSetupRetrievalTags(jobId).then((res) => {
+      if (!cancelled && res.success) {
+        setSetupTags(res.data);
+      }
+    });
     countDeletableImages(jobId, {
       confirmedBlank: true,
       noDetections: false,
+      unverifiedDetections: false,
     }).then((res) => {
       if (!cancelled && res.success) {
         setCounts(res.data);
@@ -59,9 +72,9 @@ export function BulkDeleteBlanksDialog({
   }, [jobId]);
 
   const fetchCounts = useCallback(
-    (confirmedBlank: boolean, noDetections: boolean) => {
-      if (!confirmedBlank && !noDetections) {
-        setCounts({ confirmedBlankCount: 0, noDetectionsCount: 0, totalCount: 0 });
+    (confirmedBlank: boolean, noDetections: boolean, unverifiedDetections: boolean) => {
+      if (!confirmedBlank && !noDetections && !unverifiedDetections) {
+        setCounts({ confirmedBlankCount: 0, noDetectionsCount: 0, unverifiedDetectionsCount: 0, totalCount: 0 });
         return;
       }
 
@@ -69,6 +82,7 @@ export function BulkDeleteBlanksDialog({
         const res = await countDeletableImages(jobId, {
           confirmedBlank,
           noDetections,
+          unverifiedDetections,
         });
         if (res.success) {
           setCounts(res.data);
@@ -81,17 +95,25 @@ export function BulkDeleteBlanksDialog({
   const handleConfirmedBlankChange = useCallback(
     (checked: boolean) => {
       setConfirmedBlankChecked(checked);
-      fetchCounts(checked, noDetectionsChecked);
+      fetchCounts(checked, noDetectionsChecked, unverifiedDetectionsChecked);
     },
-    [noDetectionsChecked, fetchCounts]
+    [noDetectionsChecked, unverifiedDetectionsChecked, fetchCounts]
   );
 
   const handleNoDetectionsChange = useCallback(
     (checked: boolean) => {
       setNoDetectionsChecked(checked);
-      fetchCounts(confirmedBlankChecked, checked);
+      fetchCounts(confirmedBlankChecked, checked, unverifiedDetectionsChecked);
     },
-    [confirmedBlankChecked, fetchCounts]
+    [confirmedBlankChecked, unverifiedDetectionsChecked, fetchCounts]
+  );
+
+  const handleUnverifiedDetectionsChange = useCallback(
+    (checked: boolean) => {
+      setUnverifiedDetectionsChecked(checked);
+      fetchCounts(confirmedBlankChecked, noDetectionsChecked, checked);
+    },
+    [confirmedBlankChecked, noDetectionsChecked, fetchCounts]
   );
 
   const handleDelete = useCallback(() => {
@@ -100,6 +122,7 @@ export function BulkDeleteBlanksDialog({
       const res = await bulkDeleteBlankImages(jobId, {
         confirmedBlank: confirmedBlankChecked,
         noDetections: noDetectionsChecked,
+        unverifiedDetections: unverifiedDetectionsChecked,
       });
       if (res.success) {
         setResult(res.data);
@@ -110,10 +133,11 @@ export function BulkDeleteBlanksDialog({
         setError(res.error);
       }
     });
-  }, [jobId, confirmedBlankChecked, noDetectionsChecked, router, onClose]);
+  }, [jobId, confirmedBlankChecked, noDetectionsChecked, unverifiedDetectionsChecked, router, onClose]);
 
   const totalCount = counts?.totalCount ?? 0;
-  const noneSelected = !confirmedBlankChecked && !noDetectionsChecked;
+  const noneSelected = !confirmedBlankChecked && !noDetectionsChecked && !unverifiedDetectionsChecked;
+  const tagsReady = setupTags?.hasDeployment && setupTags?.hasRetrieval;
 
   return (
     <Dialog
@@ -175,6 +199,22 @@ export function BulkDeleteBlanksDialog({
           </div>
         ) : (
           <div className="space-y-4">
+            {setupTags && !tagsReady && (
+              <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
+                <AlertTriangle className="size-4 mt-0.5 shrink-0" />
+                <div>
+                  <p className="font-medium">Debe designar las imágenes de instalación y recogida antes de eliminar.</p>
+                  <p className="text-xs mt-1">
+                    {!setupTags.hasDeployment && !setupTags.hasRetrieval
+                      ? "Falta: instalación y recogida"
+                      : !setupTags.hasDeployment
+                        ? "Falta: instalación"
+                        : "Falta: recogida"}
+                  </p>
+                </div>
+              </div>
+            )}
+
             <div className="space-y-4">
               <div>
                 <label className="flex items-center justify-between gap-3 cursor-pointer">
@@ -216,7 +256,30 @@ export function BulkDeleteBlanksDialog({
                   )}
                 </label>
                 <p className="text-xs text-muted-foreground ml-6 mt-1">
-                  El modelo no detectó nada. Imágenes con detecciones (incluso sin verificar) no se incluyen.
+                  El modelo no detectó nada.
+                </p>
+              </div>
+
+              <div>
+                <label className="flex items-center justify-between gap-3 cursor-pointer">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={unverifiedDetectionsChecked}
+                      onChange={(e) => handleUnverifiedDetectionsChange(e.target.checked)}
+                      className="accent-primary"
+                    />
+                    <span className="text-sm">Imágenes con detecciones sin verificar</span>
+                  </div>
+                  {counts && unverifiedDetectionsChecked && (
+                    <span className="text-sm text-muted-foreground tabular-nums">
+                      ({counts.unverifiedDetectionsCount})
+                    </span>
+                  )}
+                </label>
+                <p className="text-xs text-muted-foreground ml-6 mt-1">
+                  Todas las detecciones están sin verificar — posibles falsos positivos.
+                  Imágenes con identificaciones verificadas o corregidas no se incluyen.
                 </p>
               </div>
             </div>
@@ -253,7 +316,7 @@ export function BulkDeleteBlanksDialog({
               </Button>
               <Button
                 onClick={() => setStep("confirm")}
-                disabled={isPending || noneSelected || totalCount === 0}
+                disabled={isPending || noneSelected || totalCount === 0 || !tagsReady}
               >
                 Siguiente
               </Button>

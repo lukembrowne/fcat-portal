@@ -530,15 +530,27 @@ export async function downloadFile(
  */
 export async function downloadDeploymentImages(
   imageFiles: DriveImageFile[],
-  destDir: string
+  destDir: string,
+  onProgress?: (downloaded: number, failed: number, total: number) => void,
+  isCancelled?: () => Promise<boolean>,
 ): Promise<{ downloaded: number; failed: number; pathMap: Map<string, string> }> {
   let downloaded = 0;
   let failed = 0;
   const pathMap = new Map<string, string>(); // driveFileId → local path
 
   const BATCH_SIZE = 50;
+  const totalBatches = Math.ceil(imageFiles.length / BATCH_SIZE);
+  const startTime = Date.now();
 
   for (let i = 0; i < imageFiles.length; i += BATCH_SIZE) {
+    // Check for cancellation between batches
+    if (isCancelled && await isCancelled()) {
+      console.log(`[Drive] Download cancelled after ${downloaded} files`);
+      break;
+    }
+
+    const batchStart = Date.now();
+    const batchNum = Math.floor(i / BATCH_SIZE) + 1;
     const batch = imageFiles.slice(i, i + BATCH_SIZE);
 
     await Promise.all(
@@ -554,6 +566,16 @@ export async function downloadDeploymentImages(
         }
       })
     );
+
+    const batchSec = ((Date.now() - batchStart) / 1000).toFixed(1);
+    const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
+    const mem = process.memoryUsage();
+    const rssMB = (mem.rss / 1024 / 1024).toFixed(0);
+    console.log(
+      `[Drive] Batch ${batchNum}/${totalBatches}: ${downloaded} ok, ${failed} failed (${batchSec}s batch, ${elapsedSec}s total, RSS: ${rssMB}MB)`
+    );
+
+    onProgress?.(downloaded, failed, imageFiles.length);
   }
 
   return { downloaded, failed, pathMap };

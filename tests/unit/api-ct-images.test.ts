@@ -77,11 +77,11 @@ describe("/api/ct-images/[id]", () => {
   });
 
   describe("permission check", () => {
-    it("returns 403 when user has no camera-trap permission", async () => {
+    it("returns 403 when user has no camera-trap or biochoco permission", async () => {
       mockGetCurrentUser.mockResolvedValue({
         ...testUser,
         globalRole: null,
-        permissions: [{ projectId: "biochoco", role: "viewer" }],
+        permissions: [{ projectId: "finance", role: "viewer" }],
       });
 
       const res = await GET(makeRequest("123"), {
@@ -90,6 +90,20 @@ describe("/api/ct-images/[id]", () => {
       expect(res.status).toBe(403);
       const body = await res.json();
       expect(body.error).toBe("Forbidden");
+    });
+
+    it("allows biochoco viewer to access images", async () => {
+      mockGetCurrentUser.mockResolvedValue({
+        ...testUser,
+        globalRole: null,
+        permissions: [{ projectId: "biochoco", role: "viewer" }],
+      });
+
+      // Will proceed to DB lookup (which returns undefined from mock) → 404
+      const res = await GET(makeRequest("123"), {
+        params: Promise.resolve({ id: "123" }),
+      });
+      expect(res.status).toBe(404);
     });
 
     it("allows super admin regardless of project permissions", async () => {

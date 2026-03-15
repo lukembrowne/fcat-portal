@@ -148,8 +148,7 @@ export async function fetchResultadosData(): Promise<ActionResult<ResultadosData
         .where(
           and(
             inArray(images.deploymentId, processedDepIds),
-            inArray(identifications.verificationStatus, ["verified", "corrected"]),
-            eq(detections.detectionClass, 1)
+            inArray(identifications.verificationStatus, ["verified", "corrected"])
           )
         )
         .groupBy(images.deploymentId);
@@ -376,8 +375,7 @@ async function fetchSpeciesForDeployments(
     .where(
       and(
         inArray(images.deploymentId, depIds),
-        inArray(identifications.verificationStatus, ["verified", "corrected"]),
-        eq(detections.detectionClass, 1)
+        inArray(identifications.verificationStatus, ["verified", "corrected"])
       )
     )
     .groupBy(
@@ -399,8 +397,7 @@ async function fetchSpeciesForDeployments(
         and(
           inArray(images.deploymentId, depIds),
           sql`coalesce(${identifications.correctedSpecies}, ${identifications.species}) = ${row.speciesName}`,
-          inArray(identifications.verificationStatus, ["verified", "corrected"]),
-          eq(detections.detectionClass, 1)
+          inArray(identifications.verificationStatus, ["verified", "corrected"])
         )
       )
       .orderBy(sql`${identifications.confidence} DESC`)

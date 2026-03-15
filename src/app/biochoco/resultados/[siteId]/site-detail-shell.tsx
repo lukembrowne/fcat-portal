@@ -82,6 +82,14 @@ export function SiteDetailShell({ data, siteId }: SiteDetailShellProps) {
 
       <Separator />
 
+      {/* Hábitat */}
+      <HabitatSection
+        habitat={data.habitat}
+        totalCount={data.habitatAssessmentCount}
+      />
+
+      <Separator />
+
       {/* Fauna */}
       <section>
         <h2 className="text-lg font-semibold flex items-center gap-2 mb-4">
@@ -103,14 +111,6 @@ export function SiteDetailShell({ data, siteId }: SiteDetailShellProps) {
       <TemperatureOverlay
         temperature={data.temperature}
         temperatureStats={data.temperatureStats}
-      />
-
-      <Separator />
-
-      {/* Hábitat */}
-      <HabitatSection
-        habitat={data.habitat}
-        totalCount={data.habitatAssessmentCount}
       />
 
       <Separator />

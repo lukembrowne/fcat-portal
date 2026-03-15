@@ -96,25 +96,17 @@ export function SpeciesCards({ species, totalDetections }: SpeciesCardsProps) {
               </div>
 
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Badge variant="secondary" className="text-xs">
-                    {sp.detectionCount}{" "}
-                    {sp.detectionCount === 1 ? "detección" : "detecciones"}
+                <Badge variant="secondary" className="text-xs">
+                  {sp.detectionCount}{" "}
+                  {sp.detectionCount === 1 ? "detección" : "detecciones"}
+                </Badge>
+                {sp.taxonomicType && (
+                  <Badge variant="outline" className="text-xs gap-1">
+                    <TaxonomicIcon type={sp.taxonomicType} />
+                    {TAXONOMIC_LABELS[sp.taxonomicType] ?? sp.taxonomicType}
                   </Badge>
-                </div>
-                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  {sp.taxonomicType && (
-                    <Badge variant="outline" className="text-xs gap-1">
-                      <TaxonomicIcon type={sp.taxonomicType} />
-                      {TAXONOMIC_LABELS[sp.taxonomicType] ?? sp.taxonomicType}
-                    </Badge>
-                  )}
-                </div>
+                )}
               </div>
-
-              <p className="text-xs text-muted-foreground">
-                Confianza: {(sp.avgConfidence * 100).toFixed(0)}%
-              </p>
             </CardContent>
           </Card>
         ))}

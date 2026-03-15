@@ -37,7 +37,7 @@ function HabitatPhoto({
   if (!filename) {
     return (
       <div className="space-y-1">
-        <div className="h-32 bg-muted rounded-lg flex items-center justify-center">
+        <div className="h-48 bg-muted rounded-lg flex items-center justify-center">
           <p className="text-xs text-muted-foreground">Sin foto</p>
         </div>
         <p className="text-xs text-center text-muted-foreground">{label}</p>
@@ -49,7 +49,7 @@ function HabitatPhoto({
 
   return (
     <div className="space-y-1">
-      <div className="relative h-32 rounded-lg overflow-hidden bg-muted">
+      <div className="relative h-48 rounded-lg overflow-hidden bg-muted">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={src}
@@ -127,8 +127,8 @@ export function HabitatSection({ habitat, totalCount }: HabitatSectionProps) {
             </p>
           )}
 
-          {/* Directional photos */}
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+          {/* Directional photos — 3 on top, 2 on bottom */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
             <HabitatPhoto
               label="Norte"
               filename={habitat.photoNorth}
@@ -144,6 +144,8 @@ export function HabitatSection({ habitat, totalCount }: HabitatSectionProps) {
               filename={habitat.photoSouth}
               instanceId={habitat.instanceId}
             />
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-2 gap-3 sm:w-2/3">
             <HabitatPhoto
               label="Oeste"
               filename={habitat.photoWest}

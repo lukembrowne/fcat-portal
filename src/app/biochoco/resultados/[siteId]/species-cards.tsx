@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import type { SiteSpecies } from "../types";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -72,12 +71,12 @@ export function SpeciesCards({ species, totalDetections }: SpeciesCardsProps) {
             {/* Photo */}
             <div className="relative h-40 bg-muted">
               {sp.photoImageId ? (
-                <Image
+                /* eslint-disable-next-line @next/next/no-img-element */
+                <img
                   src={`/api/ct-images/${sp.photoImageId}?size=thumb`}
                   alt={sp.speciesName}
-                  fill
-                  className="object-cover"
-                  sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
+                  className="object-cover w-full h-full"
+                  loading="lazy"
                 />
               ) : (
                 <div className="flex items-center justify-center h-full">

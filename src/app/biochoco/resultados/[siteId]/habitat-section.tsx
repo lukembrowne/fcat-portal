@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import type { HabitatAssessment } from "../../habitat/types";
 import {
   UNDERSTORY_LABELS,
@@ -51,12 +50,12 @@ function HabitatPhoto({
   return (
     <div className="space-y-1">
       <div className="relative h-32 rounded-lg overflow-hidden bg-muted">
-        <Image
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
           src={src}
           alt={label}
-          fill
-          className="object-cover"
-          sizes="(max-width: 640px) 50vw, 20vw"
+          className="object-cover w-full h-full"
+          loading="lazy"
         />
       </div>
       <p className="text-xs text-center text-muted-foreground">{label}</p>

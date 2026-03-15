@@ -473,7 +473,7 @@ async function fetchTemperatureForDeployments(
 
   const result: DeploymentTemperature[] = [];
   for (const depId of uploadDepIds) {
-    let readings = byDeployment.get(depId) ?? [];
+    const readings = byDeployment.get(depId) ?? [];
     const upload = uploadMap.get(depId);
 
     // Compute stats from full data

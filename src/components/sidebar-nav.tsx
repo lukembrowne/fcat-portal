@@ -65,6 +65,7 @@ export function SidebarNav({ user }: SidebarNavProps) {
     biochocoChildren.push({ label: "Datos", href: "/biochoco/data" });
     biochocoChildren.push({ label: "Hábitat", href: "/biochoco/habitat" });
     biochocoChildren.push({ label: "Temperatura", href: "/biochoco/ibutton" });
+    biochocoChildren.push({ label: "Resultados", href: "/biochoco/resultados" });
     biochocoChildren.push({ label: "Recursos", href: "/biochoco/recursos" });
     if (isBiochocoAdmin) {
       biochocoChildren.push({

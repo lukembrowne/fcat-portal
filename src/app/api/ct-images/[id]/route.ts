@@ -46,7 +46,7 @@ export async function GET(
 
   const hasAccess =
     user.globalRole === "super_admin" ||
-    user.permissions.some((p) => p.projectId === "camera-trap");
+    user.permissions.some((p) => p.projectId === "camera-trap" || p.projectId === "biochoco");
   if (!hasAccess) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }

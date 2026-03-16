@@ -10,6 +10,20 @@ import { google, type sheets_v4 } from "googleapis";
 import type { ScheduleRow, SlotRow, ScheduleRowUpdate } from "./schedule-types";
 
 const SHEET_ID = process.env.BIOCHOCO_SHEET_ID;
+const API_TIMEOUT_MS = 15_000; // 15 seconds
+
+function withTimeout<T>(promise: Promise<T>, ms = API_TIMEOUT_MS): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`Google Sheets API timed out after ${ms}ms`)),
+      ms
+    );
+    promise.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); }
+    );
+  });
+}
 
 function getServiceAccountKey(): Record<string, string> {
   const raw = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
@@ -97,10 +111,10 @@ export async function loadSchedule(): Promise<ScheduleRow[]> {
   const sheets = getSheets();
   const spreadsheetId = requireSheetId();
 
-  const res = await sheets.spreadsheets.values.get({
+  const res = await withTimeout(sheets.spreadsheets.values.get({
     spreadsheetId,
     range: "Sheet1",
-  });
+  }));
 
   const rows = res.data.values;
   if (!rows || rows.length < 2) return [];
@@ -222,10 +236,10 @@ export async function loadSlotTemplate(): Promise<SlotRow[]> {
   const sheets = getSheets();
   const spreadsheetId = requireSheetId();
 
-  const res = await sheets.spreadsheets.values.get({
+  const res = await withTimeout(sheets.spreadsheets.values.get({
     spreadsheetId,
     range: "SlotTemplate",
-  });
+  }));
 
   const rows = res.data.values;
   if (!rows || rows.length < 2) return [];

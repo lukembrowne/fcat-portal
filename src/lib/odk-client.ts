@@ -11,6 +11,7 @@ const ODK_CENTRAL_EMAIL = process.env.ODK_CENTRAL_EMAIL!;
 const ODK_CENTRAL_PASSWORD = process.env.ODK_CENTRAL_PASSWORD!;
 
 const PAGE_SIZE = 250;
+const FETCH_TIMEOUT_MS = 15_000; // 15 seconds per request
 
 /**
  * Recursively flatten nested objects using `_` as separator.
@@ -61,6 +62,7 @@ async function getSessionToken(): Promise<string> {
           email: ODK_CENTRAL_EMAIL,
           password: ODK_CENTRAL_PASSWORD,
         }),
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       });
 
       if (!res.ok) {
@@ -99,12 +101,13 @@ async function odkFetch(
   options?: RequestInit
 ): Promise<Response> {
   const headers = await authHeaders();
-  const res = await fetch(url, { ...options, headers: { ...headers, ...options?.headers } });
+  const signal = options?.signal ?? AbortSignal.timeout(FETCH_TIMEOUT_MS);
+  const res = await fetch(url, { ...options, signal, headers: { ...headers, ...options?.headers } });
 
   if (res.status === 401) {
     invalidateToken();
     const freshHeaders = await authHeaders();
-    return fetch(url, { ...options, headers: { ...freshHeaders, ...options?.headers } });
+    return fetch(url, { ...options, signal, headers: { ...freshHeaders, ...options?.headers } });
   }
 
   return res;

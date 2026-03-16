@@ -68,6 +68,7 @@ export default function HabitatMapInner({
             <LayersControl.Overlay checked name="Reserva FCAT">
               <GeoJSON
                 data={boundary}
+                interactive={false}
                 style={{
                   color: "#22c55e",
                   weight: 2,

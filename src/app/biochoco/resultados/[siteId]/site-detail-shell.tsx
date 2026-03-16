@@ -9,7 +9,7 @@ import { TemperatureOverlay } from "./temperature-overlay";
 import { HabitatSection } from "./habitat-section";
 import { Separator } from "@/components/ui/separator";
 import { Card, CardContent } from "@/components/ui/card";
-import { MapPin, Calendar, Camera, Volume2 } from "lucide-react";
+import { MapPin, Calendar, Camera, Volume2, Thermometer, TreePine } from "lucide-react";
 
 interface SiteDetailShellProps {
   data: SiteDetail;
@@ -78,6 +78,69 @@ export function SiteDetailShell({ data, siteId }: SiteDetailShellProps) {
             <SiteLocationMap lat={site.lat} lng={site.lng} />
           </div>
         )}
+      </div>
+
+      {/* Summary cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        {/* Fauna */}
+        <Card>
+          <CardContent className="pt-4 pb-4">
+            <div className="flex items-center gap-2 text-sm font-medium mb-2">
+              <Camera className="h-4 w-4 text-muted-foreground" />
+              Fauna
+            </div>
+            {data.species.length > 0 ? (
+              <>
+                <p className="text-2xl font-bold">{data.species.length} <span className="text-sm font-normal text-muted-foreground">{data.species.length === 1 ? "especie" : "especies"}</span></p>
+                <p className="text-sm text-muted-foreground">
+                  {data.species.reduce((sum, s) => sum + s.detectionCount, 0)} detecciones
+                </p>
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground">Sin datos</p>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Temperatura */}
+        <Card>
+          <CardContent className="pt-4 pb-4">
+            <div className="flex items-center gap-2 text-sm font-medium mb-2">
+              <Thermometer className="h-4 w-4 text-muted-foreground" />
+              Temperatura
+            </div>
+            {data.temperatureStats ? (
+              <>
+                <p className="text-2xl font-bold">{data.temperatureStats.mean.toFixed(1)}°C <span className="text-sm font-normal text-muted-foreground">promedio</span></p>
+                <p className="text-sm text-muted-foreground">
+                  {data.temperatureStats.min.toFixed(1)} — {data.temperatureStats.max.toFixed(1)}°C · {data.temperature.length} {data.temperature.length === 1 ? "despliegue" : "despliegues"}
+                </p>
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground">Sin datos</p>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Hábitat */}
+        <Card>
+          <CardContent className="pt-4 pb-4">
+            <div className="flex items-center gap-2 text-sm font-medium mb-2">
+              <TreePine className="h-4 w-4 text-muted-foreground" />
+              Hábitat
+            </div>
+            {data.habitat ? (
+              <>
+                <p className="text-2xl font-bold">{data.habitat.canopyCoverPercent}% <span className="text-sm font-normal text-muted-foreground">dosel</span></p>
+                <p className="text-sm text-muted-foreground">
+                  Sotobosque: {data.habitat.understoryDensity}
+                </p>
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground">Sin datos</p>
+            )}
+          </CardContent>
+        </Card>
       </div>
 
       <Separator />

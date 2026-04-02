@@ -202,13 +202,19 @@ export async function refreshSingleUploadCount(
 
   const uploads = result.data;
 
-  // Persist counts + subfolder IDs to DB
+  // Persist counts, sizes, newest dates, and subfolder IDs to DB
   await db
     .update(deployments)
     .set({
       uploadCameraCount: uploads.camarasTrampas,
       uploadAudioCount: uploads.grabadoresDeAudio,
       uploadIbuttonCount: uploads.ibutton,
+      uploadCameraSizeBytes: uploads.camarasTrampasSizeBytes,
+      uploadAudioSizeBytes: uploads.grabadoresDeAudioSizeBytes,
+      uploadIbuttonSizeBytes: uploads.ibuttonSizeBytes,
+      uploadNewestCameraDate: uploads.camarasTrampasNewestDate,
+      uploadNewestAudioDate: uploads.grabadoresDeAudioNewestDate,
+      uploadNewestIbuttonDate: uploads.ibuttonNewestDate,
       uploadCameraFolderId: uploads.subfolderIds.camarasTrampas,
       uploadAudioFolderId: uploads.subfolderIds.grabadoresDeAudio,
       uploadIbuttonFolderId: uploads.subfolderIds.ibutton,
@@ -233,6 +239,9 @@ export async function saveUploadSnapshot(): Promise<void> {
       uploadCameraCount: deployments.uploadCameraCount,
       uploadAudioCount: deployments.uploadAudioCount,
       uploadIbuttonCount: deployments.uploadIbuttonCount,
+      uploadCameraSizeBytes: deployments.uploadCameraSizeBytes,
+      uploadAudioSizeBytes: deployments.uploadAudioSizeBytes,
+      uploadIbuttonSizeBytes: deployments.uploadIbuttonSizeBytes,
     })
     .from(deployments)
     .where(isNotNull(deployments.driveFolderId));
@@ -240,6 +249,9 @@ export async function saveUploadSnapshot(): Promise<void> {
   let totalCameras = 0;
   let totalAudio = 0;
   let totalIbutton = 0;
+  let totalCameraSizeBytes = 0;
+  let totalAudioSizeBytes = 0;
+  let totalIbuttonSizeBytes = 0;
   let deploymentsWithUploads = 0;
 
   for (const r of rows) {
@@ -249,6 +261,9 @@ export async function saveUploadSnapshot(): Promise<void> {
     totalCameras += cam;
     totalAudio += aud;
     totalIbutton += ibt;
+    totalCameraSizeBytes += r.uploadCameraSizeBytes ?? 0;
+    totalAudioSizeBytes += r.uploadAudioSizeBytes ?? 0;
+    totalIbuttonSizeBytes += r.uploadIbuttonSizeBytes ?? 0;
     if (cam > 0 || aud > 0 || ibt > 0) deploymentsWithUploads++;
   }
 
@@ -259,6 +274,9 @@ export async function saveUploadSnapshot(): Promise<void> {
       totalCameras,
       totalAudio,
       totalIbutton,
+      totalCameraSizeBytes,
+      totalAudioSizeBytes,
+      totalIbuttonSizeBytes,
       deploymentsWithUploads,
       totalDeployments: rows.length,
     })
@@ -268,6 +286,9 @@ export async function saveUploadSnapshot(): Promise<void> {
         totalCameras,
         totalAudio,
         totalIbutton,
+        totalCameraSizeBytes,
+        totalAudioSizeBytes,
+        totalIbuttonSizeBytes,
         deploymentsWithUploads,
         totalDeployments: rows.length,
         createdAt: sql`(unixepoch())`,
@@ -279,13 +300,20 @@ export interface UploadSummary {
   cameras: number;
   audio: number;
   ibutton: number;
+  cameraSizeBytes: number;
+  audioSizeBytes: number;
+  ibuttonSizeBytes: number;
   deltaCameras: number | null;
   deltaAudio: number | null;
   deltaIbutton: number | null;
+  deltaCameraSizeBytes: number | null;
+  deltaAudioSizeBytes: number | null;
+  deltaIbuttonSizeBytes: number | null;
+  previousSnapshotDate: string | null;
 }
 
 /**
- * Fetch live upload totals and yesterday's snapshot for delta display.
+ * Fetch live upload totals and previous snapshot for delta display.
  */
 export async function fetchUploadSummary(): Promise<UploadSummary> {
   await requirePermission("biochoco", "viewer");
@@ -295,6 +323,9 @@ export async function fetchUploadSummary(): Promise<UploadSummary> {
       uploadCameraCount: deployments.uploadCameraCount,
       uploadAudioCount: deployments.uploadAudioCount,
       uploadIbuttonCount: deployments.uploadIbuttonCount,
+      uploadCameraSizeBytes: deployments.uploadCameraSizeBytes,
+      uploadAudioSizeBytes: deployments.uploadAudioSizeBytes,
+      uploadIbuttonSizeBytes: deployments.uploadIbuttonSizeBytes,
     })
     .from(deployments)
     .where(isNotNull(deployments.driveFolderId));
@@ -302,30 +333,43 @@ export async function fetchUploadSummary(): Promise<UploadSummary> {
   let cameras = 0;
   let audio = 0;
   let ibutton = 0;
+  let cameraSizeBytes = 0;
+  let audioSizeBytes = 0;
+  let ibuttonSizeBytes = 0;
 
   for (const r of rows) {
     cameras += r.uploadCameraCount ?? 0;
     audio += r.uploadAudioCount ?? 0;
     ibutton += r.uploadIbuttonCount ?? 0;
+    cameraSizeBytes += r.uploadCameraSizeBytes ?? 0;
+    audioSizeBytes += r.uploadAudioSizeBytes ?? 0;
+    ibuttonSizeBytes += r.uploadIbuttonSizeBytes ?? 0;
   }
 
-  // Get yesterday's snapshot
+  // Get previous snapshot for delta comparison
   const today = new Date().toISOString().slice(0, 10);
-  const yesterdaySnapshots = await db
+  const previousSnapshots = await db
     .select()
     .from(uploadCountSnapshots)
     .where(sql`${uploadCountSnapshots.date} < ${today}`)
     .orderBy(sql`${uploadCountSnapshots.date} DESC`)
     .limit(1);
 
-  const yesterday = yesterdaySnapshots[0] ?? null;
+  const prev = previousSnapshots[0] ?? null;
 
   return {
     cameras,
     audio,
     ibutton,
-    deltaCameras: yesterday ? cameras - yesterday.totalCameras : null,
-    deltaAudio: yesterday ? audio - yesterday.totalAudio : null,
-    deltaIbutton: yesterday ? ibutton - yesterday.totalIbutton : null,
+    cameraSizeBytes,
+    audioSizeBytes,
+    ibuttonSizeBytes,
+    deltaCameras: prev ? cameras - prev.totalCameras : null,
+    deltaAudio: prev ? audio - prev.totalAudio : null,
+    deltaIbutton: prev ? ibutton - prev.totalIbutton : null,
+    deltaCameraSizeBytes: prev ? cameraSizeBytes - prev.totalCameraSizeBytes : null,
+    deltaAudioSizeBytes: prev ? audioSizeBytes - prev.totalAudioSizeBytes : null,
+    deltaIbuttonSizeBytes: prev ? ibuttonSizeBytes - prev.totalIbuttonSizeBytes : null,
+    previousSnapshotDate: prev ? prev.date : null,
   };
 }

@@ -19,11 +19,23 @@ export interface UploadStatus {
   camarasTrampas: number | null; // file count, null = subfolder not found or check failed
   grabadoresDeAudio: number | null;
   ibutton: number | null;
+  camarasTrampasSizeBytes: number | null;
+  grabadoresDeAudioSizeBytes: number | null;
+  ibuttonSizeBytes: number | null;
+  camarasTrampasNewestDate: string | null;
+  grabadoresDeAudioNewestDate: string | null;
+  ibuttonNewestDate: string | null;
   subfolderIds: {
     camarasTrampas: string | null;
     grabadoresDeAudio: string | null;
     ibutton: string | null;
   };
+}
+
+interface FileStats {
+  count: number;
+  totalBytes: number;
+  newestDate: string | null;
 }
 
 // Subfolder names on Google Drive (must match exactly)
@@ -84,11 +96,13 @@ async function countFilesRecursive(
   folderId: string,
   extensions: Set<string>,
   depth = 0
-): Promise<number> {
-  if (depth > 5) return 0;
+): Promise<FileStats> {
+  if (depth > 5) return { count: 0, totalBytes: 0, newestDate: null };
 
   const drive = getDrive();
   let count = 0;
+  let totalBytes = 0;
+  let newestDate: string | null = null;
   const subfolders: { id: string; name: string }[] = [];
   let pageToken: string | undefined;
 
@@ -96,7 +110,7 @@ async function countFilesRecursive(
     const res = await withRetry(
       () => drive.files.list({
         q: `'${folderId}' in parents and trashed = false`,
-        fields: "nextPageToken, files(id, name, mimeType)",
+        fields: "nextPageToken, files(id, name, mimeType, size, modifiedTime)",
         pageSize: 1000,
         pageToken,
         supportsAllDrives: true,
@@ -114,6 +128,10 @@ async function countFilesRecursive(
         const ext = path.extname(file.name).toLowerCase();
         if (extensions.has(ext)) {
           count++;
+          if (file.size) totalBytes += parseInt(file.size, 10);
+          if (file.modifiedTime && (!newestDate || file.modifiedTime > newestDate)) {
+            newestDate = file.modifiedTime;
+          }
         }
       }
     }
@@ -121,16 +139,20 @@ async function countFilesRecursive(
     pageToken = res.data.nextPageToken ?? undefined;
   } while (pageToken);
 
-  const subCounts = await Promise.all(
+  const subStats = await Promise.all(
     subfolders
       .filter((sub) => sub.name !== "_frames")
       .map((sub) => countFilesRecursive(sub.id, extensions, depth + 1))
   );
-  for (const subCount of subCounts) {
-    count += subCount;
+  for (const sub of subStats) {
+    count += sub.count;
+    totalBytes += sub.totalBytes;
+    if (sub.newestDate && (!newestDate || sub.newestDate > newestDate)) {
+      newestDate = sub.newestDate;
+    }
   }
 
-  return count;
+  return { count, totalBytes, newestDate };
 }
 
 export interface DriveFileInfo {
@@ -256,6 +278,12 @@ export async function checkDeploymentUploads(
       camarasTrampas: null,
       grabadoresDeAudio: null,
       ibutton: null,
+      camarasTrampasSizeBytes: null,
+      grabadoresDeAudioSizeBytes: null,
+      ibuttonSizeBytes: null,
+      camarasTrampasNewestDate: null,
+      grabadoresDeAudioNewestDate: null,
+      ibuttonNewestDate: null,
       subfolderIds: {
         camarasTrampas: subfolderMap.get(DATA_TYPE_FOLDERS.camarasTrampas) ?? null,
         grabadoresDeAudio: subfolderMap.get(DATA_TYPE_FOLDERS.grabadoresDeAudio) ?? null,
@@ -263,23 +291,35 @@ export async function checkDeploymentUploads(
       },
     };
 
+    const sizeKeyMap = {
+      camarasTrampas: "camarasTrampasSizeBytes",
+      grabadoresDeAudio: "grabadoresDeAudioSizeBytes",
+      ibutton: "ibuttonSizeBytes",
+    } as const;
+
+    const dateKeyMap = {
+      camarasTrampas: "camarasTrampasNewestDate",
+      grabadoresDeAudio: "grabadoresDeAudioNewestDate",
+      ibutton: "ibuttonNewestDate",
+    } as const;
+
     const countPromises = Object.entries(DATA_TYPE_FOLDERS).map(
       async ([key, folderName]) => {
         const k = key as keyof typeof DATA_TYPE_FOLDERS;
         const subfolderId = subfolderMap.get(folderName);
         if (!subfolderId) {
           console.log(`[Drive] ${folderName}: subfolder not found in parent`);
-          return { key: k, count: 0 };
+          return { key: k, stats: { count: 0, totalBytes: 0, newestDate: null } as FileStats };
         }
 
         try {
           const extensions = DATA_TYPE_EXTENSIONS[k];
-          const count = await countFilesRecursive(subfolderId, extensions);
-          console.log(`[Drive] ${folderName} (${subfolderId}): ${count} files`);
-          return { key: k, count };
+          const stats = await countFilesRecursive(subfolderId, extensions);
+          console.log(`[Drive] ${folderName} (${subfolderId}): ${stats.count} files, ${(stats.totalBytes / 1024 / 1024).toFixed(0)}MB`);
+          return { key: k, stats };
         } catch (err) {
           console.error(`[Drive] Error counting files in ${folderName}:`, err);
-          return { key: k, count: null as number | null };
+          return { key: k, stats: null };
         }
       }
     );
@@ -288,8 +328,10 @@ export async function checkDeploymentUploads(
 
     for (const result of results) {
       if (result.status === "fulfilled") {
-        const { key, count } = result.value;
-        status[key] = count;
+        const { key, stats } = result.value;
+        status[key] = stats ? stats.count : null;
+        status[sizeKeyMap[key]] = stats ? stats.totalBytes : null;
+        status[dateKeyMap[key]] = stats ? stats.newestDate : null;
       }
     }
 

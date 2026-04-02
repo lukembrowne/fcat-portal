@@ -105,7 +105,13 @@ const CAMERA_TRAP_DDL = `
     upload_camera_folder_id TEXT,
     upload_audio_folder_id TEXT,
     upload_ibutton_folder_id TEXT,
-    upload_counts_checked_at INTEGER
+    upload_counts_checked_at INTEGER,
+    upload_camera_size_bytes INTEGER,
+    upload_audio_size_bytes INTEGER,
+    upload_ibutton_size_bytes INTEGER,
+    upload_newest_camera_date TEXT,
+    upload_newest_audio_date TEXT,
+    upload_newest_ibutton_date TEXT
   );
 
   CREATE TABLE biochoco_processing_jobs (

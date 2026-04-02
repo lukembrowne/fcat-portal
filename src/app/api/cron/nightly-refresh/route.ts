@@ -1,9 +1,9 @@
 /**
  * Nightly BioChoco Data Refresh & Email Report
  *
- * Called by cron via curl. Refreshes Google Drive file counts for all
- * BioChoco deployments, saves a daily snapshot, computes deltas from
- * yesterday, and sends a summary email via Resend.
+ * Called by cron via curl. Refreshes Google Drive file counts and sizes
+ * for all BioChoco deployments, saves a daily snapshot, computes deltas
+ * from the previous snapshot, and sends a summary email via Resend.
  *
  * Auth: Bearer token from CRON_SECRET env var (not user auth).
  */
@@ -29,15 +29,37 @@ interface DeploymentResult {
   error: string | null;
 }
 
-interface SnapshotDelta {
+interface SnapshotData {
   totalCameras: number;
   totalAudio: number;
   totalIbutton: number;
+  totalCameraSizeBytes: number;
+  totalAudioSizeBytes: number;
+  totalIbuttonSizeBytes: number;
+  deploymentsWithUploads: number;
+  totalDeployments: number;
+}
+
+interface SnapshotDelta extends SnapshotData {
   deltaCameras: number | null;
   deltaAudio: number | null;
   deltaIbutton: number | null;
-  deploymentsWithUploads: number;
-  totalDeployments: number;
+  deltaCameraSizeBytes: number | null;
+  deltaAudioSizeBytes: number | null;
+  deltaIbuttonSizeBytes: number | null;
+  previousSnapshotDate: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  const value = bytes / Math.pow(1024, i);
+  return `${value.toFixed(i > 1 ? 1 : 0)} ${units[i]}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -93,12 +115,18 @@ export async function POST(request: Request) {
         `[nightly] ${dep.name}: cameras=${uploads.camarasTrampas}, audio=${uploads.grabadoresDeAudio}, ibutton=${uploads.ibutton}`
       );
 
-      // Persist counts to DB
+      // Persist counts, sizes, newest dates to DB
       db.update(deployments)
         .set({
           uploadCameraCount: uploads.camarasTrampas,
           uploadAudioCount: uploads.grabadoresDeAudio,
           uploadIbuttonCount: uploads.ibutton,
+          uploadCameraSizeBytes: uploads.camarasTrampasSizeBytes,
+          uploadAudioSizeBytes: uploads.grabadoresDeAudioSizeBytes,
+          uploadIbuttonSizeBytes: uploads.ibuttonSizeBytes,
+          uploadNewestCameraDate: uploads.camarasTrampasNewestDate,
+          uploadNewestAudioDate: uploads.grabadoresDeAudioNewestDate,
+          uploadNewestIbuttonDate: uploads.ibuttonNewestDate,
           uploadCameraFolderId: uploads.subfolderIds.camarasTrampas,
           uploadAudioFolderId: uploads.subfolderIds.grabadoresDeAudio,
           uploadIbuttonFolderId: uploads.subfolderIds.ibutton,
@@ -125,6 +153,9 @@ export async function POST(request: Request) {
         totalCameras: snapshot.totalCameras,
         totalAudio: snapshot.totalAudio,
         totalIbutton: snapshot.totalIbutton,
+        totalCameraSizeBytes: snapshot.totalCameraSizeBytes,
+        totalAudioSizeBytes: snapshot.totalAudioSizeBytes,
+        totalIbuttonSizeBytes: snapshot.totalIbuttonSizeBytes,
         deploymentsWithUploads: snapshot.deploymentsWithUploads,
         totalDeployments: snapshot.totalDeployments,
       })
@@ -134,6 +165,9 @@ export async function POST(request: Request) {
           totalCameras: snapshot.totalCameras,
           totalAudio: snapshot.totalAudio,
           totalIbutton: snapshot.totalIbutton,
+          totalCameraSizeBytes: snapshot.totalCameraSizeBytes,
+          totalAudioSizeBytes: snapshot.totalAudioSizeBytes,
+          totalIbuttonSizeBytes: snapshot.totalIbuttonSizeBytes,
           deploymentsWithUploads: snapshot.deploymentsWithUploads,
           totalDeployments: snapshot.totalDeployments,
           createdAt: sql`(unixepoch())`,
@@ -143,8 +177,8 @@ export async function POST(request: Request) {
 
     console.log("[nightly] Snapshot saved");
 
-    // Step 4: Compute deltas from yesterday
-    const yesterdayRows = db
+    // Step 4: Compute deltas from previous snapshot
+    const prevRows = db
       .select()
       .from(uploadCountSnapshots)
       .where(sql`${uploadCountSnapshots.date} < ${today}`)
@@ -152,12 +186,16 @@ export async function POST(request: Request) {
       .limit(1)
       .all();
 
-    const yesterday = yesterdayRows[0] ?? null;
+    const prev = prevRows[0] ?? null;
     const delta: SnapshotDelta = {
       ...snapshot,
-      deltaCameras: yesterday ? snapshot.totalCameras - yesterday.totalCameras : null,
-      deltaAudio: yesterday ? snapshot.totalAudio - yesterday.totalAudio : null,
-      deltaIbutton: yesterday ? snapshot.totalIbutton - yesterday.totalIbutton : null,
+      deltaCameras: prev ? snapshot.totalCameras - prev.totalCameras : null,
+      deltaAudio: prev ? snapshot.totalAudio - prev.totalAudio : null,
+      deltaIbutton: prev ? snapshot.totalIbutton - prev.totalIbutton : null,
+      deltaCameraSizeBytes: prev ? snapshot.totalCameraSizeBytes - prev.totalCameraSizeBytes : null,
+      deltaAudioSizeBytes: prev ? snapshot.totalAudioSizeBytes - prev.totalAudioSizeBytes : null,
+      deltaIbuttonSizeBytes: prev ? snapshot.totalIbuttonSizeBytes - prev.totalIbuttonSizeBytes : null,
+      previousSnapshotDate: prev ? prev.date : null,
     };
 
     // Step 5: Send email
@@ -172,12 +210,14 @@ export async function POST(request: Request) {
 
     const errorCount = results.filter((r) => r.error).length;
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    console.log(`[nightly] Done in ${elapsed}s — ${results.length} deployments, ${errorCount} errors`);
+    const totalSize = snapshot.totalCameraSizeBytes + snapshot.totalAudioSizeBytes + snapshot.totalIbuttonSizeBytes;
+    console.log(`[nightly] Done in ${elapsed}s — ${results.length} deployments, ${errorCount} errors, ${formatBytes(totalSize)} total`);
 
     return Response.json({
       ok: true,
       deployments: results.length,
       errors: errorCount,
+      totalSize: formatBytes(totalSize),
       elapsed: `${elapsed}s`,
     });
   } catch (err) {
@@ -196,10 +236,13 @@ export async function POST(request: Request) {
 function computeSnapshot(
   results: DeploymentResult[],
   totalDeployments: number
-): Omit<SnapshotDelta, "deltaCameras" | "deltaAudio" | "deltaIbutton"> {
+): SnapshotData {
   let totalCameras = 0;
   let totalAudio = 0;
   let totalIbutton = 0;
+  let totalCameraSizeBytes = 0;
+  let totalAudioSizeBytes = 0;
+  let totalIbuttonSizeBytes = 0;
   let deploymentsWithUploads = 0;
 
   for (const r of results) {
@@ -210,10 +253,17 @@ function computeSnapshot(
     totalCameras += cam;
     totalAudio += aud;
     totalIbutton += ibt;
+    totalCameraSizeBytes += r.uploads.camarasTrampasSizeBytes ?? 0;
+    totalAudioSizeBytes += r.uploads.grabadoresDeAudioSizeBytes ?? 0;
+    totalIbuttonSizeBytes += r.uploads.ibuttonSizeBytes ?? 0;
     if (cam > 0 || aud > 0 || ibt > 0) deploymentsWithUploads++;
   }
 
-  return { totalCameras, totalAudio, totalIbutton, deploymentsWithUploads, totalDeployments };
+  return {
+    totalCameras, totalAudio, totalIbutton,
+    totalCameraSizeBytes, totalAudioSizeBytes, totalIbuttonSizeBytes,
+    deploymentsWithUploads, totalDeployments,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -265,12 +315,25 @@ async function sendReport(
 // HTML Email Builder
 // ---------------------------------------------------------------------------
 
-function formatDelta(value: number | null): string {
-  if (value === null) return "";
-  if (value === 0) return "";
-  return value > 0
-    ? ` <span style="color:#16a34a;font-weight:600">+${value} nuevos</span>`
-    : ` <span style="color:#dc2626;font-weight:600">${value}</span>`;
+function formatDeltaHtml(
+  countDelta: number | null,
+  sizeDelta: number | null,
+  previousDate: string | null
+): string {
+  if (countDelta === null) return "";
+  const sinceLabel = previousDate ? `desde ${previousDate}` : "desde último conteo";
+  if (countDelta === 0 && (sizeDelta === null || sizeDelta === 0)) {
+    return ` <span style="color:#6b7280">sin cambios ${sinceLabel}</span>`;
+  }
+  const parts: string[] = [];
+  if (countDelta !== 0) {
+    parts.push(`${countDelta > 0 ? "+" : ""}${countDelta} archivos`);
+  }
+  if (sizeDelta && sizeDelta !== 0) {
+    parts.push(`${sizeDelta > 0 ? "+" : ""}${formatBytes(Math.abs(sizeDelta))}`);
+  }
+  const color = countDelta > 0 ? "#16a34a" : "#dc2626";
+  return ` <span style="color:${color};font-weight:600">${parts.join(", ")} ${sinceLabel}</span>`;
 }
 
 function buildEmailHtml(
@@ -280,6 +343,9 @@ function buildEmailHtml(
   delta: SnapshotDelta,
   errors: DeploymentResult[]
 ): string {
+  const totalFiles = delta.totalCameras + delta.totalAudio + delta.totalIbutton;
+  const totalSize = delta.totalCameraSizeBytes + delta.totalAudioSizeBytes + delta.totalIbuttonSizeBytes;
+
   const deploymentRows = results
     .filter((r) => {
       if (!r.uploads) return false;
@@ -333,19 +399,21 @@ function buildEmailHtml(
 
   <p style="font-size:16px;font-weight:600;color:${errors.length > 0 ? "#dc2626" : "#16a34a"}">${statusLine}</p>
 
+  <p style="font-size:14px;color:#6b7280;margin-top:8px">Total: <strong>${formatBytes(totalSize)}</strong> en ${totalFiles.toLocaleString()} archivos</p>
+
   <h3 style="margin-top:24px">Resumen</h3>
   <table style="border-collapse:collapse;margin-top:8px">
     <tr>
       <td style="padding:6px 16px 6px 0;font-weight:600">Cámaras trampa</td>
-      <td style="padding:6px 0">${delta.totalCameras.toLocaleString()}${formatDelta(delta.deltaCameras)}</td>
+      <td style="padding:6px 0">${delta.totalCameras.toLocaleString()} (${formatBytes(delta.totalCameraSizeBytes)})${formatDeltaHtml(delta.deltaCameras, delta.deltaCameraSizeBytes, delta.previousSnapshotDate)}</td>
     </tr>
     <tr>
       <td style="padding:6px 16px 6px 0;font-weight:600">Grabadores de audio</td>
-      <td style="padding:6px 0">${delta.totalAudio.toLocaleString()}${formatDelta(delta.deltaAudio)}</td>
+      <td style="padding:6px 0">${delta.totalAudio.toLocaleString()} (${formatBytes(delta.totalAudioSizeBytes)})${formatDeltaHtml(delta.deltaAudio, delta.deltaAudioSizeBytes, delta.previousSnapshotDate)}</td>
     </tr>
     <tr>
       <td style="padding:6px 16px 6px 0;font-weight:600">iButton</td>
-      <td style="padding:6px 0">${delta.totalIbutton.toLocaleString()}${formatDelta(delta.deltaIbutton)}</td>
+      <td style="padding:6px 0">${delta.totalIbutton.toLocaleString()} (${formatBytes(delta.totalIbuttonSizeBytes)})${formatDeltaHtml(delta.deltaIbutton, delta.deltaIbuttonSizeBytes, delta.previousSnapshotDate)}</td>
     </tr>
     <tr>
       <td style="padding:6px 16px 6px 0;font-weight:600">Instalaciones con datos</td>

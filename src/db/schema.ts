@@ -164,6 +164,13 @@ export const deployments = sqliteTable(
     uploadAudioFolderId: text("upload_audio_folder_id"),
     uploadIbuttonFolderId: text("upload_ibutton_folder_id"),
     uploadCountsCheckedAt: integer("upload_counts_checked_at", { mode: "timestamp" }),
+    // Upload cache — file sizes (bytes) and newest file dates
+    uploadCameraSizeBytes: integer("upload_camera_size_bytes"),
+    uploadAudioSizeBytes: integer("upload_audio_size_bytes"),
+    uploadIbuttonSizeBytes: integer("upload_ibutton_size_bytes"),
+    uploadNewestCameraDate: text("upload_newest_camera_date"),
+    uploadNewestAudioDate: text("upload_newest_audio_date"),
+    uploadNewestIbuttonDate: text("upload_newest_ibutton_date"),
   },
   (table) => [
     uniqueIndex("idx_biochoco_deployments_project_path").on(
@@ -774,6 +781,9 @@ export const uploadCountSnapshots = sqliteTable("upload_count_snapshots", {
   totalCameras: integer("total_cameras").notNull().default(0),
   totalAudio: integer("total_audio").notNull().default(0),
   totalIbutton: integer("total_ibutton").notNull().default(0),
+  totalCameraSizeBytes: integer("total_camera_size_bytes").notNull().default(0),
+  totalAudioSizeBytes: integer("total_audio_size_bytes").notNull().default(0),
+  totalIbuttonSizeBytes: integer("total_ibutton_size_bytes").notNull().default(0),
   deploymentsWithUploads: integer("deployments_with_uploads").notNull().default(0),
   totalDeployments: integer("total_deployments").notNull().default(0),
   createdAt: integer("created_at", { mode: "timestamp" })

@@ -17,6 +17,9 @@ services:
       - ML_VENV_DIR=data/ml-venv
       - SUPER_ADMIN_EMAILS=lukebrowne@fcat-ecuador.org
       - ALLOWED_EMAILS_PATH=data/allowed_external_emails.txt
+      - RESEND_API_KEY=${RESEND_API_KEY:-}
+      - NIGHTLY_REPORT_EMAILS=${NIGHTLY_REPORT_EMAILS:-}
+      - RESEND_FROM_EMAIL=${RESEND_FROM_EMAIL:-portal@fcat-ecuador.org}
       - TZ=America/New_York
     restart: unless-stopped
     healthcheck:

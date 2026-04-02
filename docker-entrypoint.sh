@@ -9,6 +9,10 @@ export YOLO_CONFIG_DIR=/tmp/Ultralytics
 # Ensure backup directory exists
 mkdir -p /app/data/backups
 
+# Export env vars for cron jobs (Debian cron doesn't inherit Docker env)
+echo "CRON_SECRET=${CRON_SECRET}" > /etc/cron.d/portal-env
+chmod 0600 /etc/cron.d/portal-env
+
 # Start cron daemon (Debian — auto-backgrounds, reads /etc/cron.d/)
 cron
 

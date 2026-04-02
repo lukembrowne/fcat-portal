@@ -1,26 +1,21 @@
 /**
  * Nightly BioChoco Data Refresh & Email Report
  *
- * Standalone script executed by cron. Refreshes Google Drive file counts
- * for all BioChoco deployments, saves a daily snapshot, computes deltas
- * from yesterday, and sends a summary email via Resend.
+ * Called by cron via curl. Refreshes Google Drive file counts for all
+ * BioChoco deployments, saves a daily snapshot, computes deltas from
+ * yesterday, and sends a summary email via Resend.
  *
- * Usage: NODE_OPTIONS='--conditions react-server' npx tsx scripts/nightly-data-refresh.ts
+ * Auth: Bearer token from CRON_SECRET env var (not user auth).
  */
 
-import { getDb } from "../src/db/index";
-import { deployments, uploadCountSnapshots } from "../src/db/schema";
-import { checkDeploymentUploads, type UploadStatus } from "../src/lib/drive-client";
+import { db } from "@/db";
+import { deployments, uploadCountSnapshots } from "@/db/schema";
+import { checkDeploymentUploads, type UploadStatus } from "@/lib/drive-client";
+import { verifyCronSecret } from "@/lib/cron-auth";
 import { isNotNull, eq, sql } from "drizzle-orm";
 import { Resend } from "resend";
 
-// ---------------------------------------------------------------------------
-// Config
-// ---------------------------------------------------------------------------
-
-const RESEND_API_KEY = process.env.RESEND_API_KEY;
-const NIGHTLY_REPORT_EMAILS = process.env.NIGHTLY_REPORT_EMAILS;
-const FROM_EMAIL = process.env.RESEND_FROM_EMAIL ?? "portal@fcat-ecuador.org";
+export const dynamic = "force-dynamic";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -46,139 +41,152 @@ interface SnapshotDelta {
 }
 
 // ---------------------------------------------------------------------------
-// Main
+// POST handler
 // ---------------------------------------------------------------------------
 
-async function main() {
-  const startTime = Date.now();
-  const today = new Date().toISOString().slice(0, 10);
-  console.log(`[nightly] Starting BioChoco data refresh — ${today}`);
-
-  if (!RESEND_API_KEY) {
-    console.warn("[nightly] RESEND_API_KEY not set — email will be skipped");
-  }
-  if (!NIGHTLY_REPORT_EMAILS) {
-    console.warn("[nightly] NIGHTLY_REPORT_EMAILS not set — email will be skipped");
+export async function POST(request: Request) {
+  if (!verifyCronSecret(request)) {
+    return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const db = getDb();
+  try {
+    const startTime = Date.now();
+    const today = new Date().toISOString().slice(0, 10);
+    console.log(`[nightly] Starting BioChoco data refresh — ${today}`);
 
-  // Step 1: Query all deployments with a Drive folder
-  const allDeployments = db
-    .select({
-      id: deployments.id,
-      name: deployments.name,
-      siteName: deployments.siteName,
-      driveFolderId: deployments.driveFolderId,
-    })
-    .from(deployments)
-    .where(isNotNull(deployments.driveFolderId))
-    .all();
+    // Step 1: Query all deployments with a Drive folder
+    const allDeployments = db
+      .select({
+        id: deployments.id,
+        name: deployments.name,
+        siteName: deployments.siteName,
+        driveFolderId: deployments.driveFolderId,
+      })
+      .from(deployments)
+      .where(isNotNull(deployments.driveFolderId))
+      .all();
 
-  console.log(`[nightly] Found ${allDeployments.length} deployments with Drive folders`);
+    console.log(`[nightly] Found ${allDeployments.length} deployments with Drive folders`);
 
-  // Step 2: Check each deployment sequentially
-  const results: DeploymentResult[] = [];
+    // Step 2: Check each deployment sequentially
+    const results: DeploymentResult[] = [];
 
-  for (const dep of allDeployments) {
-    console.log(`[nightly] Checking ${dep.name} (folder: ${dep.driveFolderId})`);
+    for (const dep of allDeployments) {
+      console.log(`[nightly] Checking ${dep.name} (folder: ${dep.driveFolderId})`);
 
-    const result = await checkDeploymentUploads(dep.driveFolderId!);
+      const result = await checkDeploymentUploads(dep.driveFolderId!);
 
-    if (!result.success) {
-      console.error(`[nightly] FAILED ${dep.name}: ${result.error}`);
+      if (!result.success) {
+        console.error(`[nightly] FAILED ${dep.name}: ${result.error}`);
+        results.push({
+          id: dep.id,
+          name: dep.name,
+          siteName: dep.siteName,
+          uploads: null,
+          error: result.error,
+        });
+        continue;
+      }
+
+      const uploads = result.data;
+      console.log(
+        `[nightly] ${dep.name}: cameras=${uploads.camarasTrampas}, audio=${uploads.grabadoresDeAudio}, ibutton=${uploads.ibutton}`
+      );
+
+      // Persist counts to DB
+      db.update(deployments)
+        .set({
+          uploadCameraCount: uploads.camarasTrampas,
+          uploadAudioCount: uploads.grabadoresDeAudio,
+          uploadIbuttonCount: uploads.ibutton,
+          uploadCameraFolderId: uploads.subfolderIds.camarasTrampas,
+          uploadAudioFolderId: uploads.subfolderIds.grabadoresDeAudio,
+          uploadIbuttonFolderId: uploads.subfolderIds.ibutton,
+          uploadCountsCheckedAt: sql`(unixepoch())`,
+        })
+        .where(eq(deployments.id, dep.id))
+        .run();
+
       results.push({
         id: dep.id,
         name: dep.name,
         siteName: dep.siteName,
-        uploads: null,
-        error: result.error,
+        uploads,
+        error: null,
       });
-      continue;
     }
 
-    const uploads = result.data;
-    console.log(
-      `[nightly] ${dep.name}: cameras=${uploads.camarasTrampas}, audio=${uploads.grabadoresDeAudio}, ibutton=${uploads.ibutton}`
-    );
+    // Step 3: Save daily snapshot
+    const snapshot = computeSnapshot(results, allDeployments.length);
 
-    // Persist counts to DB
-    db.update(deployments)
-      .set({
-        uploadCameraCount: uploads.camarasTrampas,
-        uploadAudioCount: uploads.grabadoresDeAudio,
-        uploadIbuttonCount: uploads.ibutton,
-        uploadCameraFolderId: uploads.subfolderIds.camarasTrampas,
-        uploadAudioFolderId: uploads.subfolderIds.grabadoresDeAudio,
-        uploadIbuttonFolderId: uploads.subfolderIds.ibutton,
-        uploadCountsCheckedAt: sql`(unixepoch())`,
-      })
-      .where(eq(deployments.id, dep.id))
-      .run();
-
-    results.push({
-      id: dep.id,
-      name: dep.name,
-      siteName: dep.siteName,
-      uploads,
-      error: null,
-    });
-  }
-
-  // Step 3: Save daily snapshot
-  const snapshot = computeSnapshot(results, allDeployments.length);
-
-  db.insert(uploadCountSnapshots)
-    .values({
-      date: today,
-      totalCameras: snapshot.totalCameras,
-      totalAudio: snapshot.totalAudio,
-      totalIbutton: snapshot.totalIbutton,
-      deploymentsWithUploads: snapshot.deploymentsWithUploads,
-      totalDeployments: snapshot.totalDeployments,
-    })
-    .onConflictDoUpdate({
-      target: uploadCountSnapshots.date,
-      set: {
+    db.insert(uploadCountSnapshots)
+      .values({
+        date: today,
         totalCameras: snapshot.totalCameras,
         totalAudio: snapshot.totalAudio,
         totalIbutton: snapshot.totalIbutton,
         deploymentsWithUploads: snapshot.deploymentsWithUploads,
         totalDeployments: snapshot.totalDeployments,
-        createdAt: sql`(unixepoch())`,
-      },
-    })
-    .run();
+      })
+      .onConflictDoUpdate({
+        target: uploadCountSnapshots.date,
+        set: {
+          totalCameras: snapshot.totalCameras,
+          totalAudio: snapshot.totalAudio,
+          totalIbutton: snapshot.totalIbutton,
+          deploymentsWithUploads: snapshot.deploymentsWithUploads,
+          totalDeployments: snapshot.totalDeployments,
+          createdAt: sql`(unixepoch())`,
+        },
+      })
+      .run();
 
-  console.log("[nightly] Snapshot saved");
+    console.log("[nightly] Snapshot saved");
 
-  // Step 4: Compute deltas from yesterday
-  const yesterdayRows = db
-    .select()
-    .from(uploadCountSnapshots)
-    .where(sql`${uploadCountSnapshots.date} < ${today}`)
-    .orderBy(sql`${uploadCountSnapshots.date} DESC`)
-    .limit(1)
-    .all();
+    // Step 4: Compute deltas from yesterday
+    const yesterdayRows = db
+      .select()
+      .from(uploadCountSnapshots)
+      .where(sql`${uploadCountSnapshots.date} < ${today}`)
+      .orderBy(sql`${uploadCountSnapshots.date} DESC`)
+      .limit(1)
+      .all();
 
-  const yesterday = yesterdayRows[0] ?? null;
-  const delta: SnapshotDelta = {
-    ...snapshot,
-    deltaCameras: yesterday ? snapshot.totalCameras - yesterday.totalCameras : null,
-    deltaAudio: yesterday ? snapshot.totalAudio - yesterday.totalAudio : null,
-    deltaIbutton: yesterday ? snapshot.totalIbutton - yesterday.totalIbutton : null,
-  };
+    const yesterday = yesterdayRows[0] ?? null;
+    const delta: SnapshotDelta = {
+      ...snapshot,
+      deltaCameras: yesterday ? snapshot.totalCameras - yesterday.totalCameras : null,
+      deltaAudio: yesterday ? snapshot.totalAudio - yesterday.totalAudio : null,
+      deltaIbutton: yesterday ? snapshot.totalIbutton - yesterday.totalIbutton : null,
+    };
 
-  // Step 5: Send email
-  if (RESEND_API_KEY && NIGHTLY_REPORT_EMAILS) {
-    await sendReport(today, results, delta);
+    // Step 5: Send email
+    const RESEND_API_KEY = process.env.RESEND_API_KEY;
+    const NIGHTLY_REPORT_EMAILS = process.env.NIGHTLY_REPORT_EMAILS;
+
+    if (RESEND_API_KEY && NIGHTLY_REPORT_EMAILS) {
+      await sendReport(RESEND_API_KEY, NIGHTLY_REPORT_EMAILS, today, results, delta);
+    } else {
+      console.warn("[nightly] Email skipped — RESEND_API_KEY or NIGHTLY_REPORT_EMAILS not set");
+    }
+
+    const errorCount = results.filter((r) => r.error).length;
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`[nightly] Done in ${elapsed}s — ${results.length} deployments, ${errorCount} errors`);
+
+    return Response.json({
+      ok: true,
+      deployments: results.length,
+      errors: errorCount,
+      elapsed: `${elapsed}s`,
+    });
+  } catch (err) {
+    console.error("[nightly] Fatal error:", err);
+    return Response.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      { status: 500 }
+    );
   }
-
-  const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-  const errors = results.filter((r) => r.error).length;
-  console.log(
-    `[nightly] Done in ${elapsed}s — ${results.length} deployments, ${errors} errors`
-  );
 }
 
 // ---------------------------------------------------------------------------
@@ -213,12 +221,15 @@ function computeSnapshot(
 // ---------------------------------------------------------------------------
 
 async function sendReport(
+  apiKey: string,
+  recipientEmails: string,
   date: string,
   results: DeploymentResult[],
   delta: SnapshotDelta
 ) {
-  const resend = new Resend(RESEND_API_KEY);
-  const to = NIGHTLY_REPORT_EMAILS!.split(",").map((e) => e.trim()).filter(Boolean);
+  const resend = new Resend(apiKey);
+  const fromEmail = process.env.RESEND_FROM_EMAIL ?? "portal@fcat-ecuador.org";
+  const to = recipientEmails.split(",").map((e) => e.trim()).filter(Boolean);
 
   if (to.length === 0) {
     console.warn("[nightly] No recipient emails configured");
@@ -234,7 +245,7 @@ async function sendReport(
 
   try {
     const { error } = await resend.emails.send({
-      from: FROM_EMAIL,
+      from: fromEmail,
       to,
       subject: `BioChoco Datos — Resumen nocturno ${date}`,
       html,
@@ -269,7 +280,6 @@ function buildEmailHtml(
   delta: SnapshotDelta,
   errors: DeploymentResult[]
 ): string {
-  // Per-deployment rows: only those with at least one file, sorted by name
   const deploymentRows = results
     .filter((r) => {
       if (!r.uploads) return false;
@@ -361,14 +371,3 @@ function buildEmailHtml(
 </body>
 </html>`;
 }
-
-// ---------------------------------------------------------------------------
-// Run
-// ---------------------------------------------------------------------------
-
-main()
-  .then(() => process.exit(0))
-  .catch((err) => {
-    console.error("[nightly] Fatal error:", err);
-    process.exit(1);
-  });

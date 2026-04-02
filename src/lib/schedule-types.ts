@@ -29,6 +29,7 @@ export interface ScheduleRow {
   uploadAudioFolderId?: string | null;
   uploadIbuttonFolderId?: string | null;
   uploadCountsCheckedAt?: number | null; // unix timestamp
+  uploadNewestDate?: string | null; // ISO date of most recent file across all data types
 }
 
 export interface SlotRow {

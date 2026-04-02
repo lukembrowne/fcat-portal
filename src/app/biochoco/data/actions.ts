@@ -84,6 +84,9 @@ export async function fetchSchedule(): Promise<ActionResult<ScheduleRow[]>> {
         uploadAudioFolderId: deployments.uploadAudioFolderId,
         uploadIbuttonFolderId: deployments.uploadIbuttonFolderId,
         uploadCountsCheckedAt: deployments.uploadCountsCheckedAt,
+        uploadNewestCameraDate: deployments.uploadNewestCameraDate,
+        uploadNewestAudioDate: deployments.uploadNewestAudioDate,
+        uploadNewestIbuttonDate: deployments.uploadNewestIbuttonDate,
       })
       .from(deployments)
       .where(isNotNull(deployments.driveFolderId));
@@ -111,6 +114,14 @@ export async function fetchSchedule(): Promise<ActionResult<ScheduleRow[]>> {
           uploadCountsCheckedAt: dbRow.uploadCountsCheckedAt
             ? Math.floor(dbRow.uploadCountsCheckedAt.getTime() / 1000)
             : null,
+          uploadNewestDate: [
+            dbRow.uploadNewestCameraDate,
+            dbRow.uploadNewestAudioDate,
+            dbRow.uploadNewestIbuttonDate,
+          ]
+            .filter(Boolean)
+            .sort()
+            .pop() ?? null,
         };
       });
 

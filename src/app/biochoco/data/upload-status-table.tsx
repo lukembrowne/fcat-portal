@@ -26,7 +26,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import type { ScheduleRow, ScheduleStatus } from "@/lib/schedule-types";
-import type { UploadStatus } from "@/lib/drive-client";
 import { refreshSingleUploadCount, saveUploadSnapshot, type DriveStatusResult } from "./actions";
 import { recreateDriveFolder } from "./drive-folder-actions";
 
@@ -43,6 +42,13 @@ function formatShortDate(dateStr: string | null): string {
 
 function driveLink(folderId: string): string {
   return `https://drive.google.com/drive/folders/${folderId}`;
+}
+
+function formatNewestDate(isoDate: string | null | undefined): string {
+  if (!isoDate) return "—";
+  const d = new Date(isoDate);
+  if (isNaN(d.getTime())) return "—";
+  return `${d.getDate()} ${SHORT_MONTHS[d.getMonth()]} ${d.getFullYear()}`;
 }
 
 function formatRelativeTime(unixTimestamp: number): string {
@@ -65,6 +71,12 @@ function buildInitialCache(schedule: ScheduleRow[]): Map<string, DriveStatusResu
           camarasTrampas: row.uploadCameraCount ?? null,
           grabadoresDeAudio: row.uploadAudioCount ?? null,
           ibutton: row.uploadIbuttonCount ?? null,
+          camarasTrampasSizeBytes: null,
+          grabadoresDeAudioSizeBytes: null,
+          ibuttonSizeBytes: null,
+          camarasTrampasNewestDate: null,
+          grabadoresDeAudioNewestDate: null,
+          ibuttonNewestDate: null,
           subfolderIds: {
             camarasTrampas: row.uploadCameraFolderId ?? null,
             grabadoresDeAudio: row.uploadAudioFolderId ?? null,
@@ -98,7 +110,7 @@ function DataTypeCell({
 }: {
   parentFolderLink: string | null;
   driveStatus: DriveStatusResult | undefined;
-  dataTypeKey: keyof Omit<UploadStatus, "subfolderIds">;
+  dataTypeKey: "camarasTrampas" | "grabadoresDeAudio" | "ibutton";
 }) {
   if (!parentFolderLink) {
     return (
@@ -152,20 +164,23 @@ function DataTypeCell({
 
 // --- Sorting ---
 
-type SortField = "deploymentId" | "siteId" | "status" | "actualDeployDate" | "actualRetrieveDate" | "uploadCameraCount" | "uploadAudioCount" | "uploadIbuttonCount";
-type SortDir = "asc" | "desc";
+type SortField = "deploymentId" | "siteId" | "status" | "actualDeployDate" | "actualRetrieveDate" | "uploadCameraCount" | "uploadAudioCount" | "uploadIbuttonCount" | "uploadNewestDate";
+type SortDir = "asc" | "desc" | null;
 
 const NUMERIC_FIELDS = new Set<SortField>(["uploadCameraCount", "uploadAudioCount", "uploadIbuttonCount"]);
 
 function sortRows(rows: ScheduleRow[], field: SortField, dir: SortDir): ScheduleRow[] {
+  if (!dir) return rows;
   return [...rows].sort((a, b) => {
     let cmp: number;
     if (NUMERIC_FIELDS.has(field)) {
-      const av = (a[field] as number | null | undefined) ?? -1;
-      const bv = (b[field] as number | null | undefined) ?? -1;
+      const av = (a[field as keyof ScheduleRow] as number | null | undefined) ?? -1;
+      const bv = (b[field as keyof ScheduleRow] as number | null | undefined) ?? -1;
       cmp = av - bv;
     } else {
-      cmp = (a[field] as string ?? "").localeCompare(b[field] as string ?? "");
+      const av = (a[field as keyof ScheduleRow] as string) ?? "";
+      const bv = (b[field as keyof ScheduleRow] as string) ?? "";
+      cmp = av.localeCompare(bv);
     }
     return dir === "asc" ? cmp : -cmp;
   });
@@ -173,11 +188,11 @@ function sortRows(rows: ScheduleRow[], field: SortField, dir: SortDir): Schedule
 
 function SortButton({ field, current, dir, onSort }: {
   field: SortField;
-  current: SortField;
+  current: SortField | null;
   dir: SortDir;
   onSort: (field: SortField) => void;
 }) {
-  const active = field === current;
+  const active = field === current && dir !== null;
   return (
     <button onClick={() => onSort(field)} className="inline-flex items-center gap-0.5 hover:text-foreground">
       {active ? (
@@ -198,7 +213,7 @@ interface UploadStatusTableProps {
 export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
   const router = useRouter();
   const [search, setSearch] = useState("");
-  const [sortField, setSortField] = useState<SortField>("deploymentId");
+  const [sortField, setSortField] = useState<SortField | null>("deploymentId");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [driveCache, setDriveCache] = useState<Map<string, DriveStatusResult>>(() => buildInitialCache(schedule));
   const [progress, setProgress] = useState<{ current: number; total: number; action: "verify" | "recreate" } | null>(null);
@@ -207,11 +222,17 @@ export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
   const handleSort = useCallback((field: SortField) => {
     setSortField((prev) => {
       if (prev === field) {
-        setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+        // Cycle: asc → desc → none
+        setSortDir((d) => {
+          if (d === "asc") return "desc";
+          if (d === "desc") return null;
+          return "asc";
+        });
+        return field;
       } else {
         setSortDir("asc");
+        return field;
       }
-      return field;
     });
   }, []);
 
@@ -226,7 +247,7 @@ export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
             r.siteName.toLowerCase().includes(q)
         )
       : schedule;
-    return sortRows(base, sortField, sortDir);
+    return sortField && sortDir ? sortRows(base, sortField, sortDir) : base;
   }, [schedule, search, sortField, sortDir]);
 
   // Summary stats
@@ -456,6 +477,12 @@ export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
                       <SortButton field="uploadIbuttonCount" current={sortField} dir={sortDir} onSort={handleSort} />
                     </span>
                   </TableHead>
+                  <TableHead className="text-center whitespace-nowrap">
+                    <span className="inline-flex items-center gap-1">
+                      Último Subida
+                      <SortButton field="uploadNewestDate" current={sortField} dir={sortDir} onSort={handleSort} />
+                    </span>
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -512,6 +539,9 @@ export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
                           driveStatus={driveStatus}
                           dataTypeKey="ibutton"
                         />
+                      </TableCell>
+                      <TableCell className="text-center text-sm whitespace-nowrap text-muted-foreground">
+                        {formatNewestDate(row.uploadNewestDate)}
                       </TableCell>
                     </TableRow>
                   );

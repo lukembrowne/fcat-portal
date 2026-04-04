@@ -2,5 +2,7 @@
 # Debian /etc/cron.d/ format requires the user field (root)
 0 * * * * root cd /app && /usr/local/bin/node scripts/backup-db.mjs >> /app/data/backups/cron.log 2>&1
 
-# Nightly BioChoco data refresh + email report (midnight Ecuador / 05:00 UTC)
-0 5 * * * root . /etc/cron.d/portal-env && /usr/bin/curl -sf -X POST -H "Authorization: Bearer $CRON_SECRET" --max-time 600 --retry 3 --retry-delay 10 --retry-connrefused http://localhost:3000/api/cron/nightly-refresh >> /app/data/nightly-refresh.log 2>&1
+# Nightly BioChoco data refresh + email report (~midnight Ecuador / 05:00 UTC)
+# Container TZ is America/New_York (EDT=UTC-4, EST=UTC-5). Ecuador is always UTC-5.
+# 1 AM Eastern = midnight Ecuador during EDT; 11 PM Ecuador during EST.
+0 1 * * * root . /etc/cron.d/portal-env && /usr/bin/curl -sf -X POST -H "Authorization: Bearer $CRON_SECRET" --max-time 600 --retry 3 --retry-delay 10 --retry-connrefused http://localhost:3000/api/cron/nightly-refresh >> /app/data/nightly-refresh.log 2>&1

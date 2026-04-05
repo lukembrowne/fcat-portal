@@ -39,6 +39,7 @@ import type { ScheduleRow } from "@/lib/schedule-types";
 import type { SiteInfo } from "./types";
 import { getHabitatName, getDeploymentStatus, SPANISH_MONTHS } from "./types";
 import { toUtm17N } from "@/lib/utm";
+import { FieldNotesPopover } from "@/app/biochoco/field-notes/field-notes-popover";
 
 interface ScheduleTableProps {
   deploymentsThisMonth: ScheduleRow[];
@@ -48,6 +49,7 @@ interface ScheduleTableProps {
   deployedSet: Set<string>;
   retrievedSet: Set<string>;
   selectedMonth: { year: number; month: number };
+  canEditNotes?: boolean;
 }
 
 interface CombinedRow {
@@ -62,6 +64,7 @@ interface CombinedRow {
   lat: number | null;
   lng: number | null;
   driveFolderLink: string;
+  fieldNotes: string | null;
 }
 
 function statusBadge(status: string) {
@@ -108,6 +111,7 @@ function buildRows(
       lat: site?.lat ?? null,
       lng: site?.lng ?? null,
       driveFolderLink: r.driveFolderLink,
+      fieldNotes: r.fieldNotes ?? null,
     };
   });
 }
@@ -121,6 +125,7 @@ function downloadCsv(rows: CombinedRow[]) {
     "Hábitat",
     "Hab. Evaluado",
     "ID Instalación",
+    "Notas de campo",
     "Estado",
     "Latitud",
     "Longitud",
@@ -150,6 +155,7 @@ function downloadCsv(rows: CombinedRow[]) {
       r.habitat,
       r.habitatAssessed,
       r.deploymentId,
+      r.fieldNotes ?? "",
       statusLabel[r.status] ?? r.status,
       r.lat?.toString() ?? "",
       r.lng?.toString() ?? "",
@@ -184,6 +190,7 @@ export function ScheduleTable({
   deployedSet,
   retrievedSet,
   selectedMonth,
+  canEditNotes = false,
 }: ScheduleTableProps) {
   const [showAll, setShowAll] = useState(false);
   const [sorting, setSorting] = useState<SortingState>([]);
@@ -278,6 +285,19 @@ export function ScheduleTable({
         ),
       },
       {
+        id: "fieldNotes",
+        header: "Notas",
+        cell: ({ row }) => (
+          <FieldNotesPopover
+            deploymentName={row.original.deploymentId}
+            initialNotes={row.original.fieldNotes}
+            canEdit={canEditNotes}
+          />
+        ),
+        enableSorting: false,
+        enableGlobalFilter: false,
+      },
+      {
         id: "status",
         accessorKey: "status",
         header: "Estado",
@@ -366,7 +386,7 @@ export function ScheduleTable({
         enableGlobalFilter: false,
       },
     ],
-    [],
+    [canEditNotes],
   );
 
   const table = useReactTable({

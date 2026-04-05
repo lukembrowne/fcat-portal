@@ -28,6 +28,7 @@ import { Button } from "@/components/ui/button";
 import type { ScheduleRow, ScheduleStatus } from "@/lib/schedule-types";
 import { refreshSingleUploadCount, saveUploadSnapshot, type DriveStatusResult } from "./actions";
 import { recreateDriveFolder } from "./drive-folder-actions";
+import { FieldNotesPopover } from "@/app/biochoco/field-notes/field-notes-popover";
 
 // --- Helpers ---
 
@@ -208,9 +209,10 @@ function SortButton({ field, current, dir, onSort }: {
 
 interface UploadStatusTableProps {
   schedule: ScheduleRow[];
+  canEditNotes?: boolean;
 }
 
-export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
+export function UploadStatusTable({ schedule, canEditNotes = false }: UploadStatusTableProps) {
   const router = useRouter();
   const [search, setSearch] = useState("");
   const [sortField, setSortField] = useState<SortField | null>("deploymentId");
@@ -441,6 +443,7 @@ export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
                       <SortButton field="siteId" current={sortField} dir={sortDir} onSort={handleSort} />
                     </span>
                   </TableHead>
+                  <TableHead className="w-8 text-center">Notas</TableHead>
                   <TableHead className="text-center">
                     <span className="inline-flex items-center gap-1">
                       Estado
@@ -510,6 +513,13 @@ export function UploadStatusTable({ schedule }: UploadStatusTableProps) {
                       </TableCell>
                       <TableCell className="font-medium">{row.deploymentId}</TableCell>
                       <TableCell>{row.siteName || row.siteId}</TableCell>
+                      <TableCell className="text-center">
+                        <FieldNotesPopover
+                          deploymentName={row.deploymentId}
+                          initialNotes={row.fieldNotes ?? null}
+                          canEdit={canEditNotes}
+                        />
+                      </TableCell>
                       <TableCell className="text-center">
                         <StatusBadge status={row.status} />
                       </TableCell>

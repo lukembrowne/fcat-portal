@@ -51,7 +51,7 @@ export default async function BiochocoDataPage() {
         totalRetrieved={retrieved.length}
       />
       {isEditor && <CreateFoldersPanel />}
-      <UploadStatusTable schedule={result.data} />
+      <UploadStatusTable schedule={result.data} canEditNotes={isEditor} />
     </div>
   );
 }

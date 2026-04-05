@@ -12,7 +12,7 @@ import { WorkloadTable } from "./workload-table";
 import { DurationOutliersTable } from "./duration-outliers-table";
 import { SiteSummaryTable } from "./site-summary-table";
 
-export function DashboardShell({ data }: { data: BiochocoOverviewData }) {
+export function DashboardShell({ data, canEditNotes = false }: { data: BiochocoOverviewData; canEditNotes?: boolean }) {
   const now = new Date();
   const [selectedMonth, setSelectedMonth] = useState({
     year: now.getFullYear(),
@@ -91,6 +91,7 @@ export function DashboardShell({ data }: { data: BiochocoOverviewData }) {
         deployedSet={deployedSet}
         retrievedSet={retrievedSet}
         selectedMonth={selectedMonth}
+        canEditNotes={canEditNotes}
       />
 
       <Separator />

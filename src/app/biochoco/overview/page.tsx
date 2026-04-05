@@ -3,7 +3,7 @@ import { fetchBiochocoData } from "./actions";
 import { DashboardShell } from "./dashboard-shell";
 
 export default async function BiochocoOverviewPage() {
-  await requirePermission("biochoco", "viewer");
+  const user = await requirePermission("biochoco", "viewer");
 
   const result = await fetchBiochocoData();
 
@@ -21,5 +21,11 @@ export default async function BiochocoOverviewPage() {
     );
   }
 
-  return <DashboardShell data={result.data} />;
+  const canEditNotes =
+    user.globalRole === "super_admin" ||
+    user.permissions.some(
+      (p) => p.projectId === "biochoco" && (p.role === "editor" || p.role === "admin")
+    );
+
+  return <DashboardShell data={result.data} canEditNotes={canEditNotes} />;
 }

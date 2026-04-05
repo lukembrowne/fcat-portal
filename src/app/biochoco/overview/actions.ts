@@ -9,7 +9,6 @@ import type { ActionResult } from "@/lib/types";
 import type { BiochocoOverviewData, SiteInfo } from "./types";
 import { db } from "@/db";
 import { deployments } from "@/db/schema";
-import { isNotNull } from "drizzle-orm";
 
 export async function fetchBiochocoData(): Promise<ActionResult<BiochocoOverviewData>> {
   try {
@@ -21,20 +20,26 @@ export async function fetchBiochocoData(): Promise<ActionResult<BiochocoOverview
       fetchSubmissions<Record<string, unknown>>(BIOCHOCO_PROJECT_ID, BIOCHOCO_FORM_RETRIEVE),
     ]);
 
-    // Enrich schedule with DB Drive folder links (DB is source of truth)
-    const dbWithFolders = await db
-      .select({ name: deployments.name, driveFolderId: deployments.driveFolderId })
-      .from(deployments)
-      .where(isNotNull(deployments.driveFolderId));
+    // Enrich schedule with DB data (Drive folder links + field notes)
+    const dbDeployments = await db
+      .select({
+        name: deployments.name,
+        driveFolderId: deployments.driveFolderId,
+        fieldNotes: deployments.fieldNotes,
+      })
+      .from(deployments);
 
-    const folderMap = new Map(
-      dbWithFolders.map((d) => [d.name, d.driveFolderId!])
+    const dbMap = new Map(
+      dbDeployments.map((d) => [d.name, d])
     );
 
     for (const row of schedule) {
-      const folderId = folderMap.get(row.deploymentId);
-      if (folderId) {
-        row.driveFolderLink = `https://drive.google.com/drive/folders/${folderId}`;
+      const dbRow = dbMap.get(row.deploymentId);
+      if (dbRow?.driveFolderId) {
+        row.driveFolderLink = `https://drive.google.com/drive/folders/${dbRow.driveFolderId}`;
+      }
+      if (dbRow?.fieldNotes) {
+        row.fieldNotes = dbRow.fieldNotes;
       }
     }
 

@@ -77,6 +77,7 @@ export async function fetchSchedule(): Promise<ActionResult<ScheduleRow[]>> {
       .select({
         name: deployments.name,
         driveFolderId: deployments.driveFolderId,
+        fieldNotes: deployments.fieldNotes,
         uploadCameraCount: deployments.uploadCameraCount,
         uploadAudioCount: deployments.uploadAudioCount,
         uploadIbuttonCount: deployments.uploadIbuttonCount,
@@ -105,6 +106,7 @@ export async function fetchSchedule(): Promise<ActionResult<ScheduleRow[]>> {
           actualRetrieveDate: retrievedDateMap.get(r.deploymentId) ?? r.actualRetrieveDate,
           status: getDeploymentStatus(r.deploymentId, deployedSet, retrievedSet),
           driveFolderLink: `https://drive.google.com/drive/folders/${dbRow.driveFolderId}`,
+          fieldNotes: dbRow.fieldNotes,
           uploadCameraCount: dbRow.uploadCameraCount,
           uploadAudioCount: dbRow.uploadAudioCount,
           uploadIbuttonCount: dbRow.uploadIbuttonCount,

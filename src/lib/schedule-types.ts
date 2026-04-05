@@ -30,6 +30,8 @@ export interface ScheduleRow {
   uploadIbuttonFolderId?: string | null;
   uploadCountsCheckedAt?: number | null; // unix timestamp
   uploadNewestDate?: string | null; // ISO date of most recent file across all data types
+  // Field notes from DB (operational context — equipment issues, missing data)
+  fieldNotes?: string | null;
 }
 
 export interface SlotRow {

@@ -99,6 +99,7 @@ const CAMERA_TRAP_DDL = `
     valid_start TEXT,
     valid_end TEXT,
     qa_notes TEXT,
+    field_notes TEXT,
     upload_camera_count INTEGER,
     upload_audio_count INTEGER,
     upload_ibutton_count INTEGER,

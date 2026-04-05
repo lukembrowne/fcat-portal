@@ -17,12 +17,13 @@ const DEPLOYMENT_STATUS_CONFIG: Record<
   string,
   { variant: BadgeVariant; label: string; className?: string }
 > = {
-  unscanned: { variant: "outline", label: "Sin escanear" },
-  scanned: { variant: "secondary", label: "Escaneada" },
-  processing: { variant: "default", label: "Procesando" },
-  processed: { variant: "default", label: "Procesada", className: "bg-green-600" },
+  unscanned: { variant: "secondary", label: "Por Procesar", className: "bg-blue-100 text-blue-700" },
+  scanned: { variant: "secondary", label: "Por Procesar", className: "bg-blue-100 text-blue-700" },
+  processing: { variant: "default", label: "Procesando", className: "bg-yellow-500" },
+  processed: { variant: "default", label: "Por Revisar", className: "bg-orange-500" },
+  processed_empty: { variant: "secondary", label: "Sin Detecciones", className: "bg-gray-100 text-gray-600" },
   verified: { variant: "default", label: "Verificada", className: "bg-emerald-700" },
-  verified_empty: { variant: "default", label: "Vacía verificada", className: "bg-slate-500" },
+  verified_empty: { variant: "default", label: "Vacía (verificada)", className: "bg-slate-500" },
 };
 
 const IMAGE_STATUS_CONFIG: Record<

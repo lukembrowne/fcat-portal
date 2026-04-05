@@ -156,6 +156,8 @@ export const deployments = sqliteTable(
     validStart: text("valid_start"),
     validEnd: text("valid_end"),
     qaNotes: text("qa_notes"),
+    // Field notes (operational context — equipment issues, missing data explanations)
+    fieldNotes: text("field_notes"),
     // Upload cache (Drive file counts)
     uploadCameraCount: integer("upload_camera_count"),
     uploadAudioCount: integer("upload_audio_count"),

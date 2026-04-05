@@ -532,6 +532,8 @@ const migrations = [
   `ALTER TABLE upload_count_snapshots ADD COLUMN total_camera_size_bytes INTEGER NOT NULL DEFAULT 0`,
   `ALTER TABLE upload_count_snapshots ADD COLUMN total_audio_size_bytes INTEGER NOT NULL DEFAULT 0`,
   `ALTER TABLE upload_count_snapshots ADD COLUMN total_ibutton_size_bytes INTEGER NOT NULL DEFAULT 0`,
+  // Deployment field notes — operational context (2026-04-04)
+  `ALTER TABLE biochoco_deployments ADD COLUMN field_notes TEXT`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }

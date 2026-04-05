@@ -188,7 +188,8 @@ describe("cancelJob", () => {
     expect(job.completedAt).toBeTruthy();
   });
 
-  it("reverts deployment status to scanned", async () => {
+  it("restores deployment to processed when a previous completed job exists", async () => {
+    // seed has a completed job, so cancelling a new job should restore to "processed"
     const createResult = await actions.createProcessingJob(seed.deployment.id);
     expect(createResult.success).toBe(true);
     if (!createResult.success) return;
@@ -201,7 +202,19 @@ describe("cancelJob", () => {
       .where(eq(schema.deployments.id, seed.deployment.id))
       .all();
 
-    expect(dep.status).toBe("scanned");
+    expect(dep.status).toBe("processed");
+
+    // Images should be reassigned back to the previous completed job
+    const imgs = db
+      .select()
+      .from(schema.images)
+      .where(eq(schema.images.deploymentId, seed.deployment.id))
+      .all();
+
+    for (const img of imgs) {
+      expect(img.jobId).toBe(seed.job.id);
+      expect(img.status).toBe("processed");
+    }
   });
 
   it("returns error for non-existent job", async () => {

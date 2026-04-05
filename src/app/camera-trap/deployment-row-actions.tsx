@@ -28,7 +28,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import type { DeploymentRow } from "./actions";
-import { markVerifiedEmpty, undoVerifiedEmpty } from "./actions";
+import { markVerifiedEmpty, undoVerifiedEmpty, markVerified, undoVerified, getUnverifiedCount } from "./actions";
 import { scanDeploymentImages } from "./drive-actions";
 import { matchOdkDeployments } from "./odk-actions";
 import { CompressConfirmDialog } from "./compress-confirm-dialog";
@@ -40,14 +40,12 @@ interface DeploymentRowActionsProps {
   deployment: DeploymentRow;
   canEdit: boolean;
   isAdmin: boolean;
-  onExpandAndEdit: () => void;
 }
 
 export function DeploymentRowActions({
   deployment,
   canEdit,
   isAdmin,
-  onExpandAndEdit,
 }: DeploymentRowActionsProps) {
   const router = useRouter();
   const [scanningAction, startScanning] = useTransition();
@@ -61,7 +59,6 @@ export function DeploymentRowActions({
   const isProcessing = deployment.status === "processing";
   const hasImages = (deployment.totalImages ?? 0) > 0;
   const hasResults = !!deployment.lastCompletedJobId;
-  const isResultState = ["processed", "verified", "verified_empty"].includes(deployment.status);
 
   const handleScan = () => {
     startScanning(async () => {
@@ -112,6 +109,40 @@ export function DeploymentRowActions({
       const result = await undoVerifiedEmpty(deployment.id);
       if (result.success) {
         toast.success("Verificación deshecha");
+        router.refresh();
+      } else {
+        toast.error(result.error);
+      }
+    });
+  };
+
+  const handleMarkVerified = () => {
+    startVerifying(async () => {
+      const countResult = await getUnverifiedCount(deployment.id);
+      const unverified = countResult.success ? countResult.data.unverified : 0;
+
+      if (unverified > 0) {
+        const confirmed = window.confirm(
+          `Hay ${unverified} identificaciones sin revisar. ¿Marcar como verificada de todos modos?`
+        );
+        if (!confirmed) return;
+      }
+
+      const result = await markVerified(deployment.id);
+      if (result.success) {
+        toast.success("Instalación marcada como verificada");
+        router.refresh();
+      } else {
+        toast.error(result.error);
+      }
+    });
+  };
+
+  const handleUndoVerified = () => {
+    startVerifying(async () => {
+      const result = await undoVerified(deployment.id);
+      if (result.success) {
+        toast.success("Revisión reabierta");
         router.refresh();
       } else {
         toast.error(result.error);
@@ -186,14 +217,16 @@ export function DeploymentRowActions({
             </DropdownMenuItem>
           )}
           {canEdit && (
-            <DropdownMenuItem onClick={onExpandAndEdit}>
-              <Pencil className="h-4 w-4 mr-2" />
-              Editar Metadatos
+            <DropdownMenuItem asChild>
+              <Link href={`/camera-trap/${deployment.id}`}>
+                <Pencil className="h-4 w-4 mr-2" />
+                Ver Detalles
+              </Link>
             </DropdownMenuItem>
           )}
 
           {/* Compression group (admin only) */}
-          {isAdmin && hasImages && !isProcessing && (
+          {isAdmin && hasImages && !isProcessing && deployment.revertibleImageCount < (deployment.totalImages ?? 0) && (
             <>
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={() => setCompressDialogId(deployment.id)}>
@@ -222,6 +255,18 @@ export function DeploymentRowActions({
               </DropdownMenuItem>
             </>
           )}
+          {canEdit && deployment.status === "processed" && (deployment.totalDetections ?? 0) > 0 && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={handleMarkVerified}
+                disabled={verifyingAction || anyPending}
+              >
+                <CheckCircle className="h-4 w-4 mr-2" />
+                {verifyingAction ? "Verificando..." : "Marcar como Verificada"}
+              </DropdownMenuItem>
+            </>
+          )}
           {canEdit && deployment.status === "verified_empty" && (
             <>
               <DropdownMenuSeparator />
@@ -231,6 +276,18 @@ export function DeploymentRowActions({
               >
                 <Undo2 className="h-4 w-4 mr-2" />
                 {verifyingAction ? "Deshaciendo..." : "Deshacer Verificación"}
+              </DropdownMenuItem>
+            </>
+          )}
+          {canEdit && deployment.status === "verified" && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={handleUndoVerified}
+                disabled={verifyingAction || anyPending}
+              >
+                <Undo2 className="h-4 w-4 mr-2" />
+                {verifyingAction ? "Reabriendo..." : "Re-abrir Revisión"}
               </DropdownMenuItem>
             </>
           )}

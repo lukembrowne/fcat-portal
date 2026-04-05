@@ -1161,6 +1161,8 @@ export interface DeploymentRow {
   totalDetections: number | null;
   distinctSpecies: number | null;
   revertibleImageCount: number;
+  reviewedCount: number | null;
+  totalIdentifications: number | null;
 }
 
 export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
@@ -1283,6 +1285,23 @@ export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
     }
   }
 
+  // Batch: verification progress per deployment (all identifications, not just latest job)
+  const verificationCounts = await db
+    .select({
+      deploymentId: images.deploymentId,
+      total: count(),
+      reviewed: sql<number>`sum(case when ${identifications.verificationStatus} != 'unverified' then 1 else 0 end)`,
+    })
+    .from(identifications)
+    .innerJoin(detections, eq(identifications.detectionId, detections.id))
+    .innerJoin(images, eq(detections.imageId, images.id))
+    .where(inArray(images.deploymentId, deploymentIds))
+    .groupBy(images.deploymentId);
+
+  const verificationMap = new Map(
+    verificationCounts.map((r) => [r.deploymentId, { reviewed: r.reviewed, total: r.total }])
+  );
+
   return allDeployments.map((d) => {
     const jobInfo = jobMap.get(d.id);
     const latestStatus = latestStatusMap.get(d.id);
@@ -1317,6 +1336,8 @@ export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
       totalDetections: completedJobId != null ? (detCountMap.get(completedJobId) ?? 0) : null,
       distinctSpecies: completedJobId != null ? (specCountMap.get(completedJobId) ?? 0) : null,
       revertibleImageCount: revertCountMap.get(d.id) ?? 0,
+      reviewedCount: verificationMap.get(d.id)?.reviewed ?? null,
+      totalIdentifications: verificationMap.get(d.id)?.total ?? null,
     };
   });
 }
@@ -2136,6 +2157,176 @@ export async function getDeploymentsCascadeStats(
 }
 
 // ---------------------------------------------------------------------------
+// Deployment Verification Completion
+// ---------------------------------------------------------------------------
+
+/**
+ * Check if all identifications for a deployment have been reviewed.
+ * If so, auto-transition from "processed" → "verified".
+ * Returns true if the deployment was auto-completed.
+ */
+async function maybeAutoCompleteDeployment(deploymentId: number): Promise<boolean> {
+  const [unverifiedResult] = await db
+    .select({ cnt: count() })
+    .from(identifications)
+    .innerJoin(detections, eq(identifications.detectionId, detections.id))
+    .innerJoin(images, eq(detections.imageId, images.id))
+    .where(
+      and(
+        eq(images.deploymentId, deploymentId),
+        eq(identifications.verificationStatus, "unverified")
+      )
+    );
+
+  if ((unverifiedResult?.cnt ?? 0) > 0) return false;
+
+  // Also ensure there's at least one identification (don't auto-verify empty deployments)
+  const [totalResult] = await db
+    .select({ cnt: count() })
+    .from(identifications)
+    .innerJoin(detections, eq(identifications.detectionId, detections.id))
+    .innerJoin(images, eq(detections.imageId, images.id))
+    .where(eq(images.deploymentId, deploymentId));
+
+  if ((totalResult?.cnt ?? 0) === 0) return false;
+
+  const [deployment] = await db
+    .select({ status: deployments.status })
+    .from(deployments)
+    .where(eq(deployments.id, deploymentId));
+
+  if (deployment?.status !== "processed") return false;
+
+  await db
+    .update(deployments)
+    .set({ status: "verified", updatedAt: new Date() })
+    .where(eq(deployments.id, deploymentId));
+
+  return true;
+}
+
+export async function markVerified(
+  deploymentId: number
+): Promise<ActionResult> {
+  const user = await requirePermission("camera-trap", "editor");
+
+  try {
+    const [deployment] = await db
+      .select()
+      .from(deployments)
+      .where(eq(deployments.id, deploymentId));
+
+    if (!deployment) {
+      return { success: false, error: "Instalación no encontrada" };
+    }
+
+    await requireDeploymentAccess(user, deploymentId);
+
+    if (deployment.status !== "processed") {
+      return {
+        success: false,
+        error: "Solo se pueden verificar instalaciones con estado 'procesada'",
+      };
+    }
+
+    await db
+      .update(deployments)
+      .set({ status: "verified", updatedAt: new Date() })
+      .where(eq(deployments.id, deploymentId));
+
+    revalidatePath(CAMERA_TRAP_PATH);
+    return { success: true, data: undefined };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Error al verificar",
+    };
+  }
+}
+
+export async function undoVerified(
+  deploymentId: number
+): Promise<ActionResult> {
+  const user = await requirePermission("camera-trap", "editor");
+
+  try {
+    await requireDeploymentAccess(user, deploymentId);
+
+    const [deployment] = await db
+      .select()
+      .from(deployments)
+      .where(eq(deployments.id, deploymentId));
+
+    if (!deployment) {
+      return { success: false, error: "Instalación no encontrada" };
+    }
+
+    if (deployment.status !== "verified") {
+      return {
+        success: false,
+        error: "Solo se puede re-abrir instalaciones con estado 'verificada'",
+      };
+    }
+
+    await db
+      .update(deployments)
+      .set({ status: "processed", updatedAt: new Date() })
+      .where(eq(deployments.id, deploymentId));
+
+    revalidatePath(CAMERA_TRAP_PATH);
+    return { success: true, data: undefined };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Error al re-abrir revisión",
+    };
+  }
+}
+
+/** Get the count of unverified identifications for a deployment (for confirmation dialogs). */
+export async function getUnverifiedCount(
+  deploymentId: number
+): Promise<ActionResult<{ unverified: number; total: number }>> {
+  const user = await requirePermission("camera-trap", "viewer");
+
+  try {
+    await requireDeploymentAccess(user, deploymentId);
+
+    const [totalResult] = await db
+      .select({ cnt: count() })
+      .from(identifications)
+      .innerJoin(detections, eq(identifications.detectionId, detections.id))
+      .innerJoin(images, eq(detections.imageId, images.id))
+      .where(eq(images.deploymentId, deploymentId));
+
+    const [unverifiedResult] = await db
+      .select({ cnt: count() })
+      .from(identifications)
+      .innerJoin(detections, eq(identifications.detectionId, detections.id))
+      .innerJoin(images, eq(detections.imageId, images.id))
+      .where(
+        and(
+          eq(images.deploymentId, deploymentId),
+          eq(identifications.verificationStatus, "unverified")
+        )
+      );
+
+    return {
+      success: true,
+      data: {
+        unverified: unverifiedResult?.cnt ?? 0,
+        total: totalResult?.cnt ?? 0,
+      },
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Error al obtener conteo",
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Verified Empty
 // ---------------------------------------------------------------------------
 
@@ -2451,6 +2642,26 @@ export async function getDeployment(id: number) {
     verifiedCount = verResult?.cnt ?? 0;
   }
 
+  // Deployment-wide verification progress (across all jobs + manual detections)
+  const [totalIdResult] = await db
+    .select({ cnt: count() })
+    .from(identifications)
+    .innerJoin(detections, eq(identifications.detectionId, detections.id))
+    .innerJoin(images, eq(detections.imageId, images.id))
+    .where(eq(images.deploymentId, id));
+
+  const [reviewedResult] = await db
+    .select({ cnt: count() })
+    .from(identifications)
+    .innerJoin(detections, eq(identifications.detectionId, detections.id))
+    .innerJoin(images, eq(detections.imageId, images.id))
+    .where(
+      and(
+        eq(images.deploymentId, id),
+        ne(identifications.verificationStatus, "unverified")
+      )
+    );
+
   return {
     deployment,
     images: deploymentImages,
@@ -2460,6 +2671,8 @@ export async function getDeployment(id: number) {
       distinctSpeciesCount,
       verifiedCount,
       latestCompletedJobId: latestCompletedJob?.id ?? null,
+      totalIdentifications: totalIdResult?.cnt ?? 0,
+      reviewedCount: reviewedResult?.cnt ?? 0,
     },
   };
 }
@@ -2821,10 +3034,11 @@ export async function getJobImageIds(jobId: number): Promise<number[]> {
  * Used by the embedded annotation view on the deployment detail page.
  */
 export async function getImageAnnotationData(imageId: number, jobId: number) {
-  const [data, imageIds, speciesList] = await Promise.all([
+  const [data, imageIds, speciesList, verificationStats] = await Promise.all([
     getImageWithDetections(imageId),
     getJobImageIds(jobId),
     getSpeciesList(),
+    getJobVerificationStats(jobId),
   ]);
 
   if (!data) return null;
@@ -2911,6 +3125,7 @@ export async function getImageAnnotationData(imageId: number, jobId: number) {
     nextImageId,
     currentIndex,
     totalImages: imageIds.length,
+    verificationStats,
   };
 }
 
@@ -2927,7 +3142,7 @@ export async function verifyIdentification(
     const depId = await getDeploymentIdForIdentification(identificationId);
     if (depId) await requireDeploymentAccess(user, depId);
 
-    const result = await db
+    await db
       .update(identifications)
       .set({
         verificationStatus: "verified",
@@ -2941,6 +3156,7 @@ export async function verifyIdentification(
         )
       );
 
+    if (depId) await maybeAutoCompleteDeployment(depId);
     revalidatePath(CAMERA_TRAP_PATH);
     return { success: true, data: undefined };
   } catch (error) {
@@ -2974,6 +3190,7 @@ export async function rejectIdentification(
         )
       );
 
+    if (depId) await maybeAutoCompleteDeployment(depId);
     revalidatePath(CAMERA_TRAP_PATH);
     return { success: true, data: undefined };
   } catch (error) {
@@ -3009,6 +3226,7 @@ export async function correctIdentification(
         )
       );
 
+    if (depId) await maybeAutoCompleteDeployment(depId);
     revalidatePath(CAMERA_TRAP_PATH);
     return { success: true, data: undefined };
   } catch (error) {
@@ -3055,6 +3273,9 @@ export async function bulkVerify(
         )
       );
 
+    for (const row of depRows) {
+      await maybeAutoCompleteDeployment(row.deploymentId);
+    }
     revalidatePath(CAMERA_TRAP_PATH);
     return { success: true, data: { count: identificationIds.length } };
   } catch (error) {
@@ -3127,6 +3348,7 @@ export async function bulkVerifyByThreshold(
       })
       .where(inArray(identifications.id, ids));
 
+    await maybeAutoCompleteDeployment(job.deploymentId);
     revalidatePath(CAMERA_TRAP_PATH);
     return { success: true, data: { count: ids.length } };
   } catch (error) {
@@ -3660,6 +3882,7 @@ export async function assignSpecies(
       })
       .where(eq(identifications.id, identificationId));
 
+    if (depId) await maybeAutoCompleteDeployment(depId);
     revalidatePath(CAMERA_TRAP_PATH);
     return { success: true, data: undefined };
   } catch (error) {
@@ -3735,6 +3958,20 @@ export async function createManualDetection(
         .where(eq(images.id, imageId));
     }
 
+    // Revert verified deployment back to processed (new unverified identification added)
+    if (img) {
+      const [dep] = await db
+        .select({ status: deployments.status })
+        .from(deployments)
+        .where(eq(deployments.id, img.deploymentId));
+      if (dep?.status === "verified") {
+        await db
+          .update(deployments)
+          .set({ status: "processed", updatedAt: new Date() })
+          .where(eq(deployments.id, img.deploymentId));
+      }
+    }
+
     return {
       success: true,
       data: { detectionId: det.id, identificationId: ident.id },
@@ -3751,7 +3988,7 @@ export async function verifyAndAdvance(
   identificationIds: number[],
   jobId: number,
   currentImageId: number
-): Promise<ActionResult<{ nextImageId: number | null }>> {
+): Promise<ActionResult<{ nextImageId: number | null; deploymentCompleted?: boolean }>> {
   const user = await requirePermission("camera-trap", "editor");
 
   try {
@@ -3818,8 +4055,13 @@ export async function verifyAndAdvance(
     const nextId =
       wrapped[0]?.id === currentImageId ? null : (wrapped[0]?.id ?? null);
 
+    let deploymentCompleted = false;
+    if (nextId === null) {
+      deploymentCompleted = await maybeAutoCompleteDeployment(job.deploymentId);
+    }
+
     revalidatePath(CAMERA_TRAP_PATH);
-    return { success: true, data: { nextImageId: nextId } };
+    return { success: true, data: { nextImageId: nextId, deploymentCompleted } };
   } catch (error) {
     return {
       success: false,

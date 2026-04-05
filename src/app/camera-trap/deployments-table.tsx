@@ -220,9 +220,16 @@ export function DeploymentsTable({
           const displayStatus = d.status === "processed" && (d.totalDetections == null || d.totalDetections === 0)
             ? "processed_empty"
             : d.status;
+          const showProgress = (d.status === "processed" || d.status === "verified") &&
+            d.totalIdentifications != null && d.totalIdentifications > 0;
           return (
             <span className="inline-flex items-center gap-1">
               <StatusBadge status={displayStatus} type="deployment" />
+              {showProgress && (
+                <span className="text-[10px] text-muted-foreground tabular-nums">
+                  {d.reviewedCount ?? 0}/{d.totalIdentifications} revisadas
+                </span>
+              )}
               {d.excluded && (
                 <span className="inline-flex items-center rounded-full border border-destructive/30 bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium text-destructive">
                   Excluida

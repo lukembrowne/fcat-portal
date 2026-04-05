@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/dialog";
 import { useState, useCallback, useRef, useTransition, useMemo, useOptimistic, useEffect } from "react";
 import Link from "next/link";
+import { toast } from "sonner";
 import { useAnnotationShortcuts } from "@/hooks/use-annotation-shortcuts";
 import { useImageZoom } from "@/hooks/use-image-zoom";
 import { Input } from "@/components/ui/input";
@@ -225,6 +226,9 @@ export function ImageAnnotationClient({
             );
           }
         } else if (result.success) {
+          if (result.data.deploymentCompleted) {
+            toast.success("¡Todas las identificaciones revisadas! Instalación marcada como verificada.");
+          }
           refresh();
         }
       } finally {

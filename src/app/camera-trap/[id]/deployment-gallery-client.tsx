@@ -84,6 +84,13 @@ export function DeploymentGalleryClient({
             )}
           </div>
           <div className="flex items-center gap-2 shrink-0">
+            {/* Verification progress */}
+            {annotationData.verificationStats.total > 0 && (
+              <VerificationProgress
+                reviewed={annotationData.verificationStats.total - annotationData.verificationStats.unverified}
+                total={annotationData.verificationStats.total}
+              />
+            )}
             <span className="text-sm text-muted-foreground tabular-nums">
               {annotationData.currentIndex + 1} de {annotationData.totalImages}
             </span>
@@ -154,6 +161,25 @@ export function DeploymentGalleryClient({
         speciesList={speciesList}
         onImageClick={loadImage}
       />
+    </div>
+  );
+}
+
+function VerificationProgress({ reviewed, total }: { reviewed: number; total: number }) {
+  const pct = Math.round((reviewed / total) * 100);
+  const isComplete = reviewed === total;
+
+  return (
+    <div className="flex items-center gap-2">
+      <div className="w-24 h-1.5 rounded-full bg-muted overflow-hidden">
+        <div
+          className={`h-full rounded-full transition-all ${isComplete ? "bg-emerald-500" : "bg-blue-500"}`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <span className={`text-xs tabular-nums ${isComplete ? "text-emerald-600 font-medium" : "text-muted-foreground"}`}>
+        {reviewed}/{total} revisadas
+      </span>
     </div>
   );
 }

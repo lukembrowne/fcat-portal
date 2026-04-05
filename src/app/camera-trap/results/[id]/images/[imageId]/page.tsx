@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { requirePermission } from "@/lib/auth";
-import { getImageWithDetections, getJobImageIds, getSpeciesList, getFrequentSpecies } from "@/app/camera-trap/actions";
+import { getImageWithDetections, getJobImageIds, getSpeciesList, getFrequentSpecies, getJobVerificationStats } from "@/app/camera-trap/actions";
 import { db } from "@/db";
 import { videos } from "@/db/schema";
 import { eq } from "drizzle-orm";
@@ -45,10 +45,11 @@ export default async function ImageDetailPage({ params }: PageProps) {
         })
       : null;
 
-  const [imageIds, speciesList, frequentSpeciesResult] = await Promise.all([
+  const [imageIds, speciesList, frequentSpeciesResult, verificationStats] = await Promise.all([
     getJobImageIds(jobId),
     getSpeciesList(),
     getFrequentSpecies(image.deploymentId),
+    getJobVerificationStats(jobId),
   ]);
   const frequentSpecies = frequentSpeciesResult.success ? frequentSpeciesResult.data : [];
   const currentIndex = imageIds.indexOf(imgId);
@@ -119,7 +120,14 @@ export default async function ImageDetailPage({ params }: PageProps) {
             <VideoFrameLabel videoId={image.videoId} frameIndex={image.frameIndex} />
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-4">
+          {/* Verification progress */}
+          {verificationStats.total > 0 && (
+            <VerificationProgress
+              reviewed={verificationStats.total - verificationStats.unverified}
+              total={verificationStats.total}
+            />
+          )}
           <span className="text-sm text-muted-foreground">
             {currentIndex + 1} de {imageIds.length}
           </span>
@@ -160,6 +168,25 @@ export default async function ImageDetailPage({ params }: PageProps) {
         starredBy={image.starredBy}
         setupTag={image.setupTag as "deployment" | "retrieval" | null}
       />
+    </div>
+  );
+}
+
+function VerificationProgress({ reviewed, total }: { reviewed: number; total: number }) {
+  const pct = Math.round((reviewed / total) * 100);
+  const isComplete = reviewed === total;
+
+  return (
+    <div className="flex items-center gap-2">
+      <div className="w-24 h-1.5 rounded-full bg-muted overflow-hidden">
+        <div
+          className={`h-full rounded-full transition-all ${isComplete ? "bg-emerald-500" : "bg-blue-500"}`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <span className={`text-xs tabular-nums ${isComplete ? "text-emerald-600 font-medium" : "text-muted-foreground"}`}>
+        {reviewed}/{total} revisadas
+      </span>
     </div>
   );
 }

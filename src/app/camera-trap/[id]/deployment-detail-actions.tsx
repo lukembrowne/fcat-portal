@@ -24,7 +24,7 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { toast } from "sonner";
-import { markVerifiedEmpty, undoVerifiedEmpty } from "../actions";
+import { markVerifiedEmpty, undoVerifiedEmpty, markVerified, undoVerified, getUnverifiedCount } from "../actions";
 import { scanDeploymentImages } from "../drive-actions";
 import { matchOdkDeployments } from "../odk-actions";
 import { CompressConfirmDialog } from "../compress-confirm-dialog";
@@ -131,6 +131,40 @@ export function DeploymentDetailActions({
     });
   };
 
+  const handleMarkVerified = () => {
+    startVerifying(async () => {
+      const countResult = await getUnverifiedCount(deploymentId);
+      const unverified = countResult.success ? countResult.data.unverified : 0;
+
+      if (unverified > 0) {
+        const confirmed = window.confirm(
+          `Hay ${unverified} identificaciones sin revisar. ¿Marcar como verificada de todos modos?`
+        );
+        if (!confirmed) return;
+      }
+
+      const result = await markVerified(deploymentId);
+      if (result.success) {
+        toast.success("Instalación marcada como verificada");
+        router.refresh();
+      } else {
+        toast.error(result.error);
+      }
+    });
+  };
+
+  const handleUndoVerified = () => {
+    startVerifying(async () => {
+      const result = await undoVerified(deploymentId);
+      if (result.success) {
+        toast.success("Revisión reabierta");
+        router.refresh();
+      } else {
+        toast.error(result.error);
+      }
+    });
+  };
+
   const handleJobStarted = () => {
     window.dispatchEvent(new Event("job-started"));
     router.refresh();
@@ -210,6 +244,23 @@ export function DeploymentDetailActions({
               </DropdownMenuItem>
             </>
           )}
+          {status === "processed" && totalDetections > 0 && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={handleMarkVerified}
+                disabled={verifyingAction || anyPending}
+              >
+                <CheckCircle className="h-4 w-4 mr-2 shrink-0" />
+                <div>
+                  <div>{verifyingAction ? "Verificando..." : "Marcar como Verificada"}</div>
+                  <p className="text-xs text-muted-foreground font-normal">
+                    Confirmar que la revisión de esta instalación está completa
+                  </p>
+                </div>
+              </DropdownMenuItem>
+            </>
+          )}
           {status === "verified_empty" && (
             <>
               <DropdownMenuSeparator />
@@ -222,6 +273,23 @@ export function DeploymentDetailActions({
                   <div>{verifyingAction ? "Deshaciendo..." : "Deshacer Verificación"}</div>
                   <p className="text-xs text-muted-foreground font-normal">
                     Revertir el estado de vacía verificada
+                  </p>
+                </div>
+              </DropdownMenuItem>
+            </>
+          )}
+          {status === "verified" && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={handleUndoVerified}
+                disabled={verifyingAction || anyPending}
+              >
+                <Undo2 className="h-4 w-4 mr-2 shrink-0" />
+                <div>
+                  <div>{verifyingAction ? "Reabriendo..." : "Re-abrir Revisión"}</div>
+                  <p className="text-xs text-muted-foreground font-normal">
+                    Volver al estado de procesada para continuar la revisión
                   </p>
                 </div>
               </DropdownMenuItem>

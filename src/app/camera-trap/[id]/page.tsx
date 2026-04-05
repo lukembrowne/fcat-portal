@@ -98,7 +98,11 @@ export default async function DeploymentDetailPage({ params }: PageProps) {
               {stats.totalDetections > 0 && (
                 <span>
                   · {stats.totalDetections.toLocaleString()} detecciones · {stats.distinctSpeciesCount} especies
-                  {stats.verifiedCount > 0 && ` · ${stats.verifiedCount} verificadas`}
+                </span>
+              )}
+              {stats.totalIdentifications > 0 && (
+                <span className={stats.reviewedCount === stats.totalIdentifications ? "text-emerald-600 font-medium" : ""}>
+                  · {stats.reviewedCount}/{stats.totalIdentifications} revisadas
                 </span>
               )}
             </div>

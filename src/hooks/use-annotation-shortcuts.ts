@@ -91,14 +91,19 @@ export function useAnnotationShortcuts(opts: AnnotationShortcutOptions) {
 
       if (isInEditableField) return;
 
-      // If search input is focused, only allow number keys (for species assignment)
-      // and navigation keys
+      // If search input is focused, allow number keys (for species assignment),
+      // delete keys, and arrow keys — let everything else pass through to the input
       if (isSearchFocused) {
         const hasModifier = e.metaKey || e.ctrlKey || e.altKey;
         if (!hasModifier && o.selectedDetectionId != null && /^[0-9]$/.test(e.key)) {
           e.preventDefault();
           const index = e.key === "0" ? 9 : parseInt(e.key, 10) - 1;
           o.onAssignSpeciesByIndex?.(index);
+          return;
+        }
+        if (!hasModifier && (e.key === "Delete" || e.key === "Backspace") && !o.isDialogOpen) {
+          e.preventDefault();
+          o.onDeleteSelected?.();
           return;
         }
         // Let other keys pass through to the input

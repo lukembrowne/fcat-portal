@@ -1,12 +1,15 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/status-badge";
 import { requirePermission } from "@/lib/auth";
-import { getDeployment, getDeploymentShareLinks } from "../actions";
+import { getDeployment, getDeploymentShareLinks, getDistinctProjects, getJobResultsData } from "../actions";
 import { ProcessButton } from "./process-button";
 import { ShareLinksSection } from "./share-links-section";
+import { CollapsibleSection } from "./collapsible-section";
+import { MetadataSection } from "./metadata-section";
+import { QaSection } from "./qa-section";
+import { DeploymentDetailActions } from "./deployment-detail-actions";
+import { DeploymentGalleryClient } from "./deployment-gallery-client";
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -21,27 +24,31 @@ export default async function DeploymentDetailPage({ params }: PageProps) {
     notFound();
   }
 
-  const data = await getDeployment(deploymentId);
+  const [data, distinctProjects] = await Promise.all([
+    getDeployment(deploymentId),
+    getDistinctProjects(),
+  ]);
 
   if (!data) {
     notFound();
   }
 
-  const { deployment, images, jobs } = data;
-
-  const processedImages = images.filter((img) => img.status === "processed").length;
-  const failedImages = images.filter((img) => img.status === "failed").length;
-  const pendingImages = images.filter((img) => img.status === "pending").length;
+  const { deployment, images, jobs, stats } = data;
 
   const latestJob = jobs[0];
   const canProcess =
     !latestJob || ["completed", "failed", "cancelled"].includes(latestJob.status);
 
-  // Check if user is editor+ for share links
   const isEditor =
     user.globalRole === "super_admin" ||
     user.permissions.some(
       (p) => p.projectId === "camera-trap" && (p.role === "editor" || p.role === "admin")
+    );
+
+  const isAdmin =
+    user.globalRole === "super_admin" ||
+    user.permissions.some(
+      (p) => p.projectId === "camera-trap" && p.role === "admin"
     );
 
   let shareLinks: Awaited<ReturnType<typeof getDeploymentShareLinks>> = [];
@@ -53,141 +60,166 @@ export default async function DeploymentDetailPage({ params }: PageProps) {
     }
   }
 
-  return (
-    <div className="max-w-4xl mx-auto">
-      {/* Breadcrumb */}
-      <div className="flex items-center gap-2 text-sm text-muted-foreground mb-4">
-        <Link href="/camera-trap" className="hover:underline">
-          Cámaras Trampa
-        </Link>
-        <span>/</span>
-        <span>{deployment.name}</span>
-      </div>
+  // Compute display status for badge
+  const displayStatus =
+    deployment.status === "processed" && stats.totalDetections === 0
+      ? "processed_empty"
+      : deployment.status;
 
-      {/* Header */}
-      <div className="flex items-center justify-between mb-8">
-        <div>
-          <h1 className="text-3xl font-bold mb-2">{deployment.name}</h1>
-          <div className="flex items-center gap-4">
-            <StatusBadge status={deployment.status} type="deployment" />
-            {deployment.driveFolderId ? (
-              <a
-                href={`https://drive.google.com/drive/folders/${deployment.driveFolderId}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-muted-foreground text-sm hover:text-foreground"
+  // Count images with known revertible state
+  const revertibleImageCount = images.filter(
+    (img) => img.compressed && img.originalFileSize != null
+  ).length;
+
+  // Fetch results data for the latest completed job (for embedded gallery)
+  const resultsData = stats.latestCompletedJobId
+    ? await getJobResultsData(stats.latestCompletedJobId)
+    : null;
+
+  const isProcessing = deployment.status === "processing";
+  const hasResults = !!resultsData;
+
+  return (
+    <div className="max-w-7xl mx-auto space-y-3">
+      {/* Status Banner — compact single-row layout */}
+      <div className="rounded-lg border bg-card px-4 py-2.5">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3 min-w-0 flex-wrap">
+            <h1 className="text-lg font-bold shrink-0">{deployment.name}</h1>
+            <StatusBadge status={displayStatus} type="deployment" />
+            <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
+              {deployment.totalImages != null && deployment.totalImages > 0 && (
+                <span>
+                  {deployment.totalImages.toLocaleString()} imágenes
+                  {deployment.totalVideos != null && deployment.totalVideos > 0 &&
+                    ` · ${deployment.totalVideos.toLocaleString()} videos`}
+                </span>
+              )}
+              {stats.totalDetections > 0 && (
+                <span>
+                  · {stats.totalDetections.toLocaleString()} detecciones · {stats.distinctSpeciesCount} especies
+                  {stats.verifiedCount > 0 && ` · ${stats.verifiedCount} verificadas`}
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Actions */}
+          <div className="flex items-center gap-2 shrink-0">
+            {canProcess && !isProcessing && !hasResults && (
+              <ProcessButton deploymentId={deployment.id} />
+            )}
+            {isProcessing && latestJob && (
+              <Link
+                href={`/camera-trap/process?jobId=${latestJob.id}`}
+                className="text-sm text-muted-foreground hover:text-foreground"
               >
-                Abrir carpeta en Drive ↗
-              </a>
-            ) : deployment.path ? (
-              <span className="text-muted-foreground text-sm">
-                {deployment.path}
-              </span>
-            ) : null}
+                Procesando...
+              </Link>
+            )}
+            {isEditor && (
+              <DeploymentDetailActions
+                deploymentId={deployment.id}
+                deploymentName={deployment.name}
+                status={deployment.status}
+                totalDetections={stats.totalDetections}
+                revertibleImageCount={revertibleImageCount}
+                totalImages={deployment.totalImages ?? 0}
+                hasImages={(deployment.totalImages ?? 0) > 0}
+                hasResults={hasResults}
+                driveFolderId={deployment.driveFolderId}
+                canEdit={isEditor}
+                isAdmin={isAdmin}
+              />
+            )}
           </div>
         </div>
-        <div className="flex gap-2">
-          {canProcess && (
-            <ProcessButton deploymentId={deployment.id} />
-          )}
-          {latestJob && (
-            <Button asChild variant="outline">
-              <Link href={`/camera-trap/results/${latestJob.id}`}>
-                Ver Resultados
-              </Link>
-            </Button>
-          )}
+
+        {/* Collapsible details */}
+        <div className="mt-2 border-t pt-2">
+          <CollapsibleSection title="Detalles" defaultOpen={false}>
+            {deployment.fieldNotes && (
+              <div className="rounded-md border bg-amber-50 dark:bg-amber-950/20 px-3 py-2 mb-4">
+                <p className="text-muted-foreground text-xs font-medium uppercase tracking-wide mb-0.5">
+                  Notas de campo
+                </p>
+                <p className="text-sm whitespace-pre-wrap">{deployment.fieldNotes}</p>
+              </div>
+            )}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <MetadataSection
+                deployment={{
+                  id: deployment.id,
+                  name: deployment.name,
+                  cameraTrapProjectId: deployment.cameraTrapProjectId,
+                  siteName: deployment.siteName,
+                  latitude: deployment.latitude,
+                  longitude: deployment.longitude,
+                  dateStart: deployment.dateStart,
+                  dateEnd: deployment.dateEnd,
+                  totalImages: deployment.totalImages,
+                  totalVideos: deployment.totalVideos,
+                  metadataSource: deployment.metadataSource,
+                }}
+                distinctProjects={distinctProjects}
+                canEdit={isEditor}
+              />
+              <QaSection
+                deploymentId={deployment.id}
+                canEdit={isEditor}
+                excluded={deployment.excluded ?? false}
+                validStart={deployment.validStart}
+                validEnd={deployment.validEnd}
+                qaNotes={deployment.qaNotes}
+              />
+            </div>
+          </CollapsibleSection>
         </div>
       </div>
 
-      {/* Stats Grid */}
-      <div className="grid gap-4 md:grid-cols-4 mb-8">
-        <StatCard label="Total Imágenes" value={images.length} />
-        <StatCard label="Procesadas" value={processedImages} />
-        <StatCard label="Fallidas" value={failedImages} />
-        <StatCard label="Pendientes" value={pendingImages} />
-      </div>
-
-      {/* Metadata */}
-      {(deployment.latitude || deployment.dateStart) && (
-        <Card className="mb-8">
-          <CardHeader>
-            <CardTitle className="text-lg">Metadatos de la Instalación</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid gap-4 md:grid-cols-2">
-              {deployment.latitude && deployment.longitude && (
-                <div>
-                  <p className="text-sm text-muted-foreground">Ubicación</p>
-                  <p className="font-medium">
-                    {deployment.latitude.toFixed(6)},{" "}
-                    {deployment.longitude.toFixed(6)}
-                  </p>
-                </div>
-              )}
-              {deployment.dateStart && (
-                <div>
-                  <p className="text-sm text-muted-foreground">Rango de fechas</p>
-                  <p className="font-medium">
-                    {deployment.dateStart}
-                    {deployment.dateEnd && ` — ${deployment.dateEnd}`}
-                  </p>
-                </div>
+      {/* Image Gallery (embedded from results) or Empty State */}
+      {hasResults ? (
+        <DeploymentGalleryClient
+          images={resultsData.gridImages}
+          jobId={stats.latestCompletedJobId!}
+          speciesList={resultsData.speciesList}
+          isAdmin={isAdmin}
+          deploymentName={deployment.name}
+        />
+      ) : (
+        <div className="rounded-lg border bg-card p-12 text-center">
+          {isProcessing ? (
+            <div className="space-y-3">
+              <p className="text-muted-foreground">
+                Esta instalación está siendo procesada.
+              </p>
+              {latestJob && (
+                <Link
+                  href={`/camera-trap/process?jobId=${latestJob.id}`}
+                  className="text-sm text-primary hover:underline"
+                >
+                  Ver progreso →
+                </Link>
               )}
             </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Processing History */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">Historial de Procesamiento</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {jobs.length === 0 ? (
-            <p className="text-muted-foreground text-sm">
-              Sin trabajos de procesamiento. Haz clic en &ldquo;Procesar&rdquo; para iniciar.
-            </p>
           ) : (
             <div className="space-y-3">
-              {jobs.map((job) => (
-                <div
-                  key={job.id}
-                  className="flex items-center justify-between p-3 bg-muted/50 rounded-lg"
-                >
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium">
-                        Trabajo #{job.id}
-                      </span>
-                      <StatusBadge status={job.status} type="job" />
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      {job.processedImages} / {job.totalImages} imágenes
-                      {job.failedImages > 0 &&
-                        ` (${job.failedImages} fallidas)`}
-                      {" · "}
-                      Modelo: {job.detectorModel}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {job.createdAt?.toLocaleString() || "Desconocido"}
-                    </p>
-                  </div>
-                  <Button asChild variant="ghost" size="sm">
-                    <Link href={`/camera-trap/results/${job.id}`}>
-                      Resultados
-                    </Link>
-                  </Button>
-                </div>
-              ))}
+              <p className="text-muted-foreground">
+                Esta instalación aún no ha sido procesada.
+                {deployment.totalImages != null && deployment.totalImages > 0
+                  ? ` Hay ${deployment.totalImages.toLocaleString()} imágenes listas para analizar.`
+                  : " Sincroniza con Drive para buscar imágenes."}
+              </p>
+              {canProcess && isEditor && (
+                <ProcessButton deploymentId={deployment.id} />
+              )}
             </div>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      )}
 
       {/* Share Links — editors+ only */}
-      {isEditor && (
+      {isEditor && shareLinks.length > 0 && (
         <ShareLinksSection
           deploymentId={deploymentId}
           shareLinks={shareLinks.map((link) => ({
@@ -200,16 +232,5 @@ export default async function DeploymentDetailPage({ params }: PageProps) {
         />
       )}
     </div>
-  );
-}
-
-function StatCard({ label, value }: { label: string; value: number }) {
-  return (
-    <Card>
-      <CardContent className="pt-6">
-        <p className="text-sm text-muted-foreground">{label}</p>
-        <p className="text-3xl font-bold">{value}</p>
-      </CardContent>
-    </Card>
   );
 }

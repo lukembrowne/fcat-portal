@@ -41,9 +41,11 @@ interface ImageGridProps {
   selectedIds?: Set<number>;
   onToggleSelect?: (id: number) => void;
   columns?: number;
+  /** When provided, clicking an image calls this instead of navigating */
+  onImageClick?: (imageId: number) => void;
 }
 
-export function ImageGrid({ images, jobId, basePath, selectable, selectedIds, onToggleSelect, columns = 4 }: ImageGridProps) {
+export function ImageGrid({ images, jobId, basePath, selectable, selectedIds, onToggleSelect, columns = 4, onImageClick }: ImageGridProps) {
   const pathname = usePathname();
   const gridClass = GRID_CLASSES[columns] ?? GRID_CLASSES[4];
 
@@ -134,6 +136,7 @@ export function ImageGrid({ images, jobId, basePath, selectable, selectedIds, on
                 selected={selectedIds?.has(img.id)}
                 onToggleSelect={onToggleSelect}
                 onBeforeNavigate={saveScroll}
+                onImageClick={onImageClick}
               />
             ))}
           </div>
@@ -158,6 +161,7 @@ export function ImageGrid({ images, jobId, basePath, selectable, selectedIds, on
                 selected={selectedIds?.has(img.id)}
                 onToggleSelect={onToggleSelect}
                 onBeforeNavigate={saveScroll}
+                onImageClick={onImageClick}
               />
             ))}
           </div>
@@ -175,6 +179,7 @@ function ImageCard({
   selected,
   onToggleSelect,
   onBeforeNavigate,
+  onImageClick,
 }: {
   image: ImageGridItem;
   jobId?: number;
@@ -183,6 +188,7 @@ function ImageCard({
   selected?: boolean;
   onToggleSelect?: (id: number) => void;
   onBeforeNavigate?: () => void;
+  onImageClick?: (imageId: number) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [isVisible, setIsVisible] = useState(false);
@@ -349,6 +355,14 @@ function ImageCard({
       )}
     </div>
   );
+
+  if (onImageClick) {
+    return (
+      <div onClick={() => onImageClick(image.id)}>
+        {cardContent}
+      </div>
+    );
+  }
 
   return <Link href={href} onClick={onBeforeNavigate}>{cardContent}</Link>;
 }

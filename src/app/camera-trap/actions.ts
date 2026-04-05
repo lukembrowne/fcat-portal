@@ -778,15 +778,51 @@ export async function cancelJob(
       // Best effort cleanup
     }
 
+    // Reset images that were reassigned to this job back to unassigned
+    await db
+      .update(images)
+      .set({ status: "pending", jobId: null })
+      .where(eq(images.jobId, jobId));
+
+    // Delete any detections created by this (partial) job
+    await db.delete(detections).where(eq(detections.jobId, jobId));
+
     await db
       .update(processingJobs)
       .set({ status: "cancelled", completedAt: new Date(), statusMessage: null })
       .where(eq(processingJobs.id, jobId));
 
+    // If a previous completed job exists, restore deployment to "processed";
+    // otherwise revert to "scanned"
+    const previousCompleted = await db
+      .select({ id: processingJobs.id })
+      .from(processingJobs)
+      .where(
+        and(
+          eq(processingJobs.deploymentId, job.deploymentId),
+          eq(processingJobs.status, "completed")
+        )
+      );
+
+    const newStatus = previousCompleted.length > 0 ? "processed" : "scanned";
     await db
       .update(deployments)
-      .set({ status: "scanned", updatedAt: new Date() })
+      .set({ status: newStatus, updatedAt: new Date() })
       .where(eq(deployments.id, job.deploymentId));
+
+    // If restoring to a previous job, reassign images back to that job
+    if (previousCompleted.length > 0) {
+      const prevJobId = previousCompleted[0].id;
+      await db
+        .update(images)
+        .set({ jobId: prevJobId, status: "processed" })
+        .where(
+          and(
+            eq(images.deploymentId, job.deploymentId),
+            sql`${images.jobId} IS NULL`
+          )
+        );
+    }
 
     revalidatePath(CAMERA_TRAP_PATH);
     return { success: true, data: undefined };
@@ -848,7 +884,7 @@ export async function deleteJob(
     // 3. Delete the job
     await db.delete(processingJobs).where(eq(processingJobs.id, jobId));
 
-    // 3. If no completed jobs remain, revert deployment to "scanned"
+    // 4. Check for remaining completed jobs
     const remainingJobs = await db
       .select({ id: processingJobs.id })
       .from(processingJobs)
@@ -859,7 +895,24 @@ export async function deleteJob(
         )
       );
 
-    if (remainingJobs.length === 0) {
+    if (remainingJobs.length > 0) {
+      // Reassign orphaned images back to the most recent completed job
+      const prevJobId = remainingJobs[0].id;
+      await db
+        .update(images)
+        .set({ jobId: prevJobId, status: "processed" })
+        .where(
+          and(
+            eq(images.deploymentId, job.deploymentId),
+            sql`${images.jobId} IS NULL`
+          )
+        );
+      // Restore deployment to "processed" if it was reverted
+      await db
+        .update(deployments)
+        .set({ status: "processed", updatedAt: new Date() })
+        .where(eq(deployments.id, job.deploymentId));
+    } else {
       await db
         .update(deployments)
         .set({ status: "scanned", updatedAt: new Date() })
@@ -2361,7 +2414,166 @@ export async function getDeployment(id: number) {
     .where(eq(processingJobs.deploymentId, id))
     .orderBy(desc(processingJobs.createdAt));
 
-  return { deployment, images: deploymentImages, jobs };
+  // Stats for latest completed job (used by CTA banner)
+  const latestCompletedJob = jobs.find((j) => j.status === "completed");
+  let totalDetections = 0;
+  let distinctSpeciesCount = 0;
+  let verifiedCount = 0;
+  if (latestCompletedJob) {
+    const [detResult] = await db
+      .select({ cnt: count() })
+      .from(detections)
+      .innerJoin(images, eq(detections.imageId, images.id))
+      .where(eq(images.jobId, latestCompletedJob.id));
+    totalDetections = detResult?.cnt ?? 0;
+
+    const [specResult] = await db
+      .select({
+        cnt: sql<number>`count(distinct coalesce(${identifications.correctedSpecies}, ${identifications.species}))`,
+      })
+      .from(identifications)
+      .innerJoin(detections, eq(identifications.detectionId, detections.id))
+      .innerJoin(images, eq(detections.imageId, images.id))
+      .where(eq(images.jobId, latestCompletedJob.id));
+    distinctSpeciesCount = specResult?.cnt ?? 0;
+
+    const [verResult] = await db
+      .select({ cnt: count() })
+      .from(identifications)
+      .innerJoin(detections, eq(identifications.detectionId, detections.id))
+      .innerJoin(images, eq(detections.imageId, images.id))
+      .where(
+        and(
+          eq(images.jobId, latestCompletedJob.id),
+          ne(identifications.verificationStatus, "unverified")
+        )
+      );
+    verifiedCount = verResult?.cnt ?? 0;
+  }
+
+  return {
+    deployment,
+    images: deploymentImages,
+    jobs,
+    stats: {
+      totalDetections,
+      distinctSpeciesCount,
+      verifiedCount,
+      latestCompletedJobId: latestCompletedJob?.id ?? null,
+    },
+  };
+}
+
+/** Fetch all data needed to render the image gallery for a given processing job.
+ *  Shared by both the results page and the embedded gallery on the detail page. */
+export async function getJobResultsData(jobId: number) {
+  const [job] = await db
+    .select()
+    .from(processingJobs)
+    .where(eq(processingJobs.id, jobId));
+
+  if (!job) return null;
+
+  const [deployment] = await db
+    .select()
+    .from(deployments)
+    .where(eq(deployments.id, job.deploymentId));
+
+  const jobImages = await db
+    .select()
+    .from(images)
+    .where(eq(images.jobId, jobId))
+    .orderBy(IMAGE_TIMESTAMP_ORDER, images.filename);
+
+  const imageIds = jobImages.map((img) => img.id);
+  const jobDetections =
+    imageIds.length > 0
+      ? await db
+          .select()
+          .from(detections)
+          .where(inArray(detections.imageId, imageIds))
+      : [];
+
+  const detectionIds = jobDetections.map((d) => d.id);
+  const jobIdentifications =
+    detectionIds.length > 0
+      ? await db
+          .select()
+          .from(identifications)
+          .where(inArray(identifications.detectionId, detectionIds))
+      : [];
+
+  const identByDetection = new Map<number, (typeof jobIdentifications)[number]>();
+  for (const ident of jobIdentifications) {
+    identByDetection.set(ident.detectionId, ident);
+  }
+
+  const detectionsByImage = new Map<number, (typeof jobDetections)>();
+  for (const det of jobDetections) {
+    const existing = detectionsByImage.get(det.imageId) || [];
+    existing.push(det);
+    detectionsByImage.set(det.imageId, existing);
+  }
+
+  const speciesCount: Record<string, number> = {};
+  for (const ident of jobIdentifications) {
+    const sp = ident.correctedSpecies || ident.species;
+    speciesCount[sp] = (speciesCount[sp] || 0) + 1;
+  }
+
+  const sortedSpecies = Object.entries(speciesCount).sort(([, a], [, b]) => b - a);
+
+  const verified = jobIdentifications.filter(
+    (i) => i.verificationStatus === "verified" || i.verificationStatus === "corrected"
+  ).length;
+  const unverified = jobIdentifications.filter(
+    (i) => i.verificationStatus === "unverified"
+  ).length;
+
+  // Query videos for this deployment to build a name map
+  const jobVideos = deployment
+    ? await db.select().from(videos).where(eq(videos.deploymentId, deployment.id))
+    : [];
+  const videoMap = new Map(jobVideos.map((v) => [v.id, v]));
+
+  const gridImages = jobImages.map((img) => {
+    const imgDets = detectionsByImage.get(img.id) || [];
+    const vid = img.videoId ? videoMap.get(img.videoId) : null;
+    return {
+      id: img.id,
+      filename: img.filename,
+      path: img.path,
+      status: img.status,
+      thumbnailPath: img.thumbnailPath,
+      videoId: img.videoId ?? null,
+      frameIndex: img.frameIndex ?? null,
+      videoFilename: vid?.filename ?? null,
+      confirmedBlank: img.confirmedBlank ?? false,
+      starred: img.starred ?? false,
+      setupTag: img.setupTag ?? null,
+      detections: imgDets.map((det) => {
+        const ident = identByDetection.get(det.id);
+        return {
+          id: det.id,
+          species: ident?.correctedSpecies || ident?.species || null,
+          confidence: ident?.confidence || null,
+          detectionConfidence: det.detectionConfidence,
+          verificationStatus: ident?.verificationStatus || "unverified",
+        };
+      }),
+    };
+  });
+
+  return {
+    job,
+    deployment,
+    gridImages,
+    speciesList: sortedSpecies,
+    detectionCount: jobDetections.length,
+    verified,
+    unverified,
+    totalIdentifications: jobIdentifications.length,
+  };
 }
 
 export async function getRecentJobs(limit: number = 50) {
@@ -2602,6 +2814,104 @@ export async function getJobImageIds(jobId: number): Promise<number[]> {
     .orderBy(IMAGE_TIMESTAMP_ORDER, images.filename);
 
   return rows.map((r) => r.id);
+}
+
+/**
+ * Fetch all data needed to render the image annotation client for a single image.
+ * Used by the embedded annotation view on the deployment detail page.
+ */
+export async function getImageAnnotationData(imageId: number, jobId: number) {
+  const [data, imageIds, speciesList] = await Promise.all([
+    getImageWithDetections(imageId),
+    getJobImageIds(jobId),
+    getSpeciesList(),
+  ]);
+
+  if (!data) return null;
+
+  const { image, deploymentName, detections: rawDetections } = data;
+
+  const frequentSpeciesResult = await getFrequentSpecies(image.deploymentId);
+  const frequentSpecies = frequentSpeciesResult.success ? frequentSpeciesResult.data : [];
+
+  const currentIndex = imageIds.indexOf(imageId);
+  const prevImageId = currentIndex > 0 ? imageIds[currentIndex - 1] : null;
+  const nextImageId = currentIndex < imageIds.length - 1 ? imageIds[currentIndex + 1] : null;
+
+  const boxes = rawDetections.map((det) => ({
+    id: det.id,
+    x: det.bboxX,
+    y: det.bboxY,
+    width: det.bboxWidth,
+    height: det.bboxHeight,
+    detectionConfidence: det.detectionConfidence,
+    detectionClass: det.detectionClass,
+    species: det.identification?.correctedSpecies || det.identification?.species || null,
+    speciesConfidence: det.identification?.confidence || null,
+    verificationStatus: det.identification?.verificationStatus || "unverified",
+  }));
+
+  const annotationDetections = rawDetections.map((det) => ({
+    id: det.id,
+    detectionClass: det.detectionClass,
+    detectionConfidence: det.detectionConfidence,
+    bboxX: det.bboxX,
+    bboxY: det.bboxY,
+    bboxWidth: det.bboxWidth,
+    bboxHeight: det.bboxHeight,
+    identification: det.identification
+      ? {
+          id: det.identification.id,
+          species: det.identification.species,
+          confidence: det.identification.confidence,
+          verificationStatus: det.identification.verificationStatus,
+          correctedSpecies: det.identification.correctedSpecies,
+        }
+      : null,
+  }));
+
+  // Format timestamp
+  const rawTimestamp = image.exifTimestamp
+    ? new Date(image.exifTimestamp)
+    : image.fileModified
+      ? new Date(image.fileModified)
+      : null;
+  const timestamp =
+    rawTimestamp && !isNaN(rawTimestamp.getTime())
+      ? rawTimestamp.toLocaleDateString("es-EC", {
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+        }) +
+        ", " +
+        rawTimestamp.toLocaleTimeString("es-EC", {
+          hour: "2-digit",
+          minute: "2-digit",
+        })
+      : null;
+
+  return {
+    image: {
+      id: image.id,
+      filename: image.filename,
+      confirmedBlank: image.confirmedBlank,
+      starred: image.starred,
+      starredBy: image.starredBy,
+      setupTag: image.setupTag as "deployment" | "retrieval" | null,
+      videoId: image.videoId,
+      frameIndex: image.frameIndex,
+    },
+    deploymentName,
+    timestamp,
+    boxes,
+    detections: annotationDetections,
+    speciesList,
+    frequentSpecies,
+    prevImageId,
+    nextImageId,
+    currentIndex,
+    totalImages: imageIds.length,
+  };
 }
 
 // ---------------------------------------------------------------------------

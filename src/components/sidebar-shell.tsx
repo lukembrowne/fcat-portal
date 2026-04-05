@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Home, TreePine, Leaf, Camera, Shield, DollarSign, BarChart3, CloudSun, ClipboardList, Thermometer, AudioLines, ChevronRight } from "lucide-react";
+import { Home, TreePine, Leaf, Camera, Shield, DollarSign, BarChart3, CloudSun, ClipboardList, Thermometer, AudioLines, ChevronRight, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { Collapsible } from "radix-ui";
 import type { AuthUser } from "@/lib/types";
 import type { IconName, NavItem, NavSection } from "@/components/sidebar-nav";
@@ -198,6 +198,20 @@ function SubNavItem({
   return null;
 }
 
+function SidebarToggleButton() {
+  const { toggleSidebar, open, isMobile } = useSidebar();
+  if (isMobile) return null;
+  return (
+    <button
+      onClick={toggleSidebar}
+      className="size-7 flex items-center justify-center rounded-md text-sidebar-foreground/50 hover:text-sidebar-foreground hover:bg-sidebar-accent transition-colors"
+      title={open ? "Colapsar barra lateral" : "Expandir barra lateral"}
+    >
+      {open ? <PanelLeftClose className="size-4" /> : <PanelLeftOpen className="size-4" />}
+    </button>
+  );
+}
+
 export function SidebarShell({ sections, user }: SidebarShellProps) {
   const pathname = usePathname();
   const activeHref = findActiveHref(pathname, sections);
@@ -206,23 +220,26 @@ export function SidebarShell({ sections, user }: SidebarShellProps) {
   return (
     <Sidebar collapsible="icon">
       <SidebarHeader className="border-b border-sidebar-border pb-3">
-        <Link href="/" className="flex items-center gap-3 px-1 group-data-[collapsible=icon]:justify-center">
-          <Image
-            src="/logo-fcat.png"
-            alt="FCAT"
-            width={36}
-            height={36}
-            className="shrink-0 group-data-[collapsible=icon]:w-7 group-data-[collapsible=icon]:h-7 transition-all"
-          />
-          <div className="flex flex-col group-data-[collapsible=icon]:hidden">
-            <span className="font-semibold text-sm text-sidebar-foreground leading-tight">
-              Portal FCAT
-            </span>
-            <span className="text-[11px] text-sidebar-foreground/50 leading-tight">
-              Plataforma interna
-            </span>
-          </div>
-        </Link>
+        <div className="flex items-center justify-between group-data-[collapsible=icon]:flex-col group-data-[collapsible=icon]:gap-2">
+          <Link href="/" className="flex items-center gap-3 px-1 group-data-[collapsible=icon]:justify-center">
+            <Image
+              src="/logo-fcat.png"
+              alt="FCAT"
+              width={36}
+              height={36}
+              className="shrink-0 group-data-[collapsible=icon]:w-7 group-data-[collapsible=icon]:h-7 transition-all"
+            />
+            <div className="flex flex-col group-data-[collapsible=icon]:hidden">
+              <span className="font-semibold text-sm text-sidebar-foreground leading-tight">
+                Portal FCAT
+              </span>
+              <span className="text-[11px] text-sidebar-foreground/50 leading-tight">
+                Plataforma interna
+              </span>
+            </div>
+          </Link>
+          <SidebarToggleButton />
+        </div>
       </SidebarHeader>
 
       <SidebarContent>

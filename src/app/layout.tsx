@@ -5,7 +5,6 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { getCurrentUser } from "@/lib/auth";
 import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar";
 import { SidebarNav } from "@/components/sidebar-nav";
-import { TopHeader } from "@/components/top-header";
 import { FloatingJobProgress } from "@/components/floating-job-progress";
 import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
@@ -44,7 +43,6 @@ export default async function RootLayout({
           <SidebarProvider defaultOpen={defaultOpen}>
             <SidebarNav user={user} />
             <SidebarInset className="min-w-0">
-              <TopHeader />
               <main className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-6 min-w-0">
                 <div className="mx-auto max-w-7xl">{children}</div>
               </main>

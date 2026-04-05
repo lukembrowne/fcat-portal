@@ -209,12 +209,12 @@ export function BBoxOverlay({
   );
 
   return (
-    <div ref={containerRef} className="relative inline-block w-full">
+    <div ref={containerRef} className="relative inline-block max-w-full max-h-full">
       <img
         ref={imgRef}
         src={src}
         alt={alt}
-        className="w-full h-auto block"
+        className="max-w-full max-h-full h-auto w-auto block"
         draggable={false}
       />
 

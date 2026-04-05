@@ -1,20 +1,16 @@
 "use client";
 
-import { useState, useMemo, useCallback, useRef, useTransition, useEffect, Fragment } from "react";
+import { useState, useMemo, useCallback, useTransition, useEffect, Fragment } from "react";
 import { useRouter } from "next/navigation";
 import {
   useReactTable,
   getCoreRowModel,
   getSortedRowModel,
-
   getFilteredRowModel,
-  getExpandedRowModel,
   flexRender,
   type ColumnDef,
   type SortingState,
-
   type RowSelectionState,
-  type ExpandedState,
 } from "@tanstack/react-table";
 import {
   Table,
@@ -32,12 +28,12 @@ import {
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
-  ChevronRight,
   Search,
   RefreshCw,
   Loader2,
   Info,
   Download,
+  ChevronRight,
 } from "lucide-react";
 import {
   Tooltip,
@@ -46,24 +42,13 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import type { DeploymentRow } from "./actions";
-import { DeploymentExpandedRow } from "./deployment-expanded-row";
 import { DeploymentRowActions } from "./deployment-row-actions";
 import { BatchEditDialog } from "./batch-edit-dialog";
 import { BatchDeleteDialog } from "./batch-delete-dialog";
 import { syncWithDrive, scanDeploymentImages } from "./drive-actions";
 import { matchOdkDeployments } from "./odk-actions";
 import { ProcessConfirmDialog } from "./process-confirm-dialog";
-
-interface JobInfo {
-  id: number;
-  status: string;
-  detectorModel: string | null;
-  classifierModel: string | null;
-  totalImages: number;
-  processedImages: number;
-  createdAt: Date;
-  completedAt: Date | null;
-}
+import type { ProjectGroup } from "./page";
 
 export interface CtProject {
   id: number;
@@ -71,6 +56,7 @@ export interface CtProject {
 }
 
 interface DeploymentsTableProps {
+  groups: ProjectGroup[];
   deployments: DeploymentRow[];
   distinctProjects: CtProject[];
   canEdit: boolean;
@@ -78,6 +64,7 @@ interface DeploymentsTableProps {
 }
 
 export function DeploymentsTable({
+  groups,
   deployments: initialDeployments,
   distinctProjects,
   canEdit,
@@ -85,10 +72,7 @@ export function DeploymentsTable({
 }: DeploymentsTableProps) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [globalFilter, setGlobalFilter] = useState("");
-
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
-  const [expanded, setExpanded] = useState<ExpandedState>({});
-  const [projectFilter, setProjectFilter] = useState<string>("");
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [syncing, startSync] = useTransition();
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
@@ -96,35 +80,68 @@ export function DeploymentsTable({
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
   const [processDialogIds, setProcessDialogIds] = useState<number[] | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
+    () => new Set()
+  );
   const router = useRouter();
-
-  // Cache for loaded job data per deployment
-  const jobsCacheRef = useRef<Map<number, JobInfo[]>>(new Map());
-  const handleCacheJobs = useCallback((deploymentId: number, jobs: JobInfo[]) => {
-    jobsCacheRef.current.set(deploymentId, jobs);
-  }, []);
 
   // Refresh table data when a job reaches a terminal state
   useEffect(() => {
     const handleJobsUpdated = () => {
-      jobsCacheRef.current.clear();
       router.refresh();
     };
     window.addEventListener("jobs-updated", handleJobsUpdated);
     return () => window.removeEventListener("jobs-updated", handleJobsUpdated);
   }, [router]);
 
-  // Apply dropdown filters
+  // Apply status filter to the flat data for TanStack
   const filteredData = useMemo(() => {
     let data = initialDeployments;
-    if (projectFilter) {
-      data = data.filter((d) => d.projectLabel === projectFilter);
-    }
     if (statusFilter) {
       data = data.filter((d) => d.status === statusFilter);
     }
     return data;
-  }, [initialDeployments, projectFilter, statusFilter]);
+  }, [initialDeployments, statusFilter]);
+
+  // Build filtered groups from the server-provided groups + client filters
+  const filteredGroups = useMemo(() => {
+    return groups
+      .map((g) => {
+        let deps = g.deployments;
+        if (statusFilter) {
+          deps = deps.filter((d) => d.status === statusFilter);
+        }
+        if (globalFilter) {
+          const lower = globalFilter.toLowerCase();
+          deps = deps.filter(
+            (d) =>
+              d.name.toLowerCase().includes(lower) ||
+              (d.projectLabel?.toLowerCase().includes(lower) ?? false) ||
+              (d.siteName?.toLowerCase().includes(lower) ?? false)
+          );
+        }
+        return { ...g, deployments: deps, totalCount: deps.length };
+      })
+      .filter((g) => g.deployments.length > 0);
+  }, [groups, statusFilter, globalFilter]);
+
+  const toggleGroup = useCallback((projectLabel: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(projectLabel)) {
+        next.delete(projectLabel);
+      } else {
+        next.add(projectLabel);
+      }
+      return next;
+    });
+  }, []);
+
+  const expandAll = useCallback(() => setCollapsedGroups(new Set()), []);
+  const collapseAll = useCallback(
+    () => setCollapsedGroups(new Set(groups.map((g) => g.projectLabel))),
+    [groups]
+  );
 
   const columns = useMemo<ColumnDef<DeploymentRow>[]>(() => {
     const cols: ColumnDef<DeploymentRow>[] = [
@@ -166,11 +183,6 @@ export function DeploymentsTable({
         ),
       },
       {
-        accessorKey: "projectLabel",
-        header: "Proyecto",
-        cell: ({ getValue }) => getValue<string | null>() || "—",
-      },
-      {
         accessorKey: "siteName",
         header: "Sitio",
         cell: ({ getValue }) => (
@@ -192,27 +204,33 @@ export function DeploymentsTable({
               </TooltipTrigger>
               <TooltipContent side="bottom" className="max-w-xs bg-popover text-popover-foreground border shadow-md p-3">
                 <div className="flex flex-col gap-1.5 text-xs">
-                  <span className="inline-flex items-center gap-1.5"><StatusBadge status="unscanned" type="deployment" /> Carpeta importada, imágenes no buscadas</span>
-                  <span className="inline-flex items-center gap-1.5"><StatusBadge status="scanned" type="deployment" /> Imágenes contadas, lista para procesar</span>
+                  <span className="inline-flex items-center gap-1.5"><StatusBadge status="scanned" type="deployment" /> Lista para procesar con ML</span>
                   <span className="inline-flex items-center gap-1.5"><StatusBadge status="processing" type="deployment" /> Modelo ML analizando</span>
-                  <span className="inline-flex items-center gap-1.5"><StatusBadge status="processed" type="deployment" /> Análisis ML completado</span>
+                  <span className="inline-flex items-center gap-1.5"><StatusBadge status="processed" type="deployment" /> Tiene detecciones por revisar</span>
+                  <span className="inline-flex items-center gap-1.5"><StatusBadge status="processed_empty" type="deployment" /> Procesada, sin detecciones</span>
                   <span className="inline-flex items-center gap-1.5"><StatusBadge status="verified" type="deployment" /> Revisada por investigador</span>
-                  <span className="inline-flex items-center gap-1.5"><StatusBadge status="verified_empty" type="deployment" /> Sin detecciones, confirmada por investigador</span>
+                  <span className="inline-flex items-center gap-1.5"><StatusBadge status="verified_empty" type="deployment" /> Sin detecciones, confirmada</span>
                 </div>
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
         ),
-        cell: ({ row }) => (
-          <span className="inline-flex items-center gap-1">
-            <StatusBadge status={row.original.status} type="deployment" />
-            {row.original.excluded && (
-              <span className="inline-flex items-center rounded-full border border-destructive/30 bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium text-destructive">
-                Excluida
-              </span>
-            )}
-          </span>
-        ),
+        cell: ({ row }) => {
+          const d = row.original;
+          const displayStatus = d.status === "processed" && (d.totalDetections == null || d.totalDetections === 0)
+            ? "processed_empty"
+            : d.status;
+          return (
+            <span className="inline-flex items-center gap-1">
+              <StatusBadge status={displayStatus} type="deployment" />
+              {d.excluded && (
+                <span className="inline-flex items-center rounded-full border border-destructive/30 bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium text-destructive">
+                  Excluida
+                </span>
+              )}
+            </span>
+          );
+        },
       },
       {
         accessorKey: "totalImages",
@@ -287,87 +305,27 @@ export function DeploymentsTable({
             deployment={row.original}
             canEdit={canEdit}
             isAdmin={isAdmin}
-            onExpandAndEdit={() => {
-              // Expand the row first, then trigger edit mode
-              if (!row.getIsExpanded()) {
-                row.toggleExpanded();
-              }
-              // Dispatch event for the expanded row to pick up
-              setTimeout(() => {
-                window.dispatchEvent(new CustomEvent("expand-and-edit", { detail: row.original.id }));
-              }, 50);
-            }}
           />
         ),
         enableSorting: false,
         enableGlobalFilter: false,
       },
-      {
-        id: "dates",
-        header: "Fechas",
-        accessorFn: (row) => row.dateStart || "",
-        cell: ({ row }) => {
-          const { dateStart, dateEnd } = row.original;
-          if (!dateStart) return "—";
-          return (
-            <span className="tabular-nums text-muted-foreground whitespace-nowrap">
-              {dateStart}
-              {dateEnd && ` — ${dateEnd}`}
-            </span>
-          );
-        },
-        enableGlobalFilter: false,
-      },
-      {
-        id: "expand",
-        header: "",
-        cell: ({ row }) => (
-          <ChevronRight className={`h-4 w-4 text-muted-foreground transition-transform ${row.getIsExpanded() ? "rotate-90" : ""}`} />
-        ),
-        enableSorting: false,
-        enableGlobalFilter: false,
-      }
     );
 
     return cols;
   }, [canEdit, isAdmin]);
 
-  // Accordion behavior: only allow one expanded row at a time
-  const handleExpandedChange = useCallback((updater: ExpandedState | ((old: ExpandedState) => ExpandedState)) => {
-    setExpanded((prev) => {
-      const next = typeof updater === "function" ? updater(prev) : updater;
-      if (next === true) return next;
-      // Find newly expanded rows (keys that are true in next but not in prev)
-      const prevKeys = prev === true ? [] : Object.keys(prev).filter((k) => prev[k]);
-      const nextKeys = Object.keys(next).filter((k) => next[k]);
-      const newlyExpanded = nextKeys.filter((k) => !prevKeys.includes(k));
-      // If a new row was expanded, collapse all others (accordion)
-      if (newlyExpanded.length > 0) {
-        return { [newlyExpanded[newlyExpanded.length - 1]]: true };
-      }
-      return next;
-    });
-  }, []);
-
   const table = useReactTable({
     data: filteredData,
     columns,
-    state: { sorting, globalFilter, rowSelection, expanded },
+    state: { sorting, globalFilter, rowSelection },
     onSortingChange: setSorting,
     onGlobalFilterChange: setGlobalFilter,
-
-
     onRowSelectionChange: setRowSelection,
-    onExpandedChange: handleExpandedChange,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
-
-
-    getExpandedRowModel: getExpandedRowModel(),
-    autoResetExpanded: false,
     enableRowSelection: true,
-    getRowCanExpand: () => true,
     getRowId: (row) => String(row.id),
   });
 
@@ -495,6 +453,11 @@ export function DeploymentsTable({
     }
   };
 
+  // Build a set of row IDs that pass the global filter for grouped rendering
+  const filteredRowIds = useMemo(() => {
+    return new Set(table.getFilteredRowModel().rows.map((r) => r.id));
+  }, [table]);
+
   return (
     <div className="space-y-4">
       {/* Toolbar */}
@@ -510,48 +473,42 @@ export function DeploymentsTable({
         </div>
 
         <select
-          value={projectFilter}
-          onChange={(e) => setProjectFilter(e.target.value)}
-          className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-        >
-          <option value="">Todos los proyectos</option>
-          {distinctProjects.map((p) => (
-            <option key={p.id} value={p.name}>
-              {p.name}
-            </option>
-          ))}
-        </select>
-
-        <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
           className="h-9 rounded-md border border-input bg-background px-3 text-sm"
         >
           <option value="">Todos los estados</option>
-          <option value="unscanned">Sin escanear</option>
-          <option value="scanned">Escaneada</option>
+          <option value="unscanned">Por Procesar (nueva)</option>
+          <option value="scanned">Por Procesar</option>
           <option value="processing">Procesando</option>
-          <option value="processed">Procesada</option>
+          <option value="processed">Por Revisar</option>
           <option value="verified">Verificada</option>
-          <option value="verified_empty">Vacía verificada</option>
+          <option value="verified_empty">Vacía (verificada)</option>
         </select>
 
+        <div className="flex gap-1">
+          <Button variant="ghost" size="sm" onClick={expandAll} className="text-xs">
+            Expandir
+          </Button>
+          <Button variant="ghost" size="sm" onClick={collapseAll} className="text-xs">
+            Colapsar
+          </Button>
+        </div>
+
         {canEdit && (
-          <>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleSync}
-              disabled={syncing}
-            >
-              {syncing ? (
-                <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
-              ) : (
-                <RefreshCw className="h-4 w-4 mr-1.5" />
-              )}
-              Sincronizar con Drive
-            </Button>
-          </>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleSync}
+            disabled={syncing}
+          >
+            {syncing ? (
+              <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4 mr-1.5" />
+            )}
+            Sincronizar con Drive
+          </Button>
         )}
       </div>
 
@@ -621,7 +578,6 @@ export function DeploymentsTable({
             variant="ghost"
             size="sm"
             onClick={() => setRowSelection({})}
-            className="ml-auto"
           >
             Deseleccionar
           </Button>
@@ -670,7 +626,7 @@ export function DeploymentsTable({
             ))}
           </TableHeader>
           <TableBody>
-            {table.getRowModel().rows.length === 0 ? (
+            {filteredGroups.length === 0 ? (
               <TableRow>
                 <TableCell
                   colSpan={columns.length}
@@ -682,40 +638,66 @@ export function DeploymentsTable({
                 </TableCell>
               </TableRow>
             ) : (
-              table.getRowModel().rows.map((row) => (
-                <Fragment key={row.id}>
-                  <TableRow
-                    className={`cursor-pointer hover:bg-muted/50 ${row.getIsExpanded() ? "bg-primary/10 border-b-0" : ""} ${row.original.excluded ? "opacity-50" : ""}`}
-                    data-state={row.getIsSelected() ? "selected" : undefined}
-                    onClick={() => row.toggleExpanded()}
-                  >
-                    {row.getVisibleCells().map((cell) => (
-                      <TableCell key={cell.id}>
-                        {flexRender(
-                          cell.column.columnDef.cell,
-                          cell.getContext()
-                        )}
-                      </TableCell>
-                    ))}
-                  </TableRow>
-                  {row.getIsExpanded() && (
-                    <TableRow className="hover:bg-transparent">
-                      <TableCell
-                        colSpan={columns.length}
-                        className="p-0"
-                      >
-                        <DeploymentExpandedRow
-                          deployment={row.original}
-                          canEdit={canEdit}
-                          distinctProjects={distinctProjects}
-                          cachedJobs={jobsCacheRef.current.get(row.original.id)}
-                          onCacheJobs={handleCacheJobs}
-                        />
+              filteredGroups.map((group) => {
+                const isCollapsed = collapsedGroups.has(group.projectLabel);
+                const actionable = group.deployments.filter((d) =>
+                  ["unscanned", "scanned", "processing", "processed"].includes(d.status)
+                ).length;
+
+                return (
+                  <Fragment key={group.projectLabel}>
+                    {/* Group header row */}
+                    <TableRow
+                      className="bg-muted/30 hover:bg-muted/50 cursor-pointer border-b"
+                      onClick={() => toggleGroup(group.projectLabel)}
+                    >
+                      <TableCell colSpan={columns.length} className="py-2.5 px-3">
+                        <div className="flex items-center gap-2">
+                          <ChevronRight
+                            className={`h-4 w-4 transition-transform shrink-0 ${!isCollapsed ? "rotate-90" : ""}`}
+                          />
+                          <span className="font-semibold text-sm">
+                            {group.projectLabel}
+                          </span>
+                          <span className="text-muted-foreground text-xs">
+                            {group.totalCount} instalaciones
+                          </span>
+                          {actionable > 0 && (
+                            <span className="text-xs font-medium text-orange-600">
+                              {actionable} pendiente{actionable !== 1 ? "s" : ""}
+                            </span>
+                          )}
+                        </div>
                       </TableCell>
                     </TableRow>
-                  )}
-                </Fragment>
-              ))
+                    {/* Deployment rows within group */}
+                    {!isCollapsed &&
+                      group.deployments.map((dep) => {
+                        const row = table.getRowModel().rowsById[String(dep.id)];
+                        if (!row) return null;
+                        // Skip rows that don't match global filter
+                        if (!filteredRowIds.has(row.id)) return null;
+                        return (
+                          <TableRow
+                            key={row.id}
+                            className={`cursor-pointer hover:bg-muted/50 ${dep.excluded ? "opacity-50" : ""}`}
+                            data-state={row.getIsSelected() ? "selected" : undefined}
+                            onClick={() => router.push(`/camera-trap/${dep.id}`)}
+                          >
+                            {row.getVisibleCells().map((cell) => (
+                              <TableCell key={cell.id}>
+                                {flexRender(
+                                  cell.column.columnDef.cell,
+                                  cell.getContext()
+                                )}
+                              </TableCell>
+                            ))}
+                          </TableRow>
+                        );
+                      })}
+                  </Fragment>
+                );
+              })
             )}
           </TableBody>
         </Table>
@@ -724,7 +706,7 @@ export function DeploymentsTable({
       {/* Row count */}
       <p className="text-sm text-muted-foreground">
         {table.getFilteredRowModel().rows.length} instalaciones
-        {(globalFilter || projectFilter || statusFilter) && " (filtradas)"}
+        {(globalFilter || statusFilter) && " (filtradas)"}
       </p>
 
       {/* Batch dialogs */}

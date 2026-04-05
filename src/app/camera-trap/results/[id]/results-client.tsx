@@ -17,6 +17,7 @@ interface ResultsClientProps {
   jobId: number;
   speciesList: [string, number][];
   isAdmin?: boolean;
+  onImageClick?: (imageId: number) => void;
 }
 
 const VERIFICATION_STATUSES = [
@@ -32,6 +33,7 @@ export function ResultsClient({
   jobId,
   speciesList,
   isAdmin,
+  onImageClick,
 }: ResultsClientProps) {
   const [gridColumns, setGridColumns] = useState(4);
   useEffect(() => {
@@ -286,6 +288,7 @@ export function ResultsClient({
           images={filteredImages}
           jobId={jobId}
           columns={gridColumns}
+          onImageClick={onImageClick}
         />
       </div>
 

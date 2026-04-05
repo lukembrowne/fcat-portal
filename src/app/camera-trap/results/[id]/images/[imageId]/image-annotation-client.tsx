@@ -66,6 +66,13 @@ interface ImageAnnotationClientProps {
   starred: boolean;
   starredBy: string | null;
   setupTag: "deployment" | "retrieval" | null;
+  /** When provided, navigation uses these callbacks instead of router.push */
+  onNavigate?: (imageId: number) => void;
+  onBack?: () => void;
+  /** Override the main container height class (default: viewport-based calc) */
+  containerClassName?: string;
+  /** Called after any data mutation; use to re-fetch data in embedded mode */
+  onMutate?: () => void;
 }
 
 export function ImageAnnotationClient({
@@ -83,8 +90,16 @@ export function ImageAnnotationClient({
   starred,
   starredBy,
   setupTag,
+  onNavigate,
+  onBack,
+  containerClassName,
+  onMutate,
 }: ImageAnnotationClientProps) {
   const router = useRouter();
+  const refresh = useCallback(() => {
+    if (onMutate) onMutate();
+    else router.refresh();
+  }, [onMutate, router]);
   const [selectedBoxId, setSelectedBoxId] = useState<number | null>(null);
   const [bboxesHidden, setBboxesHidden] = useState(false);
   const [deleteDialogDetectionId, setDeleteDialogDetectionId] = useState<number | null>(null);
@@ -202,35 +217,39 @@ export function ImageAnnotationClient({
       try {
         const result = await verifyAndAdvance(unverifiedIds, jobId, imageId);
         if (result.success && result.data.nextImageId) {
-          router.push(
-            `/camera-trap/results/${jobId}/images/${result.data.nextImageId}`
-          );
+          if (onNavigate) {
+            onNavigate(result.data.nextImageId);
+          } else {
+            router.push(
+              `/camera-trap/results/${jobId}/images/${result.data.nextImageId}`
+            );
+          }
         } else if (result.success) {
-          router.refresh();
+          refresh();
         }
       } finally {
         isVerifyingRef.current = false;
       }
     });
-  }, [detections, jobId, imageId, router]);
+  }, [detections, jobId, imageId, router, onNavigate, refresh]);
 
   const handleVerifySelected = useCallback(() => {
     if (!selectedDetection?.identification) return;
     if (selectedDetection.identification.verificationStatus !== "unverified") return;
     startTransition(async () => {
       await verifyIdentification(selectedDetection.identification!.id);
-      router.refresh();
+      refresh();
     });
-  }, [selectedDetection, router]);
+  }, [selectedDetection, refresh]);
 
   const handleRejectSelected = useCallback(() => {
     if (!selectedDetection?.identification) return;
     if (selectedDetection.identification.verificationStatus !== "unverified") return;
     startTransition(async () => {
       await rejectIdentification(selectedDetection.identification!.id);
-      router.refresh();
+      refresh();
     });
-  }, [selectedDetection, router]);
+  }, [selectedDetection, refresh]);
 
   const handleDrawComplete = useCallback(
     (bbox: { x: number; y: number; width: number; height: number }) => {
@@ -239,11 +258,11 @@ export function ImageAnnotationClient({
         if (result.success) {
           setSearchQuery("");
           setSelectedBoxId(result.data.detectionId);
-          router.refresh();
+          refresh();
         }
       });
     },
-    [imageId, router]
+    [imageId, refresh]
   );
 
   const handleSelectSpecies = useCallback(
@@ -255,14 +274,14 @@ export function ImageAnnotationClient({
           scientificName
         );
         if (result.success) {
-          router.refresh();
+          refresh();
         } else {
           console.error("assignSpecies failed:", result.error);
           alert(result.error);
         }
       });
     },
-    [selectedDetection, router]
+    [selectedDetection, refresh]
   );
 
   const handleDeleteDetection = useCallback((detectionId: number) => {
@@ -279,10 +298,10 @@ export function ImageAnnotationClient({
         if (selectedBoxId === idToDelete) {
           setSelectedBoxId(null);
         }
-        router.refresh();
+        refresh();
       }
     });
-  }, [deleteDialogDetectionId, selectedBoxId, router]);
+  }, [deleteDialogDetectionId, selectedBoxId, refresh]);
 
   const handleDeleteSelected = useCallback(() => {
     if (selectedBoxId != null) {
@@ -294,17 +313,17 @@ export function ImageAnnotationClient({
     setOptimisticBlank(!isConfirmedBlank);
     startTransition(async () => {
       await toggleConfirmedBlank(imageId);
-      router.refresh();
+      refresh();
     });
-  }, [imageId, isConfirmedBlank, router]);
+  }, [imageId, isConfirmedBlank, refresh]);
 
   const handleToggleStarred = useCallback(() => {
     setOptimisticStarred(!isStarred);
     startTransition(async () => {
       await toggleStarred(imageId);
-      router.refresh();
+      refresh();
     });
-  }, [imageId, isStarred, router]);
+  }, [imageId, isStarred, refresh]);
 
   const handleAddSpecies = useCallback(() => {
     setAddSpeciesForm({
@@ -330,12 +349,12 @@ export function ImageAnnotationClient({
       });
       if (result.success) {
         setAddSpeciesOpen(false);
-        router.refresh();
+        refresh();
       } else {
         setAddSpeciesError(result.error);
       }
     });
-  }, [addSpeciesForm, router]);
+  }, [addSpeciesForm, refresh]);
 
   const handleToggleSetupTag = useCallback(
     (tag: "deployment" | "retrieval") => {
@@ -349,10 +368,10 @@ export function ImageAnnotationClient({
         } else {
           setDateSuggestion(null);
         }
-        router.refresh();
+        refresh();
       });
     },
-    [imageId, currentSetupTag, router]
+    [imageId, currentSetupTag, refresh]
   );
 
   const handleApplyDate = useCallback(() => {
@@ -364,9 +383,9 @@ export function ImageAnnotationClient({
         dateSuggestion.value
       );
       setDateSuggestion(null);
-      router.refresh();
+      refresh();
     });
-  }, [dateSuggestion, router]);
+  }, [dateSuggestion, refresh]);
 
   // --- Keyboard shortcuts ---
 
@@ -386,13 +405,21 @@ export function ImageAnnotationClient({
     onNext: () => {
       if (nextImageId) {
         resetZoom();
-        router.push(`/camera-trap/results/${jobId}/images/${nextImageId}`);
+        if (onNavigate) {
+          onNavigate(nextImageId);
+        } else {
+          router.push(`/camera-trap/results/${jobId}/images/${nextImageId}`);
+        }
       }
     },
     onPrev: () => {
       if (prevImageId) {
         resetZoom();
-        router.push(`/camera-trap/results/${jobId}/images/${prevImageId}`);
+        if (onNavigate) {
+          onNavigate(prevImageId);
+        } else {
+          router.push(`/camera-trap/results/${jobId}/images/${prevImageId}`);
+        }
       }
     },
     onSelectDetection: (index) => {
@@ -405,7 +432,11 @@ export function ImageAnnotationClient({
       setSearchQuery("");
     },
     onEscapeBack: () => {
-      router.push(`/camera-trap/results/${jobId}`, { scroll: false });
+      if (onBack) {
+        onBack();
+      } else {
+        router.push(`/camera-trap/results/${jobId}`, { scroll: false });
+      }
     },
     onAssignSpeciesByIndex: (index) => {
       if (index < visibleSpecies.length) {
@@ -427,7 +458,7 @@ export function ImageAnnotationClient({
 
   return (
     <>
-      <div className="flex gap-4 h-[calc(100vh-10rem)]">
+      <div className={`flex gap-4 ${containerClassName ?? "h-[calc(100vh-10rem)]"}`}>
         {/* Left sidebar — Species list */}
         <aside className="w-56 shrink-0 flex flex-col min-w-0 overflow-hidden border rounded-lg bg-background">
           <SpeciesSidebar
@@ -521,9 +552,9 @@ export function ImageAnnotationClient({
           {/* Image with bbox overlay */}
           <div
             ref={zoomContainerRef}
-            className={`flex-1 min-h-0 rounded-lg overflow-hidden border bg-black flex items-center relative ${isPanning ? "cursor-grab" : ""}`}
+            className={`flex-1 min-h-0 rounded-lg overflow-hidden border bg-black flex items-center justify-center relative ${isPanning ? "cursor-grab" : ""}`}
           >
-            <div ref={zoomWrapperRef} style={zoomStyle} {...panHandlers}>
+            <div ref={zoomWrapperRef} className="max-h-full" style={zoomStyle} {...panHandlers}>
               <BBoxOverlay
                 src={src}
                 alt={alt}
@@ -566,11 +597,17 @@ export function ImageAnnotationClient({
               </svg>
               {isStarred ? "Destacada" : "Destacar"}
             </Button>
-            <Button asChild variant="outline" size="sm" className="shrink-0">
-              <Link href={`/camera-trap/results/${jobId}`} scroll={false}>
+            {onBack ? (
+              <Button variant="outline" size="sm" className="shrink-0" onClick={onBack}>
                 Volver a Cuadrícula
-              </Link>
-            </Button>
+              </Button>
+            ) : (
+              <Button asChild variant="outline" size="sm" className="shrink-0">
+                <Link href={`/camera-trap/results/${jobId}`} scroll={false}>
+                  Volver a Cuadrícula
+                </Link>
+              </Button>
+            )}
           </div>
         </div>
       </div>

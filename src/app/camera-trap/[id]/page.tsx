@@ -130,6 +130,7 @@ export default async function DeploymentDetailPage({ params }: PageProps) {
                 driveFolderId={deployment.driveFolderId}
                 canEdit={isEditor}
                 isAdmin={isAdmin}
+                lastCompletedJobId={stats.latestCompletedJobId ?? null}
               />
             )}
           </div>
@@ -183,7 +184,6 @@ export default async function DeploymentDetailPage({ params }: PageProps) {
           images={resultsData.gridImages}
           jobId={stats.latestCompletedJobId!}
           speciesList={resultsData.speciesList}
-          isAdmin={isAdmin}
           deploymentName={deployment.name}
         />
       ) : (

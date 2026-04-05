@@ -5,17 +5,7 @@ import { StatusBadge } from "@/components/status-badge";
 import { requirePermission } from "@/lib/auth";
 import { requireDeploymentAccess } from "@/lib/camera-trap-auth";
 import { formatDuration } from "@/lib/format-duration";
-import { db } from "@/db";
-import {
-  processingJobs,
-  deployments,
-  images,
-  videos,
-  detections,
-  identifications,
-  IMAGE_TIMESTAMP_ORDER,
-} from "@/db/schema";
-import { eq, inArray } from "drizzle-orm";
+import { getJobResultsData } from "../../actions";
 import { ResultsClient } from "./results-client";
 
 interface PageProps {
@@ -32,14 +22,13 @@ export default async function JobResultsPage({ params }: PageProps) {
     notFound();
   }
 
-  const [job] = await db
-    .select()
-    .from(processingJobs)
-    .where(eq(processingJobs.id, jobId));
+  const data = await getJobResultsData(jobId);
 
-  if (!job) {
+  if (!data) {
     notFound();
   }
+
+  const { job, deployment, gridImages, speciesList, detectionCount, verified, unverified, totalIdentifications } = data;
 
   // Verify CT project access (return 404 to avoid leaking existence)
   try {
@@ -47,106 +36,6 @@ export default async function JobResultsPage({ params }: PageProps) {
   } catch {
     notFound();
   }
-
-  const [deployment] = await db
-    .select()
-    .from(deployments)
-    .where(eq(deployments.id, job.deploymentId));
-
-  const jobImages = await db
-    .select()
-    .from(images)
-    .where(eq(images.jobId, jobId))
-    .orderBy(IMAGE_TIMESTAMP_ORDER, images.filename);
-
-  const imageIds = jobImages.map((img) => img.id);
-  const jobDetections =
-    imageIds.length > 0
-      ? await db
-          .select()
-          .from(detections)
-          .where(inArray(detections.imageId, imageIds))
-      : [];
-
-  const detectionIds = jobDetections.map((d) => d.id);
-  const jobIdentifications =
-    detectionIds.length > 0
-      ? await db
-          .select()
-          .from(identifications)
-          .where(inArray(identifications.detectionId, detectionIds))
-      : [];
-
-  const identByDetection = new Map<
-    number,
-    (typeof jobIdentifications)[number]
-  >();
-  for (const ident of jobIdentifications) {
-    identByDetection.set(ident.detectionId, ident);
-  }
-
-  const detectionsByImage = new Map<
-    number,
-    (typeof jobDetections)
-  >();
-  for (const det of jobDetections) {
-    const existing = detectionsByImage.get(det.imageId) || [];
-    existing.push(det);
-    detectionsByImage.set(det.imageId, existing);
-  }
-
-  const speciesCount: Record<string, number> = {};
-  for (const ident of jobIdentifications) {
-    const species = ident.correctedSpecies || ident.species;
-    speciesCount[species] = (speciesCount[species] || 0) + 1;
-  }
-
-  const sortedSpecies = Object.entries(speciesCount)
-    .sort(([, a], [, b]) => b - a);
-
-  const verified = jobIdentifications.filter(
-    (i) => i.verificationStatus === "verified" || i.verificationStatus === "corrected"
-  ).length;
-  const unverified = jobIdentifications.filter(
-    (i) => i.verificationStatus === "unverified"
-  ).length;
-
-  // Query videos for this deployment to build a name map
-  const jobVideos = deployment
-    ? await db
-        .select()
-        .from(videos)
-        .where(eq(videos.deploymentId, deployment.id))
-    : [];
-  const videoMap = new Map(jobVideos.map((v) => [v.id, v]));
-
-  const gridImages = jobImages.map((img) => {
-    const imgDets = detectionsByImage.get(img.id) || [];
-    const vid = img.videoId ? videoMap.get(img.videoId) : null;
-    return {
-      id: img.id,
-      filename: img.filename,
-      path: img.path,
-      status: img.status,
-      thumbnailPath: img.thumbnailPath,
-      videoId: img.videoId ?? null,
-      frameIndex: img.frameIndex ?? null,
-      videoFilename: vid?.filename ?? null,
-      confirmedBlank: img.confirmedBlank ?? false,
-      starred: img.starred ?? false,
-      setupTag: img.setupTag ?? null,
-      detections: imgDets.map((det) => {
-        const ident = identByDetection.get(det.id);
-        return {
-          id: det.id,
-          species: ident?.correctedSpecies || ident?.species || null,
-          confidence: ident?.confidence || null,
-          detectionConfidence: det.detectionConfidence,
-          verificationStatus: ident?.verificationStatus || "unverified",
-        };
-      }),
-    };
-  });
 
   return (
     <div className="max-w-7xl mx-auto">
@@ -156,10 +45,14 @@ export default async function JobResultsPage({ params }: PageProps) {
           Cámaras Trampa
         </Link>
         <span>/</span>
-        <Link href="/camera-trap/results" className="hover:underline">
-          Resultados
-        </Link>
-        <span>/</span>
+        {deployment && (
+          <>
+            <Link href={`/camera-trap/${deployment.id}`} className="hover:underline">
+              {deployment.name}
+            </Link>
+            <span>/</span>
+          </>
+        )}
         <span>Trabajo #{job.id}</span>
       </div>
 
@@ -204,14 +97,14 @@ export default async function JobResultsPage({ params }: PageProps) {
 
       {/* Compact Summary */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground mb-4">
-        <span><strong className="text-foreground">{jobDetections.length}</strong> detecciones</span>
+        <span><strong className="text-foreground">{detectionCount}</strong> detecciones</span>
         <span>·</span>
-        <span><strong className="text-foreground">{Object.keys(speciesCount).length}</strong> especies</span>
-        {jobIdentifications.length > 0 && (
+        <span><strong className="text-foreground">{speciesList.length}</strong> especies</span>
+        {totalIdentifications > 0 && (
           <>
             <span>·</span>
             <span>
-              <strong className="text-foreground">{verified}</strong> de {jobIdentifications.length} verificadas
+              <strong className="text-foreground">{verified}</strong> de {totalIdentifications} verificadas
               {unverified > 0 && <span className="ml-1">({unverified} pendientes)</span>}
             </span>
           </>
@@ -230,13 +123,7 @@ export default async function JobResultsPage({ params }: PageProps) {
       <ResultsClient
         images={gridImages}
         jobId={jobId}
-        speciesList={sortedSpecies}
-        isAdmin={
-          user.globalRole === "super_admin" ||
-          user.permissions.some(
-            (p) => p.projectId === "camera-trap" && p.role === "admin"
-          )
-        }
+        speciesList={speciesList}
       />
     </div>
   );

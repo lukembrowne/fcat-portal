@@ -6,9 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { ImageGrid, type ImageGridItem } from "@/components/image-grid";
-import { BulkDeleteBlanksDialog } from "./bulk-delete-blanks-dialog";
 import { cn } from "@/lib/utils";
-import { Trash2 } from "lucide-react";
 
 const COLUMN_OPTIONS = [2, 3, 4, 6] as const;
 
@@ -16,7 +14,6 @@ interface ResultsClientProps {
   images: ImageGridItem[];
   jobId: number;
   speciesList: [string, number][];
-  isAdmin?: boolean;
   onImageClick?: (imageId: number) => void;
 }
 
@@ -32,7 +29,6 @@ export function ResultsClient({
   images,
   jobId,
   speciesList,
-  isAdmin,
   onImageClick,
 }: ResultsClientProps) {
   const [gridColumns, setGridColumns] = useState(4);
@@ -53,7 +49,6 @@ export function ResultsClient({
   const [showEmpty, setShowEmpty] = useState(true);
   const [showStarredOnly, setShowStarredOnly] = useState(false);
   const [showBlanksOnly, setShowBlanksOnly] = useState(false);
-  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
 
   const filteredImages = useMemo(() => {
     return images.filter((img) => {
@@ -233,26 +228,6 @@ export function ResultsClient({
               Solo vacías
             </label>
 
-            {isAdmin && (
-              <>
-                <div className="border-t pt-3 mt-1">
-                  <Label className="text-xs text-muted-foreground uppercase tracking-wide">
-                    Herramientas
-                  </Label>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="w-full mt-2 text-xs text-destructive border-destructive/30 hover:bg-destructive/10"
-                    onClick={() => {
-                      setBulkDeleteOpen(true);
-                    }}
-                  >
-                    <Trash2 className="h-3.5 w-3.5 mr-1.5" />
-                    Eliminar vacías
-                  </Button>
-                </div>
-              </>
-            )}
           </CardContent>
         </Card>
       </div>
@@ -292,12 +267,6 @@ export function ResultsClient({
         />
       </div>
 
-      {isAdmin && bulkDeleteOpen && (
-        <BulkDeleteBlanksDialog
-          onClose={() => setBulkDeleteOpen(false)}
-          jobId={jobId}
-        />
-      )}
     </div>
   );
 }

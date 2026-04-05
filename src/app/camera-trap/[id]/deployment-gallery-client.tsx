@@ -15,7 +15,6 @@ interface DeploymentGalleryClientProps {
   images: ImageGridItem[];
   jobId: number;
   speciesList: [string, number][];
-  isAdmin: boolean;
   deploymentName: string;
 }
 
@@ -23,7 +22,6 @@ export function DeploymentGalleryClient({
   images,
   jobId,
   speciesList,
-  isAdmin,
   deploymentName,
 }: DeploymentGalleryClientProps) {
   const router = useRouter();
@@ -154,7 +152,6 @@ export function DeploymentGalleryClient({
         images={images}
         jobId={jobId}
         speciesList={speciesList}
-        isAdmin={isAdmin}
         onImageClick={loadImage}
       />
     </div>

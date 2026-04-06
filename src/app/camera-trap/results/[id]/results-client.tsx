@@ -53,6 +53,15 @@ type PersonFilter = (typeof PERSON_FILTERS)[number]["value"];
 // MegaDetector class index for "person".
 const PERSON_CLASS = 1;
 
+const SETUP_FILTERS = [
+  { value: "all", label: "Todas" },
+  { value: "deployment", label: "Instalación" },
+  { value: "retrieval", label: "Recogida" },
+  { value: "any", label: "Inst. + Rec." },
+] as const;
+
+type SetupFilter = (typeof SETUP_FILTERS)[number]["value"];
+
 export function ResultsClient(props: ResultsClientProps) {
   return (
     <SpeciesDisplayProvider speciesInfo={props.speciesList}>
@@ -88,6 +97,7 @@ function ResultsClientInner({
   const [showStarredOnly, setShowStarredOnly] = useState(false);
   const [showBlanksOnly, setShowBlanksOnly] = useState(false);
   const [personFilter, setPersonFilter] = useState<PersonFilter>("all");
+  const [setupFilter, setSetupFilter] = useState<SetupFilter>("all");
 
   const filteredImages = useMemo(() => {
     return images.filter((img) => {
@@ -134,9 +144,19 @@ function ResultsClientInner({
         if (personFilter === "exclude" && hasPerson) return false;
       }
 
+      if (setupFilter !== "all") {
+        if (setupFilter === "any") {
+          if (img.setupTag !== "deployment" && img.setupTag !== "retrieval") {
+            return false;
+          }
+        } else if (img.setupTag !== setupFilter) {
+          return false;
+        }
+      }
+
       return true;
     });
-  }, [images, selectedSpecies, confidenceRange, verificationFilter, showEmpty, showStarredOnly, showBlanksOnly, personFilter]);
+  }, [images, selectedSpecies, confidenceRange, verificationFilter, showEmpty, showStarredOnly, showBlanksOnly, personFilter, setupFilter]);
 
   // Notify parent of the current ordered filtered ID set so it can scope
   // downstream navigation (e.g. annotation overlay prev/next) to the visible
@@ -154,6 +174,7 @@ function ResultsClientInner({
     setShowStarredOnly(false);
     setShowBlanksOnly(false);
     setPersonFilter("all");
+    setSetupFilter("all");
   };
 
   const hasActiveFilters =
@@ -164,7 +185,8 @@ function ResultsClientInner({
     !showEmpty ||
     showStarredOnly ||
     showBlanksOnly ||
-    personFilter !== "all";
+    personFilter !== "all" ||
+    setupFilter !== "all";
 
   return (
     <div className="grid gap-6 lg:grid-cols-[240px_1fr]">
@@ -323,6 +345,28 @@ function ResultsClientInner({
                         : "hover:bg-accent border-border"
                     )}
                     onClick={() => setPersonFilter(f.value)}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-xs text-muted-foreground uppercase tracking-wide">
+                Inst. / Recogida
+              </Label>
+              <div className="flex flex-wrap gap-1">
+                {SETUP_FILTERS.map((f) => (
+                  <button
+                    key={f.value}
+                    className={cn(
+                      "px-2 py-1 text-xs rounded-md border transition-colors",
+                      setupFilter === f.value
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "hover:bg-accent border-border"
+                    )}
+                    onClick={() => setSetupFilter(f.value)}
                   >
                     {f.label}
                   </button>

@@ -339,6 +339,28 @@ export function DeploymentsTable({
   const selectedRows = table.getFilteredSelectedRowModel().rows;
   const selectedIds = selectedRows.map((r) => r.original.id);
 
+  // Map of deployment id → index in TanStack's sorted row model.
+  // Recomputed whenever sorting state changes because getRowModel() returns
+  // a new rows array.
+  const sortedRows = table.getRowModel().rows;
+  const sortedRowOrder = useMemo(() => {
+    const map = new Map<number, number>();
+    sortedRows.forEach((r, i) => map.set(r.original.id, i));
+    return map;
+  }, [sortedRows]);
+
+  // Apply the sorted order within each group so grouping stays intact
+  // but rows inside each group respect the active column sort.
+  const sortedGroups = useMemo(() => {
+    return filteredGroups.map((g) => ({
+      ...g,
+      deployments: [...g.deployments].sort(
+        (a, b) =>
+          (sortedRowOrder.get(a.id) ?? 0) - (sortedRowOrder.get(b.id) ?? 0)
+      ),
+    }));
+  }, [filteredGroups, sortedRowOrder]);
+
   const handleSync = () => {
     startSync(async () => {
       setSyncMessage(null);
@@ -645,7 +667,7 @@ export function DeploymentsTable({
                 </TableCell>
               </TableRow>
             ) : (
-              filteredGroups.map((group) => {
+              sortedGroups.map((group) => {
                 const isCollapsed = collapsedGroups.has(group.projectLabel);
                 const actionable = group.deployments.filter((d) =>
                   ["unscanned", "scanned", "processing", "processed"].includes(d.status)

@@ -44,7 +44,7 @@ export default async function RootLayout({
             <SidebarNav user={user} />
             <SidebarInset className="min-w-0">
               <main className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-6 min-w-0">
-                <div className="mx-auto max-w-7xl">{children}</div>
+                <div className="mx-auto max-w-screen-2xl">{children}</div>
               </main>
             </SidebarInset>
             <FloatingJobProgress />

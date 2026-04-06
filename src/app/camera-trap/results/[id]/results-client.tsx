@@ -197,18 +197,18 @@ function ResultsClientInner({
     setupFilter !== "all";
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[240px_1fr]">
+    <div className="grid gap-4 lg:grid-cols-[210px_1fr]">
       {/* Filter Sidebar */}
-      <div className="space-y-4">
+      <div className="space-y-3">
         <Card>
-          <CardHeader className="pb-3">
+          <CardHeader className="pb-2 pt-3 px-3">
             <div className="flex items-center justify-between">
-              <CardTitle className="text-base">Filtros</CardTitle>
+              <CardTitle className="text-sm">Filtros</CardTitle>
               {hasActiveFilters && (
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="text-xs h-auto py-1"
+                  className="text-xs h-auto py-0.5 px-1.5"
                   onClick={clearFilters}
                 >
                   Limpiar
@@ -216,11 +216,11 @@ function ResultsClientInner({
               )}
             </div>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="space-y-3 px-3 pb-3">
             {speciesList.length > 0 && (
-              <div className="space-y-2">
+              <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
-                  <Label className="text-xs text-muted-foreground uppercase tracking-wide">
+                  <Label className="text-[10px] text-muted-foreground uppercase tracking-wide">
                     Especie{" "}
                     <span className="text-muted-foreground/70 normal-case tracking-normal">
                       ({speciesList.length})
@@ -248,7 +248,7 @@ function ResultsClientInner({
                         <button
                           key={sp.scientificName}
                           className={cn(
-                            "flex items-center justify-between w-full text-left px-2 py-1.5 rounded text-sm hover:bg-accent transition-colors",
+                            "flex items-center justify-between w-full text-left px-1.5 py-1 rounded text-xs hover:bg-accent transition-colors",
                             selectedSpecies === sp.scientificName && "bg-accent font-medium"
                           )}
                           onClick={() =>
@@ -266,7 +266,7 @@ function ResultsClientInner({
                           >
                             {label}
                           </span>
-                          <Badge variant="secondary" className="text-xs ml-2 shrink-0">
+                          <Badge variant="secondary" className="text-[10px] px-1.5 py-0 ml-2 shrink-0">
                             {sp.count}
                           </Badge>
                         </button>
@@ -279,8 +279,8 @@ function ResultsClientInner({
               </div>
             )}
 
-            <div className="space-y-2">
-              <Label className="text-xs text-muted-foreground uppercase tracking-wide">
+            <div className="space-y-1.5">
+              <Label className="text-[10px] text-muted-foreground uppercase tracking-wide">
                 Confianza mínima: {(confidenceRange[0] * 100).toFixed(0)}%
               </Label>
               <input
@@ -296,8 +296,8 @@ function ResultsClientInner({
               />
             </div>
 
-            <div className="space-y-2">
-              <Label className="text-xs text-muted-foreground uppercase tracking-wide">
+            <div className="space-y-1.5">
+              <Label className="text-[10px] text-muted-foreground uppercase tracking-wide">
                 Verificación
               </Label>
               <div className="flex flex-wrap gap-1">
@@ -305,7 +305,7 @@ function ResultsClientInner({
                   <button
                     key={s.value}
                     className={cn(
-                      "px-2 py-1 text-xs rounded-md border transition-colors",
+                      "px-1.5 py-0.5 text-[11px] rounded-md border transition-colors",
                       verificationFilter === s.value
                         ? "bg-primary text-primary-foreground border-primary"
                         : "hover:bg-accent border-border"
@@ -318,7 +318,7 @@ function ResultsClientInner({
               </div>
             </div>
 
-            <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <label className="flex items-center gap-1.5 text-xs cursor-pointer">
               <input
                 type="checkbox"
                 checked={showEmpty}
@@ -328,7 +328,7 @@ function ResultsClientInner({
               Mostrar imágenes sin detecciones
             </label>
 
-            <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <label className="flex items-center gap-1.5 text-xs cursor-pointer">
               <input
                 type="checkbox"
                 checked={showStarredOnly}
@@ -338,7 +338,7 @@ function ResultsClientInner({
               Solo destacadas
             </label>
 
-            <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <label className="flex items-center gap-1.5 text-xs cursor-pointer">
               <input
                 type="checkbox"
                 checked={showBlanksOnly}
@@ -348,8 +348,8 @@ function ResultsClientInner({
               Solo vacías (sin detecciones)
             </label>
 
-            <div className="space-y-2">
-              <Label className="text-xs text-muted-foreground uppercase tracking-wide">
+            <div className="space-y-1.5">
+              <Label className="text-[10px] text-muted-foreground uppercase tracking-wide">
                 Personas
               </Label>
               <div className="flex flex-wrap gap-1">
@@ -357,7 +357,7 @@ function ResultsClientInner({
                   <button
                     key={f.value}
                     className={cn(
-                      "px-2 py-1 text-xs rounded-md border transition-colors",
+                      "px-1.5 py-0.5 text-[11px] rounded-md border transition-colors",
                       personFilter === f.value
                         ? "bg-primary text-primary-foreground border-primary"
                         : "hover:bg-accent border-border"
@@ -370,8 +370,8 @@ function ResultsClientInner({
               </div>
             </div>
 
-            <div className="space-y-2">
-              <Label className="text-xs text-muted-foreground uppercase tracking-wide">
+            <div className="space-y-1.5">
+              <Label className="text-[10px] text-muted-foreground uppercase tracking-wide">
                 Inst. / Recogida
               </Label>
               <div className="flex flex-wrap gap-1">
@@ -379,7 +379,7 @@ function ResultsClientInner({
                   <button
                     key={f.value}
                     className={cn(
-                      "px-2 py-1 text-xs rounded-md border transition-colors",
+                      "px-1.5 py-0.5 text-[11px] rounded-md border transition-colors",
                       setupFilter === f.value
                         ? "bg-primary text-primary-foreground border-primary"
                         : "hover:bg-accent border-border"

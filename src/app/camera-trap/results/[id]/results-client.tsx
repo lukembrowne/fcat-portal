@@ -42,6 +42,17 @@ const VERIFICATION_STATUSES = [
   { value: "corrected", label: "Corregido" },
 ];
 
+const PERSON_FILTERS = [
+  { value: "all", label: "Todas" },
+  { value: "only", label: "Solo personas" },
+  { value: "exclude", label: "Sin personas" },
+] as const;
+
+type PersonFilter = (typeof PERSON_FILTERS)[number]["value"];
+
+// MegaDetector class index for "person".
+const PERSON_CLASS = 1;
+
 export function ResultsClient(props: ResultsClientProps) {
   return (
     <SpeciesDisplayProvider speciesInfo={props.speciesList}>
@@ -76,6 +87,7 @@ function ResultsClientInner({
   const [showEmpty, setShowEmpty] = useState(true);
   const [showStarredOnly, setShowStarredOnly] = useState(false);
   const [showBlanksOnly, setShowBlanksOnly] = useState(false);
+  const [personFilter, setPersonFilter] = useState<PersonFilter>("all");
 
   const filteredImages = useMemo(() => {
     return images.filter((img) => {
@@ -114,9 +126,17 @@ function ResultsClientInner({
         return false;
       }
 
+      if (personFilter !== "all") {
+        const hasPerson = img.detections.some(
+          (d) => d.detectionClass === PERSON_CLASS
+        );
+        if (personFilter === "only" && !hasPerson) return false;
+        if (personFilter === "exclude" && hasPerson) return false;
+      }
+
       return true;
     });
-  }, [images, selectedSpecies, confidenceRange, verificationFilter, showEmpty, showStarredOnly, showBlanksOnly]);
+  }, [images, selectedSpecies, confidenceRange, verificationFilter, showEmpty, showStarredOnly, showBlanksOnly, personFilter]);
 
   // Notify parent of the current ordered filtered ID set so it can scope
   // downstream navigation (e.g. annotation overlay prev/next) to the visible
@@ -133,6 +153,7 @@ function ResultsClientInner({
     setShowEmpty(true);
     setShowStarredOnly(false);
     setShowBlanksOnly(false);
+    setPersonFilter("all");
   };
 
   const hasActiveFilters =
@@ -142,7 +163,8 @@ function ResultsClientInner({
     verificationFilter !== "all" ||
     !showEmpty ||
     showStarredOnly ||
-    showBlanksOnly;
+    showBlanksOnly ||
+    personFilter !== "all";
 
   return (
     <div className="grid gap-6 lg:grid-cols-[240px_1fr]">
@@ -283,8 +305,30 @@ function ResultsClientInner({
                 onChange={(e) => setShowBlanksOnly(e.target.checked)}
                 className="accent-primary"
               />
-              Solo vacías
+              Solo vacías (sin detecciones)
             </label>
+
+            <div className="space-y-2">
+              <Label className="text-xs text-muted-foreground uppercase tracking-wide">
+                Personas
+              </Label>
+              <div className="flex flex-wrap gap-1">
+                {PERSON_FILTERS.map((f) => (
+                  <button
+                    key={f.value}
+                    className={cn(
+                      "px-2 py-1 text-xs rounded-md border transition-colors",
+                      personFilter === f.value
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "hover:bg-accent border-border"
+                    )}
+                    onClick={() => setPersonFilter(f.value)}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+            </div>
 
           </CardContent>
         </Card>

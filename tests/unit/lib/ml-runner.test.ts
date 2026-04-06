@@ -103,6 +103,7 @@ const {
   checkPytorchWildlife,
   shutdownModelServer,
   cancelModelServerJob,
+  buildCrashError,
 } = await import("@/lib/ml-runner");
 
 beforeEach(() => {
@@ -231,5 +232,90 @@ describe("shutdownModelServer", () => {
 describe("cancelModelServerJob", () => {
   it("does not throw when no server is running", () => {
     expect(() => cancelModelServerJob()).not.toThrow();
+  });
+});
+
+// === buildCrashError ===
+
+describe("buildCrashError", () => {
+  it("uses the explicit Python NDJSON error when present (highest priority)", () => {
+    const msg = buildCrashError(
+      1,
+      null,
+      "startup",
+      "some unrelated stderr noise",
+      "Loading classifier: AI4GAmazonRainforest",
+      "Fatal: failed to load models: PytorchStreamReader failed reading zip archive",
+    );
+    expect(msg).toContain("Model server died during startup");
+    expect(msg).toContain("exit code 1");
+    expect(msg).toContain("Last activity: Loading classifier: AI4GAmazonRainforest");
+    expect(msg).toContain("PytorchStreamReader failed reading zip archive");
+    // The Python error must take precedence over the stderr fallback
+    expect(msg).not.toContain("some unrelated stderr noise");
+  });
+
+  it("falls back to the tail of stderr when no NDJSON error was emitted", () => {
+    const stderrLog = [
+      "  File \"/app/scripts/model-server.py\", line 86, in load_models",
+      "    classifier = classifier_class(device=device)",
+      "RuntimeError: CUDA out of memory",
+    ].join("\n");
+    const msg = buildCrashError(1, null, "running", stderrLog, null, null);
+    expect(msg).toContain("Model server crashed");
+    expect(msg).toContain("RuntimeError: CUDA out of memory");
+    expect(msg).toContain("classifier_class(device=device)");
+  });
+
+  it("trims stderr to the last 10 non-empty lines to keep error compact", () => {
+    const lines = Array.from({ length: 30 }, (_, i) => `line ${i}`);
+    const msg = buildCrashError(1, null, "running", lines.join("\n"), null, null);
+    // Should include the last 10 lines (line 20..29)
+    expect(msg).toContain("line 29");
+    expect(msg).toContain("line 20");
+    // And should NOT include older lines
+    expect(msg).not.toContain("line 19");
+    expect(msg).not.toContain("line 0");
+  });
+
+  it("returns OOM-kill hint when signal is SIGKILL", () => {
+    const msg = buildCrashError(null, "SIGKILL", "startup", "", "Loading detector: ...", null);
+    expect(msg).toContain("signal SIGKILL");
+    expect(msg).toContain("OOM kill");
+    expect(msg).toContain("memoria insuficiente");
+    expect(msg).toContain("Last activity: Loading detector: ...");
+  });
+
+  it("returns OOM hint when exit code is 137 (container OOM)", () => {
+    const msg = buildCrashError(137, null, "startup", "", null, null);
+    expect(msg).toContain("exit code 137");
+    expect(msg).toContain("OOM kill");
+  });
+
+  it("returns SIGSEGV hint when exit code is 139", () => {
+    const msg = buildCrashError(139, null, "startup", "", null, null);
+    expect(msg).toContain("exit code 139");
+    expect(msg).toContain("Crash nativo");
+    expect(msg).toContain("SIGSEGV");
+  });
+
+  it("returns generic hint when stderr is empty and no clear signal", () => {
+    const msg = buildCrashError(1, null, "startup", "", null, null);
+    expect(msg).toContain("exit code 1");
+    expect(msg).toContain("sin escribir nada a stderr");
+    expect(msg).toContain("OOM kill o crash nativo");
+  });
+
+  it("labels phase 'startup' vs 'running' differently", () => {
+    const startupMsg = buildCrashError(1, null, "startup", "", null, "boom");
+    const runningMsg = buildCrashError(1, null, "running", "", null, "boom");
+    expect(startupMsg).toContain("Model server died during startup");
+    expect(runningMsg).toContain("Model server crashed");
+    expect(runningMsg).not.toContain("during startup");
+  });
+
+  it("omits 'Last activity' when no info message was captured", () => {
+    const msg = buildCrashError(1, null, "startup", "", null, "boom");
+    expect(msg).not.toContain("Last activity");
   });
 });

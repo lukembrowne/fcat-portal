@@ -13,6 +13,7 @@ interface ProgressData {
   total: number;
   failed: number;
   error?: string;
+  errorMessage?: string | null;
   statusMessage?: string;
   startedAt?: string | null;
   downloadedImages?: number;
@@ -253,6 +254,17 @@ export function ProgressTracker({
           <p className="text-sm text-orange-600">
             {progress.failed} imágenes fallaron al procesar
           </p>
+        )}
+
+        {progress?.status === "failed" && progress?.errorMessage && (
+          <details className="rounded-md border border-destructive/30 bg-destructive/5 text-sm" open>
+            <summary className="cursor-pointer px-3 py-2 font-medium text-destructive">
+              Detalles del error
+            </summary>
+            <pre className="px-3 pb-3 pt-1 text-xs text-destructive/90 whitespace-pre-wrap break-words font-mono max-h-64 overflow-y-auto">
+              {progress.errorMessage}
+            </pre>
+          </details>
         )}
 
         {connectionState === "failed" && (

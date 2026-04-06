@@ -69,6 +69,7 @@ export async function GET(request: Request) {
             downloadedImages: job.downloadedImages ?? 0,
             downloadTotal: job.downloadTotal ?? 0,
             cachedImages: job.cachedImages ?? 0,
+            errorMessage: job.errorMessage,
           });
 
           if (["completed", "failed", "cancelled"].includes(job.status)) {

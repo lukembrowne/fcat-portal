@@ -42,6 +42,7 @@ export interface ResultsJob {
   detectionsCount: number;
   speciesCount: number;
   verifiedCount: number;
+  errorMessage: string | null;
 }
 
 interface Props {
@@ -230,6 +231,14 @@ export function ResultsTable({ jobs, canDelete }: Props) {
                 </TableCell>
                 <TableCell>
                   <StatusBadge status={job.status} type="job" />
+                  {job.status === "failed" && job.errorMessage && (
+                    <div
+                      className="mt-1 max-w-[240px] truncate text-xs text-destructive"
+                      title={job.errorMessage}
+                    >
+                      {job.errorMessage.split("\n")[0]}
+                    </div>
+                  )}
                 </TableCell>
                 <TableCell>
                   {job.processedImages}/{job.totalImages}

@@ -90,6 +90,12 @@ let serverReadyReject: ((err: Error) => void) | null = null;
 let serverReadyPromise: Promise<void> | null = null;
 let currentJob: JobContext | null = null;
 let idleTimer: ReturnType<typeof setTimeout> | null = null;
+/** Last info message received from the Python model server. Used to pinpoint
+ * where it died when stderr is empty (e.g. "Loading classifier: ..."). */
+let lastModelServerInfo: string | null = null;
+/** Last fatal error message emitted by Python via NDJSON (type: "error" without
+ * an image). Captured here so it survives until the close handler runs. */
+let lastModelServerError: string | null = null;
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 const PID_FILE = path.join(process.cwd(), "data", "model-server.pid");
 
@@ -233,7 +239,73 @@ export function shutdownModelServer(): void {
   removePidFile();
 }
 
+/**
+ * Build a rich crash error message from process exit info, captured stderr,
+ * and the last NDJSON messages received from the Python model server.
+ *
+ * Pure function — exported for unit testing. The spawn handler closes over
+ * its `stderrLog` accumulator and passes it in here.
+ *
+ * Resolution priority (most specific → least):
+ *   1. An NDJSON `error` message Python explicitly emitted
+ *   2. The tail of stderr if any was captured
+ *   3. A heuristic hint based on signal/exit code (OOM, segfault, etc.)
+ */
+export function buildCrashError(
+  code: number | null,
+  signal: NodeJS.Signals | null,
+  phase: "startup" | "running",
+  stderrLog: string,
+  lastInfo: string | null,
+  lastError: string | null,
+): string {
+  const phaseLabel =
+    phase === "startup" ? "Model server died during startup" : "Model server crashed";
+  const exitInfo = signal ? `signal ${signal}` : `exit code ${code}`;
+  const lastActivity = lastInfo ? ` Last activity: ${lastInfo}.` : "";
+
+  // Best signal: an explicit error message Python emitted via NDJSON.
+  if (lastError) {
+    return `${phaseLabel} (${exitInfo}).${lastActivity}\n${lastError}`;
+  }
+
+  if (stderrLog.trim()) {
+    const tail = stderrLog
+      .split("\n")
+      .filter((l) => l.trim().length > 0)
+      .slice(-10)
+      .join("\n");
+    return `${phaseLabel} (${exitInfo}).${lastActivity}\n${tail}`;
+  }
+
+  // Empty stderr → Python never wrote anything before dying.
+  // Strong indicators: SIGKILL (almost always OOM kill), code 137 (OOM in
+  // container), code 139 (SIGSEGV native crash). Code 1 with no stderr is
+  // most often OOM as well.
+  let hint: string;
+  if (signal === "SIGKILL" || code === 137) {
+    hint =
+      "El proceso fue terminado por el sistema operativo (SIGKILL). " +
+      "Causa más probable: memoria insuficiente (OOM kill). " +
+      "Revisa el límite de memoria del contenedor y `docker stats` durante la carga del modelo.";
+  } else if (code === 139) {
+    hint =
+      "Crash nativo (SIGSEGV). Causa probable: incompatibilidad de torch/torchvision " +
+      "o un binario nativo del modelo.";
+  } else {
+    hint =
+      "El proceso terminó sin escribir nada a stderr — Python no alcanzó su manejador de errores. " +
+      "Causa más probable: OOM kill o crash nativo durante la carga del modelo. " +
+      "Verifica memoria del contenedor con `docker stats` y prueba ejecutar el model server " +
+      "manualmente para ver si genera un traceback.";
+  }
+  return `${phaseLabel} (${exitInfo}).${lastActivity}\n${hint}`;
+}
+
 function spawnModelServer(): void {
+  // Reset crash diagnostics for the new process
+  lastModelServerInfo = null;
+  lastModelServerError = null;
   const scriptPath = path.join(process.cwd(), "scripts", "model-server.py");
   const cwd = path.join(process.cwd(), "data");
 
@@ -287,6 +359,7 @@ function spawnModelServer(): void {
 
       if (msg.type === "info") {
         console.log(`[ml-runner] ${msg.message}`);
+        lastModelServerInfo = msg.message ?? null;
         // Forward model-loading info as status messages if a job is active
         if (currentJob) {
           const infoMsg = msg.message || "";
@@ -303,6 +376,15 @@ function spawnModelServer(): void {
               .where(eq(processingJobs.id, currentJob.jobId));
           }
         }
+        return;
+      }
+
+      // Fatal/global errors (no image attached) must be handled BEFORE the
+      // currentJob guard so they're not silently dropped during startup
+      // (e.g. "Fatal: failed to load models: ...").
+      if (msg.type === "error" && !msg.image) {
+        console.error(`[ml-runner] ${msg.message}`);
+        lastModelServerError = msg.message ?? null;
         return;
       }
 
@@ -382,8 +464,6 @@ function spawnModelServer(): void {
             .set({ failedImages: job.failedCount })
             .where(eq(processingJobs.id, job.jobId));
         }
-      } else if (msg.type === "error" && !msg.image) {
-        console.error(`[ml-runner] ${msg.message}`);
       } else if (msg.type === "complete") {
         const elapsedSec = ((Date.now() - job.startedAt) / 1000).toFixed(1);
         const mem = process.memoryUsage();
@@ -415,28 +495,42 @@ function spawnModelServer(): void {
     }
   });
 
-  // Capture stderr for diagnostics
-  let stderr = "";
+  // Capture stderr for diagnostics. Two buffers:
+  //  - `stderrBuffer`: partial-line accumulator for line-by-line console logging
+  //  - `stderrLog`: full transcript (capped) for inclusion in crash error messages
+  let stderrBuffer = "";
+  let stderrLog = "";
+  const STDERR_LOG_MAX = 8 * 1024; // keep last ~8KB
   proc.stderr!.on("data", (chunk: Buffer) => {
-    stderr += chunk.toString();
-    // Log stderr lines as they come
-    const lines = stderr.split("\n");
-    // Keep the last (possibly incomplete) line in the buffer
-    stderr = lines.pop() || "";
+    const text = chunk.toString();
+    // Append to full transcript (bounded — keep tail)
+    stderrLog += text;
+    if (stderrLog.length > STDERR_LOG_MAX) {
+      stderrLog = stderrLog.slice(-STDERR_LOG_MAX);
+    }
+    // Stream complete lines to console
+    stderrBuffer += text;
+    const lines = stderrBuffer.split("\n");
+    stderrBuffer = lines.pop() || "";
     for (const l of lines) {
       if (l.trim()) console.error(`[model-server stderr] ${l}`);
     }
   });
 
-  proc.on("close", (code) => {
-    console.log(`[ml-runner] Model server exited with code ${code}`);
-    serverProc = null;
-    serverStatus = "dead";
-    removePidFile();
+  function finalizeCrash(code: number | null, signal: NodeJS.Signals | null): void {
+    const phase: "startup" | "running" = serverReadyReject ? "startup" : "running";
+    const crashError = buildCrashError(
+      code,
+      signal,
+      phase,
+      stderrLog,
+      lastModelServerInfo,
+      lastModelServerError,
+    );
 
     // Reject pending ready promise
     if (serverReadyReject) {
-      serverReadyReject(new Error(`Model server exited during startup (code ${code})`));
+      serverReadyReject(new Error(crashError));
       serverReadyResolve = null;
       serverReadyReject = null;
     }
@@ -449,11 +543,32 @@ function spawnModelServer(): void {
         success: false,
         totalProcessed: job.processedCount,
         totalDetections: job.totalDetections,
-        error: `Model server crashed (exit code ${code})`,
+        error: crashError,
       });
     }
 
     clearIdleTimer();
+  }
+
+  proc.on("close", (code, signal) => {
+    // Flush any partial stderr line that never got a trailing newline
+    if (stderrBuffer.trim()) {
+      console.error(`[model-server stderr] ${stderrBuffer}`);
+      stderrLog += stderrBuffer;
+      stderrBuffer = "";
+    }
+    console.log(
+      `[ml-runner] Model server exited (code=${code}, signal=${signal ?? "none"})`
+    );
+    serverProc = null;
+    serverStatus = "dead";
+    removePidFile();
+
+    // Defer the rest by one tick so any pending readline `line` events
+    // (which may carry Python's final NDJSON error) can fire first.
+    // The line handler is async — it captures `lastModelServerError`
+    // synchronously before any await, so a single setImmediate is enough.
+    setImmediate(() => finalizeCrash(code, signal));
   });
 
   proc.on("error", (err) => {
@@ -461,8 +576,20 @@ function spawnModelServer(): void {
     serverProc = null;
     serverStatus = "dead";
 
+    // Surface spawn errors with the same rich format we use for crashes,
+    // so the UI shows a useful message instead of a bare "ENOENT".
+    const phase: "startup" | "running" = serverReadyReject ? "startup" : "running";
+    const crashError = buildCrashError(
+      null,
+      null,
+      phase,
+      "",
+      lastModelServerInfo,
+      `Spawn error: ${err.message}`,
+    );
+
     if (serverReadyReject) {
-      serverReadyReject(err);
+      serverReadyReject(new Error(crashError));
       serverReadyResolve = null;
       serverReadyReject = null;
     }
@@ -474,7 +601,7 @@ function spawnModelServer(): void {
         success: false,
         totalProcessed: job.processedCount,
         totalDetections: job.totalDetections,
-        error: err.message,
+        error: crashError,
       });
     }
   });

@@ -444,7 +444,10 @@ function ImageCard({
 
   if (onImageClick) {
     return (
-      <div onClick={() => onImageClick(image.id)}>
+      <div onClick={() => {
+        onBeforeNavigate?.();
+        onImageClick(image.id);
+      }}>
         {cardContent}
       </div>
     );

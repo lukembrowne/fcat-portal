@@ -5,6 +5,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { Info } from "lucide-react";
 import { ImageGrid, type ImageGridItem } from "@/components/image-grid";
 import { cn } from "@/lib/utils";
 import {
@@ -200,10 +207,34 @@ function ResultsClientInner({
     <div className="grid gap-4 lg:grid-cols-[210px_1fr]">
       {/* Filter Sidebar */}
       <div className="space-y-3">
-        <Card>
+        <Card className="gap-0 py-0">
           <CardHeader className="pb-2 pt-3 px-3">
             <div className="flex items-center justify-between">
-              <CardTitle className="text-sm">Filtros</CardTitle>
+              <CardTitle className="text-sm inline-flex items-center gap-1.5">
+                Filtros
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button type="button" className="inline-flex items-center text-muted-foreground hover:text-foreground">
+                        <Info className="h-3.5 w-3.5" />
+                        <span className="sr-only">Ayuda sobre los filtros</span>
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" className="max-w-xs bg-popover text-popover-foreground border shadow-md p-3">
+                      <div className="flex flex-col gap-1.5 text-xs">
+                        <p><strong>Especie:</strong> muestra solo imágenes con la especie seleccionada.</p>
+                        <p><strong>Confianza mínima:</strong> oculta detecciones del modelo ML por debajo del umbral.</p>
+                        <p><strong>Verificación:</strong> filtra por estado de revisión (sin verificar, verificado, rechazado).</p>
+                        <p><strong>Mostrar imágenes sin detecciones:</strong> incluye fotos donde el ML no detectó nada.</p>
+                        <p><strong>Solo destacadas:</strong> muestra solo las imágenes marcadas con estrella.</p>
+                        <p><strong>Solo vacías:</strong> muestra únicamente las fotos sin detecciones.</p>
+                        <p><strong>Personas:</strong> filtra imágenes con o sin presencia humana.</p>
+                        <p><strong>Inst. / Recogida:</strong> filtra por imágenes de instalación o recogida del sensor.</p>
+                      </div>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </CardTitle>
               {hasActiveFilters && (
                 <Button
                   variant="ghost"

@@ -38,6 +38,7 @@ export default async function ResultsPage() {
     detectionsCount: job.detectionsCount,
     speciesCount: job.speciesCount,
     verifiedCount: job.verifiedCount,
+    errorMessage: job.errorMessage ?? null,
   }));
 
   return (

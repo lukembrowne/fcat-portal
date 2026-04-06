@@ -7,13 +7,23 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { ImageGrid, type ImageGridItem } from "@/components/image-grid";
 import { cn } from "@/lib/utils";
+import {
+  SpeciesDisplayProvider,
+  useSpeciesDisplay,
+  DISPLAY_LABELS,
+  type SpeciesNameInfo,
+} from "@/lib/species-display";
 
 const COLUMN_OPTIONS = [2, 3, 4, 6] as const;
+
+export interface ResultsSpeciesEntry extends SpeciesNameInfo {
+  count: number;
+}
 
 interface ResultsClientProps {
   images: ImageGridItem[];
   jobId: number;
-  speciesList: [string, number][];
+  speciesList: ResultsSpeciesEntry[];
   onImageClick?: (imageId: number) => void;
 }
 
@@ -25,12 +35,21 @@ const VERIFICATION_STATUSES = [
   { value: "corrected", label: "Corregido" },
 ];
 
-export function ResultsClient({
+export function ResultsClient(props: ResultsClientProps) {
+  return (
+    <SpeciesDisplayProvider speciesInfo={props.speciesList}>
+      <ResultsClientInner {...props} />
+    </SpeciesDisplayProvider>
+  );
+}
+
+function ResultsClientInner({
   images,
   jobId,
   speciesList,
   onImageClick,
 }: ResultsClientProps) {
+  const display = useSpeciesDisplay();
   const [gridColumns, setGridColumns] = useState(4);
   useEffect(() => {
     const saved = localStorage.getItem("grid-columns");
@@ -132,29 +151,52 @@ export function ResultsClient({
           <CardContent className="space-y-4">
             {speciesList.length > 0 && (
               <div className="space-y-2">
-                <Label className="text-xs text-muted-foreground uppercase tracking-wide">
-                  Especie
-                </Label>
-                <div className="space-y-1 max-h-48 overflow-y-auto">
-                  {speciesList.map(([species, count]) => (
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs text-muted-foreground uppercase tracking-wide">
+                    Especie
+                  </Label>
+                  {display && (
                     <button
-                      key={species}
-                      className={cn(
-                        "flex items-center justify-between w-full text-left px-2 py-1.5 rounded text-sm hover:bg-accent transition-colors",
-                        selectedSpecies === species && "bg-accent font-medium"
-                      )}
-                      onClick={() =>
-                        setSelectedSpecies((prev) =>
-                          prev === species ? null : species
-                        )
-                      }
+                      type="button"
+                      onClick={display.cycle}
+                      className="text-[10px] text-muted-foreground hover:text-foreground px-1.5 py-0.5 rounded border transition-colors"
+                      title="Cambiar formato de nombre"
                     >
-                      <span className="truncate">{species}</span>
-                      <Badge variant="secondary" className="text-xs ml-2 shrink-0">
-                        {count}
-                      </Badge>
+                      {DISPLAY_LABELS[display.nameDisplay]}
                     </button>
-                  ))}
+                  )}
+                </div>
+                <div className="space-y-1 max-h-48 overflow-y-auto">
+                  {speciesList.map((sp) => {
+                    const label = display ? display.getName(sp.scientificName) : sp.scientificName;
+                    return (
+                      <button
+                        key={sp.scientificName}
+                        className={cn(
+                          "flex items-center justify-between w-full text-left px-2 py-1.5 rounded text-sm hover:bg-accent transition-colors",
+                          selectedSpecies === sp.scientificName && "bg-accent font-medium"
+                        )}
+                        onClick={() =>
+                          setSelectedSpecies((prev) =>
+                            prev === sp.scientificName ? null : sp.scientificName
+                          )
+                        }
+                        title={sp.scientificName}
+                      >
+                        <span
+                          className={cn(
+                            "truncate",
+                            display?.nameDisplay === "scientific" && "italic",
+                          )}
+                        >
+                          {label}
+                        </span>
+                        <Badge variant="secondary" className="text-xs ml-2 shrink-0">
+                          {sp.count}
+                        </Badge>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             )}

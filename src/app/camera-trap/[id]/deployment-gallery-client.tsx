@@ -4,7 +4,7 @@ import { useState, useTransition, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Loader2, ArrowLeft } from "lucide-react";
-import { ResultsClient } from "../results/[id]/results-client";
+import { ResultsClient, type ResultsSpeciesEntry } from "../results/[id]/results-client";
 import { ImageAnnotationClient } from "../results/[id]/images/[imageId]/image-annotation-client";
 import { getImageAnnotationData } from "../actions";
 import type { ImageGridItem } from "@/components/image-grid";
@@ -14,7 +14,7 @@ type AnnotationData = NonNullable<Awaited<ReturnType<typeof getImageAnnotationDa
 interface DeploymentGalleryClientProps {
   images: ImageGridItem[];
   jobId: number;
-  speciesList: [string, number][];
+  speciesList: ResultsSpeciesEntry[];
   deploymentName: string;
 }
 

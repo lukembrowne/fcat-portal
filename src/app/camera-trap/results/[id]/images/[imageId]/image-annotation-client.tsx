@@ -6,10 +6,8 @@ import type { DetectionWithIdentification } from "@/components/annotation-toolba
 import {
   SpeciesSidebar,
   getVisibleSpecies,
-  getStoredDisplay,
-  DISPLAY_KEY,
-  type NameDisplay,
 } from "@/components/species-sidebar";
+import { useNameDisplay } from "@/lib/species-display";
 import { DetectionCardStrip } from "@/components/detection-card-strip";
 import { AnnotationHelpPanel } from "@/components/annotation-help-panel";
 import { Button } from "@/components/ui/button";
@@ -108,7 +106,7 @@ export function ImageAnnotationClient({
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [, startTransition] = useTransition();
   const isVerifyingRef = useRef(false);
-  const [nameDisplay, setNameDisplay] = useState<NameDisplay>(getStoredDisplay);
+  const [nameDisplay, cycleDisplay] = useNameDisplay();
   const [isConfirmedBlank, setOptimisticBlank] = useOptimistic(confirmedBlank);
   const [isStarred, setOptimisticStarred] = useOptimistic(starred);
   const [currentSetupTag, setOptimisticSetupTag] = useOptimistic(setupTag);
@@ -118,16 +116,6 @@ export function ImageAnnotationClient({
     deploymentId: number;
   } | null>(null);
   const [suggestionDismissed, setSuggestionDismissed] = useState(false);
-
-  const cycleDisplay = useCallback(() => {
-    setNameDisplay((prev) => {
-      const cycle: NameDisplay[] = ["common", "spanish", "scientific"];
-      const idx = cycle.indexOf(prev);
-      const next = cycle[(idx + 1) % cycle.length];
-      localStorage.setItem(DISPLAY_KEY, next);
-      return next;
-    });
-  }, []);
 
   // Build species lookup map for display labels
   const speciesMap = useMemo(() => {

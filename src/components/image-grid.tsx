@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
+import { useSpeciesDisplay } from "@/lib/species-display";
 
 const GRID_CLASSES: Record<number, string> = {
   2: "grid-cols-1 sm:grid-cols-2",
@@ -29,6 +30,7 @@ export interface ImageGridItem {
     species: string | null;
     confidence: number | null;
     detectionConfidence: number;
+    detectionClass?: number;
     verificationStatus?: string;
   }[];
 }
@@ -193,6 +195,7 @@ function ImageCard({
   const ref = useRef<HTMLDivElement>(null);
   const [isVisible, setIsVisible] = useState(false);
   const [loadError, setLoadError] = useState(false);
+  const display = useSpeciesDisplay();
 
   useEffect(() => {
     const el = ref.current;
@@ -213,7 +216,46 @@ function ImageCard({
   }, []);
 
   const thumbUrl = `/api/ct-images/${image.id}?size=thumb`;
-  const topSpecies = image.detections[0];
+
+  // Build a deduplicated list of species for the tag overlay. An image can
+  // contain multiple detections of the same or different species; showing
+  // only the top one is misleading when several species are present.
+  const speciesBadges = (() => {
+    const map = new Map<
+      string,
+      { species: string; confidence: number | null; status: string }
+    >();
+    for (const det of image.detections) {
+      if (!det.species) continue;
+      const existing = map.get(det.species);
+      const incomingStatus = det.verificationStatus ?? "pending";
+      if (!existing) {
+        map.set(det.species, {
+          species: det.species,
+          confidence: det.confidence,
+          status: incomingStatus,
+        });
+        continue;
+      }
+      // Keep highest confidence
+      if (
+        det.confidence != null &&
+        (existing.confidence == null || det.confidence > existing.confidence)
+      ) {
+        existing.confidence = det.confidence;
+      }
+      // Roll up verification status: verified/corrected wins, then pending,
+      // then rejected (only if all are rejected).
+      const verifiedSet = new Set(["verified", "corrected"]);
+      if (verifiedSet.has(incomingStatus)) {
+        existing.status = "verified";
+      } else if (existing.status === "rejected" && incomingStatus !== "rejected") {
+        existing.status = incomingStatus;
+      }
+    }
+    return [...map.values()];
+  })();
+
   const href = basePath
     ? `${basePath}/${image.id}`
     : `/camera-trap/results/${jobId}/images/${image.id}`;
@@ -253,69 +295,106 @@ function ImageCard({
         <div className="w-full h-full bg-muted animate-pulse" />
       )}
 
-      {topSpecies?.species && (
-        <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-2 pt-6">
-          <Badge
-            variant="secondary"
-            className={`text-xs truncate max-w-full ${
-              topSpecies.verificationStatus === "verified" || topSpecies.verificationStatus === "corrected"
-                ? "bg-blue-100 text-blue-800 border border-blue-300"
-                : topSpecies.verificationStatus === "rejected"
-                  ? "bg-red-100 text-red-700 border border-red-300"
-                  : "bg-white/90"
-            }`}
-          >
-            {topSpecies.species}
-            {topSpecies.verificationStatus === "verified" || topSpecies.verificationStatus === "corrected"
-              ? " ✓"
-              : topSpecies.verificationStatus === "rejected"
-                ? " ✗"
-                : topSpecies.confidence != null
-                  ? ` ${(topSpecies.confidence * 100).toFixed(0)}%`
-                  : null}
-          </Badge>
-        </div>
-      )}
-
-      {image.setupTag === "deployment" ? (
-        <div className="absolute top-2 right-2">
-          <Badge variant="outline" className="bg-blue-50 border-blue-300 text-blue-700 text-xs">
-            Instalación
-          </Badge>
-        </div>
-      ) : image.setupTag === "retrieval" ? (
-        <div className="absolute top-2 right-2">
-          <Badge variant="outline" className="bg-orange-50 border-orange-300 text-orange-700 text-xs">
-            Recogida
-          </Badge>
-        </div>
-      ) : image.confirmedBlank ? (
-        <div className="absolute top-2 right-2">
-          <Badge variant="outline" className="bg-green-50 border-green-300 text-green-700 text-xs">
-            Vacía ✓
-          </Badge>
-        </div>
-      ) : image.detections.length > 1 ? (
-        <div className="absolute top-2 right-2">
-          <Badge className="bg-primary/90 text-xs">
-            {image.detections.length} detecciones
-          </Badge>
-        </div>
-      ) : image.status === "processed" && image.detections.length === 0 ? (
-        <div className="absolute top-2 right-2">
-          <Badge variant="outline" className="bg-white/80 text-xs">
-            Vacía
-          </Badge>
-        </div>
-      ) : null}
-
-      {image.status === "failed" && (
-        <div className="absolute inset-0 flex items-center justify-center bg-red-500/20">
-          <Badge variant="destructive" className="text-xs">
-            Fallida
-          </Badge>
-        </div>
-      )}
+      {(() => {
+        // Megadetector classes: 0=Animal, 1=Persona, 2=Vehículo. Person and
+        // vehicle detections never get a species (the classifier only runs on
+        // animals), so we surface them as their own badges instead of letting
+        // them disappear from the gallery.
+        let personCount = 0;
+        let vehicleCount = 0;
+        for (const det of image.detections) {
+          if (det.detectionClass === 1) personCount++;
+          else if (det.detectionClass === 2) vehicleCount++;
+        }
+        const hasNonAnimalBadge = personCount > 0 || vehicleCount > 0;
+        const showBlankConfirmed =
+          image.confirmedBlank && speciesBadges.length === 0 && !hasNonAnimalBadge;
+        const showBlank =
+          !image.confirmedBlank &&
+          image.status === "processed" &&
+          image.detections.length === 0;
+        const showPending = image.status === "pending";
+        const showFailed = image.status === "failed";
+        const isInstall = image.setupTag === "deployment";
+        const isRetrieval = image.setupTag === "retrieval";
+        const hasAnyBadge =
+          speciesBadges.length > 0 ||
+          hasNonAnimalBadge ||
+          showBlankConfirmed ||
+          showBlank ||
+          showPending ||
+          showFailed ||
+          isInstall ||
+          isRetrieval;
+        if (!hasAnyBadge) return null;
+        return (
+          <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-2 pt-6 flex flex-wrap gap-1">
+            {isInstall && (
+              <Badge className="bg-blue-600 text-white border border-blue-700 text-xs font-semibold shadow-sm">
+                Instalación
+              </Badge>
+            )}
+            {isRetrieval && (
+              <Badge className="bg-orange-600 text-white border border-orange-700 text-xs font-semibold shadow-sm">
+                Recogida
+              </Badge>
+            )}
+            {speciesBadges.map((sp) => {
+              const isVerified = sp.status === "verified" || sp.status === "corrected";
+              const isRejected = sp.status === "rejected";
+              const label = display ? display.getName(sp.species) : sp.species;
+              const italic = display?.nameDisplay === "scientific";
+              return (
+                <Badge
+                  key={sp.species}
+                  variant="secondary"
+                  title={sp.species}
+                  className={`text-xs truncate max-w-full ${italic ? "italic" : ""} ${
+                    isVerified
+                      ? "bg-blue-100 text-blue-800 border border-blue-300"
+                      : isRejected
+                        ? "bg-red-100 text-red-700 border border-red-300"
+                        : "bg-white/90"
+                  }`}
+                >
+                  {label}
+                  {isVerified ? " ✓" : isRejected ? " ✗" : null}
+                </Badge>
+              );
+            })}
+            {personCount > 0 && (
+              <Badge className="bg-stone-500 text-white border border-stone-600 text-xs font-semibold shadow-sm">
+                {personCount > 1 ? `${personCount} personas` : "Persona"}
+              </Badge>
+            )}
+            {vehicleCount > 0 && (
+              <Badge className="bg-teal-600 text-white border border-teal-700 text-xs font-semibold shadow-sm">
+                {vehicleCount > 1 ? `${vehicleCount} vehículos` : "Vehículo"}
+              </Badge>
+            )}
+            {showBlankConfirmed && (
+              <Badge className="bg-emerald-500 text-white border border-emerald-600 text-xs font-semibold shadow-sm">
+                Vacía ✓
+              </Badge>
+            )}
+            {showBlank && (
+              <Badge className="bg-slate-700 text-white border border-slate-800 text-xs font-semibold shadow-sm">
+                Vacía
+              </Badge>
+            )}
+            {showPending && (
+              <Badge className="bg-zinc-200 text-zinc-700 border border-zinc-300 text-xs font-semibold shadow-sm">
+                Pendiente
+              </Badge>
+            )}
+            {showFailed && (
+              <Badge className="bg-red-600 text-white border border-red-700 text-xs font-semibold shadow-sm">
+                Fallida
+              </Badge>
+            )}
+          </div>
+        );
+      })()}
 
       <div className="absolute top-0 left-0 right-0 bg-gradient-to-b from-black/50 to-transparent p-2 opacity-0 group-hover:opacity-100 transition-opacity">
         <p className="text-white text-xs truncate">{image.filename}</p>

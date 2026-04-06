@@ -164,6 +164,207 @@ describe("createProcessingJob", () => {
       expect(result.error).toContain("no encontrada");
     }
   });
+
+  // === Stale data cleanup on re-run ===
+  // Regression: previously, re-running ML on a deployment left old detections
+  // (and any verified identifications) attached to the reused image rows,
+  // contradicting the "Las verificaciones existentes se perderán" warning
+  // and inflating the deployment-wide verified count after a fresh run.
+
+  it("deletes ML detections from previous jobs when a new job is created", async () => {
+    // Seed already created `seed.detections` (3 ML detections, jobId=seed.job.id)
+    // Each has an identification cascading off it.
+    const beforeDets = db
+      .select()
+      .from(schema.detections)
+      .where(eq(schema.detections.imageId, seed.images[0].id))
+      .all();
+    expect(beforeDets.length).toBeGreaterThan(0);
+
+    const result = await actions.createProcessingJob(seed.deployment.id);
+    expect(result.success).toBe(true);
+
+    // The previous job's detections should be gone — fresh slate for the new job
+    const afterDets = db
+      .select()
+      .from(schema.detections)
+      .where(eq(schema.detections.jobId, seed.job.id))
+      .all();
+    expect(afterDets).toHaveLength(0);
+  });
+
+  it("cascade-deletes identifications when previous detections are cleaned up", async () => {
+    // Mark one of the seed identifications as verified to simulate the bug
+    db.update(schema.identifications)
+      .set({ verificationStatus: "verified" })
+      .where(eq(schema.identifications.id, seed.identifications[0].id))
+      .run();
+
+    const result = await actions.createProcessingJob(seed.deployment.id);
+    expect(result.success).toBe(true);
+
+    // All identifications attached to the seed deployment's images should be gone
+    const remainingIdents = db
+      .select()
+      .from(schema.identifications)
+      .where(eq(schema.identifications.id, seed.identifications[0].id))
+      .all();
+    expect(remainingIdents).toHaveLength(0);
+  });
+
+  it("preserves manual detections (jobId IS NULL) across re-runs", async () => {
+    // Insert a manual detection (no jobId — created by the user, not ML)
+    const [manualDet] = db
+      .insert(schema.detections)
+      .values({
+        imageId: seed.images[0].id,
+        jobId: null,
+        bboxX: 0.2,
+        bboxY: 0.2,
+        bboxWidth: 0.4,
+        bboxHeight: 0.4,
+        detectionConfidence: 1.0,
+        detectionClass: 0,
+        modelVersion: "manual",
+      })
+      .returning()
+      .all();
+
+    const result = await actions.createProcessingJob(seed.deployment.id);
+    expect(result.success).toBe(true);
+
+    // Manual detection must still exist
+    const [stillThere] = db
+      .select()
+      .from(schema.detections)
+      .where(eq(schema.detections.id, manualDet.id))
+      .all();
+    expect(stillThere).toBeDefined();
+    expect(stillThere.jobId).toBeNull();
+  });
+
+  it("resets confirmed_blank on all images when a new job is created", async () => {
+    // User had marked an image as blank during a previous review pass
+    db.update(schema.images)
+      .set({ confirmedBlank: true })
+      .where(eq(schema.images.id, seed.images[0].id))
+      .run();
+
+    const result = await actions.createProcessingJob(seed.deployment.id);
+    expect(result.success).toBe(true);
+
+    const imgs = db
+      .select()
+      .from(schema.images)
+      .where(eq(schema.images.deploymentId, seed.deployment.id))
+      .all();
+    for (const img of imgs) {
+      expect(img.confirmedBlank).toBe(false);
+    }
+  });
+
+  it("resets verification state on identifications attached to surviving manual detections", async () => {
+    // Add a manual detection + identification, then mark the identification verified
+    const [manualDet] = db
+      .insert(schema.detections)
+      .values({
+        imageId: seed.images[0].id,
+        jobId: null,
+        bboxX: 0.1,
+        bboxY: 0.1,
+        bboxWidth: 0.3,
+        bboxHeight: 0.3,
+        detectionConfidence: 1.0,
+        detectionClass: 0,
+        modelVersion: "manual",
+      })
+      .returning()
+      .all();
+
+    const [manualIdent] = db
+      .insert(schema.identifications)
+      .values({
+        detectionId: manualDet.id,
+        species: "Tapirus bairdii",
+        confidence: 1.0,
+        verificationStatus: "verified",
+        correctedSpecies: "Tapirus indicus",
+        verifiedBy: "luke@example.com",
+        verifiedAt: new Date(),
+      })
+      .returning()
+      .all();
+
+    const result = await actions.createProcessingJob(seed.deployment.id);
+    expect(result.success).toBe(true);
+
+    const [after] = db
+      .select()
+      .from(schema.identifications)
+      .where(eq(schema.identifications.id, manualIdent.id))
+      .all();
+    expect(after).toBeDefined();
+    expect(after.verificationStatus).toBe("unverified");
+    expect(after.correctedSpecies).toBeNull();
+    expect(after.verifiedBy).toBeNull();
+    expect(after.verifiedAt).toBeNull();
+  });
+
+  it("preserves setup_tag and starred flags across re-runs", async () => {
+    db.update(schema.images)
+      .set({
+        setupTag: "deployment",
+        starred: true,
+        starredBy: "luke@example.com",
+        starredAt: new Date(),
+      })
+      .where(eq(schema.images.id, seed.images[0].id))
+      .run();
+
+    await actions.createProcessingJob(seed.deployment.id);
+
+    const [img] = db
+      .select()
+      .from(schema.images)
+      .where(eq(schema.images.id, seed.images[0].id))
+      .all();
+    expect(img.setupTag).toBe("deployment");
+    expect(img.starred).toBe(true);
+    expect(img.starredBy).toBe("luke@example.com");
+  });
+
+  it("is a no-op cleanup on first process (no existing detections)", async () => {
+    // Create a fresh deployment with images but no prior detections
+    const [freshDep] = db
+      .insert(schema.deployments)
+      .values({
+        projectId: "camera-trap",
+        name: "FRESH-DEPLOY-001",
+        status: "scanned",
+        cameraTrapProjectId: seed.ctProject.id,
+      })
+      .returning()
+      .all();
+
+    db.insert(schema.images)
+      .values([
+        { deploymentId: freshDep.id, jobId: null, filename: "FRESH_001.jpg", status: "pending" },
+        { deploymentId: freshDep.id, jobId: null, filename: "FRESH_002.jpg", status: "pending" },
+      ])
+      .run();
+
+    const result = await actions.createProcessingJob(freshDep.id);
+    expect(result.success).toBe(true);
+
+    // Job created successfully and images linked
+    if (!result.success) return;
+    const [job] = db
+      .select()
+      .from(schema.processingJobs)
+      .where(eq(schema.processingJobs.id, result.data.jobId))
+      .all();
+    expect(job.totalImages).toBe(2);
+  });
 });
 
 // === Cancel Job ===

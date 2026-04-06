@@ -84,6 +84,56 @@ export async function createProcessingJob(
       console.log(`[createProcessingJob] Empty deployment ${deploymentId} — 0 images, 0 videos`);
     }
 
+    // Clean up stale state from any prior jobs on this deployment so the new
+    // run starts from a clean slate (matches the "Las verificaciones existentes
+    // se perderán" promise on the Reprocesar dialog):
+    //   1. Delete ML-owned detections (jobId IS NOT NULL). Manual detections
+    //      (jobId IS NULL) are user-created and preserved. Identifications
+    //      cascade via the FK on detection_id.
+    //   2. Reset confirmed_blank on every image — a re-run is a clean
+    //      re-evaluation, so prior "blank" judgments shouldn't carry over.
+    //   3. Reset verification state on identifications belonging to surviving
+    //      manual detections (the ML-owned ones were just cascade-deleted).
+    // setup_tag and starred* are pure user metadata and stay preserved.
+    if (deploymentImages.length > 0) {
+      const imageIds = deploymentImages.map((i) => i.id);
+      await db
+        .delete(detections)
+        .where(
+          and(
+            inArray(detections.imageId, imageIds),
+            sql`${detections.jobId} IS NOT NULL`
+          )
+        );
+
+      await db
+        .update(images)
+        .set({ confirmedBlank: false })
+        .where(eq(images.deploymentId, deploymentId));
+
+      const remainingDetectionIds = await db
+        .select({ id: detections.id })
+        .from(detections)
+        .where(inArray(detections.imageId, imageIds));
+
+      if (remainingDetectionIds.length > 0) {
+        await db
+          .update(identifications)
+          .set({
+            verificationStatus: "unverified",
+            correctedSpecies: null,
+            verifiedBy: null,
+            verifiedAt: null,
+          })
+          .where(
+            inArray(
+              identifications.detectionId,
+              remainingDetectionIds.map((d) => d.id)
+            )
+          );
+      }
+    }
+
     const [job] = await db
       .insert(processingJobs)
       .values({
@@ -2734,7 +2784,29 @@ export async function getJobResultsData(jobId: number) {
     speciesCount[sp] = (speciesCount[sp] || 0) + 1;
   }
 
-  const sortedSpecies = Object.entries(speciesCount).sort(([, a], [, b]) => b - a);
+  // Look up display-name metadata (common/spanish names) for the species
+  // present in this job so the client can render labels in the user's
+  // preferred display mode.
+  const speciesNames = Object.keys(speciesCount);
+  const speciesRecords = speciesNames.length > 0
+    ? await db
+        .select()
+        .from(species)
+        .where(inArray(species.scientificName, speciesNames))
+    : [];
+  const speciesRecordMap = new Map(speciesRecords.map((r) => [r.scientificName, r]));
+
+  const sortedSpecies = Object.entries(speciesCount)
+    .sort(([, a], [, b]) => b - a)
+    .map(([name, count]) => {
+      const r = speciesRecordMap.get(name);
+      return {
+        scientificName: name,
+        commonName: r?.commonName ?? null,
+        spanishName: r?.spanishName ?? null,
+        count,
+      };
+    });
 
   const verified = jobIdentifications.filter(
     (i) => i.verificationStatus === "verified" || i.verificationStatus === "corrected"
@@ -2771,6 +2843,7 @@ export async function getJobResultsData(jobId: number) {
           species: ident?.correctedSpecies || ident?.species || null,
           confidence: ident?.confidence || null,
           detectionConfidence: det.detectionConfidence,
+          detectionClass: det.detectionClass,
           verificationStatus: ident?.verificationStatus || "unverified",
         };
       }),

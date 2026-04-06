@@ -39,7 +39,6 @@ const VERIFICATION_STATUSES = [
   { value: "unverified", label: "Sin verificar" },
   { value: "verified", label: "Verificado" },
   { value: "rejected", label: "Rechazado" },
-  { value: "corrected", label: "Corregido" },
 ];
 
 const PERSON_FILTERS = [
@@ -126,9 +125,18 @@ function ResultsClientInner({
 
       if (verificationFilter !== "all") {
         if (img.detections.length === 0) return false;
-        const hasStatus = img.detections.some(
-          (d) => d.verificationStatus === verificationFilter
-        );
+        const hasStatus = img.detections.some((d) => {
+          // "verified" in the UI means any human-reviewed positive
+          // identification — both explicit verifications and corrections
+          // (where the user changed the ML-predicted species).
+          if (verificationFilter === "verified") {
+            return (
+              d.verificationStatus === "verified" ||
+              d.verificationStatus === "corrected"
+            );
+          }
+          return d.verificationStatus === verificationFilter;
+        });
         if (!hasStatus) return false;
       }
 
@@ -213,7 +221,10 @@ function ResultsClientInner({
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <Label className="text-xs text-muted-foreground uppercase tracking-wide">
-                    Especie
+                    Especie{" "}
+                    <span className="text-muted-foreground/70 normal-case tracking-normal">
+                      ({speciesList.length})
+                    </span>
                   </Label>
                   {display && (
                     <button
@@ -226,37 +237,44 @@ function ResultsClientInner({
                     </button>
                   )}
                 </div>
-                <div className="space-y-1 max-h-48 overflow-y-auto">
-                  {speciesList.map((sp) => {
-                    const label = display ? display.getName(sp.scientificName) : sp.scientificName;
-                    return (
-                      <button
-                        key={sp.scientificName}
-                        className={cn(
-                          "flex items-center justify-between w-full text-left px-2 py-1.5 rounded text-sm hover:bg-accent transition-colors",
-                          selectedSpecies === sp.scientificName && "bg-accent font-medium"
-                        )}
-                        onClick={() =>
-                          setSelectedSpecies((prev) =>
-                            prev === sp.scientificName ? null : sp.scientificName
-                          )
-                        }
-                        title={sp.scientificName}
-                      >
-                        <span
+                <div className="relative rounded-md border bg-background/40">
+                  <div
+                    className="space-y-1 max-h-56 overflow-y-auto p-1 [scrollbar-width:thin]"
+                    style={{ scrollbarGutter: "stable" }}
+                  >
+                    {speciesList.map((sp) => {
+                      const label = display ? display.getName(sp.scientificName) : sp.scientificName;
+                      return (
+                        <button
+                          key={sp.scientificName}
                           className={cn(
-                            "truncate",
-                            display?.nameDisplay === "scientific" && "italic",
+                            "flex items-center justify-between w-full text-left px-2 py-1.5 rounded text-sm hover:bg-accent transition-colors",
+                            selectedSpecies === sp.scientificName && "bg-accent font-medium"
                           )}
+                          onClick={() =>
+                            setSelectedSpecies((prev) =>
+                              prev === sp.scientificName ? null : sp.scientificName
+                            )
+                          }
+                          title={sp.scientificName}
                         >
-                          {label}
-                        </span>
-                        <Badge variant="secondary" className="text-xs ml-2 shrink-0">
-                          {sp.count}
-                        </Badge>
-                      </button>
-                    );
-                  })}
+                          <span
+                            className={cn(
+                              "truncate",
+                              display?.nameDisplay === "scientific" && "italic",
+                            )}
+                          >
+                            {label}
+                          </span>
+                          <Badge variant="secondary" className="text-xs ml-2 shrink-0">
+                            {sp.count}
+                          </Badge>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {/* Bottom fade — visible only when content overflows; harmless on short lists */}
+                  <div className="pointer-events-none absolute inset-x-0 bottom-0 h-6 rounded-b-md bg-gradient-to-t from-card to-transparent" />
                 </div>
               </div>
             )}

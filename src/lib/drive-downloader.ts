@@ -26,6 +26,37 @@ const CACHE_BASE = path.join(process.cwd(), "data", "cache", "ct-images");
 const THUMB_BATCH_SIZE = 20;
 const CT_CACHE_MAX_BYTES =
   parseInt(process.env.CT_IMAGE_CACHE_MAX_GB || "30", 10) * 1024 * 1024 * 1024;
+/**
+ * Per-file size cap for anything we download into the cache. Anything larger
+ * is rejected during preflight rather than allowed to consume the cache.
+ * Camera-trap stills are typically 1–10 MB; 100 MB is a generous ceiling that
+ * still rules out accidental video uploads or corrupt mega-files.
+ */
+const MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024;
+/**
+ * Per-file size cap for videos. Camera-trap clips are typically 5–60 MB but
+ * can run longer at higher framerates; 2 GB is the safety ceiling.
+ */
+const MAX_VIDEO_SIZE_BYTES = 2 * 1024 * 1024 * 1024;
+
+/**
+ * Reject filenames that would escape the deployment cache directory via path
+ * traversal, absolute paths, or unexpected separators. Returns true if the
+ * filename is safe to join onto cacheDir.
+ */
+function isSafeCacheFilename(cacheDir: string, filename: string): boolean {
+  if (!filename || filename.includes("\0")) return false;
+  if (path.isAbsolute(filename)) return false;
+  // Disallow any directory components — Drive filenames should be flat.
+  if (filename.includes("/") || filename.includes("\\")) return false;
+  if (filename === "." || filename === "..") return false;
+  const resolved = path.resolve(cacheDir, filename);
+  const cacheResolved = path.resolve(cacheDir);
+  return (
+    resolved === path.join(cacheResolved, filename) &&
+    resolved.startsWith(cacheResolved + path.sep)
+  );
+}
 
 export type DownloadProgressEvent =
   | { phase: "preflight"; cached: number; toDownload: number }
@@ -77,7 +108,25 @@ export async function downloadDeploymentForProcessing(
   }> = [];
   const alreadyCached = new Map<string, string>(); // driveFileId → local path
 
+  let rejectedUnsafe = 0;
+  let rejectedTooLarge = 0;
   for (const img of driveImages) {
+    if (!isSafeCacheFilename(cacheDir, img.filename)) {
+      console.warn(
+        `[drive-downloader] Skipping image ${img.id} — unsafe filename: ${JSON.stringify(img.filename)}`
+      );
+      rejectedUnsafe++;
+      continue;
+    }
+    if ((img.fileSize ?? 0) > MAX_FILE_SIZE_BYTES) {
+      console.warn(
+        `[drive-downloader] Skipping image ${img.id} (${img.filename}) — ${(
+          (img.fileSize ?? 0) / 1024 / 1024
+        ).toFixed(1)} MB exceeds ${MAX_FILE_SIZE_BYTES / 1024 / 1024} MB cap`
+      );
+      rejectedTooLarge++;
+      continue;
+    }
     const localPath = path.join(cacheDir, img.filename);
     try {
       await fs.access(localPath);
@@ -91,6 +140,11 @@ export async function downloadDeploymentForProcessing(
         relativePath: img.filename,
       });
     }
+  }
+  if (rejectedUnsafe > 0 || rejectedTooLarge > 0) {
+    console.warn(
+      `[drive-downloader] Job ${jobId}, deployment ${deploymentId}: rejected ${rejectedUnsafe} unsafe filename(s), ${rejectedTooLarge} oversized file(s)`
+    );
   }
 
   // Pre-flight: estimate download size and report
@@ -231,7 +285,25 @@ export async function downloadVideosForProcessing(
   }> = [];
   const alreadyCached = new Map<string, string>();
 
+  let rejectedUnsafe = 0;
+  let rejectedTooLarge = 0;
   for (const vid of driveVideos) {
+    if (!isSafeCacheFilename(cacheDir, vid.filename)) {
+      console.warn(
+        `[drive-downloader] Skipping video ${vid.id} — unsafe filename: ${JSON.stringify(vid.filename)}`
+      );
+      rejectedUnsafe++;
+      continue;
+    }
+    if ((vid.fileSize ?? 0) > MAX_VIDEO_SIZE_BYTES) {
+      console.warn(
+        `[drive-downloader] Skipping video ${vid.id} (${vid.filename}) — ${(
+          (vid.fileSize ?? 0) / 1024 / 1024
+        ).toFixed(1)} MB exceeds ${MAX_VIDEO_SIZE_BYTES / 1024 / 1024} MB cap`
+      );
+      rejectedTooLarge++;
+      continue;
+    }
     const localPath = path.join(cacheDir, vid.filename);
     try {
       await fs.access(localPath);
@@ -245,6 +317,11 @@ export async function downloadVideosForProcessing(
         relativePath: vid.filename,
       });
     }
+  }
+  if (rejectedUnsafe > 0 || rejectedTooLarge > 0) {
+    console.warn(
+      `[drive-downloader] Job ${jobId} videos, deployment ${deploymentId}: rejected ${rejectedUnsafe} unsafe filename(s), ${rejectedTooLarge} oversized file(s)`
+    );
   }
 
   const downloadSize = toDownload.reduce((sum, f) => sum + f.size, 0);

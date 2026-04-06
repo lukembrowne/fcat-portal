@@ -508,7 +508,11 @@ describe("bulkDeleteBlankImages", () => {
   it("handles Drive trashFile failures gracefully", async () => {
     seedDeletableImages(db, seed.deployment.id, seed.job.id);
 
-    // First call succeeds, second fails
+    // First call succeeds, second fails. With the DB-first reorder, the
+    // database rows are deleted before Drive is touched, so both images are
+    // counted as deleted from the DB perspective — the Drive failure is
+    // logged so the orphaned Drive file can be cleaned up later, but the
+    // primary intent (removing the row from the portal) succeeded.
     mockTrashFile
       .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(new Error("Drive API error"));
@@ -521,8 +525,18 @@ describe("bulkDeleteBlankImages", () => {
 
     expect(result.success).toBe(true);
     if (!result.success) return;
-    expect(result.data.deleted).toBe(1);
-    expect(result.data.failed).toBe(1);
+    expect(result.data.deleted).toBe(2);
+    expect(result.data.failed).toBe(0);
+
+    // Both targeted rows must be gone from the DB regardless of Drive outcome.
+    const remaining = db
+      .select()
+      .from(schema.images)
+      .where(eq(schema.images.jobId, seed.job.id))
+      .all();
+    const filenames = remaining.map((i) => i.filename);
+    expect(filenames).not.toContain("BLANK_001.jpg");
+    expect(filenames).not.toContain("BLANK_REJ_003.jpg");
   });
 });
 

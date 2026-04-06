@@ -67,6 +67,33 @@ export async function createProcessingJob(
       return { success: false, error: "Instalación no encontrada" };
     }
 
+    // Reject if a job is already active for this deployment. Without this
+    // guard, two near-simultaneous createProcessingJob calls would both insert
+    // jobs and race on images.jobId — the loser ends up with zero linked
+    // images and orphaned detections.
+    if (deployment.status === "processing") {
+      return {
+        success: false,
+        error: "Esta instalación ya está siendo procesada",
+      };
+    }
+    const [activeJob] = await db
+      .select({ id: processingJobs.id })
+      .from(processingJobs)
+      .where(
+        and(
+          eq(processingJobs.deploymentId, deploymentId),
+          inArray(processingJobs.status, ["pending", "processing"])
+        )
+      )
+      .limit(1);
+    if (activeJob) {
+      return {
+        success: false,
+        error: "Ya existe un trabajo activo para esta instalación",
+      };
+    }
+
     await requireDeploymentAccess(user, deploymentId);
 
     // Check for images OR videos (deployments with only videos are valid)
@@ -84,9 +111,11 @@ export async function createProcessingJob(
       console.log(`[createProcessingJob] Empty deployment ${deploymentId} — 0 images, 0 videos`);
     }
 
-    // Clean up stale state from any prior jobs on this deployment so the new
-    // run starts from a clean slate (matches the "Las verificaciones existentes
-    // se perderán" promise on the Reprocesar dialog):
+    // Atomically clean up stale state from any prior jobs and link all images
+    // to the new job. Done as a single transaction so a partial failure can't
+    // leave detections, identifications, and image.jobId out of sync.
+    // (matches the "Las verificaciones existentes se perderán" promise on
+    // the Reprocesar dialog):
     //   1. Delete ML-owned detections (jobId IS NOT NULL). Manual detections
     //      (jobId IS NULL) are user-created and preserved. Identifications
     //      cascade via the FK on detection_id.
@@ -94,76 +123,84 @@ export async function createProcessingJob(
     //      re-evaluation, so prior "blank" judgments shouldn't carry over.
     //   3. Reset verification state on identifications belonging to surviving
     //      manual detections (the ML-owned ones were just cascade-deleted).
+    //   4. Insert the new job row.
+    //   5. Link images to the new job, reset image status, and flip the
+    //      deployment to processing.
     // setup_tag and starred* are pure user metadata and stay preserved.
-    if (deploymentImages.length > 0) {
-      const imageIds = deploymentImages.map((i) => i.id);
-      await db
-        .delete(detections)
-        .where(
-          and(
-            inArray(detections.imageId, imageIds),
-            sql`${detections.jobId} IS NOT NULL`
-          )
-        );
-
-      await db
-        .update(images)
-        .set({ confirmedBlank: false })
-        .where(eq(images.deploymentId, deploymentId));
-
-      const remainingDetectionIds = await db
-        .select({ id: detections.id })
-        .from(detections)
-        .where(inArray(detections.imageId, imageIds));
-
-      if (remainingDetectionIds.length > 0) {
-        await db
-          .update(identifications)
-          .set({
-            verificationStatus: "unverified",
-            correctedSpecies: null,
-            verifiedBy: null,
-            verifiedAt: null,
-          })
+    const imageIds = deploymentImages.map((i) => i.id);
+    const job = db.transaction((tx) => {
+      if (imageIds.length > 0) {
+        tx.delete(detections)
           .where(
-            inArray(
-              identifications.detectionId,
-              remainingDetectionIds.map((d) => d.id)
+            and(
+              inArray(detections.imageId, imageIds),
+              sql`${detections.jobId} IS NOT NULL`
             )
-          );
+          )
+          .run();
+
+        tx.update(images)
+          .set({ confirmedBlank: false })
+          .where(eq(images.deploymentId, deploymentId))
+          .run();
+
+        const remainingDetectionIds = tx
+          .select({ id: detections.id })
+          .from(detections)
+          .where(inArray(detections.imageId, imageIds))
+          .all();
+
+        if (remainingDetectionIds.length > 0) {
+          tx.update(identifications)
+            .set({
+              verificationStatus: "unverified",
+              correctedSpecies: null,
+              verifiedBy: null,
+              verifiedAt: null,
+            })
+            .where(
+              inArray(
+                identifications.detectionId,
+                remainingDetectionIds.map((d) => d.id)
+              )
+            )
+            .run();
+        }
       }
-    }
 
-    const [job] = await db
-      .insert(processingJobs)
-      .values({
-        deploymentId,
-        detectorModel: modelConfig?.detectorModel || ML_DEFAULTS.detectorModel,
-        classifierModel: modelConfig?.classifierModel || ML_DEFAULTS.classifierModel,
-        confidenceThreshold: modelConfig?.confidenceThreshold ?? ML_DEFAULTS.confidenceThreshold,
-        frameExtractionRate: modelConfig?.frameExtractionRate ?? 1.0,
-        compressFirst: options?.compressFirst ?? false,
-        status: "pending",
-        totalImages: deploymentImages.length,
-        totalVideos: deploymentVideos.length,
-        processedImages: 0,
-        failedImages: 0,
-        createdBy: user.email,
-      })
-      .returning();
+      const inserted = tx
+        .insert(processingJobs)
+        .values({
+          deploymentId,
+          detectorModel: modelConfig?.detectorModel || ML_DEFAULTS.detectorModel,
+          classifierModel: modelConfig?.classifierModel || ML_DEFAULTS.classifierModel,
+          confidenceThreshold: modelConfig?.confidenceThreshold ?? ML_DEFAULTS.confidenceThreshold,
+          frameExtractionRate: modelConfig?.frameExtractionRate ?? 1.0,
+          compressFirst: options?.compressFirst ?? false,
+          status: "pending",
+          totalImages: deploymentImages.length,
+          totalVideos: deploymentVideos.length,
+          processedImages: 0,
+          failedImages: 0,
+          createdBy: user.email,
+        })
+        .returning()
+        .get();
 
-    // Link existing images to this job and reset status
-    for (const img of deploymentImages) {
-      await db
-        .update(images)
-        .set({ jobId: job.id, status: "pending", errorMessage: null })
-        .where(eq(images.id, img.id));
-    }
+      if (imageIds.length > 0) {
+        tx.update(images)
+          .set({ jobId: inserted.id, status: "pending", errorMessage: null })
+          .where(inArray(images.id, imageIds))
+          .run();
+      }
 
-    await db
-      .update(deployments)
-      .set({ status: "processing", updatedAt: new Date() })
-      .where(eq(deployments.id, deploymentId));
+      tx.update(deployments)
+        .set({ status: "processing", updatedAt: new Date() })
+        .where(eq(deployments.id, deploymentId))
+        .run();
+
+      return inserted;
+    });
 
     revalidatePath(CAMERA_TRAP_PATH);
 
@@ -2047,7 +2084,7 @@ export async function bulkDeleteBlankImages(
   jobId: number,
   scope: { confirmedBlank: boolean; noDetections: boolean; unverifiedDetections: boolean }
 ): Promise<ActionResult<{ deleted: number; failed: number; skipped: number }>> {
-  const user = await requirePermission("camera-trap", "admin");
+  const user = await requirePermission("camera-trap", "editor");
 
   try {
     const sets = await computeEligibilitySets(jobId);
@@ -2070,45 +2107,66 @@ export async function bulkDeleteBlankImages(
     let deleted = 0;
     let failed = 0;
 
-    // Process in batches
+    // Process in batches. DB delete (atomic per batch) happens BEFORE Drive
+    // trash so that if Drive fails we leave the file in Drive (recoverable)
+    // rather than orphaning a row in the DB. Drive trash is also recoverable
+    // from the user's Drive trash if needed.
     for (let i = 0; i < imagesToDelete.length; i += DELETE_BATCH_SIZE) {
       const batch = imagesToDelete.slice(i, i + DELETE_BATCH_SIZE);
+      const batchImageIds = batch.map((img) => img.id);
+      const batchDetectionIds: number[] = [];
+      for (const img of batch) {
+        const imgDets = sets.detectionsByImg.get(img.id);
+        if (imgDets && imgDets.length > 0) {
+          batchDetectionIds.push(...imgDets);
+        }
+      }
 
-      const results = await Promise.allSettled(
+      // Step 1: atomic DB cleanup for the whole batch.
+      try {
+        db.transaction((tx) => {
+          if (batchDetectionIds.length > 0) {
+            tx.delete(identifications)
+              .where(inArray(identifications.detectionId, batchDetectionIds))
+              .run();
+            tx.delete(detections)
+              .where(inArray(detections.id, batchDetectionIds))
+              .run();
+          }
+          tx.delete(images).where(inArray(images.id, batchImageIds)).run();
+        });
+      } catch (err) {
+        console.error("[BulkDeleteBlanks] DB batch failed, skipping Drive trash:", err);
+        failed += batch.length;
+        continue;
+      }
+
+      // Step 2: trash files in Drive + clean caches/thumbnails.
+      // DB rows are already gone — remaining ops are best-effort cleanup.
+      const fsResults = await Promise.allSettled(
         batch.map(async (img) => {
-          // Trash from Drive
           await trashFile(img.driveFileId!);
-
-          // Clean up local cache
-          const cachePath = img.path || path.join(CACHE_BASE, String(img.deploymentId), img.filename);
+          const cachePath =
+            img.path || path.join(CACHE_BASE, String(img.deploymentId), img.filename);
           try { await fs.unlink(cachePath); } catch { /* may not exist */ }
-
-          // Clean up thumbnail
           const thumbPath = thumbPathFn(img.deploymentId, img.id);
           try { await fs.unlink(thumbPath); } catch { /* may not exist */ }
-
-          // Delete detections first (if any), then the image
-          const imgDets = sets.detectionsByImg.get(img.id);
-          if (imgDets && imgDets.length > 0) {
-            await db.delete(identifications).where(
-              inArray(identifications.detectionId, imgDets)
-            );
-            await db.delete(detections).where(
-              inArray(detections.id, imgDets)
-            );
-          }
-
-          await db.delete(images).where(eq(images.id, img.id));
         })
       );
 
       const batchNum = Math.floor(i / DELETE_BATCH_SIZE) + 1;
-      for (const result of results) {
+      for (const result of fsResults) {
         if (result.status === "fulfilled") {
           deleted++;
         } else {
-          console.error("[BulkDeleteBlanks] Failed:", result.reason);
-          failed++;
+          // DB row is gone but Drive trash failed — count as deleted (the
+          // primary intent succeeded) and log so the orphaned Drive file can
+          // be cleaned up manually.
+          console.error(
+            "[BulkDeleteBlanks] Drive/cache cleanup failed (DB row deleted):",
+            result.reason
+          );
+          deleted++;
         }
       }
       console.log(
@@ -3295,7 +3353,10 @@ export async function verifyIdentification(
 
   try {
     const depId = await getDeploymentIdForIdentification(identificationId);
-    if (depId) await requireDeploymentAccess(user, depId);
+    if (!depId) {
+      return { success: false, error: "Identificación no encontrada" };
+    }
+    await requireDeploymentAccess(user, depId);
 
     await db
       .update(identifications)
@@ -3311,7 +3372,7 @@ export async function verifyIdentification(
         )
       );
 
-    if (depId) await maybeAutoCompleteDeployment(depId);
+    await maybeAutoCompleteDeployment(depId);
     revalidatePath(CAMERA_TRAP_PATH);
     return { success: true, data: undefined };
   } catch (error) {
@@ -3329,7 +3390,10 @@ export async function rejectIdentification(
 
   try {
     const depId = await getDeploymentIdForIdentification(identificationId);
-    if (depId) await requireDeploymentAccess(user, depId);
+    if (!depId) {
+      return { success: false, error: "Identificación no encontrada" };
+    }
+    await requireDeploymentAccess(user, depId);
 
     await db
       .update(identifications)
@@ -3345,7 +3409,7 @@ export async function rejectIdentification(
         )
       );
 
-    if (depId) await maybeAutoCompleteDeployment(depId);
+    await maybeAutoCompleteDeployment(depId);
     revalidatePath(CAMERA_TRAP_PATH);
     return { success: true, data: undefined };
   } catch (error) {
@@ -3364,7 +3428,10 @@ export async function correctIdentification(
 
   try {
     const depId = await getDeploymentIdForIdentification(identificationId);
-    if (depId) await requireDeploymentAccess(user, depId);
+    if (!depId) {
+      return { success: false, error: "Identificación no encontrada" };
+    }
+    await requireDeploymentAccess(user, depId);
 
     await db
       .update(identifications)
@@ -3381,7 +3448,7 @@ export async function correctIdentification(
         )
       );
 
-    if (depId) await maybeAutoCompleteDeployment(depId);
+    await maybeAutoCompleteDeployment(depId);
     revalidatePath(CAMERA_TRAP_PATH);
     return { success: true, data: undefined };
   } catch (error) {
@@ -3981,7 +4048,10 @@ export async function deleteDetection(
 
   try {
     const depId = await getDeploymentIdForDetection(detectionId);
-    if (depId) await requireDeploymentAccess(user, depId);
+    if (!depId) {
+      return { success: false, error: "Detección no encontrada" };
+    }
+    await requireDeploymentAccess(user, depId);
 
     // Fetch detection + image info for activity log
     const [det] = await db
@@ -4031,7 +4101,10 @@ export async function assignSpecies(
 
   try {
     const depId = await getDeploymentIdForIdentification(identificationId);
-    if (depId) await requireDeploymentAccess(user, depId);
+    if (!depId) {
+      return { success: false, error: "Identificación no encontrada" };
+    }
+    await requireDeploymentAccess(user, depId);
 
     // Fetch the identification to compare against original ML prediction
     const [ident] = await db
@@ -4061,7 +4134,7 @@ export async function assignSpecies(
       })
       .where(eq(identifications.id, identificationId));
 
-    if (depId) await maybeAutoCompleteDeployment(depId);
+    await maybeAutoCompleteDeployment(depId);
     revalidatePath(CAMERA_TRAP_PATH);
     return { success: true, data: undefined };
   } catch (error) {

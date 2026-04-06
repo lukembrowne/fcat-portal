@@ -113,6 +113,7 @@ export function ImageAnnotationClient({
   const [deleteDialogDetectionId, setDeleteDialogDetectionId] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const deleteButtonRef = useRef<HTMLButtonElement>(null);
   const [, startTransition] = useTransition();
   const isVerifyingRef = useRef(false);
   const [nameDisplay, cycleDisplay] = useNameDisplay();
@@ -498,30 +499,6 @@ export function ImageAnnotationClient({
             speciesList={speciesList}
           />
 
-          {/* Setup tag buttons */}
-          <div className="flex items-center gap-2">
-            <Button
-              variant={currentSetupTag === "deployment" ? "default" : "outline"}
-              size="sm"
-              className={`h-7 text-xs gap-1.5 ${currentSetupTag === "deployment" ? "bg-blue-600 hover:bg-blue-700 text-white" : ""}`}
-              onClick={() => handleToggleSetupTag("deployment")}
-              title="Marcar como instalación (i)"
-            >
-              <Camera className="size-3.5" />
-              Instalación
-            </Button>
-            <Button
-              variant={currentSetupTag === "retrieval" ? "default" : "outline"}
-              size="sm"
-              className={`h-7 text-xs gap-1.5 ${currentSetupTag === "retrieval" ? "bg-orange-600 hover:bg-orange-700 text-white" : ""}`}
-              onClick={() => handleToggleSetupTag("retrieval")}
-              title="Marcar como recogida (t)"
-            >
-              <Camera className="size-3.5" />
-              Recogida
-            </Button>
-          </div>
-
           {/* Date suggestion banner */}
           {dateSuggestion && !suggestionDismissed && (
             <div className="flex items-center gap-3 px-3 py-2 rounded-md border bg-blue-50 border-blue-200 text-sm">
@@ -580,11 +557,31 @@ export function ImageAnnotationClient({
             )}
           </div>
 
-          {/* Help panel + star + back link */}
+          {/* Help panel + setup tags + star + back link */}
           <div className="flex items-start gap-2">
             <div className="flex-1 min-w-0">
               <AnnotationHelpPanel />
             </div>
+            <Button
+              variant={currentSetupTag === "deployment" ? "default" : "outline"}
+              size="sm"
+              className={`shrink-0 gap-1.5 ${currentSetupTag === "deployment" ? "bg-blue-600 hover:bg-blue-700 text-white" : ""}`}
+              onClick={() => handleToggleSetupTag("deployment")}
+              title="Marcar como instalación (i)"
+            >
+              <Camera className="size-4" />
+              Instalación
+            </Button>
+            <Button
+              variant={currentSetupTag === "retrieval" ? "default" : "outline"}
+              size="sm"
+              className={`shrink-0 gap-1.5 ${currentSetupTag === "retrieval" ? "bg-orange-600 hover:bg-orange-700 text-white" : ""}`}
+              onClick={() => handleToggleSetupTag("retrieval")}
+              title="Marcar como recogida (t)"
+            >
+              <Camera className="size-4" />
+              Recogida
+            </Button>
             <Button
               variant={isStarred ? "default" : "outline"}
               size="sm"
@@ -625,12 +622,23 @@ export function ImageAnnotationClient({
           if (!open) setDeleteDialogDetectionId(null);
         }}
       >
-        <DialogContent onKeyDown={(e: React.KeyboardEvent) => {
-          if (e.key === "Delete" || e.key === "Backspace" || e.key === "d") {
+        <DialogContent
+          onOpenAutoFocus={(e) => {
             e.preventDefault();
-            handleConfirmDelete();
-          }
-        }}>
+            deleteButtonRef.current?.focus();
+          }}
+          onKeyDown={(e: React.KeyboardEvent) => {
+            if (
+              e.key === "Delete" ||
+              e.key === "Backspace" ||
+              e.key === "d" ||
+              e.key === "Enter"
+            ) {
+              e.preventDefault();
+              handleConfirmDelete();
+            }
+          }}
+        >
           <DialogHeader>
             <DialogTitle>Eliminar detección #{deleteDialogIndex}</DialogTitle>
             <DialogDescription>
@@ -645,6 +653,7 @@ export function ImageAnnotationClient({
               Cancelar
             </Button>
             <Button
+              ref={deleteButtonRef}
               variant="destructive"
               onClick={handleConfirmDelete}
             >

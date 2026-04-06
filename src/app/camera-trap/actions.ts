@@ -16,7 +16,7 @@ import {
   shareTokens,
   IMAGE_TIMESTAMP_ORDER,
 } from "@/db/schema";
-import { eq, desc, inArray, and, or, gte, ne, sql, count, sum, isNotNull } from "drizzle-orm";
+import { eq, desc, inArray, and, or, gte, ne, sql, count, sum, isNotNull, isNull } from "drizzle-orm";
 import { runMLPredictions, checkPytorchWildlife, cancelModelServerJob } from "@/lib/ml-runner";
 import {
   downloadDeploymentForProcessing,
@@ -1348,9 +1348,31 @@ export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
     .where(inArray(images.deploymentId, deploymentIds))
     .groupBy(images.deploymentId);
 
-  const verificationMap = new Map(
-    verificationCounts.map((r) => [r.deploymentId, { reviewed: r.reviewed, total: r.total }])
-  );
+  // Batch: blank images (no detections) per deployment — these require an
+  // explicit "Confirmar vacía" action, so they count toward the review
+  // workload even though they have no identifications.
+  const blankCounts = await db
+    .select({
+      deploymentId: images.deploymentId,
+      blankTotal: count(),
+      blankReviewed: sql<number>`sum(case when ${images.confirmedBlank} = 1 then 1 else 0 end)`,
+    })
+    .from(images)
+    .leftJoin(detections, eq(detections.imageId, images.id))
+    .where(and(inArray(images.deploymentId, deploymentIds), isNull(detections.id)))
+    .groupBy(images.deploymentId);
+
+  const verificationMap = new Map<number, { reviewed: number; total: number }>();
+  for (const r of verificationCounts) {
+    verificationMap.set(r.deploymentId, { reviewed: Number(r.reviewed), total: r.total });
+  }
+  for (const r of blankCounts) {
+    const existing = verificationMap.get(r.deploymentId) ?? { reviewed: 0, total: 0 };
+    verificationMap.set(r.deploymentId, {
+      reviewed: existing.reviewed + Number(r.blankReviewed),
+      total: existing.total + r.blankTotal,
+    });
+  }
 
   return allDeployments.map((d) => {
     const jobInfo = jobMap.get(d.id);
@@ -2712,6 +2734,21 @@ export async function getDeployment(id: number) {
       )
     );
 
+  // Blank images (no detections) — each one requires a "Confirmar vacía"
+  // action, so they count toward the review workload alongside the
+  // identification-level counts above.
+  const [blankResult] = await db
+    .select({
+      blankTotal: count(),
+      blankReviewed: sql<number>`sum(case when ${images.confirmedBlank} = 1 then 1 else 0 end)`,
+    })
+    .from(images)
+    .leftJoin(detections, eq(detections.imageId, images.id))
+    .where(and(eq(images.deploymentId, id), isNull(detections.id)));
+
+  const blankTotal = blankResult?.blankTotal ?? 0;
+  const blankReviewed = Number(blankResult?.blankReviewed ?? 0);
+
   return {
     deployment,
     images: deploymentImages,
@@ -2721,8 +2758,8 @@ export async function getDeployment(id: number) {
       distinctSpeciesCount,
       verifiedCount,
       latestCompletedJobId: latestCompletedJob?.id ?? null,
-      totalIdentifications: totalIdResult?.cnt ?? 0,
-      reviewedCount: reviewedResult?.cnt ?? 0,
+      totalIdentifications: (totalIdResult?.cnt ?? 0) + blankTotal,
+      reviewedCount: (reviewedResult?.cnt ?? 0) + blankReviewed,
     },
   };
 }
@@ -3556,7 +3593,7 @@ export async function getJobVerificationStats(
   }
 
   const jobImages = await db
-    .select({ id: images.id })
+    .select({ id: images.id, confirmedBlank: images.confirmedBlank })
     .from(images)
     .where(eq(images.jobId, jobId));
 
@@ -3564,31 +3601,44 @@ export async function getJobVerificationStats(
 
   const imageIds = jobImages.map((img) => img.id);
   const jobDets = await db
-    .select({ id: detections.id })
+    .select({ id: detections.id, imageId: detections.imageId })
     .from(detections)
     .where(inArray(detections.imageId, imageIds));
 
-  if (jobDets.length === 0) return emptyStats;
-
-  const detectionIds = jobDets.map((d) => d.id);
-  const idents = await db
-    .select({ verificationStatus: identifications.verificationStatus })
-    .from(identifications)
-    .where(inArray(identifications.detectionId, detectionIds));
+  // Blank images (no detections) — each counts as one review unit;
+  // reviewed when confirmedBlank is true.
+  const imagesWithDetections = new Set(jobDets.map((d) => d.imageId));
+  let blankTotal = 0;
+  let blankReviewed = 0;
+  for (const img of jobImages) {
+    if (!imagesWithDetections.has(img.id)) {
+      blankTotal++;
+      if (img.confirmedBlank) blankReviewed++;
+    }
+  }
 
   const stats: VerificationStats = {
-    total: idents.length,
+    total: blankTotal,
     verified: 0,
     rejected: 0,
     corrected: 0,
-    unverified: 0,
+    unverified: blankTotal - blankReviewed,
   };
 
-  for (const i of idents) {
-    if (i.verificationStatus === "verified") stats.verified++;
-    else if (i.verificationStatus === "rejected") stats.rejected++;
-    else if (i.verificationStatus === "corrected") stats.corrected++;
-    else stats.unverified++;
+  if (jobDets.length > 0) {
+    const detectionIds = jobDets.map((d) => d.id);
+    const idents = await db
+      .select({ verificationStatus: identifications.verificationStatus })
+      .from(identifications)
+      .where(inArray(identifications.detectionId, detectionIds));
+
+    stats.total += idents.length;
+    for (const i of idents) {
+      if (i.verificationStatus === "verified") stats.verified++;
+      else if (i.verificationStatus === "rejected") stats.rejected++;
+      else if (i.verificationStatus === "corrected") stats.corrected++;
+      else stats.unverified++;
+    }
   }
 
   return stats;
@@ -3615,7 +3665,7 @@ export async function getDeploymentVerificationStats(
 
   const jobIds = deploymentJobs.map((j) => j.id);
   const jobImages = await db
-    .select({ id: images.id })
+    .select({ id: images.id, confirmedBlank: images.confirmedBlank })
     .from(images)
     .where(inArray(images.jobId, jobIds));
 
@@ -3623,31 +3673,44 @@ export async function getDeploymentVerificationStats(
 
   const imageIds = jobImages.map((img) => img.id);
   const jobDets = await db
-    .select({ id: detections.id })
+    .select({ id: detections.id, imageId: detections.imageId })
     .from(detections)
     .where(inArray(detections.imageId, imageIds));
 
-  if (jobDets.length === 0) return emptyStats;
-
-  const detectionIds = jobDets.map((d) => d.id);
-  const idents = await db
-    .select({ verificationStatus: identifications.verificationStatus })
-    .from(identifications)
-    .where(inArray(identifications.detectionId, detectionIds));
+  // Blank images (no detections) — each counts as one review unit;
+  // reviewed when confirmedBlank is true.
+  const imagesWithDetections = new Set(jobDets.map((d) => d.imageId));
+  let blankTotal = 0;
+  let blankReviewed = 0;
+  for (const img of jobImages) {
+    if (!imagesWithDetections.has(img.id)) {
+      blankTotal++;
+      if (img.confirmedBlank) blankReviewed++;
+    }
+  }
 
   const stats: VerificationStats = {
-    total: idents.length,
+    total: blankTotal,
     verified: 0,
     rejected: 0,
     corrected: 0,
-    unverified: 0,
+    unverified: blankTotal - blankReviewed,
   };
 
-  for (const i of idents) {
-    if (i.verificationStatus === "verified") stats.verified++;
-    else if (i.verificationStatus === "rejected") stats.rejected++;
-    else if (i.verificationStatus === "corrected") stats.corrected++;
-    else stats.unverified++;
+  if (jobDets.length > 0) {
+    const detectionIds = jobDets.map((d) => d.id);
+    const idents = await db
+      .select({ verificationStatus: identifications.verificationStatus })
+      .from(identifications)
+      .where(inArray(identifications.detectionId, detectionIds));
+
+    stats.total += idents.length;
+    for (const i of idents) {
+      if (i.verificationStatus === "verified") stats.verified++;
+      else if (i.verificationStatus === "rejected") stats.rejected++;
+      else if (i.verificationStatus === "corrected") stats.corrected++;
+      else stats.unverified++;
+    }
   }
 
   return stats;

@@ -109,7 +109,7 @@ export function DetectionCardStrip({
           Imagen confirmada como vacía — detecciones rechazadas como falsos positivos
         </div>
       )}
-      <div className="flex gap-2 overflow-x-auto pb-1 min-w-0">
+      <div className="flex gap-2 overflow-x-auto p-1 min-w-0">
       {detections.map((det, index) => {
         const ident = det.identification;
         const isSelected = det.id === selectedDetectionId;
@@ -154,12 +154,22 @@ export function DetectionCardStrip({
               else cardRefs.current.delete(det.id);
             }}
             onClick={() => onSelectDetection(det.id)}
-            className={`relative flex-shrink-0 w-40 p-2 border rounded-lg text-left transition-all group ${
+            className={cn(
+              "relative flex-shrink-0 w-40 pl-3 pr-2 py-2 border rounded-lg text-left transition-all group overflow-hidden",
               isSelected
-                ? "ring-2 ring-primary border-primary bg-accent/50"
+                ? "border-primary bg-primary/10 shadow-md"
                 : "hover:bg-accent/30"
-            }`}
+            )}
           >
+            {/* Left status accent bar */}
+            <span
+              className={cn(
+                "absolute left-0 top-0 bottom-0 w-1",
+                STATUS_COLORS[status] || STATUS_COLORS.unverified,
+              )}
+              aria-hidden
+            />
+
             {/* Header: number + class + confidence + delete */}
             <div className="flex items-center gap-1.5 mb-1">
               <Badge
@@ -188,12 +198,9 @@ export function DetectionCardStrip({
               </div>
             </div>
 
-            {/* Species + status */}
-            <div className="flex items-center gap-1.5 min-w-0">
-              <span
-                className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${STATUS_COLORS[status] || STATUS_COLORS.unverified}`}
-              />
-              <span className="text-xs truncate" title={displaySpecies}>
+            {/* Species */}
+            <div className="min-w-0">
+              <span className="text-xs truncate block" title={displaySpecies}>
                 {displaySpecies}
               </span>
             </div>

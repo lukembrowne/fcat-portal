@@ -785,7 +785,7 @@ export function DeploymentsTable({
                         return (
                           <TableRow
                             key={row.id}
-                            className={`cursor-pointer hover:bg-muted/50 ${dep.excluded ? "opacity-50" : ""}`}
+                            className={`group/row cursor-pointer hover:bg-muted/50 ${dep.excluded ? "opacity-50" : ""}`}
                             data-state={row.getIsSelected() ? "selected" : undefined}
                             onClick={() => router.push(`/camera-trap/${dep.id}`)}
                           >

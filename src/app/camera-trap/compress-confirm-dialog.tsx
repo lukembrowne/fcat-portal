@@ -11,7 +11,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Loader2 } from "lucide-react";
-import { getCompressionPreview, compressDeploymentImages } from "./drive-actions";
+import { compressDeploymentImages } from "./drive-actions";
+import { getCompressionPreview } from "./preview-actions";
 import { useConfirmPreview } from "@/hooks/use-confirm-preview";
 
 interface CompressConfirmDialogProps {

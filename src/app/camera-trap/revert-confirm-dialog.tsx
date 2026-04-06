@@ -11,7 +11,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Loader2 } from "lucide-react";
-import { getRevertPreview, revertCompression } from "./drive-actions";
+import { revertCompression } from "./drive-actions";
+import { getRevertPreview } from "./preview-actions";
 import { useConfirmPreview } from "@/hooks/use-confirm-preview";
 
 interface RevertConfirmDialogProps {

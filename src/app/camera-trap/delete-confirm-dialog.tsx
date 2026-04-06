@@ -76,6 +76,11 @@ export function DeleteConfirmDialog({
                 {stats.totalVerified} identificaciones verificadas se perderán
               </p>
             )}
+            {stats.hasUploadCounts && (
+              <p className="text-amber-600 dark:text-amber-500 font-medium">
+                Los conteos de archivos subidos (BioChoco) también se perderán
+              </p>
+            )}
           </div>
         ) : deploymentId ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">

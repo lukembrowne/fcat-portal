@@ -19,7 +19,7 @@ import {
 } from "@/components/ui/tooltip";
 import { Loader2, Info } from "lucide-react";
 import { queueProcessing } from "./actions";
-import { getCompressionPreviewBatch } from "./drive-actions";
+import { getCompressionPreviewBatch } from "./preview-actions";
 
 interface ProcessConfirmDialogProps {
   deploymentIds: number[] | null;
@@ -141,10 +141,16 @@ export function ProcessConfirmDialog({
                   <Loader2 className="h-3 w-3 animate-spin" />
                   Calculando...
                 </p>
-              ) : preview && preview.count > 0 ? (
-                <p className="text-xs font-medium">
-                  {preview.count} imágenes JPEG ({preview.totalSizeMB} MB total) se comprimirán y reemplazarán en Drive
-                </p>
+              ) : preview ? (
+                preview.count > 0 ? (
+                  <p className="text-xs font-medium">
+                    {preview.count} imágenes JPEG ({preview.totalSizeMB} MB total) se comprimirán y reemplazarán en Drive
+                  </p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    No hay imágenes JPEG sin comprimir para esta selección.
+                  </p>
+                )
               ) : null}
             </div>
           )}

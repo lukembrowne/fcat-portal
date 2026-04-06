@@ -112,7 +112,7 @@ export default async function DeploymentDetailPage({ params }: PageProps) {
           {/* Actions */}
           <div className="flex items-center gap-2 shrink-0">
             {canProcess && !isProcessing && !hasResults && (
-              <ProcessButton deploymentId={deployment.id} />
+              <ProcessButton deploymentId={deployment.id} isAdmin={isAdmin} />
             )}
             {isProcessing && latestJob && (
               <Link
@@ -225,7 +225,7 @@ export default async function DeploymentDetailPage({ params }: PageProps) {
               </p>
               {canProcess && isEditor && (
                 <div className="pt-1">
-                  <ProcessButton deploymentId={deployment.id} />
+                  <ProcessButton deploymentId={deployment.id} isAdmin={isAdmin} />
                 </div>
               )}
             </div>

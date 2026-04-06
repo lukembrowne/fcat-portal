@@ -1,12 +1,18 @@
 "use client";
 
-import { useState, useTransition, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { createProcessingJob, processJob, getMLStatus } from "../actions";
-import { ML_DEFAULTS } from "@/lib/ml-defaults";
+import { getMLStatus } from "../actions";
+import { ProcessConfirmDialog } from "../process-confirm-dialog";
 
-export function ProcessButton({ deploymentId }: { deploymentId: number }) {
-  const [isPending, startTransition] = useTransition();
+export function ProcessButton({
+  deploymentId,
+  isAdmin,
+}: {
+  deploymentId: number;
+  isAdmin: boolean;
+}) {
+  const [dialogIds, setDialogIds] = useState<number[] | null>(null);
   const [started, setStarted] = useState(false);
   const [mlStatus, setMlStatus] = useState<{
     available: boolean;
@@ -17,31 +23,15 @@ export function ProcessButton({ deploymentId }: { deploymentId: number }) {
     getMLStatus().then(setMlStatus);
   }, []);
 
-  const handleProcess = () => {
-    startTransition(async () => {
-      const result = await createProcessingJob(deploymentId, ML_DEFAULTS);
-
-      if (!result.success) {
-        alert(`Error: ${result.error}`);
-        return;
-      }
-
-      // Fire-and-forget: processJob runs in background
-      processJob(result.data.jobId);
-      setStarted(true);
-      window.dispatchEvent(new Event("job-started"));
-    });
-  };
-
   const mlUnavailable = mlStatus !== null && !mlStatus.available;
 
   return (
     <div className="flex items-center gap-3">
       <Button
-        onClick={handleProcess}
-        disabled={isPending || mlUnavailable || started}
+        onClick={() => setDialogIds([deploymentId])}
+        disabled={mlUnavailable || started}
       >
-        {isPending ? "Iniciando..." : started ? "Procesando..." : "Procesar Imágenes"}
+        {started ? "Procesando..." : "Procesar Imágenes"}
       </Button>
       {started && (
         <p className="text-sm text-muted-foreground">
@@ -53,6 +43,16 @@ export function ProcessButton({ deploymentId }: { deploymentId: number }) {
           ML no disponible: {mlStatus.message}
         </p>
       )}
+
+      <ProcessConfirmDialog
+        deploymentIds={dialogIds}
+        isAdmin={isAdmin}
+        onClose={() => setDialogIds(null)}
+        onStarted={() => {
+          setStarted(true);
+          window.dispatchEvent(new Event("job-started"));
+        }}
+      />
     </div>
   );
 }

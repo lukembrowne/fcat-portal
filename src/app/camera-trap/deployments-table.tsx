@@ -34,6 +34,7 @@ import {
   Info,
   Download,
   ChevronRight,
+  AlertCircle,
 } from "lucide-react";
 import {
   Tooltip,
@@ -61,6 +62,8 @@ interface DeploymentsTableProps {
   distinctProjects: CtProject[];
   canEdit: boolean;
   isAdmin: boolean;
+  /** ISO string of the last successful Drive sync, or null if never. */
+  lastDriveSyncAt: string | null;
 }
 
 export function DeploymentsTable({
@@ -69,6 +72,7 @@ export function DeploymentsTable({
   distinctProjects,
   canEdit,
   isAdmin,
+  lastDriveSyncAt,
 }: DeploymentsTableProps) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [globalFilter, setGlobalFilter] = useState("");
@@ -83,6 +87,15 @@ export function DeploymentsTable({
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
     () => new Set()
   );
+  const [lastSyncAt, setLastSyncAt] = useState<string | null>(lastDriveSyncAt);
+  const [syncErrors, setSyncErrors] = useState<string[]>([]);
+  const [errorsExpanded, setErrorsExpanded] = useState(false);
+  // Tick every 30s so the relative "hace X" label stays fresh without a refresh.
+  const [, setNowTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setNowTick((n) => n + 1), 30_000);
+    return () => clearInterval(id);
+  }, []);
   const router = useRouter();
 
   // Refresh table data when a job reaches a terminal state
@@ -364,16 +377,22 @@ export function DeploymentsTable({
   const handleSync = () => {
     startSync(async () => {
       setSyncMessage(null);
+      setSyncErrors([]);
+      setErrorsExpanded(false);
       const messages: string[] = [];
+      const collectedErrors: string[] = [];
 
       // Step 1: Sync with Drive (discovers new folders, auto-scans them)
       const result = await syncWithDrive();
       if (!result.success) {
         setSyncMessage(`Error: ${result.error}`);
+        setSyncErrors([result.error]);
+        setErrorsExpanded(true);
         return;
       }
 
       const { created, errors } = result.data;
+      collectedErrors.push(...errors);
       if (created.length > 0) {
         // Step 2: Auto-match new deployments with ODK
         const odkResult = await matchOdkDeployments(
@@ -401,14 +420,18 @@ export function DeploymentsTable({
         let scanned = 0;
         let scanErrors = 0;
         for (let i = 0; i < needsScan.length; i++) {
+          const dep = needsScan[i];
           setSyncMessage(
             `Buscando imágenes ${i + 1}/${needsScan.length}...`
           );
-          const scanResult = await scanDeploymentImages(needsScan[i].id);
+          const scanResult = await scanDeploymentImages(dep.id);
           if (scanResult.success) {
             scanned++;
           } else {
             scanErrors++;
+            collectedErrors.push(
+              `${dep.projectLabel ? `${dep.projectLabel} / ` : ""}${dep.name}: ${scanResult.error}`
+            );
           }
         }
         messages.push(
@@ -421,6 +444,9 @@ export function DeploymentsTable({
           ? messages.join(" ")
           : "Todo sincronizado. No hay cambios."
       );
+      setSyncErrors(collectedErrors);
+      if (collectedErrors.length > 0) setErrorsExpanded(true);
+      setLastSyncAt(new Date().toISOString());
     });
   };
 
@@ -491,29 +517,41 @@ export function DeploymentsTable({
     <div className="space-y-4">
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-3">
-        <div className="relative flex-1 min-w-[200px] max-w-sm">
-          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Buscar por nombre, proyecto, sitio..."
-            value={globalFilter}
-            onChange={(e) => setGlobalFilter(e.target.value)}
-            className="pl-9"
-          />
-        </div>
-
-        <select
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
-          className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-        >
-          <option value="">Todos los estados</option>
-          <option value="unscanned">Por Procesar (nueva)</option>
-          <option value="scanned">Por Procesar</option>
-          <option value="processing">Procesando</option>
-          <option value="processed">Por Revisar</option>
-          <option value="verified">Verificada</option>
-          <option value="verified_empty">Vacía (verificada)</option>
-        </select>
+        {canEdit && (
+          <div className="flex items-center gap-2">
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="default"
+                    size="sm"
+                    onClick={handleSync}
+                    disabled={syncing}
+                  >
+                    {syncing ? (
+                      <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-4 w-4 mr-1.5" />
+                    )}
+                    Sincronizar con Drive
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="max-w-xs">
+                  <p className="text-xs leading-relaxed">
+                    Busca carpetas nuevas en Google Drive, las vincula con
+                    formularios de ODK y cuenta sus imágenes. Úsalo cuando hayas
+                    subido instalaciones nuevas o cambiado datos en ODK.
+                  </p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+            <span className="text-xs text-muted-foreground tabular-nums">
+              {lastSyncAt
+                ? `Última sincronización ${formatRelativeEs(lastSyncAt)}`
+                : "Nunca sincronizado"}
+            </span>
+          </div>
+        )}
 
         <div className="flex gap-1">
           <Button variant="ghost" size="sm" onClick={expandAll} className="text-xs">
@@ -524,21 +562,31 @@ export function DeploymentsTable({
           </Button>
         </div>
 
-        {canEdit && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleSync}
-            disabled={syncing}
+        <div className="ml-auto flex flex-wrap items-center gap-3">
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="h-9 rounded-md border border-input bg-background px-3 text-sm"
           >
-            {syncing ? (
-              <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
-            ) : (
-              <RefreshCw className="h-4 w-4 mr-1.5" />
-            )}
-            Sincronizar con Drive
-          </Button>
-        )}
+            <option value="">Todos los estados</option>
+            <option value="unscanned">Por Procesar (nueva)</option>
+            <option value="scanned">Por Procesar</option>
+            <option value="processing">Procesando</option>
+            <option value="processed">Por Revisar</option>
+            <option value="verified">Verificada</option>
+            <option value="verified_empty">Vacía (verificada)</option>
+          </select>
+
+          <div className="relative w-[260px]">
+            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Buscar por nombre, proyecto, sitio..."
+              value={globalFilter}
+              onChange={(e) => setGlobalFilter(e.target.value)}
+              className="pl-9"
+            />
+          </div>
+        </div>
       </div>
 
       {/* Sync message */}
@@ -546,6 +594,34 @@ export function DeploymentsTable({
         <p className="text-sm text-muted-foreground bg-muted/50 px-3 py-2 rounded-md">
           {syncMessage}
         </p>
+      )}
+
+      {/* Sync errors detail */}
+      {syncErrors.length > 0 && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/5">
+          <button
+            type="button"
+            onClick={() => setErrorsExpanded((v) => !v)}
+            className="flex w-full items-center gap-2 px-3 py-2 text-sm text-destructive hover:bg-destructive/10 rounded-md"
+          >
+            <AlertCircle className="h-4 w-4 shrink-0" />
+            <span className="font-medium">
+              {syncErrors.length} error{syncErrors.length === 1 ? "" : "es"} durante la sincronización
+            </span>
+            <ChevronRight
+              className={`h-4 w-4 ml-auto transition-transform ${errorsExpanded ? "rotate-90" : ""}`}
+            />
+          </button>
+          {errorsExpanded && (
+            <ul className="border-t border-destructive/20 px-3 py-2 space-y-1 text-xs text-destructive/90 max-h-64 overflow-y-auto font-mono">
+              {syncErrors.map((err, i) => (
+                <li key={i} className="break-words">
+                  • {err}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       )}
 
       {/* Selection toolbar */}
@@ -766,4 +842,22 @@ export function DeploymentsTable({
       )}
     </div>
   );
+}
+
+/** Compact Spanish relative time, e.g. "hace 5 min", "hace 2 h", "hace 3 d". */
+function formatRelativeEs(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "";
+  const diffSec = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  if (diffSec < 60) return "hace unos segundos";
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `hace ${diffMin} min`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `hace ${diffHr} h`;
+  const diffDay = Math.floor(diffHr / 24);
+  if (diffDay < 30) return `hace ${diffDay} d`;
+  const diffMo = Math.floor(diffDay / 30);
+  if (diffMo < 12) return `hace ${diffMo} mes${diffMo === 1 ? "" : "es"}`;
+  const diffYr = Math.floor(diffDay / 365);
+  return `hace ${diffYr} año${diffYr === 1 ? "" : "s"}`;
 }

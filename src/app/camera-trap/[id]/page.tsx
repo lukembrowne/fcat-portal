@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { Sparkles, Loader2 } from "lucide-react";
 import { StatusBadge } from "@/components/status-badge";
 import { requirePermission } from "@/lib/auth";
 import { getDeployment, getDeploymentShareLinks, getDistinctProjects, getJobResultsData } from "../actions";
@@ -191,31 +192,41 @@ export default async function DeploymentDetailPage({ params }: PageProps) {
           deploymentName={deployment.name}
         />
       ) : (
-        <div className="rounded-lg border bg-card p-12 text-center">
+        <div className="rounded-lg border bg-card px-6 py-10">
           {isProcessing ? (
-            <div className="space-y-3">
-              <p className="text-muted-foreground">
-                Esta instalación está siendo procesada.
+            <div className="flex flex-col items-center gap-3 text-center">
+              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-yellow-100 text-yellow-600">
+                <Loader2 className="h-6 w-6 animate-spin" />
+              </div>
+              <h3 className="text-base font-semibold">Procesando con ML</h3>
+              <p className="text-sm text-muted-foreground max-w-md">
+                Esta instalación está siendo analizada. El progreso aparece en
+                el widget flotante.
               </p>
               {latestJob && (
                 <Link
                   href={`/camera-trap/process?jobId=${latestJob.id}`}
-                  className="text-sm text-primary hover:underline"
+                  className="text-sm font-medium text-primary hover:underline"
                 >
                   Ver progreso →
                 </Link>
               )}
             </div>
           ) : (
-            <div className="space-y-3">
-              <p className="text-muted-foreground">
-                Esta instalación aún no ha sido procesada.
+            <div className="flex flex-col items-center gap-3 text-center">
+              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
+                <Sparkles className="h-6 w-6" />
+              </div>
+              <h3 className="text-base font-semibold">Lista para procesar</h3>
+              <p className="text-sm text-muted-foreground max-w-md">
                 {deployment.totalImages != null && deployment.totalImages > 0
-                  ? ` Hay ${deployment.totalImages.toLocaleString()} imágenes listas para analizar.`
-                  : " Sincroniza con Drive para buscar imágenes."}
+                  ? `Hay ${deployment.totalImages.toLocaleString()} imágenes listas para analizar con ML.`
+                  : "Sincroniza con Drive para buscar imágenes en esta instalación."}
               </p>
               {canProcess && isEditor && (
-                <ProcessButton deploymentId={deployment.id} />
+                <div className="pt-1">
+                  <ProcessButton deploymentId={deployment.id} />
+                </div>
               )}
             </div>
           )}

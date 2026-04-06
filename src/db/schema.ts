@@ -78,6 +78,18 @@ export const userPermissions = sqliteTable(
 );
 
 // ---------------------------------------------------------------------------
+// App State (generic key/value for cross-module timestamps and flags)
+// ---------------------------------------------------------------------------
+
+export const appState = sqliteTable("app_state", {
+  key: text("key").primaryKey(),
+  value: text("value"),
+  updatedAt: integer("updated_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+
+// ---------------------------------------------------------------------------
 // Camera Trap Projects (sub-projects within camera-trap module)
 // ---------------------------------------------------------------------------
 

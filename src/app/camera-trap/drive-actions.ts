@@ -16,6 +16,8 @@ import {
 import { matchOdkDeployments } from "./odk-actions";
 import { requirePermission } from "@/lib/auth";
 import { getUserCameraTrapProjects, requireDeploymentAccess } from "@/lib/camera-trap-auth";
+import { touchAppState } from "@/lib/app-state";
+import { CAMERA_TRAP_DRIVE_LAST_SYNC_KEY } from "@/lib/app-state-keys";
 import { revalidatePath } from "next/cache";
 import path from "path";
 import { promises as fs } from "fs";
@@ -177,6 +179,7 @@ export async function syncWithDrive(
       }
     }
 
+    await touchAppState(CAMERA_TRAP_DRIVE_LAST_SYNC_KEY);
     revalidatePath(CAMERA_TRAP_PATH);
     return { success: true, data: { created: allCreated, existing, errors: allErrors } };
   } catch (err) {

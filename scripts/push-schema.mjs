@@ -453,6 +453,13 @@ const statements = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_share_tokens_token ON share_tokens(token)`,
   `CREATE INDEX IF NOT EXISTS idx_share_tokens_deployment ON share_tokens(deployment_id)`,
+
+  // App State (generic key/value for cross-module timestamps/flags)
+  `CREATE TABLE IF NOT EXISTS app_state (
+    key TEXT PRIMARY KEY,
+    value TEXT,
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
 ];
 
 for (const stmt of statements) {

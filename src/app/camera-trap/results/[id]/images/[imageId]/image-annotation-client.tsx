@@ -319,7 +319,10 @@ export function ImageAnnotationClient({
   const handleToggleConfirmedBlank = useCallback(() => {
     setOptimisticBlank(!isConfirmedBlank);
     startTransition(async () => {
-      await toggleConfirmedBlank(imageId);
+      const result = await toggleConfirmedBlank(imageId);
+      if (!result.success) {
+        toast.error(result.error);
+      }
       refresh();
     });
   }, [imageId, isConfirmedBlank, refresh]);
@@ -541,7 +544,7 @@ export function ImageAnnotationClient({
               <BBoxOverlay
                 src={src}
                 alt={alt}
-                boxes={bboxesHidden ? [] : displayBoxes}
+                boxes={bboxesHidden || isConfirmedBlank ? [] : displayBoxes}
                 selectedBoxId={selectedBoxId}
                 onBoxClick={(box) =>
                   setSelectedBoxId((prev) => (prev === box.id ? null : box.id))

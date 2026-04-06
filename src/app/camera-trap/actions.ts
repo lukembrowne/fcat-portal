@@ -16,7 +16,7 @@ import {
   shareTokens,
   IMAGE_TIMESTAMP_ORDER,
 } from "@/db/schema";
-import { eq, desc, inArray, and, or, gte, ne, sql, count, sum, isNotNull, isNull } from "drizzle-orm";
+import { eq, desc, inArray, and, or, gte, ne, sql, count, sum, isNotNull, isNull, notExists } from "drizzle-orm";
 import { runMLPredictions, checkPytorchWildlife, cancelModelServerJob } from "@/lib/ml-runner";
 import {
   downloadDeploymentForProcessing,
@@ -1348,9 +1348,12 @@ export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
     .where(inArray(images.deploymentId, deploymentIds))
     .groupBy(images.deploymentId);
 
-  // Batch: blank images (no detections) per deployment — these require an
-  // explicit "Confirmar vacía" action, so they count toward the review
-  // workload even though they have no identifications.
+  // Batch: blank-reviewable images per deployment. "Blank-reviewable" means
+  // the image has no identifications — so either zero detections, or only
+  // person/vehicle detections (which don't get classified). These images
+  // require an explicit "Confirmar vacía" action to be considered reviewed,
+  // so they count toward the review workload even though they have no
+  // identifications in their own right.
   const blankCounts = await db
     .select({
       deploymentId: images.deploymentId,
@@ -1358,8 +1361,21 @@ export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
       blankReviewed: sql<number>`sum(case when ${images.confirmedBlank} = 1 then 1 else 0 end)`,
     })
     .from(images)
-    .leftJoin(detections, eq(detections.imageId, images.id))
-    .where(and(inArray(images.deploymentId, deploymentIds), isNull(detections.id)))
+    .where(
+      and(
+        inArray(images.deploymentId, deploymentIds),
+        notExists(
+          db
+            .select({ one: sql`1` })
+            .from(detections)
+            .innerJoin(
+              identifications,
+              eq(identifications.detectionId, detections.id),
+            )
+            .where(eq(detections.imageId, images.id)),
+        ),
+      ),
+    )
     .groupBy(images.deploymentId);
 
   const verificationMap = new Map<number, { reviewed: number; total: number }>();
@@ -2734,17 +2750,31 @@ export async function getDeployment(id: number) {
       )
     );
 
-  // Blank images (no detections) — each one requires a "Confirmar vacía"
-  // action, so they count toward the review workload alongside the
-  // identification-level counts above.
+  // Blank-reviewable images — images with no identifications (either zero
+  // detections, or only person/vehicle detections, which never get
+  // classified). Each one requires an explicit "Confirmar vacía" action to
+  // count as reviewed.
   const [blankResult] = await db
     .select({
       blankTotal: count(),
       blankReviewed: sql<number>`sum(case when ${images.confirmedBlank} = 1 then 1 else 0 end)`,
     })
     .from(images)
-    .leftJoin(detections, eq(detections.imageId, images.id))
-    .where(and(eq(images.deploymentId, id), isNull(detections.id)));
+    .where(
+      and(
+        eq(images.deploymentId, id),
+        notExists(
+          db
+            .select({ one: sql`1` })
+            .from(detections)
+            .innerJoin(
+              identifications,
+              eq(identifications.detectionId, detections.id),
+            )
+            .where(eq(detections.imageId, images.id)),
+        ),
+      ),
+    );
 
   const blankTotal = blankResult?.blankTotal ?? 0;
   const blankReviewed = Number(blankResult?.blankReviewed ?? 0);
@@ -3600,45 +3630,47 @@ export async function getJobVerificationStats(
   if (jobImages.length === 0) return emptyStats;
 
   const imageIds = jobImages.map((img) => img.id);
-  const jobDets = await db
-    .select({ id: detections.id, imageId: detections.imageId })
+  // Pull detections with their identification (if any). Person/vehicle
+  // detections have no identification row, so we can't just count
+  // detections — we need to know which images have at least one
+  // identification (i.e. animal detection).
+  const detsWithIdent = await db
+    .select({
+      detectionId: detections.id,
+      imageId: detections.imageId,
+      identVerificationStatus: identifications.verificationStatus,
+    })
     .from(detections)
+    .innerJoin(identifications, eq(identifications.detectionId, detections.id))
     .where(inArray(detections.imageId, imageIds));
 
-  // Blank images (no detections) — each counts as one review unit;
-  // reviewed when confirmedBlank is true.
-  const imagesWithDetections = new Set(jobDets.map((d) => d.imageId));
+  // Blank-reviewable images: no identifications whatsoever. Either the
+  // image has zero detections or only person/vehicle detections (which
+  // aren't classified). Each one counts as a single review unit, marked
+  // reviewed when confirmedBlank = true.
+  const imagesWithIdentifications = new Set(detsWithIdent.map((d) => d.imageId));
   let blankTotal = 0;
   let blankReviewed = 0;
   for (const img of jobImages) {
-    if (!imagesWithDetections.has(img.id)) {
+    if (!imagesWithIdentifications.has(img.id)) {
       blankTotal++;
       if (img.confirmedBlank) blankReviewed++;
     }
   }
 
   const stats: VerificationStats = {
-    total: blankTotal,
+    total: blankTotal + detsWithIdent.length,
     verified: 0,
     rejected: 0,
     corrected: 0,
     unverified: blankTotal - blankReviewed,
   };
 
-  if (jobDets.length > 0) {
-    const detectionIds = jobDets.map((d) => d.id);
-    const idents = await db
-      .select({ verificationStatus: identifications.verificationStatus })
-      .from(identifications)
-      .where(inArray(identifications.detectionId, detectionIds));
-
-    stats.total += idents.length;
-    for (const i of idents) {
-      if (i.verificationStatus === "verified") stats.verified++;
-      else if (i.verificationStatus === "rejected") stats.rejected++;
-      else if (i.verificationStatus === "corrected") stats.corrected++;
-      else stats.unverified++;
-    }
+  for (const i of detsWithIdent) {
+    if (i.identVerificationStatus === "verified") stats.verified++;
+    else if (i.identVerificationStatus === "rejected") stats.rejected++;
+    else if (i.identVerificationStatus === "corrected") stats.corrected++;
+    else stats.unverified++;
   }
 
   return stats;
@@ -3672,45 +3704,41 @@ export async function getDeploymentVerificationStats(
   if (jobImages.length === 0) return emptyStats;
 
   const imageIds = jobImages.map((img) => img.id);
-  const jobDets = await db
-    .select({ id: detections.id, imageId: detections.imageId })
+  const detsWithIdent = await db
+    .select({
+      detectionId: detections.id,
+      imageId: detections.imageId,
+      identVerificationStatus: identifications.verificationStatus,
+    })
     .from(detections)
+    .innerJoin(identifications, eq(identifications.detectionId, detections.id))
     .where(inArray(detections.imageId, imageIds));
 
-  // Blank images (no detections) — each counts as one review unit;
-  // reviewed when confirmedBlank is true.
-  const imagesWithDetections = new Set(jobDets.map((d) => d.imageId));
+  // Blank-reviewable images: no identifications whatsoever (zero detections
+  // or only person/vehicle detections). Reviewed when confirmedBlank = true.
+  const imagesWithIdentifications = new Set(detsWithIdent.map((d) => d.imageId));
   let blankTotal = 0;
   let blankReviewed = 0;
   for (const img of jobImages) {
-    if (!imagesWithDetections.has(img.id)) {
+    if (!imagesWithIdentifications.has(img.id)) {
       blankTotal++;
       if (img.confirmedBlank) blankReviewed++;
     }
   }
 
   const stats: VerificationStats = {
-    total: blankTotal,
+    total: blankTotal + detsWithIdent.length,
     verified: 0,
     rejected: 0,
     corrected: 0,
     unverified: blankTotal - blankReviewed,
   };
 
-  if (jobDets.length > 0) {
-    const detectionIds = jobDets.map((d) => d.id);
-    const idents = await db
-      .select({ verificationStatus: identifications.verificationStatus })
-      .from(identifications)
-      .where(inArray(identifications.detectionId, detectionIds));
-
-    stats.total += idents.length;
-    for (const i of idents) {
-      if (i.verificationStatus === "verified") stats.verified++;
-      else if (i.verificationStatus === "rejected") stats.rejected++;
-      else if (i.verificationStatus === "corrected") stats.corrected++;
-      else stats.unverified++;
-    }
+  for (const i of detsWithIdent) {
+    if (i.identVerificationStatus === "verified") stats.verified++;
+    else if (i.identVerificationStatus === "rejected") stats.rejected++;
+    else if (i.identVerificationStatus === "corrected") stats.corrected++;
+    else stats.unverified++;
   }
 
   return stats;
@@ -4294,22 +4322,26 @@ export async function toggleConfirmedBlank(
     const newValue = !image.confirmedBlank;
     let rejectedCount = 0;
 
-    await db.transaction(async (tx) => {
-      await tx
+    // better-sqlite3 transactions must be synchronous — async callbacks
+    // throw "Transaction function cannot return a promise" at runtime.
+    db.transaction((tx) => {
+      tx
         .update(images)
         .set({ confirmedBlank: newValue })
-        .where(eq(images.id, imageId));
+        .where(eq(images.id, imageId))
+        .run();
 
-      // When toggling ON, batch-reject all identifications
+      // When toggling ON, batch-reject all identifications on this image
       if (newValue) {
-        const imageDetections = await tx
+        const imageDetections = tx
           .select({ id: detections.id })
           .from(detections)
-          .where(eq(detections.imageId, imageId));
+          .where(eq(detections.imageId, imageId))
+          .all();
 
         if (imageDetections.length > 0) {
           const detectionIds = imageDetections.map((d) => d.id);
-          const result = await tx
+          const result = tx
             .update(identifications)
             .set({ verificationStatus: "rejected" })
             .where(
@@ -4317,7 +4349,8 @@ export async function toggleConfirmedBlank(
                 inArray(identifications.detectionId, detectionIds),
                 ne(identifications.verificationStatus, "rejected")
               )
-            );
+            )
+            .run();
           rejectedCount = result.changes;
         }
       }

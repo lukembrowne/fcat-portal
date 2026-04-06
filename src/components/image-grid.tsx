@@ -300,15 +300,22 @@ function ImageCard({
         // vehicle detections never get a species (the classifier only runs on
         // animals), so we surface them as their own badges instead of letting
         // them disappear from the gallery.
+        //
+        // When an image is confirmed blank, the reviewer has explicitly marked
+        // all detections on it as false positives. In that case we hide the
+        // species/person/vehicle badges and surface "Vacía ✓" instead — the
+        // "Vacía" verdict supersedes any ML detection labels.
         let personCount = 0;
         let vehicleCount = 0;
-        for (const det of image.detections) {
-          if (det.detectionClass === 1) personCount++;
-          else if (det.detectionClass === 2) vehicleCount++;
+        if (!image.confirmedBlank) {
+          for (const det of image.detections) {
+            if (det.detectionClass === 1) personCount++;
+            else if (det.detectionClass === 2) vehicleCount++;
+          }
         }
+        const suppressSpeciesBadges = image.confirmedBlank;
         const hasNonAnimalBadge = personCount > 0 || vehicleCount > 0;
-        const showBlankConfirmed =
-          image.confirmedBlank && speciesBadges.length === 0 && !hasNonAnimalBadge;
+        const showBlankConfirmed = image.confirmedBlank;
         const showBlank =
           !image.confirmedBlank &&
           image.status === "processed" &&
@@ -318,7 +325,7 @@ function ImageCard({
         const isInstall = image.setupTag === "deployment";
         const isRetrieval = image.setupTag === "retrieval";
         const hasAnyBadge =
-          speciesBadges.length > 0 ||
+          (!suppressSpeciesBadges && speciesBadges.length > 0) ||
           hasNonAnimalBadge ||
           showBlankConfirmed ||
           showBlank ||
@@ -339,7 +346,7 @@ function ImageCard({
                 Recogida
               </Badge>
             )}
-            {speciesBadges.map((sp) => {
+            {!suppressSpeciesBadges && speciesBadges.map((sp) => {
               const isVerified = sp.status === "verified" || sp.status === "corrected";
               const isRejected = sp.status === "rejected";
               const label = display ? display.getName(sp.species) : sp.species;

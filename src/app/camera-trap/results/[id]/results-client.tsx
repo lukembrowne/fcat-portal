@@ -25,6 +25,13 @@ interface ResultsClientProps {
   jobId: number;
   speciesList: ResultsSpeciesEntry[];
   onImageClick?: (imageId: number) => void;
+  /**
+   * Called whenever the filtered image set changes. Receives the ordered list
+   * of filtered image IDs (matching the rendered grid order). Used by parents
+   * that need to scope downstream navigation (e.g. annotation overlay) to the
+   * currently visible images.
+   */
+  onFilteredIdsChange?: (ids: number[]) => void;
 }
 
 const VERIFICATION_STATUSES = [
@@ -48,6 +55,7 @@ function ResultsClientInner({
   jobId,
   speciesList,
   onImageClick,
+  onFilteredIdsChange,
 }: ResultsClientProps) {
   const display = useSpeciesDisplay();
   const [gridColumns, setGridColumns] = useState(4);
@@ -109,6 +117,14 @@ function ResultsClientInner({
       return true;
     });
   }, [images, selectedSpecies, confidenceRange, verificationFilter, showEmpty, showStarredOnly, showBlanksOnly]);
+
+  // Notify parent of the current ordered filtered ID set so it can scope
+  // downstream navigation (e.g. annotation overlay prev/next) to the visible
+  // grid. Order matches the rendered grid order.
+  useEffect(() => {
+    if (!onFilteredIdsChange) return;
+    onFilteredIdsChange(filteredImages.map((img) => img.id));
+  }, [filteredImages, onFilteredIdsChange]);
 
   const clearFilters = () => {
     setSelectedSpecies(null);

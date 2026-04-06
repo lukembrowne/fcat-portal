@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition, useCallback, useEffect } from "react";
+import { useState, useTransition, useCallback, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Loader2, ArrowLeft } from "lucide-react";
@@ -28,6 +28,18 @@ export function DeploymentGalleryClient({
   const [annotationData, setAnnotationData] = useState<AnnotationData | null>(null);
   const [loading, startLoading] = useTransition();
 
+  // Live ordered list of currently filtered image IDs (updated by ResultsClient
+  // whenever the user changes a filter). When the annotation overlay opens we
+  // snapshot this list into `navigationIds` and use the snapshot for the
+  // duration of the overlay session — so verifying images doesn't yank them
+  // out from under the user.
+  const filteredIdsRef = useRef<number[]>(images.map((img) => img.id));
+  const [navigationIds, setNavigationIds] = useState<number[] | null>(null);
+
+  const handleFilteredIdsChange = useCallback((ids: number[]) => {
+    filteredIdsRef.current = ids;
+  }, []);
+
   // Lock body scroll when annotation overlay is open
   useEffect(() => {
     if (annotationData) {
@@ -38,8 +50,18 @@ export function DeploymentGalleryClient({
 
   const loadImage = useCallback(
     (imageId: number) => {
+      // Snapshot the current filtered list so navigation stays scoped to what
+      // the user was looking at when they clicked. Empty list (no filters / no
+      // images yet) → fall back to full-job navigation by passing undefined.
+      const snapshot =
+        filteredIdsRef.current.length > 0 ? [...filteredIdsRef.current] : null;
+      setNavigationIds(snapshot);
       startLoading(async () => {
-        const data = await getImageAnnotationData(imageId, jobId);
+        const data = await getImageAnnotationData(
+          imageId,
+          jobId,
+          snapshot ?? undefined,
+        );
         if (data) {
           setAnnotationData(data);
         }
@@ -50,18 +72,24 @@ export function DeploymentGalleryClient({
 
   const handleBack = useCallback(() => {
     setAnnotationData(null);
+    setNavigationIds(null);
     router.refresh();
   }, [router]);
 
   // Re-fetch annotation data after a mutation (species assign, verify, delete, etc.)
-  // Uses direct async call instead of startLoading to avoid showing the loading spinner
+  // Uses direct async call instead of startLoading to avoid showing the loading spinner.
+  // Reuses the frozen navigationIds snapshot so prev/next/total stay stable.
   const handleMutate = useCallback(async () => {
     if (!annotationData) return;
-    const data = await getImageAnnotationData(annotationData.image.id, jobId);
+    const data = await getImageAnnotationData(
+      annotationData.image.id,
+      jobId,
+      navigationIds ?? undefined,
+    );
     if (data) {
       setAnnotationData(data);
     }
-  }, [annotationData, jobId]);
+  }, [annotationData, jobId, navigationIds]);
 
   // Full-viewport annotation overlay
   if (annotationData) {
@@ -132,6 +160,7 @@ export function DeploymentGalleryClient({
               imageId={image.id}
               prevImageId={annotationData.prevImageId}
               nextImageId={annotationData.nextImageId}
+              navigationIds={navigationIds ?? undefined}
               confirmedBlank={image.confirmedBlank}
               starred={image.starred}
               starredBy={image.starredBy}
@@ -160,6 +189,7 @@ export function DeploymentGalleryClient({
         jobId={jobId}
         speciesList={speciesList}
         onImageClick={loadImage}
+        onFilteredIdsChange={handleFilteredIdsChange}
       />
     </div>
   );

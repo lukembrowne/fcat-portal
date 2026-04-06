@@ -3105,14 +3105,26 @@ export async function getJobImageIds(jobId: number): Promise<number[]> {
 /**
  * Fetch all data needed to render the image annotation client for a single image.
  * Used by the embedded annotation view on the deployment detail page.
+ *
+ * When `navigationIds` is provided (and non-empty), prev/next/currentIndex/totalImages
+ * are computed from that ordered list instead of all images in the job. This lets the
+ * caller scope navigation to a filtered subset (see deployment-gallery-client.tsx).
  */
-export async function getImageAnnotationData(imageId: number, jobId: number) {
-  const [data, imageIds, speciesList, verificationStats] = await Promise.all([
+export async function getImageAnnotationData(
+  imageId: number,
+  jobId: number,
+  navigationIds?: number[],
+) {
+  const useFilter = navigationIds !== undefined && navigationIds.length > 0;
+
+  const [data, fullJobImageIds, speciesList, verificationStats] = await Promise.all([
     getImageWithDetections(imageId),
-    getJobImageIds(jobId),
+    useFilter ? Promise.resolve([] as number[]) : getJobImageIds(jobId),
     getSpeciesList(),
     getJobVerificationStats(jobId),
   ]);
+
+  const imageIds = useFilter ? navigationIds! : fullJobImageIds;
 
   if (!data) return null;
 
@@ -3123,7 +3135,10 @@ export async function getImageAnnotationData(imageId: number, jobId: number) {
 
   const currentIndex = imageIds.indexOf(imageId);
   const prevImageId = currentIndex > 0 ? imageIds[currentIndex - 1] : null;
-  const nextImageId = currentIndex < imageIds.length - 1 ? imageIds[currentIndex + 1] : null;
+  const nextImageId =
+    currentIndex >= 0 && currentIndex < imageIds.length - 1
+      ? imageIds[currentIndex + 1]
+      : null;
 
   const boxes = rawDetections.map((det) => ({
     id: det.id,
@@ -4060,7 +4075,8 @@ export async function createManualDetection(
 export async function verifyAndAdvance(
   identificationIds: number[],
   jobId: number,
-  currentImageId: number
+  currentImageId: number,
+  candidateImageIds?: number[]
 ): Promise<ActionResult<{ nextImageId: number | null; deploymentCompleted?: boolean }>> {
   const user = await requirePermission("camera-trap", "editor");
 
@@ -4089,47 +4105,83 @@ export async function verifyAndAdvance(
         );
     }
 
-    // Get next unverified image — FORWARD first
-    const forward = await db
-      .select({ id: images.id })
-      .from(images)
-      .innerJoin(detections, eq(detections.imageId, images.id))
-      .innerJoin(identifications, eq(identifications.detectionId, detections.id))
-      .where(
-        and(
-          eq(images.jobId, jobId),
-          eq(identifications.verificationStatus, "unverified"),
-          sql`${images.id} > ${currentImageId}`
-        )
-      )
-      .orderBy(images.id)
-      .limit(1);
+    const filtered = candidateImageIds !== undefined && candidateImageIds.length > 0;
 
-    if (forward.length > 0) {
-      revalidatePath(CAMERA_TRAP_PATH);
-      return { success: true, data: { nextImageId: forward[0].id } };
+    let nextId: number | null;
+
+    if (filtered) {
+      // Filtered path: walk the caller's ordered list. Find next unverified image
+      // strictly after currentImageId in list order; if none, wrap around from start.
+      const startIdx = candidateImageIds!.indexOf(currentImageId);
+      const ordered =
+        startIdx >= 0
+          ? [
+              ...candidateImageIds!.slice(startIdx + 1),
+              ...candidateImageIds!.slice(0, startIdx),
+            ]
+          : candidateImageIds!;
+
+      const unverifiedRows = await db
+        .select({ id: images.id })
+        .from(images)
+        .innerJoin(detections, eq(detections.imageId, images.id))
+        .innerJoin(identifications, eq(identifications.detectionId, detections.id))
+        .where(
+          and(
+            eq(images.jobId, jobId),
+            eq(identifications.verificationStatus, "unverified"),
+            inArray(images.id, candidateImageIds!)
+          )
+        );
+
+      const unverifiedSet = new Set(unverifiedRows.map((r) => r.id));
+      nextId = ordered.find((id) => unverifiedSet.has(id)) ?? null;
+    } else {
+      // Unfiltered path: original behavior — walk by images.id ascending.
+      const forward = await db
+        .select({ id: images.id })
+        .from(images)
+        .innerJoin(detections, eq(detections.imageId, images.id))
+        .innerJoin(identifications, eq(identifications.detectionId, detections.id))
+        .where(
+          and(
+            eq(images.jobId, jobId),
+            eq(identifications.verificationStatus, "unverified"),
+            sql`${images.id} > ${currentImageId}`
+          )
+        )
+        .orderBy(images.id)
+        .limit(1);
+
+      if (forward.length > 0) {
+        revalidatePath(CAMERA_TRAP_PATH);
+        return { success: true, data: { nextImageId: forward[0].id } };
+      }
+
+      // Wrap around from beginning
+      const wrapped = await db
+        .select({ id: images.id })
+        .from(images)
+        .innerJoin(detections, eq(detections.imageId, images.id))
+        .innerJoin(identifications, eq(identifications.detectionId, detections.id))
+        .where(
+          and(
+            eq(images.jobId, jobId),
+            eq(identifications.verificationStatus, "unverified")
+          )
+        )
+        .orderBy(images.id)
+        .limit(1);
+
+      nextId =
+        wrapped[0]?.id === currentImageId ? null : (wrapped[0]?.id ?? null);
     }
 
-    // Wrap around from beginning
-    const wrapped = await db
-      .select({ id: images.id })
-      .from(images)
-      .innerJoin(detections, eq(detections.imageId, images.id))
-      .innerJoin(identifications, eq(identifications.detectionId, detections.id))
-      .where(
-        and(
-          eq(images.jobId, jobId),
-          eq(identifications.verificationStatus, "unverified")
-        )
-      )
-      .orderBy(images.id)
-      .limit(1);
-
-    const nextId =
-      wrapped[0]?.id === currentImageId ? null : (wrapped[0]?.id ?? null);
-
+    // Only auto-complete the deployment when navigating the full job, not a
+    // filtered subset — finishing a filter is not the same as finishing the
+    // deployment.
     let deploymentCompleted = false;
-    if (nextId === null) {
+    if (nextId === null && !filtered) {
       deploymentCompleted = await maybeAutoCompleteDeployment(job.deploymentId);
     }
 

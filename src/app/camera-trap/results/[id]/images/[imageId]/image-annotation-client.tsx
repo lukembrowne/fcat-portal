@@ -61,6 +61,14 @@ interface ImageAnnotationClientProps {
   imageId: number;
   prevImageId: number | null;
   nextImageId: number | null;
+  /**
+   * Optional ordered list of image IDs that scopes verify-and-advance to a
+   * filtered subset (e.g. when the user is walking a species-filtered grid).
+   * When omitted, advance walks the full job. The prev/next button targets
+   * are already computed by the parent against this same list, so this prop
+   * only needs to flow into the verifyAndAdvance call.
+   */
+  navigationIds?: number[];
   confirmedBlank: boolean;
   starred: boolean;
   starredBy: string | null;
@@ -85,6 +93,7 @@ export function ImageAnnotationClient({
   imageId,
   prevImageId,
   nextImageId,
+  navigationIds,
   confirmedBlank,
   starred,
   starredBy,
@@ -204,7 +213,12 @@ export function ImageAnnotationClient({
     isVerifyingRef.current = true;
     startTransition(async () => {
       try {
-        const result = await verifyAndAdvance(unverifiedIds, jobId, imageId);
+        const result = await verifyAndAdvance(
+          unverifiedIds,
+          jobId,
+          imageId,
+          navigationIds,
+        );
         if (result.success && result.data.nextImageId) {
           if (onNavigate) {
             onNavigate(result.data.nextImageId);
@@ -223,7 +237,7 @@ export function ImageAnnotationClient({
         isVerifyingRef.current = false;
       }
     });
-  }, [detections, jobId, imageId, router, onNavigate, refresh]);
+  }, [detections, jobId, imageId, navigationIds, router, onNavigate, refresh]);
 
   const handleVerifySelected = useCallback(() => {
     if (!selectedDetection?.identification) return;

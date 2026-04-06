@@ -623,3 +623,155 @@ describe("queueProcessing with compressFirst", () => {
     expect(job.compressFirst).toBe(false);
   });
 });
+
+// === getImageAnnotationData with navigationIds ===
+
+describe("getImageAnnotationData with navigationIds", () => {
+  it("computes prev/next/totalImages from the supplied filtered list", async () => {
+    const [a, b, c] = seed.images;
+    // Pretend the user filtered the grid to images [c, a] in that order.
+    const filtered = [c.id, a.id];
+
+    const data = await actions.getImageAnnotationData(c.id, seed.job.id, filtered);
+    expect(data).not.toBeNull();
+    if (!data) return;
+
+    expect(data.totalImages).toBe(2);
+    expect(data.currentIndex).toBe(0);
+    expect(data.prevImageId).toBeNull();
+    expect(data.nextImageId).toBe(a.id);
+    // Sanity: image b is excluded entirely
+    expect(filtered).not.toContain(b.id);
+  });
+
+  it("computes prev/next from the middle of the filtered list", async () => {
+    const [a, b, c] = seed.images;
+    const filtered = [a.id, c.id, b.id];
+
+    const data = await actions.getImageAnnotationData(c.id, seed.job.id, filtered);
+    if (!data) return;
+
+    expect(data.currentIndex).toBe(1);
+    expect(data.prevImageId).toBe(a.id);
+    expect(data.nextImageId).toBe(b.id);
+    expect(data.totalImages).toBe(3);
+  });
+
+  it("returns null prev/next when current image is not in the filter", async () => {
+    const [a, b, c] = seed.images;
+    const filtered = [a.id, b.id]; // c not included
+
+    const data = await actions.getImageAnnotationData(c.id, seed.job.id, filtered);
+    if (!data) return;
+
+    expect(data.currentIndex).toBe(-1);
+    expect(data.prevImageId).toBeNull();
+    expect(data.nextImageId).toBeNull();
+    expect(data.totalImages).toBe(2);
+  });
+
+  it("falls back to the full job when navigationIds is omitted", async () => {
+    const [a, b, c] = seed.images;
+
+    const data = await actions.getImageAnnotationData(b.id, seed.job.id);
+    if (!data) return;
+
+    // seed creates 3 images; getJobImageIds orders by timestamp/filename.
+    // All three filenames sort as IMG_001 < IMG_002 < IMG_003, so b is in the middle.
+    expect(data.totalImages).toBe(3);
+    expect(data.currentIndex).toBe(1);
+    expect(data.prevImageId).toBe(a.id);
+    expect(data.nextImageId).toBe(c.id);
+  });
+
+  it("treats an empty navigationIds array as 'no filter' (full job)", async () => {
+    const [, b] = seed.images;
+
+    const data = await actions.getImageAnnotationData(b.id, seed.job.id, []);
+    if (!data) return;
+
+    expect(data.totalImages).toBe(3);
+  });
+});
+
+// === verifyAndAdvance with candidateImageIds ===
+
+describe("verifyAndAdvance with candidateImageIds", () => {
+  it("advances within the filtered subset in list order", async () => {
+    const [a, b, c] = seed.images;
+    // Filtered list orders images c first, then a, then b.
+    const filtered = [c.id, a.id, b.id];
+
+    // Verify nothing on the current image; just ask "what's next from c?"
+    const result = await actions.verifyAndAdvance([], seed.job.id, c.id, filtered);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    // Next unverified after c in filtered order is a.
+    expect(result.data.nextImageId).toBe(a.id);
+    expect(result.data.deploymentCompleted).toBeFalsy();
+  });
+
+  it("wraps around inside the filtered subset", async () => {
+    const [a, b, c] = seed.images;
+    const filtered = [a.id, b.id, c.id];
+
+    // From c (last in list), wrap to a.
+    const result = await actions.verifyAndAdvance([], seed.job.id, c.id, filtered);
+    if (!result.success) return;
+
+    expect(result.data.nextImageId).toBe(a.id);
+  });
+
+  it("returns null when all images in the filtered subset are verified", async () => {
+    const [a, b] = seed.images;
+    const [identA, identB] = seed.identifications;
+    const filtered = [a.id, b.id];
+
+    // Mark all identifications inside the filtered subset as verified up front.
+    db
+      .update(schema.identifications)
+      .set({ verificationStatus: "verified" })
+      .where(eq(schema.identifications.id, identA.id))
+      .run();
+    db
+      .update(schema.identifications)
+      .set({ verificationStatus: "verified" })
+      .where(eq(schema.identifications.id, identB.id))
+      .run();
+
+    const result = await actions.verifyAndAdvance([], seed.job.id, a.id, filtered);
+    if (!result.success) return;
+
+    expect(result.data.nextImageId).toBeNull();
+    // Critically: finishing a filtered subset must NOT mark the deployment complete.
+    expect(result.data.deploymentCompleted).toBeFalsy();
+
+    const [dep] = db
+      .select()
+      .from(schema.deployments)
+      .where(eq(schema.deployments.id, seed.deployment.id))
+      .all();
+    expect(dep.status).toBe("processed"); // unchanged
+  });
+
+  it("preserves unfiltered behavior when candidateImageIds is omitted", async () => {
+    const [a, b] = seed.images;
+
+    // Three unverified identifications exist (one per image). From a, the next
+    // forward in id order should be b.
+    const result = await actions.verifyAndAdvance([], seed.job.id, a.id);
+    if (!result.success) return;
+
+    expect(result.data.nextImageId).toBe(b.id);
+  });
+
+  it("treats an empty candidateImageIds array as 'no filter' (unfiltered behavior)", async () => {
+    const [a, b] = seed.images;
+
+    const result = await actions.verifyAndAdvance([], seed.job.id, a.id, []);
+    if (!result.success) return;
+
+    expect(result.data.nextImageId).toBe(b.id);
+  });
+});

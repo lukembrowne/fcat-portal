@@ -70,7 +70,6 @@ const HEADERS = [
   "status",
   "deploy_slot_id",
   "retrieve_slot_id",
-  "notes",
   "drive_folder_link",
 ];
 
@@ -100,7 +99,6 @@ describe("loadSchedule", () => {
             "scheduled",
             "5",
             "10",
-            "Notas de prueba",
             "https://drive.google.com/drive/folders/abc",
           ],
         ],
@@ -123,7 +121,6 @@ describe("loadSchedule", () => {
       status: "scheduled",
       deploySlotId: 5,
       retrieveSlotId: 10,
-      notes: "Notas de prueba",
       driveFolderLink: "https://drive.google.com/drive/folders/abc",
     });
   });
@@ -171,8 +168,8 @@ describe("loadSchedule", () => {
       data: {
         values: [
           HEADERS,
-          ["DEP-001", "S01", "Sitio A", "forest", "1", "dry", "", "", "", "", "deployed", "", "", "", ""],
-          ["DEP-002", "S02", "Sitio B", "river", "2", "wet", "", "", "", "", "scheduled", "", "", "", ""],
+          ["DEP-001", "S01", "Sitio A", "forest", "1", "dry", "", "", "", "", "deployed", "", "", ""],
+          ["DEP-002", "S02", "Sitio B", "river", "2", "wet", "", "", "", "", "scheduled", "", "", ""],
         ],
       },
     });
@@ -211,7 +208,6 @@ describe("saveSchedule", () => {
         status: "scheduled",
         deploySlotId: null,
         retrieveSlotId: null,
-        notes: "",
         driveFolderLink: "",
       },
       {
@@ -228,7 +224,6 @@ describe("saveSchedule", () => {
         status: "deployed",
         deploySlotId: 3,
         retrieveSlotId: null,
-        notes: "Nota",
         driveFolderLink: "",
       },
     ]);
@@ -271,7 +266,6 @@ describe("saveSchedule", () => {
       status: "scheduled" as const,
       deploySlotId: null,
       retrieveSlotId: null,
-      notes: "",
       driveFolderLink: "",
     }));
 
@@ -303,7 +297,6 @@ describe("saveSchedule", () => {
         status: "scheduled",
         deploySlotId: null,
         retrieveSlotId: null,
-        notes: "",
         driveFolderLink: "",
       },
     ]);
@@ -324,8 +317,8 @@ describe("updateScheduleRows", () => {
       data: {
         values: [
           HEADERS,
-          ["DEP-001", "S01", "Sitio A", "forest", "1", "dry", "", "", "", "", "scheduled", "", "", "", ""],
-          ["DEP-002", "S02", "Sitio B", "river", "2", "wet", "", "", "", "", "scheduled", "", "", "", ""],
+          ["DEP-001", "S01", "Sitio A", "forest", "1", "dry", "", "", "", "", "scheduled", "", "", ""],
+          ["DEP-002", "S02", "Sitio B", "river", "2", "wet", "", "", "", "", "scheduled", "", "", ""],
         ],
       },
     });
@@ -348,7 +341,7 @@ describe("updateScheduleRows", () => {
       data: {
         values: [
           HEADERS,
-          ["DEP-001", "S01", "Sitio A", "forest", "1", "dry", "", "", "", "", "scheduled", "", "", "", ""],
+          ["DEP-001", "S01", "Sitio A", "forest", "1", "dry", "", "", "", "", "scheduled", "", "", ""],
         ],
       },
     });

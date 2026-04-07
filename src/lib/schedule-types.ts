@@ -19,7 +19,6 @@ export interface ScheduleRow {
   status: ScheduleStatus;
   deploySlotId: number | null;
   retrieveSlotId: number | null;
-  notes: string;
   driveFolderLink: string;
   // Cached upload counts from DB (only populated on /biochoco/data page)
   uploadCameraCount?: number | null;

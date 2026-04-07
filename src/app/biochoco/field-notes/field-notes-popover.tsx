@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { MessageSquare, Loader2, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -29,6 +29,17 @@ export function FieldNotesPopover({
   const [saving, startSaving] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+
+  // Sync local state from prop whenever the popover opens. The popover
+  // instance is reused across table rows (sort/filter/paginate), so
+  // useState's initial value can be stale. Resyncing on open avoids
+  // clobbering in-progress edits while still loading the latest note.
+  useEffect(() => {
+    if (open) {
+      setNotes(initialNotes ?? "");
+      setError(null);
+    }
+  }, [open, initialNotes]);
 
   const hasNotes = !!(initialNotes?.trim());
   const isDirty = (notes.trim() || null) !== initialNotes;

@@ -20,7 +20,9 @@ export async function fetchBiochocoData(): Promise<ActionResult<BiochocoOverview
       fetchSubmissions<Record<string, unknown>>(BIOCHOCO_PROJECT_ID, BIOCHOCO_FORM_RETRIEVE),
     ]);
 
-    // Enrich schedule with DB data (Drive folder links + field notes)
+    // Enrich schedule with DB data (Drive folder links + field notes).
+    // Build new objects via spread (not in-place mutation) so all fields are
+    // own enumerable properties on the serialized RSC payload.
     const dbDeployments = await db
       .select({
         name: deployments.name,
@@ -33,15 +35,16 @@ export async function fetchBiochocoData(): Promise<ActionResult<BiochocoOverview
       dbDeployments.map((d) => [d.name, d])
     );
 
-    for (const row of schedule) {
+    const enrichedSchedule = schedule.map((row) => {
       const dbRow = dbMap.get(row.deploymentId);
-      if (dbRow?.driveFolderId) {
-        row.driveFolderLink = `https://drive.google.com/drive/folders/${dbRow.driveFolderId}`;
-      }
-      if (dbRow?.fieldNotes) {
-        row.fieldNotes = dbRow.fieldNotes;
-      }
-    }
+      return {
+        ...row,
+        driveFolderLink: dbRow?.driveFolderId
+          ? `https://drive.google.com/drive/folders/${dbRow.driveFolderId}`
+          : row.driveFolderLink,
+        fieldNotes: dbRow?.fieldNotes ?? null,
+      };
+    });
 
     // Transform sites
     const sites: SiteInfo[] = rawSites.map((s) => ({
@@ -71,7 +74,7 @@ export async function fetchBiochocoData(): Promise<ActionResult<BiochocoOverview
 
     return {
       success: true,
-      data: { schedule, sites, deployedIds, retrievedIds },
+      data: { schedule: enrichedSchedule, sites, deployedIds, retrievedIds },
     };
   } catch (err) {
     console.error("Failed to fetch BioChoco data:", err);

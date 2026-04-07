@@ -415,7 +415,6 @@ export function addSiteToSchedule(
       status: "scheduled",
       deploySlotId: null,
       retrieveSlotId: null,
-      notes: "Auto-generated",
       driveFolderLink: "",
     });
   }

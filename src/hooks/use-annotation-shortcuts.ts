@@ -106,6 +106,16 @@ export function useAnnotationShortcuts(opts: AnnotationShortcutOptions) {
           o.onDeleteSelected?.();
           return;
         }
+        if (!hasModifier && e.key === "ArrowLeft") {
+          e.preventDefault();
+          o.onPrev?.();
+          return;
+        }
+        if (!hasModifier && e.key === "ArrowRight") {
+          e.preventDefault();
+          o.onNext?.();
+          return;
+        }
         // Let other keys pass through to the input
         return;
       }

@@ -77,6 +77,7 @@ export function DeploymentRowActions({
           driveFolderId={deployment.driveFolderId}
           lastCompletedJobId={deployment.lastCompletedJobId}
           revertibleImageCount={deployment.revertibleImageCount ?? 0}
+          pendingImageCount={deployment.pendingImageCount ?? 0}
           canEdit={canEdit}
           isAdmin={isAdmin}
           showDetailsLink

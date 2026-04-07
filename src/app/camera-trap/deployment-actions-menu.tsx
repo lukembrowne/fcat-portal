@@ -24,6 +24,7 @@ import {
   ExternalLink,
   Eye,
   Pencil,
+  PlusCircle,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -39,6 +40,7 @@ import { CompressConfirmDialog } from "./compress-confirm-dialog";
 import { RevertConfirmDialog } from "./revert-confirm-dialog";
 import { DeleteConfirmDialog } from "./delete-confirm-dialog";
 import { ProcessConfirmDialog } from "./process-confirm-dialog";
+import { ProcessIncrementalDialog } from "./process-incremental-dialog";
 import { BulkDeleteBlanksDialog } from "./results/[id]/bulk-delete-blanks-dialog";
 
 /**
@@ -59,6 +61,8 @@ export interface DeploymentActionsMenuProps {
   lastCompletedJobId: number | null;
   /** How many compressed images can be reverted. Used to gate the "Comprimir" / "Deshacer Compresión" items. */
   revertibleImageCount: number;
+  /** Pending (un-processed) images on this deployment. Drives the "Procesar nuevas" menu item. */
+  pendingImageCount: number;
   canEdit: boolean;
   isAdmin: boolean;
   /** Show "Ver Detalles" navigation link. True for the row variant, false on the detail page itself. */
@@ -80,6 +84,7 @@ export function DeploymentActionsMenu({
   driveFolderId,
   lastCompletedJobId,
   revertibleImageCount,
+  pendingImageCount,
   canEdit,
   isAdmin,
   showDetailsLink = false,
@@ -94,6 +99,7 @@ export function DeploymentActionsMenu({
   const [revertDialogId, setRevertDialogId] = useState<number | null>(null);
   const [deleteDialogId, setDeleteDialogId] = useState<number | null>(null);
   const [processDialogIds, setProcessDialogIds] = useState<number[] | null>(null);
+  const [incrementalDialogId, setIncrementalDialogId] = useState<number | null>(null);
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
 
   const isProcessing = status === "processing";
@@ -223,6 +229,22 @@ export function DeploymentActionsMenu({
           )}
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-72">
+          {/* Procesar nuevas — incremental ML on newly added pending images */}
+          {hasResults && !isProcessing && pendingImageCount > 0 && (
+            <>
+              <DropdownMenuItem onClick={() => setIncrementalDialogId(deploymentId)}>
+                <PlusCircle className="h-4 w-4 mr-2 shrink-0" />
+                <div>
+                  <div>Procesar nuevas ({pendingImageCount})</div>
+                  <p className="text-xs text-muted-foreground font-normal">
+                    Analizar solo las imágenes nuevas. Las verificaciones existentes se preservarán.
+                  </p>
+                </div>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+            </>
+          )}
+
           {/* Reprocess (only when results exist) */}
           {hasResults && !isProcessing && (
             <>
@@ -484,6 +506,13 @@ export function DeploymentActionsMenu({
         deploymentIds={processDialogIds}
         isAdmin={isAdmin}
         onClose={() => setProcessDialogIds(null)}
+        onStarted={handleJobStarted}
+      />
+      <ProcessIncrementalDialog
+        deploymentId={incrementalDialogId}
+        pendingImageCount={pendingImageCount}
+        deploymentStatus={status}
+        onClose={() => setIncrementalDialogId(null)}
         onStarted={handleJobStarted}
       />
       <CompressConfirmDialog

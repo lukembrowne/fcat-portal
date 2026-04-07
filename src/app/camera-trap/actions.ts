@@ -53,8 +53,9 @@ export async function createProcessingJob(
     confidenceThreshold?: number;
     frameExtractionRate?: number;
   },
-  options?: { compressFirst?: boolean }
+  options?: { compressFirst?: boolean; incremental?: boolean }
 ): Promise<ActionResult<{ jobId: number }>> {
+  const incremental = options?.incremental ?? false;
   const user = await requirePermission("camera-trap", "editor");
 
   try {
@@ -96,18 +97,42 @@ export async function createProcessingJob(
 
     await requireDeploymentAccess(user, deploymentId);
 
-    // Check for images OR videos (deployments with only videos are valid)
+    // Check for images OR videos (deployments with only videos are valid).
+    // For incremental runs, only pick up images that haven't been processed yet
+    // (status = 'pending'). The destructive cleanup transaction below is also
+    // skipped, so existing detections / verifications / blank confirmations on
+    // already-processed images are preserved.
     const deploymentImages = await db
       .select()
       .from(images)
-      .where(eq(images.deploymentId, deploymentId));
+      .where(
+        incremental
+          ? and(
+              eq(images.deploymentId, deploymentId),
+              eq(images.status, "pending"),
+            )
+          : eq(images.deploymentId, deploymentId),
+      );
 
     const deploymentVideos = await db
       .select()
       .from(videos)
-      .where(eq(videos.deploymentId, deploymentId));
+      .where(
+        incremental
+          ? and(
+              eq(videos.deploymentId, deploymentId),
+              ne(videos.status, "processed"),
+            )
+          : eq(videos.deploymentId, deploymentId),
+      );
 
     if (deploymentImages.length === 0 && deploymentVideos.length === 0) {
+      if (incremental) {
+        return {
+          success: false,
+          error: "No hay imágenes nuevas para procesar",
+        };
+      }
       console.log(`[createProcessingJob] Empty deployment ${deploymentId} — 0 images, 0 videos`);
     }
 
@@ -129,7 +154,10 @@ export async function createProcessingJob(
     // setup_tag and starred* are pure user metadata and stay preserved.
     const imageIds = deploymentImages.map((i) => i.id);
     const job = db.transaction((tx) => {
-      if (imageIds.length > 0) {
+      // Destructive cleanup runs only for full reprocesses. Incremental jobs
+      // touch only the new pending images, leaving existing detections,
+      // identifications, and confirmedBlank flags intact.
+      if (!incremental && imageIds.length > 0) {
         tx.delete(detections)
           .where(
             and(
@@ -172,6 +200,7 @@ export async function createProcessingJob(
         .insert(processingJobs)
         .values({
           deploymentId,
+          jobType: incremental ? "ml_incremental" : "ml",
           detectorModel: modelConfig?.detectorModel || ML_DEFAULTS.detectorModel,
           classifierModel: modelConfig?.classifierModel || ML_DEFAULTS.classifierModel,
           confidenceThreshold: modelConfig?.confidenceThreshold ?? ML_DEFAULTS.confidenceThreshold,
@@ -194,10 +223,19 @@ export async function createProcessingJob(
           .run();
       }
 
-      tx.update(deployments)
-        .set({ status: "processing", updatedAt: new Date() })
-        .where(eq(deployments.id, deploymentId))
-        .run();
+      // Incremental jobs don't flip the deployment to "processing" — the
+      // active-job query already prevents concurrent runs, and keeping the
+      // deployment in its prior state (e.g. "processed") avoids confusing the
+      // UI during the run. The success-path finalization in processJobInternal
+      // will set it to "processed" when the job completes (which is what we
+      // want anyway: any deployment with newly added images can no longer be
+      // considered fully verified).
+      if (!incremental) {
+        tx.update(deployments)
+          .set({ status: "processing", updatedAt: new Date() })
+          .where(eq(deployments.id, deploymentId))
+          .run();
+      }
 
       return inserted;
     });
@@ -671,10 +709,15 @@ async function processJobInternal(
         })
         .where(eq(processingJobs.id, jobId));
 
-      await db
-        .update(deployments)
-        .set({ status: "scanned", updatedAt: new Date() })
-        .where(eq(deployments.id, job.deploymentId));
+      // Incremental jobs don't downgrade the deployment status on failure —
+      // the prior state (processed/verified) is still accurate because no
+      // images were touched.
+      if (job.jobType !== "ml_incremental") {
+        await db
+          .update(deployments)
+          .set({ status: "scanned", updatedAt: new Date() })
+          .where(eq(deployments.id, job.deploymentId));
+      }
 
       safeRevalidate();
 
@@ -715,13 +758,19 @@ async function processJobInternal(
       })
       .where(eq(processingJobs.id, jobId));
 
-    await db
-      .update(deployments)
-      .set({
-        status: finalStatus === "completed" ? "processed" : "scanned",
-        updatedAt: new Date(),
-      })
-      .where(eq(deployments.id, job.deploymentId));
+    // For incremental jobs on success: flip to "processed" (per the chosen
+    // status policy — any deployment with newly added images can no longer
+    // claim to be fully verified). For incremental jobs on failure: leave
+    // the deployment in its prior state, since no work was done.
+    if (finalStatus === "completed" || job.jobType !== "ml_incremental") {
+      await db
+        .update(deployments)
+        .set({
+          status: finalStatus === "completed" ? "processed" : "scanned",
+          updatedAt: new Date(),
+        })
+        .where(eq(deployments.id, job.deploymentId));
+    }
 
     safeRevalidate();
 
@@ -757,12 +806,14 @@ async function processJobInternal(
       })
       .where(eq(processingJobs.id, jobId));
 
-    // Revert deployment status from "processing" to "scanned"
+    // Revert deployment status from "processing" to "scanned" — but not for
+    // incremental jobs, which never flipped the deployment to "processing"
+    // and shouldn't downgrade a previously processed/verified deployment.
     const [failedJob] = await db
       .select()
       .from(processingJobs)
       .where(eq(processingJobs.id, jobId));
-    if (failedJob) {
+    if (failedJob && failedJob.jobType !== "ml_incremental") {
       await db
         .update(deployments)
         .set({ status: "scanned", updatedAt: new Date() })
@@ -1250,6 +1301,7 @@ export interface DeploymentRow {
   revertibleImageCount: number;
   reviewedCount: number | null;
   totalIdentifications: number | null;
+  pendingImageCount: number;
 }
 
 export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
@@ -1341,35 +1393,55 @@ export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
     .groupBy(images.deploymentId);
   const revertCountMap = new Map(revertibleCounts.map((r) => [r.deploymentId, r.cnt]));
 
-  // Batch: detection counts and species counts per latest completed job
-  const completedJobIds = [...completedJobMap.values()];
-  const detCountMap = new Map<number, number>();
-  const specCountMap = new Map<number, number>();
+  // Batch: pending image counts per deployment (for "new files since last process" badge)
+  const pendingImageCounts = await db
+    .select({
+      deploymentId: images.deploymentId,
+      cnt: count(),
+    })
+    .from(images)
+    .where(
+      and(
+        inArray(images.deploymentId, deploymentIds),
+        eq(images.status, "pending"),
+      ),
+    )
+    .groupBy(images.deploymentId);
+  const pendingImageCountMap = new Map(
+    pendingImageCounts.map((r) => [r.deploymentId, r.cnt]),
+  );
 
-  if (completedJobIds.length > 0) {
-    const detectionCounts = await db
-      .select({ jobId: images.jobId, cnt: count() })
-      .from(detections)
-      .innerJoin(images, eq(detections.imageId, images.id))
-      .where(inArray(images.jobId, completedJobIds))
-      .groupBy(images.jobId);
-    for (const r of detectionCounts) {
-      if (r.jobId != null) detCountMap.set(r.jobId, r.cnt);
-    }
+  // Batch: detection counts and species counts per DEPLOYMENT (not per job).
+  // Counting by deployment rather than by latest completed job means
+  // incremental ML runs (which add new detections without deleting prior
+  // ones) keep the totals correct. For full reprocesses the destructive
+  // transaction has already cleaned up prior detections so per-deployment
+  // counting still matches the latest job's results.
+  const detCountByDep = new Map<number, number>();
+  const specCountByDep = new Map<number, number>();
 
-    const speciesCounts = await db
-      .select({
-        jobId: images.jobId,
-        cnt: sql<number>`count(distinct coalesce(${identifications.correctedSpecies}, ${identifications.species}))`,
-      })
-      .from(identifications)
-      .innerJoin(detections, eq(identifications.detectionId, detections.id))
-      .innerJoin(images, eq(detections.imageId, images.id))
-      .where(inArray(images.jobId, completedJobIds))
-      .groupBy(images.jobId);
-    for (const r of speciesCounts) {
-      if (r.jobId != null) specCountMap.set(r.jobId, r.cnt);
-    }
+  const detectionCounts = await db
+    .select({ deploymentId: images.deploymentId, cnt: count() })
+    .from(detections)
+    .innerJoin(images, eq(detections.imageId, images.id))
+    .where(inArray(images.deploymentId, deploymentIds))
+    .groupBy(images.deploymentId);
+  for (const r of detectionCounts) {
+    detCountByDep.set(r.deploymentId, r.cnt);
+  }
+
+  const speciesCounts = await db
+    .select({
+      deploymentId: images.deploymentId,
+      cnt: sql<number>`count(distinct coalesce(${identifications.correctedSpecies}, ${identifications.species}))`,
+    })
+    .from(identifications)
+    .innerJoin(detections, eq(identifications.detectionId, detections.id))
+    .innerJoin(images, eq(detections.imageId, images.id))
+    .where(inArray(images.deploymentId, deploymentIds))
+    .groupBy(images.deploymentId);
+  for (const r of speciesCounts) {
+    specCountByDep.set(r.deploymentId, r.cnt);
   }
 
   // Batch: verification progress per deployment (all identifications, not just latest job)
@@ -1458,11 +1530,12 @@ export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
       lastJobStatus: latestStatus?.status ?? null,
       lastCompletedJobId: completedJobId ?? null,
       jobCount: jobInfo?.cnt ?? 0,
-      totalDetections: completedJobId != null ? (detCountMap.get(completedJobId) ?? 0) : null,
-      distinctSpecies: completedJobId != null ? (specCountMap.get(completedJobId) ?? 0) : null,
+      totalDetections: completedJobId != null ? (detCountByDep.get(d.id) ?? 0) : null,
+      distinctSpecies: completedJobId != null ? (specCountByDep.get(d.id) ?? 0) : null,
       revertibleImageCount: revertCountMap.get(d.id) ?? 0,
       reviewedCount: verificationMap.get(d.id)?.reviewed ?? null,
       totalIdentifications: verificationMap.get(d.id)?.total ?? null,
+      pendingImageCount: pendingImageCountMap.get(d.id) ?? 0,
     };
   });
 }
@@ -2641,6 +2714,42 @@ export async function queueProcessing(
   }
 }
 
+/**
+ * Queue an incremental ML run that processes only newly-added pending images
+ * on a deployment. Existing detections, identifications, verification state,
+ * and confirmedBlank flags are preserved. On success the deployment is set to
+ * "processed" (downgrading from verified/verified_empty if applicable, since
+ * the deployment now contains unreviewed images).
+ */
+export async function queueIncrementalProcessing(
+  deploymentId: number,
+): Promise<ActionResult<{ jobId: number }>> {
+  const user = await requirePermission("camera-trap", "editor");
+
+  try {
+    await requireDeploymentAccess(user, deploymentId);
+
+    const result = await createProcessingJob(deploymentId, undefined, {
+      incremental: true,
+    });
+    if (!result.success) return result;
+
+    // Fire-and-forget — auth already verified above.
+    processJobInternal(result.data.jobId);
+
+    revalidatePath(CAMERA_TRAP_PATH);
+    return { success: true, data: { jobId: result.data.jobId } };
+  } catch (error) {
+    return {
+      success: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Error al encolar procesamiento incremental",
+    };
+  }
+}
+
 /** Called at end of processJob to auto-advance the queue. */
 async function processNextInQueue(): Promise<void> {
   const [nextJob] = await db
@@ -2751,42 +2860,43 @@ export async function getDeployment(id: number) {
     .where(eq(processingJobs.deploymentId, id))
     .orderBy(desc(processingJobs.createdAt));
 
-  // Stats for latest completed job (used by CTA banner)
+  // Stats for the entire deployment (used by the detail page banner). Counted
+  // per deployment so they remain correct after incremental ML runs — the
+  // latest completed job may only contain a small batch of newly added images,
+  // but the banner should reflect every detection on the deployment.
+  // latestCompletedJob is still computed below for the return shape so the
+  // "Resultados" button keeps linking to /camera-trap/results/{jobId}.
   const latestCompletedJob = jobs.find((j) => j.status === "completed");
-  let totalDetections = 0;
-  let distinctSpeciesCount = 0;
-  let verifiedCount = 0;
-  if (latestCompletedJob) {
-    const [detResult] = await db
-      .select({ cnt: count() })
-      .from(detections)
-      .innerJoin(images, eq(detections.imageId, images.id))
-      .where(eq(images.jobId, latestCompletedJob.id));
-    totalDetections = detResult?.cnt ?? 0;
 
-    const [specResult] = await db
-      .select({
-        cnt: sql<number>`count(distinct coalesce(${identifications.correctedSpecies}, ${identifications.species}))`,
-      })
-      .from(identifications)
-      .innerJoin(detections, eq(identifications.detectionId, detections.id))
-      .innerJoin(images, eq(detections.imageId, images.id))
-      .where(eq(images.jobId, latestCompletedJob.id));
-    distinctSpeciesCount = specResult?.cnt ?? 0;
+  const [detResult] = await db
+    .select({ cnt: count() })
+    .from(detections)
+    .innerJoin(images, eq(detections.imageId, images.id))
+    .where(eq(images.deploymentId, id));
+  const totalDetections = detResult?.cnt ?? 0;
 
-    const [verResult] = await db
-      .select({ cnt: count() })
-      .from(identifications)
-      .innerJoin(detections, eq(identifications.detectionId, detections.id))
-      .innerJoin(images, eq(detections.imageId, images.id))
-      .where(
-        and(
-          eq(images.jobId, latestCompletedJob.id),
-          ne(identifications.verificationStatus, "unverified")
-        )
-      );
-    verifiedCount = verResult?.cnt ?? 0;
-  }
+  const [specResult] = await db
+    .select({
+      cnt: sql<number>`count(distinct coalesce(${identifications.correctedSpecies}, ${identifications.species}))`,
+    })
+    .from(identifications)
+    .innerJoin(detections, eq(identifications.detectionId, detections.id))
+    .innerJoin(images, eq(detections.imageId, images.id))
+    .where(eq(images.deploymentId, id));
+  const distinctSpeciesCount = specResult?.cnt ?? 0;
+
+  const [verResult] = await db
+    .select({ cnt: count() })
+    .from(identifications)
+    .innerJoin(detections, eq(identifications.detectionId, detections.id))
+    .innerJoin(images, eq(detections.imageId, images.id))
+    .where(
+      and(
+        eq(images.deploymentId, id),
+        ne(identifications.verificationStatus, "unverified")
+      )
+    );
+  const verifiedCount = verResult?.cnt ?? 0;
 
   // Deployment-wide verification progress (across all jobs + manual detections)
   const [totalIdResult] = await db
@@ -2984,6 +3094,164 @@ export async function getJobResultsData(jobId: number) {
     verified,
     unverified,
     totalIdentifications: jobIdentifications.length,
+  };
+}
+
+/** Fetch all data needed to render the image gallery for an entire deployment.
+ *  Used by the deployment detail page so the gallery and counts reflect every
+ *  image in the deployment, not just the latest completed job's image set.
+ *  For the per-job view (Trabajo #N) use getJobResultsData(jobId) instead.
+ *
+ *  Mirrors getJobResultsData's body almost line-for-line — only the input
+ *  query widens from `WHERE images.jobId = jobId` to
+ *  `WHERE images.deploymentId = deploymentId`. The detectionsByImage grouping
+ *  is what guarantees one gridImage entry per physical image regardless of
+ *  how many detections (ML or manual) it has. */
+export async function getDeploymentResultsData(deploymentId: number) {
+  const user = await requirePermission("camera-trap", "viewer");
+
+  const [deployment] = await db
+    .select()
+    .from(deployments)
+    .where(eq(deployments.id, deploymentId));
+
+  if (!deployment) return null;
+
+  try {
+    await requireDeploymentAccess(user, deploymentId);
+  } catch {
+    return null;
+  }
+
+  // Latest completed job — informational only, used by the page header for
+  // model version / timing display. Never used as a filter on the image set.
+  const [latestJob] = await db
+    .select()
+    .from(processingJobs)
+    .where(
+      and(
+        eq(processingJobs.deploymentId, deploymentId),
+        eq(processingJobs.status, "completed"),
+      ),
+    )
+    .orderBy(desc(processingJobs.completedAt))
+    .limit(1);
+
+  // ALL images in the deployment, regardless of which job processed them.
+  const deploymentImages = await db
+    .select()
+    .from(images)
+    .where(eq(images.deploymentId, deploymentId))
+    .orderBy(IMAGE_TIMESTAMP_ORDER, images.filename);
+
+  const imageIds = deploymentImages.map((img) => img.id);
+  const allDetections =
+    imageIds.length > 0
+      ? await db
+          .select()
+          .from(detections)
+          .where(inArray(detections.imageId, imageIds))
+      : [];
+
+  const detectionIds = allDetections.map((d) => d.id);
+  const allIdentifications =
+    detectionIds.length > 0
+      ? await db
+          .select()
+          .from(identifications)
+          .where(inArray(identifications.detectionId, detectionIds))
+      : [];
+
+  const identByDetection = new Map<number, (typeof allIdentifications)[number]>();
+  for (const ident of allIdentifications) {
+    identByDetection.set(ident.detectionId, ident);
+  }
+
+  const detectionsByImage = new Map<number, (typeof allDetections)>();
+  for (const det of allDetections) {
+    const existing = detectionsByImage.get(det.imageId) || [];
+    existing.push(det);
+    detectionsByImage.set(det.imageId, existing);
+  }
+
+  const speciesCount: Record<string, number> = {};
+  for (const ident of allIdentifications) {
+    const sp = ident.correctedSpecies || ident.species;
+    speciesCount[sp] = (speciesCount[sp] || 0) + 1;
+  }
+
+  const speciesNames = Object.keys(speciesCount);
+  const speciesRecords = speciesNames.length > 0
+    ? await db
+        .select()
+        .from(species)
+        .where(inArray(species.scientificName, speciesNames))
+    : [];
+  const speciesRecordMap = new Map(speciesRecords.map((r) => [r.scientificName, r]));
+
+  const sortedSpecies = Object.entries(speciesCount)
+    .sort(([, a], [, b]) => b - a)
+    .map(([name, count]) => {
+      const r = speciesRecordMap.get(name);
+      return {
+        scientificName: name,
+        commonName: r?.commonName ?? null,
+        spanishName: r?.spanishName ?? null,
+        count,
+      };
+    });
+
+  const verified = allIdentifications.filter(
+    (i) => i.verificationStatus === "verified" || i.verificationStatus === "corrected"
+  ).length;
+  const unverified = allIdentifications.filter(
+    (i) => i.verificationStatus === "unverified"
+  ).length;
+
+  const deploymentVideos = await db
+    .select()
+    .from(videos)
+    .where(eq(videos.deploymentId, deploymentId));
+  const videoMap = new Map(deploymentVideos.map((v) => [v.id, v]));
+
+  const gridImages = deploymentImages.map((img) => {
+    const imgDets = detectionsByImage.get(img.id) || [];
+    const vid = img.videoId ? videoMap.get(img.videoId) : null;
+    return {
+      id: img.id,
+      filename: img.filename,
+      path: img.path,
+      status: img.status,
+      thumbnailPath: img.thumbnailPath,
+      videoId: img.videoId ?? null,
+      frameIndex: img.frameIndex ?? null,
+      videoFilename: vid?.filename ?? null,
+      confirmedBlank: img.confirmedBlank ?? false,
+      starred: img.starred ?? false,
+      setupTag: img.setupTag ?? null,
+      detections: imgDets.map((det) => {
+        const ident = identByDetection.get(det.id);
+        return {
+          id: det.id,
+          species: ident?.correctedSpecies || ident?.species || null,
+          confidence: ident?.confidence || null,
+          detectionConfidence: det.detectionConfidence,
+          detectionClass: det.detectionClass,
+          verificationStatus: ident?.verificationStatus || "unverified",
+        };
+      }),
+    };
+  });
+
+  return {
+    job: latestJob ?? null,
+    deployment,
+    gridImages,
+    speciesList: sortedSpecies,
+    detectionCount: allDetections.length,
+    verified,
+    unverified,
+    totalIdentifications: allIdentifications.length,
   };
 }
 
@@ -3240,22 +3508,28 @@ export async function getImageAnnotationData(
   jobId: number,
   navigationIds?: number[],
 ) {
-  const useFilter = navigationIds !== undefined && navigationIds.length > 0;
-
-  const [data, fullJobImageIds, speciesList, verificationStats] = await Promise.all([
-    getImageWithDetections(imageId),
-    useFilter ? Promise.resolve([] as number[]) : getJobImageIds(jobId),
-    getSpeciesList(),
-    getJobVerificationStats(jobId),
-  ]);
-
-  const imageIds = useFilter ? navigationIds! : fullJobImageIds;
-
+  // Fetch the image first because every other query needs its deploymentId
+  // (verification stats, frequent species). Returning early on a missing
+  // image avoids fanning out queries we'd throw away.
+  const data = await getImageWithDetections(imageId);
   if (!data) return null;
 
   const { image, deploymentName, detections: rawDetections } = data;
+  const useFilter = navigationIds !== undefined && navigationIds.length > 0;
 
-  const frequentSpeciesResult = await getFrequentSpecies(image.deploymentId);
+  // Verification stats are intentionally deployment-scoped (not per-job).
+  // The annotation header reads "X/Y revisadas" — that's the user's mental
+  // model of "how much of THIS deployment have I reviewed?", not "how much of
+  // the latest ML job". An incremental run would otherwise show "0/2" instead
+  // of the deployment-wide progress.
+  const [fullJobImageIds, speciesList, verificationStats, frequentSpeciesResult] = await Promise.all([
+    useFilter ? Promise.resolve([] as number[]) : getJobImageIds(jobId),
+    getSpeciesList(),
+    getDeploymentVerificationStats(image.deploymentId),
+    getFrequentSpecies(image.deploymentId),
+  ]);
+
+  const imageIds = useFilter ? navigationIds! : fullJobImageIds;
   const frequentSpecies = frequentSpeciesResult.success ? frequentSpeciesResult.data : [];
 
   const currentIndex = imageIds.indexOf(imageId);

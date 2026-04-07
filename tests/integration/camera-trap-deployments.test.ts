@@ -302,6 +302,158 @@ describe("getDeploymentsCascadeStats", () => {
   });
 });
 
+// === getDeploymentsWithStats — incremental-aware counts ===
+//
+// The detection / species count query is keyed by deployment id (not by the
+// latest completed job's image set). This keeps the displayed totals correct
+// after an incremental run, where the latest completed job only contains the
+// new images. These tests cover the new query and the new pendingImageCount
+// field added in the same change.
+
+describe("getDeploymentsWithStats — counts and pendingImageCount", () => {
+  it("counts detections per deployment, not per latest job", async () => {
+    // Simulate the post-incremental state: a SECOND completed job on the
+    // same deployment that brought one new image with one new detection.
+    // The first job's 3 detections must still be counted alongside it.
+    const [secondJob] = db
+      .insert(schema.processingJobs)
+      .values({
+        deploymentId: seed.deployment.id,
+        status: "completed",
+        jobType: "ml_incremental",
+        totalImages: 1,
+        processedImages: 1,
+        completedAt: new Date(),
+      })
+      .returning()
+      .all();
+
+    const [newImg] = db
+      .insert(schema.images)
+      .values({
+        deploymentId: seed.deployment.id,
+        jobId: secondJob.id,
+        filename: "INC_NEW.jpg",
+        status: "processed",
+      })
+      .returning()
+      .all();
+
+    db.insert(schema.detections)
+      .values({
+        imageId: newImg.id,
+        jobId: secondJob.id,
+        bboxX: 0.1,
+        bboxY: 0.1,
+        bboxWidth: 0.4,
+        bboxHeight: 0.4,
+        detectionConfidence: 0.92,
+        detectionClass: 0,
+        modelVersion: "test-v1",
+      })
+      .run();
+
+    const rows = await actions.getDeploymentsWithStats();
+    const row = rows.find((r) => r.id === seed.deployment.id);
+    expect(row).toBeDefined();
+    // 3 (from seed.job) + 1 (from secondJob) = 4 total. Old per-job query
+    // would only have returned 1 (the latest completed job's count).
+    expect(row!.totalDetections).toBe(4);
+  });
+
+  it("pendingImageCount reflects images.status='pending'", async () => {
+    // Add 2 pending images on top of the 3 processed seed images.
+    db.insert(schema.images)
+      .values([
+        {
+          deploymentId: seed.deployment.id,
+          jobId: null,
+          filename: "PENDING_001.jpg",
+          status: "pending",
+        },
+        {
+          deploymentId: seed.deployment.id,
+          jobId: null,
+          filename: "PENDING_002.jpg",
+          status: "pending",
+        },
+      ])
+      .run();
+
+    const rows = await actions.getDeploymentsWithStats();
+    const row = rows.find((r) => r.id === seed.deployment.id);
+    expect(row).toBeDefined();
+    expect(row!.pendingImageCount).toBe(2);
+  });
+
+  it("pendingImageCount is 0 when all images are processed", async () => {
+    const rows = await actions.getDeploymentsWithStats();
+    const row = rows.find((r) => r.id === seed.deployment.id);
+    expect(row).toBeDefined();
+    expect(row!.pendingImageCount).toBe(0);
+  });
+
+  it("counts species across all completed jobs on a deployment", async () => {
+    // Add a second completed job with an identification for a different
+    // species — the deployment-wide species count should rise to 2.
+    const [secondJob] = db
+      .insert(schema.processingJobs)
+      .values({
+        deploymentId: seed.deployment.id,
+        status: "completed",
+        jobType: "ml_incremental",
+        totalImages: 1,
+        processedImages: 1,
+        completedAt: new Date(),
+      })
+      .returning()
+      .all();
+
+    const [newImg] = db
+      .insert(schema.images)
+      .values({
+        deploymentId: seed.deployment.id,
+        jobId: secondJob.id,
+        filename: "INC_SPECIES.jpg",
+        status: "processed",
+      })
+      .returning()
+      .all();
+
+    const [newDet] = db
+      .insert(schema.detections)
+      .values({
+        imageId: newImg.id,
+        jobId: secondJob.id,
+        bboxX: 0.1,
+        bboxY: 0.1,
+        bboxWidth: 0.4,
+        bboxHeight: 0.4,
+        detectionConfidence: 0.92,
+        detectionClass: 0,
+        modelVersion: "test-v1",
+      })
+      .returning()
+      .all();
+
+    db.insert(schema.identifications)
+      .values({
+        detectionId: newDet.id,
+        species: "Panthera onca",
+        confidence: 0.91,
+        modelVersion: "test-v1",
+        verificationStatus: "unverified",
+      })
+      .run();
+
+    const rows = await actions.getDeploymentsWithStats();
+    const row = rows.find((r) => r.id === seed.deployment.id);
+    expect(row).toBeDefined();
+    // Seed had Dasyprocta punctata; new job adds Panthera onca → 2 distinct.
+    expect(row!.distinctSpecies).toBe(2);
+  });
+});
+
 // === Edge Cases ===
 
 describe("edge cases", () => {

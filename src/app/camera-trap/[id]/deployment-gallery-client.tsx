@@ -120,7 +120,7 @@ export function DeploymentGalleryClient({
               />
             )}
             <span className="text-sm text-muted-foreground tabular-nums">
-              {annotationData.currentIndex + 1} de {annotationData.totalImages}
+              Imagen {annotationData.currentIndex + 1} de {annotationData.totalImages}
             </span>
             <Button
               variant="outline"

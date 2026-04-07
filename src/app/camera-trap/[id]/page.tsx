@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { Sparkles, Loader2 } from "lucide-react";
 import { StatusBadge } from "@/components/status-badge";
 import { requirePermission } from "@/lib/auth";
-import { getDeployment, getDeploymentShareLinks, getDistinctProjects, getJobResultsData } from "../actions";
+import { getDeployment, getDeploymentShareLinks, getDistinctProjects, getDeploymentResultsData } from "../actions";
 import { ProcessButton } from "./process-button";
 import { ShareLinksSection } from "./share-links-section";
 import { CollapsibleSection } from "./collapsible-section";
@@ -72,9 +72,15 @@ export default async function DeploymentDetailPage({ params }: PageProps) {
     (img) => img.compressed && img.originalFileSize != null
   ).length;
 
-  // Fetch results data for the latest completed job (for embedded gallery)
+  // Count pending (un-processed) images — drives the "Procesar nuevas" menu item.
+  const pendingImageCount = images.filter((img) => img.status === "pending").length;
+
+  // Fetch deployment-wide results for the embedded gallery. The
+  // latestCompletedJobId gate is just a "has anything ever been processed?"
+  // guard so we don't render an empty gallery on a fresh deployment; the data
+  // itself reflects every image in the deployment, not just the latest job's.
   const resultsData = stats.latestCompletedJobId
-    ? await getJobResultsData(stats.latestCompletedJobId)
+    ? await getDeploymentResultsData(deployment.id)
     : null;
 
   const isProcessing = deployment.status === "processing";
@@ -130,6 +136,7 @@ export default async function DeploymentDetailPage({ params }: PageProps) {
                 status={deployment.status}
                 totalDetections={stats.totalDetections}
                 revertibleImageCount={revertibleImageCount}
+                pendingImageCount={pendingImageCount}
                 totalImages={deployment.totalImages ?? 0}
                 hasImages={(deployment.totalImages ?? 0) > 0}
                 hasResults={hasResults}

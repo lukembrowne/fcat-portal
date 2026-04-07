@@ -9,6 +9,7 @@ interface DeploymentDetailActionsProps {
   status: string;
   totalDetections: number;
   revertibleImageCount: number;
+  pendingImageCount: number;
   totalImages: number;
   hasImages: boolean;
   hasResults: boolean;
@@ -24,6 +25,7 @@ export function DeploymentDetailActions({
   status,
   totalDetections,
   revertibleImageCount,
+  pendingImageCount,
   totalImages,
   hasImages,
   hasResults,
@@ -46,6 +48,7 @@ export function DeploymentDetailActions({
       driveFolderId={driveFolderId}
       lastCompletedJobId={lastCompletedJobId}
       revertibleImageCount={revertibleImageCount}
+      pendingImageCount={pendingImageCount}
       canEdit={canEdit}
       isAdmin={isAdmin}
       onDeleted={() => router.push("/camera-trap")}

@@ -102,8 +102,8 @@ export function PreviewImageViewer({
           {children}
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-sm text-muted-foreground">
-            {currentIndex + 1} de {totalImages}
+          <span className="text-sm text-muted-foreground tabular-nums">
+            Imagen {currentIndex + 1} de {totalImages}
           </span>
           <Button
             variant="outline"

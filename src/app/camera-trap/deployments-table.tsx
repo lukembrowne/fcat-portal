@@ -51,6 +51,19 @@ import { matchOdkDeployments } from "./odk-actions";
 import { ProcessConfirmDialog } from "./process-confirm-dialog";
 import type { ProjectGroup } from "./page";
 
+/** Deployment statuses that are excluded from global Drive re-scan because a
+ * human has already signed off on the contents. Operators can still scan these
+ * manually via the per-row "Buscar imágenes" action. */
+const SKIP_RESCAN_STATUSES = new Set(["verified", "verified_empty"]);
+
+/** Statuses where the deployment looks "done" but pending images may have
+ * arrived after a re-scan. Drives the "+N pendientes" badge. */
+const POST_PROCESS_STATUSES = new Set([
+  "processed",
+  "verified",
+  "verified_empty",
+]);
+
 export interface CtProject {
   id: number;
   name: string;
@@ -80,6 +93,11 @@ export function DeploymentsTable({
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [syncing, startSync] = useTransition();
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
+  const [syncProgress, setSyncProgress] = useState<{
+    current: number;
+    total: number;
+    label: string;
+  } | null>(null);
   const [batchEditOpen, setBatchEditOpen] = useState(false);
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
   const [processDialogIds, setProcessDialogIds] = useState<number[] | null>(null);
@@ -256,16 +274,43 @@ export function DeploymentsTable({
         accessorKey: "totalImages",
         header: "Archivos",
         cell: ({ row }) => {
-          const imgs = row.original.totalImages;
-          const vids = row.original.totalVideos;
+          const dep = row.original;
+          const imgs = dep.totalImages;
+          const vids = dep.totalVideos;
           const hasImgs = imgs != null && imgs > 0;
           const hasVids = vids != null && vids > 0;
-          if (!hasImgs && !hasVids) return "—";
+          const showPending =
+            dep.pendingImageCount > 0 && POST_PROCESS_STATUSES.has(dep.status);
+          if (!hasImgs && !hasVids && !showPending) return "—";
           return (
-            <span className="tabular-nums">
-              {hasImgs ? `${imgs.toLocaleString()} img` : ""}
-              {hasImgs && hasVids ? ", " : ""}
-              {hasVids ? `${vids.toLocaleString()} vid` : ""}
+            <span className="inline-flex items-center gap-1.5">
+              <span className="tabular-nums">
+                {hasImgs ? `${imgs.toLocaleString()} img` : ""}
+                {hasImgs && hasVids ? ", " : ""}
+                {hasVids ? `${vids.toLocaleString()} vid` : ""}
+                {!hasImgs && !hasVids ? "—" : ""}
+              </span>
+              {showPending && (
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span
+                        className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-800"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        +{dep.pendingImageCount} pendientes
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-xs">
+                      <p className="text-xs leading-relaxed">
+                        Imágenes nuevas detectadas que aún no han sido procesadas.
+                        Usa &quot;Procesar nuevas&quot; en el menú de acciones para
+                        incluirlas sin perder las verificaciones existentes.
+                      </p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              )}
             </span>
           );
         },
@@ -377,6 +422,7 @@ export function DeploymentsTable({
   const handleSync = () => {
     startSync(async () => {
       setSyncMessage(null);
+      setSyncProgress(null);
       setSyncErrors([]);
       setErrorsExpanded(false);
       const messages: string[] = [];
@@ -409,24 +455,35 @@ export function DeploymentsTable({
         }
       }
 
-      // Step 3: Scan remaining unscanned and 0-image deployments
+      // Step 3: Re-scan all deployments except those a human has already verified.
+      // Verified statuses are excluded so adding new images doesn't muddy the
+      // human sign-off — operators can still trigger a manual scan per row.
       const needsScan = initialDeployments.filter(
-        (d) =>
-          d.status === "unscanned" ||
-          (d.status === "scanned" && (d.totalImages == null || d.totalImages === 0))
+        (d) => d.driveFolderId && !SKIP_RESCAN_STATUSES.has(d.status)
       );
 
       if (needsScan.length > 0) {
         let scanned = 0;
         let scanErrors = 0;
+        let depsWithNewMedia = 0;
+        let totalNewMedia = 0;
+
         for (let i = 0; i < needsScan.length; i++) {
           const dep = needsScan[i];
-          setSyncMessage(
-            `Buscando imágenes ${i + 1}/${needsScan.length}...`
-          );
+          setSyncProgress({
+            current: i + 1,
+            total: needsScan.length,
+            label: dep.name,
+          });
+          const beforeImages = dep.totalImages ?? 0;
           const scanResult = await scanDeploymentImages(dep.id);
           if (scanResult.success) {
             scanned++;
+            const delta = scanResult.data.imageCount - beforeImages;
+            if (delta > 0) {
+              depsWithNewMedia++;
+              totalNewMedia += delta;
+            }
           } else {
             scanErrors++;
             collectedErrors.push(
@@ -434,11 +491,26 @@ export function DeploymentsTable({
             );
           }
         }
+
+        const newMediaSuffix =
+          depsWithNewMedia > 0
+            ? ` ${depsWithNewMedia} con imágenes nuevas (+${totalNewMedia}).`
+            : "";
+        const errorSuffix = scanErrors > 0 ? ` ${scanErrors} error(es).` : "";
         messages.push(
-          `${scanned} instalación(es) escaneada(s).${scanErrors > 0 ? ` ${scanErrors} error(es).` : ""}`
+          `${scanned} de ${needsScan.length} instalación(es) re-escaneada(s).${newMediaSuffix}${errorSuffix}`
         );
+
+        // Mention skipped (verified) deployments so the count adds up to the table total.
+        const skippedVerified = initialDeployments.filter(
+          (d) => d.driveFolderId && SKIP_RESCAN_STATUSES.has(d.status)
+        ).length;
+        if (skippedVerified > 0) {
+          messages.push(`${skippedVerified} verificada(s) (omitida(s)).`);
+        }
       }
 
+      setSyncProgress(null);
       setSyncMessage(
         messages.length > 0
           ? messages.join(" ")
@@ -589,8 +661,36 @@ export function DeploymentsTable({
         </div>
       </div>
 
+      {/* Sync progress */}
+      {syncProgress && (
+        <div className="bg-muted/50 px-3 py-2.5 rounded-md space-y-1.5">
+          <div className="flex items-center justify-between gap-3 text-xs">
+            <span className="text-muted-foreground inline-flex items-center gap-1.5 min-w-0">
+              <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+              <span className="truncate">
+                Buscando archivos en{" "}
+                <span className="font-medium text-foreground">
+                  {syncProgress.label}
+                </span>
+              </span>
+            </span>
+            <span className="tabular-nums text-muted-foreground shrink-0">
+              {syncProgress.current} / {syncProgress.total}
+            </span>
+          </div>
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+            <div
+              className="h-full bg-primary transition-all duration-200 ease-out"
+              style={{
+                width: `${Math.min(100, (syncProgress.current / syncProgress.total) * 100)}%`,
+              }}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Sync message */}
-      {syncMessage && (
+      {syncMessage && !syncProgress && (
         <p className="text-sm text-muted-foreground bg-muted/50 px-3 py-2 rounded-md">
           {syncMessage}
         </p>

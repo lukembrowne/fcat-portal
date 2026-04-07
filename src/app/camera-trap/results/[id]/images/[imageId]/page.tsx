@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { requirePermission } from "@/lib/auth";
-import { getImageWithDetections, getJobImageIds, getSpeciesList, getFrequentSpecies, getJobVerificationStats } from "@/app/camera-trap/actions";
+import { getImageWithDetections, getJobImageIds, getSpeciesList, getFrequentSpecies, getDeploymentVerificationStats } from "@/app/camera-trap/actions";
 import { db } from "@/db";
 import { videos } from "@/db/schema";
 import { eq } from "drizzle-orm";
@@ -45,11 +45,14 @@ export default async function ImageDetailPage({ params }: PageProps) {
         })
       : null;
 
+  // Verification stats are deployment-scoped, not per-job — the "X/Y revisadas"
+  // header reflects review progress on the entire deployment so an incremental
+  // ML run doesn't shrink the count to "0/2 revisadas".
   const [imageIds, speciesList, frequentSpeciesResult, verificationStats] = await Promise.all([
     getJobImageIds(jobId),
     getSpeciesList(),
     getFrequentSpecies(image.deploymentId),
-    getJobVerificationStats(jobId),
+    getDeploymentVerificationStats(image.deploymentId),
   ]);
   const frequentSpecies = frequentSpeciesResult.success ? frequentSpeciesResult.data : [];
   const currentIndex = imageIds.indexOf(imgId);
@@ -128,8 +131,8 @@ export default async function ImageDetailPage({ params }: PageProps) {
               total={verificationStats.total}
             />
           )}
-          <span className="text-sm text-muted-foreground">
-            {currentIndex + 1} de {imageIds.length}
+          <span className="text-sm text-muted-foreground tabular-nums">
+            Imagen {currentIndex + 1} de {imageIds.length}
           </span>
           <Button asChild variant="outline" size="sm" disabled={!prevImageId}>
             {prevImageId ? (

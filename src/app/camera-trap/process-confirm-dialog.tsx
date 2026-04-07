@@ -24,6 +24,10 @@ import { getCompressionPreviewBatch } from "./preview-actions";
 interface ProcessConfirmDialogProps {
   deploymentIds: number[] | null;
   isAdmin: boolean;
+  /** When true, show the compression checkbox (compression only applies to images). */
+  hasImages?: boolean;
+  /** When true, show the frame extraction rate control (only meaningful for video deployments). */
+  hasVideos?: boolean;
   onClose: () => void;
   onStarted: () => void;
 }
@@ -31,10 +35,13 @@ interface ProcessConfirmDialogProps {
 export function ProcessConfirmDialog({
   deploymentIds,
   isAdmin,
+  hasImages = true,
+  hasVideos = false,
   onClose,
   onStarted,
 }: ProcessConfirmDialogProps) {
   const [compressFirst, setCompressFirst] = useState(isAdmin);
+  const [frameRate, setFrameRate] = useState<number>(1.0);
   const [starting, setStarting] = useState(false);
   const [preview, setPreview] = useState<{ count: number; totalSizeMB: number } | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
@@ -44,7 +51,7 @@ export function ProcessConfirmDialog({
 
   // Fetch compression preview stats when checkbox is checked
   useEffect(() => {
-    if (!deploymentIds || !isAdmin || !compressFirst) {
+    if (!deploymentIds || !isAdmin || !compressFirst || !hasImages) {
       setPreview(null);
       return;
     }
@@ -58,13 +65,14 @@ export function ProcessConfirmDialog({
       setLoadingPreview(false);
     });
     return () => { cancelled = true; };
-  }, [deploymentIds, isAdmin, compressFirst]);
+  }, [deploymentIds, isAdmin, compressFirst, hasImages]);
 
   const handleConfirm = async () => {
     if (!deploymentIds || deploymentIds.length === 0) return;
     setStarting(true);
     const result = await queueProcessing(deploymentIds, {
-      compressFirst: isAdmin && compressFirst,
+      compressFirst: isAdmin && hasImages && compressFirst,
+      frameExtractionRate: hasVideos ? frameRate : undefined,
     });
     setStarting(false);
     if (result.success) {
@@ -80,6 +88,7 @@ export function ProcessConfirmDialog({
       onClose();
       // Reset state for next open
       setCompressFirst(isAdmin);
+      setFrameRate(1.0);
       setPreview(null);
     }
   };
@@ -94,42 +103,68 @@ export function ProcessConfirmDialog({
               : "Procesar Instalación"}
           </DialogTitle>
           <DialogDescription>
-            Se iniciará el análisis ML de las imágenes{isBatch ? ` de ${count} instalaciones` : ""}.
+            Se iniciará el análisis ML {describeTargets(hasImages, hasVideos)}
+            {isBatch ? ` de ${count} instalaciones` : ""}.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-3">
-          <div className="flex items-start gap-3">
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <div className="flex items-center gap-2">
-                    <Checkbox
-                      id="compress-first"
-                      checked={isAdmin && compressFirst}
-                      onCheckedChange={(checked) => setCompressFirst(!!checked)}
-                      disabled={!isAdmin}
-                    />
-                    <label
-                      htmlFor="compress-first"
-                      className={`text-sm font-medium leading-none peer-disabled:cursor-not-allowed ${
-                        !isAdmin ? "text-muted-foreground" : ""
-                      }`}
-                    >
-                      Comprimir imágenes primero (recomendado)
-                    </label>
-                  </div>
-                </TooltipTrigger>
-                {!isAdmin && (
-                  <TooltipContent>
-                    <p>Solo administradores pueden comprimir</p>
-                  </TooltipContent>
-                )}
-              </Tooltip>
-            </TooltipProvider>
-          </div>
+          {hasImages && (
+            <div className="flex items-start gap-3">
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="flex items-center gap-2">
+                      <Checkbox
+                        id="compress-first"
+                        checked={isAdmin && compressFirst}
+                        onCheckedChange={(checked) => setCompressFirst(!!checked)}
+                        disabled={!isAdmin}
+                      />
+                      <label
+                        htmlFor="compress-first"
+                        className={`text-sm font-medium leading-none peer-disabled:cursor-not-allowed ${
+                          !isAdmin ? "text-muted-foreground" : ""
+                        }`}
+                      >
+                        Comprimir imágenes primero (recomendado)
+                      </label>
+                    </div>
+                  </TooltipTrigger>
+                  {!isAdmin && (
+                    <TooltipContent>
+                      <p>Solo administradores pueden comprimir</p>
+                    </TooltipContent>
+                  )}
+                </Tooltip>
+              </TooltipProvider>
+            </div>
+          )}
 
-          {isAdmin && compressFirst && (
+          {hasVideos && (
+            <div className="space-y-1.5">
+              <label htmlFor="frame-rate" className="text-sm font-medium leading-none">
+                Cuadros por segundo (videos)
+              </label>
+              <select
+                id="frame-rate"
+                value={frameRate}
+                onChange={(e) => setFrameRate(Number(e.target.value))}
+                className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              >
+                <option value={0.5}>0.5 fps — 1 cuadro cada 2 segundos (más rápido)</option>
+                <option value={1}>1 fps — 1 cuadro por segundo (recomendado)</option>
+                <option value={2}>2 fps — 2 cuadros por segundo (más detalle)</option>
+                <option value={4}>4 fps — 4 cuadros por segundo (máximo detalle)</option>
+              </select>
+              <p className="text-xs text-muted-foreground flex items-start gap-1.5">
+                <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                Tasas más altas detectan animales rápidos pero aumentan el tiempo de procesamiento. Solo aplica a videos.
+              </p>
+            </div>
+          )}
+
+          {hasImages && isAdmin && compressFirst && (
             <div className="ml-6 space-y-1">
               <p className="text-xs text-muted-foreground flex items-start gap-1.5">
                 <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" />
@@ -176,4 +211,10 @@ export function ProcessConfirmDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+function describeTargets(hasImages: boolean, hasVideos: boolean): string {
+  if (hasImages && hasVideos) return "de las imágenes y videos";
+  if (hasVideos) return "de los videos";
+  return "de las imágenes";
 }

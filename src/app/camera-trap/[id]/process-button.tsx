@@ -8,9 +8,13 @@ import { ProcessConfirmDialog } from "../process-confirm-dialog";
 export function ProcessButton({
   deploymentId,
   isAdmin,
+  hasImages = true,
+  hasVideos = false,
 }: {
   deploymentId: number;
   isAdmin: boolean;
+  hasImages?: boolean;
+  hasVideos?: boolean;
 }) {
   const [dialogIds, setDialogIds] = useState<number[] | null>(null);
   const [started, setStarted] = useState(false);
@@ -31,7 +35,7 @@ export function ProcessButton({
         onClick={() => setDialogIds([deploymentId])}
         disabled={mlUnavailable || started}
       >
-        {started ? "Procesando..." : "Procesar Imágenes"}
+        {started ? "Procesando..." : "Procesar"}
       </Button>
       {started && (
         <p className="text-sm text-muted-foreground">
@@ -47,6 +51,8 @@ export function ProcessButton({
       <ProcessConfirmDialog
         deploymentIds={dialogIds}
         isAdmin={isAdmin}
+        hasImages={hasImages}
+        hasVideos={hasVideos}
         onClose={() => setDialogIds(null)}
         onStarted={() => {
           setStarted(true);

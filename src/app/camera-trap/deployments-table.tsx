@@ -279,8 +279,9 @@ export function DeploymentsTable({
           const vids = dep.totalVideos;
           const hasImgs = imgs != null && imgs > 0;
           const hasVids = vids != null && vids > 0;
+          const totalPending = (dep.pendingImageCount ?? 0) + (dep.pendingVideoCount ?? 0);
           const showPending =
-            dep.pendingImageCount > 0 && POST_PROCESS_STATUSES.has(dep.status);
+            totalPending > 0 && POST_PROCESS_STATUSES.has(dep.status);
           if (!hasImgs && !hasVids && !showPending) return "—";
           return (
             <span className="inline-flex items-center gap-1.5">
@@ -298,14 +299,14 @@ export function DeploymentsTable({
                         className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-800"
                         onClick={(e) => e.stopPropagation()}
                       >
-                        +{dep.pendingImageCount} pendientes
+                        +{totalPending} pendientes
                       </span>
                     </TooltipTrigger>
                     <TooltipContent side="top" className="max-w-xs">
                       <p className="text-xs leading-relaxed">
-                        Imágenes nuevas detectadas que aún no han sido procesadas.
+                        Archivos nuevos detectados que aún no han sido procesados.
                         Usa &quot;Procesar nuevas&quot; en el menú de acciones para
-                        incluirlas sin perder las verificaciones existentes.
+                        incluirlos sin perder las verificaciones existentes.
                       </p>
                     </TooltipContent>
                   </Tooltip>

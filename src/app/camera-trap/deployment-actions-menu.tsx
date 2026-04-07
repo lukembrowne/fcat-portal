@@ -55,6 +55,9 @@ export interface DeploymentActionsMenuProps {
   totalDetections: number;
   totalImages: number;
   hasImages: boolean;
+  /** Whether the deployment has any videos. Drives the frame-rate control + the
+   *  process menu gating for video-only deployments. */
+  hasVideos?: boolean;
   hasResults: boolean;
   driveFolderId: string | null;
   /** ID of the most recent completed job, used for "Ver Resultados" and "Eliminar vacías". */
@@ -63,6 +66,8 @@ export interface DeploymentActionsMenuProps {
   revertibleImageCount: number;
   /** Pending (un-processed) images on this deployment. Drives the "Procesar nuevas" menu item. */
   pendingImageCount: number;
+  /** Pending (un-processed) videos on this deployment — combined with pendingImageCount for the badge. */
+  pendingVideoCount?: number;
   canEdit: boolean;
   isAdmin: boolean;
   /** Show "Ver Detalles" navigation link. True for the row variant, false on the detail page itself. */
@@ -80,11 +85,13 @@ export function DeploymentActionsMenu({
   totalDetections,
   totalImages,
   hasImages,
+  hasVideos = false,
   hasResults,
   driveFolderId,
   lastCompletedJobId,
   revertibleImageCount,
   pendingImageCount,
+  pendingVideoCount = 0,
   canEdit,
   isAdmin,
   showDetailsLink = false,
@@ -229,15 +236,15 @@ export function DeploymentActionsMenu({
           )}
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-72">
-          {/* Procesar nuevas — incremental ML on newly added pending images */}
-          {hasResults && !isProcessing && pendingImageCount > 0 && (
+          {/* Procesar nuevas — incremental ML on newly added pending images/videos */}
+          {hasResults && !isProcessing && (pendingImageCount + pendingVideoCount) > 0 && (
             <>
               <DropdownMenuItem onClick={() => setIncrementalDialogId(deploymentId)}>
                 <PlusCircle className="h-4 w-4 mr-2 shrink-0" />
                 <div>
-                  <div>Procesar nuevas ({pendingImageCount})</div>
+                  <div>Procesar nuevas ({pendingImageCount + pendingVideoCount})</div>
                   <p className="text-xs text-muted-foreground font-normal">
-                    Analizar solo las imágenes nuevas. Las verificaciones existentes se preservarán.
+                    Analizar solo los archivos nuevos. Las verificaciones existentes se preservarán.
                   </p>
                 </div>
               </DropdownMenuItem>
@@ -262,12 +269,12 @@ export function DeploymentActionsMenu({
           )}
 
           {/* Initial process (when no results yet) */}
-          {!hasResults && !isProcessing && hasImages && (
+          {!hasResults && !isProcessing && (hasImages || hasVideos) && (
             <>
               <DropdownMenuItem onClick={() => setProcessDialogIds([deploymentId])}>
                 <RefreshCw className="h-4 w-4 mr-2 shrink-0" />
                 <div>
-                  <div>Procesar Imágenes</div>
+                  <div>Procesar</div>
                   <p className="text-xs text-muted-foreground font-normal">
                     Ejecutar ML para detectar y clasificar especies
                   </p>
@@ -505,12 +512,16 @@ export function DeploymentActionsMenu({
       <ProcessConfirmDialog
         deploymentIds={processDialogIds}
         isAdmin={isAdmin}
+        hasImages={hasImages}
+        hasVideos={hasVideos}
         onClose={() => setProcessDialogIds(null)}
         onStarted={handleJobStarted}
       />
       <ProcessIncrementalDialog
         deploymentId={incrementalDialogId}
         pendingImageCount={pendingImageCount}
+        pendingVideoCount={pendingVideoCount}
+        hasVideos={hasVideos}
         deploymentStatus={status}
         onClose={() => setIncrementalDialogId(null)}
         onStarted={handleJobStarted}

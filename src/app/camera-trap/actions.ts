@@ -53,7 +53,7 @@ export async function createProcessingJob(
     confidenceThreshold?: number;
     frameExtractionRate?: number;
   },
-  options?: { compressFirst?: boolean; incremental?: boolean }
+  options?: { compressFirst?: boolean; incremental?: boolean; frameExtractionRate?: number }
 ): Promise<ActionResult<{ jobId: number }>> {
   const incremental = options?.incremental ?? false;
   const user = await requirePermission("camera-trap", "editor");
@@ -204,7 +204,7 @@ export async function createProcessingJob(
           detectorModel: modelConfig?.detectorModel || ML_DEFAULTS.detectorModel,
           classifierModel: modelConfig?.classifierModel || ML_DEFAULTS.classifierModel,
           confidenceThreshold: modelConfig?.confidenceThreshold ?? ML_DEFAULTS.confidenceThreshold,
-          frameExtractionRate: modelConfig?.frameExtractionRate ?? 1.0,
+          frameExtractionRate: options?.frameExtractionRate ?? modelConfig?.frameExtractionRate ?? 1.0,
           compressFirst: options?.compressFirst ?? false,
           status: "pending",
           totalImages: deploymentImages.length,
@@ -1302,6 +1302,7 @@ export interface DeploymentRow {
   reviewedCount: number | null;
   totalIdentifications: number | null;
   pendingImageCount: number;
+  pendingVideoCount: number;
 }
 
 export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
@@ -1409,6 +1410,25 @@ export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
     .groupBy(images.deploymentId);
   const pendingImageCountMap = new Map(
     pendingImageCounts.map((r) => [r.deploymentId, r.cnt]),
+  );
+
+  // Batch: pending video counts per deployment (mirrors pendingImageCounts —
+  // drives the "Procesar nuevas" badge for video-bearing deployments).
+  const pendingVideoCounts = await db
+    .select({
+      deploymentId: videos.deploymentId,
+      cnt: count(),
+    })
+    .from(videos)
+    .where(
+      and(
+        inArray(videos.deploymentId, deploymentIds),
+        eq(videos.status, "pending"),
+      ),
+    )
+    .groupBy(videos.deploymentId);
+  const pendingVideoCountMap = new Map(
+    pendingVideoCounts.map((r) => [r.deploymentId, r.cnt]),
   );
 
   // Batch: detection counts and species counts per DEPLOYMENT (not per job).
@@ -1536,6 +1556,7 @@ export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
       reviewedCount: verificationMap.get(d.id)?.reviewed ?? null,
       totalIdentifications: verificationMap.get(d.id)?.total ?? null,
       pendingImageCount: pendingImageCountMap.get(d.id) ?? 0,
+      pendingVideoCount: pendingVideoCountMap.get(d.id) ?? 0,
     };
   });
 }
@@ -2659,7 +2680,7 @@ export async function undoVerifiedEmpty(
 
 export async function queueProcessing(
   deploymentIds: number[],
-  options?: { compressFirst?: boolean }
+  options?: { compressFirst?: boolean; frameExtractionRate?: number }
 ): Promise<ActionResult<{ jobIds: number[] }>> {
   const user = await requirePermission("camera-trap", "editor");
 
@@ -2723,6 +2744,7 @@ export async function queueProcessing(
  */
 export async function queueIncrementalProcessing(
   deploymentId: number,
+  options?: { frameExtractionRate?: number },
 ): Promise<ActionResult<{ jobId: number }>> {
   const user = await requirePermission("camera-trap", "editor");
 
@@ -2731,6 +2753,7 @@ export async function queueIncrementalProcessing(
 
     const result = await createProcessingJob(deploymentId, undefined, {
       incremental: true,
+      frameExtractionRate: options?.frameExtractionRate,
     });
     if (!result.success) return result;
 
@@ -2854,6 +2877,11 @@ export async function getDeployment(id: number) {
     .from(images)
     .where(eq(images.deploymentId, id));
 
+  const deploymentVideos = await db
+    .select()
+    .from(videos)
+    .where(eq(videos.deploymentId, id));
+
   const jobs = await db
     .select()
     .from(processingJobs)
@@ -2947,9 +2975,12 @@ export async function getDeployment(id: number) {
   const blankTotal = blankResult?.blankTotal ?? 0;
   const blankReviewed = Number(blankResult?.blankReviewed ?? 0);
 
+  const pendingVideoCount = deploymentVideos.filter((v) => v.status === "pending").length;
+
   return {
     deployment,
     images: deploymentImages,
+    videos: deploymentVideos,
     jobs,
     stats: {
       totalDetections,
@@ -2958,6 +2989,7 @@ export async function getDeployment(id: number) {
       latestCompletedJobId: latestCompletedJob?.id ?? null,
       totalIdentifications: (totalIdResult?.cnt ?? 0) + blankTotal,
       reviewedCount: (reviewedResult?.cnt ?? 0) + blankReviewed,
+      pendingVideoCount,
     },
   };
 }

@@ -34,7 +34,7 @@ export default async function DeploymentDetailPage({ params }: PageProps) {
     notFound();
   }
 
-  const { deployment, images, jobs, stats } = data;
+  const { deployment, images, videos, jobs, stats } = data;
 
   const latestJob = jobs[0];
   const canProcess =
@@ -74,6 +74,9 @@ export default async function DeploymentDetailPage({ params }: PageProps) {
 
   // Count pending (un-processed) images — drives the "Procesar nuevas" menu item.
   const pendingImageCount = images.filter((img) => img.status === "pending").length;
+  const pendingVideoCount = videos.filter((v) => v.status === "pending").length;
+  const hasImages = (deployment.totalImages ?? 0) > 0;
+  const hasVideos = (deployment.totalVideos ?? 0) > 0 || videos.length > 0;
 
   // Fetch deployment-wide results for the embedded gallery. The
   // latestCompletedJobId gate is just a "has anything ever been processed?"
@@ -118,8 +121,13 @@ export default async function DeploymentDetailPage({ params }: PageProps) {
 
           {/* Actions */}
           <div className="flex items-center gap-2 shrink-0">
-            {canProcess && !isProcessing && !hasResults && (
-              <ProcessButton deploymentId={deployment.id} isAdmin={isAdmin} />
+            {canProcess && !isProcessing && !hasResults && (hasImages || hasVideos) && (
+              <ProcessButton
+                deploymentId={deployment.id}
+                isAdmin={isAdmin}
+                hasImages={hasImages}
+                hasVideos={hasVideos}
+              />
             )}
             {isProcessing && latestJob && (
               <Link
@@ -137,8 +145,10 @@ export default async function DeploymentDetailPage({ params }: PageProps) {
                 totalDetections={stats.totalDetections}
                 revertibleImageCount={revertibleImageCount}
                 pendingImageCount={pendingImageCount}
+                pendingVideoCount={pendingVideoCount}
                 totalImages={deployment.totalImages ?? 0}
-                hasImages={(deployment.totalImages ?? 0) > 0}
+                hasImages={hasImages}
+                hasVideos={hasVideos}
                 hasResults={hasResults}
                 driveFolderId={deployment.driveFolderId}
                 canEdit={isEditor}
@@ -227,13 +237,17 @@ export default async function DeploymentDetailPage({ params }: PageProps) {
               </div>
               <h3 className="text-base font-semibold">Lista para procesar</h3>
               <p className="text-sm text-muted-foreground max-w-md">
-                {deployment.totalImages != null && deployment.totalImages > 0
-                  ? `Hay ${deployment.totalImages.toLocaleString()} imágenes listas para analizar con ML.`
-                  : "Sincroniza con Drive para buscar imágenes en esta instalación."}
+                {hasImages || hasVideos
+                  ? buildReadyMessage(deployment.totalImages ?? 0, deployment.totalVideos ?? 0)
+                  : "Sincroniza con Drive para buscar archivos en esta instalación."}
               </p>
-              {canProcess && isEditor && (
+              {canProcess && isEditor && (hasImages || hasVideos) && (
                 <div className="pt-1">
-                  <ProcessButton deploymentId={deployment.id} isAdmin={isAdmin} />
+                  <ProcessButton
+                    deploymentId={deployment.id}
+                    isAdmin={isAdmin}
+                    hasVideos={hasVideos}
+                  />
                 </div>
               )}
             </div>
@@ -256,6 +270,14 @@ export default async function DeploymentDetailPage({ params }: PageProps) {
       )}
     </div>
   );
+}
+
+function buildReadyMessage(totalImages: number, totalVideos: number): string {
+  const parts: string[] = [];
+  if (totalImages > 0) parts.push(`${totalImages.toLocaleString()} imágenes`);
+  if (totalVideos > 0) parts.push(`${totalVideos.toLocaleString()} videos`);
+  if (parts.length === 0) return "";
+  return `Hay ${parts.join(" y ")} listos para analizar con ML.`;
 }
 
 function ReviewProgress({ reviewed, total }: { reviewed: number; total: number }) {

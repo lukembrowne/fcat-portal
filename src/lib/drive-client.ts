@@ -829,7 +829,7 @@ async function findOrCreateSubfolder(
     supportsAllDrives: true,
   });
 
-  console.log(`[Drive] Created _frames subfolder in ${parentId}`);
+  console.log(`[Drive] Created '${name}' subfolder in ${parentId}`);
   return created.data.id!;
 }
 
@@ -860,17 +860,48 @@ async function uploadSingleFile(
 }
 
 /**
- * Upload extracted video frames to a `_frames/` subfolder in the deployment's
- * Drive folder. Returns a map of filename → driveFileId.
+ * Look up an existing subfolder by name under a parent folder. Returns the
+ * folder ID if found, or null. Used to nest the `_frames/` upload under a
+ * `camaras_trampas/` subfolder when one exists, so frames live next to the
+ * source videos rather than at the deployment root.
+ */
+async function findSubfolderId(
+  parentId: string,
+  name: string,
+): Promise<string | null> {
+  const drive = getDrive();
+  const res = await drive.files.list({
+    q: `'${parentId}' in parents and name = '${name.replace(/'/g, "\\'")}' and mimeType = '${FOLDER_MIME}' and trashed = false`,
+    fields: "files(id)",
+    pageSize: 1,
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
+  });
+  return res.data.files?.[0]?.id ?? null;
+}
+
+/**
+ * Upload extracted video frames to a `_frames/` subfolder. If the deployment
+ * has a `camaras_trampas/` subfolder (the FCAT convention for camera-trap
+ * media inside a multi-sensor deployment), the `_frames/` folder is nested
+ * inside it so the frames live next to the source videos. Otherwise the
+ * `_frames/` folder is created at the deployment root.
  *
- * Uploads in batches of 5 to avoid overwhelming the API.
+ * Returns a map of filename → driveFileId. Uploads in batches to avoid
+ * overwhelming the API.
  */
 export async function uploadFramesToDrive(
   deploymentFolderId: string,
   frames: { localPath: string; filename: string }[],
   onProgress?: (uploaded: number, total: number) => Promise<void>
 ): Promise<Map<string, string>> {
-  const framesFolderId = await findOrCreateSubfolder(deploymentFolderId, "_frames");
+  // Prefer nesting under camaras_trampas/ when present.
+  const cameraTrapFolderId = await findSubfolderId(
+    deploymentFolderId,
+    "camaras_trampas",
+  );
+  const framesParentId = cameraTrapFolderId ?? deploymentFolderId;
+  const framesFolderId = await findOrCreateSubfolder(framesParentId, "_frames");
   const result = new Map<string, string>();
   const BATCH_SIZE = 20;
 

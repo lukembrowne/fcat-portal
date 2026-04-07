@@ -10,7 +10,7 @@
 
 import { db } from "@/db";
 import { images } from "@/db/schema";
-import { and, eq, inArray, sql, count, sum } from "drizzle-orm";
+import { and, eq, inArray, or, sql, count, sum } from "drizzle-orm";
 import { requirePermission } from "@/lib/auth";
 import type { ActionResult } from "@/lib/types";
 
@@ -30,7 +30,10 @@ export async function getCompressionPreview(
         eq(images.deploymentId, deploymentId),
         eq(images.compressed, false),
         sql`${images.driveFileId} IS NOT NULL`,
-        sql`lower(${images.filename}) LIKE '%.jpg' OR lower(${images.filename}) LIKE '%.jpeg'`,
+        or(
+          sql`lower(${images.filename}) LIKE '%.jpg'`,
+          sql`lower(${images.filename}) LIKE '%.jpeg'`,
+        ),
       ),
     );
 
@@ -64,7 +67,10 @@ export async function getCompressionPreviewBatch(
         inArray(images.deploymentId, deploymentIds),
         eq(images.compressed, false),
         sql`${images.driveFileId} IS NOT NULL`,
-        sql`lower(${images.filename}) LIKE '%.jpg' OR lower(${images.filename}) LIKE '%.jpeg'`,
+        or(
+          sql`lower(${images.filename}) LIKE '%.jpg'`,
+          sql`lower(${images.filename}) LIKE '%.jpeg'`,
+        ),
       ),
     );
 

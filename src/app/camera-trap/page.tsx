@@ -1,5 +1,3 @@
-import Link from "next/link";
-import { Button } from "@/components/ui/button";
 import { getDeploymentsWithStats, getDistinctProjects } from "./actions";
 import { DeploymentsTable } from "./deployments-table";
 import { requirePermission } from "@/lib/auth";
@@ -97,17 +95,12 @@ export default async function CameraTrapPage() {
   return (
     <div className="max-w-7xl mx-auto min-w-0">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-3xl font-bold mb-1">Cámaras Trampa</h1>
-          <p className="text-muted-foreground text-sm">
-            Gestiona instalaciones, procesa imágenes con ML y revisa
-            identificaciones.
-          </p>
-        </div>
-        <Button asChild variant="outline" size="sm">
-          <Link href="/camera-trap/results">Todos los Resultados</Link>
-        </Button>
+      <div className="mb-6">
+        <h1 className="text-3xl font-bold mb-1">Cámaras Trampa</h1>
+        <p className="text-muted-foreground text-sm">
+          Gestiona instalaciones, procesa imágenes con ML y revisa
+          identificaciones.
+        </p>
       </div>
 
       {/* Summary strip */}

@@ -140,11 +140,11 @@ export function SidebarNav({ user }: SidebarNavProps) {
   if (hasCameraTrap) {
     const cameraTrapChildren: NavItem[] = [
       { label: "Instalaciones", href: "/camera-trap" },
-      { label: "Resultados", href: "/camera-trap/results" },
       { label: "Destacadas", href: "/camera-trap/favorites" },
     ];
     if (isCameraTrapEditor) {
       cameraTrapChildren.push({ label: "Especies", href: "/camera-trap/species" });
+      cameraTrapChildren.push({ label: "Trabajos de ML", href: "/camera-trap/results" });
     }
     analysisItems.push({
       label: "Cámaras Trampa",

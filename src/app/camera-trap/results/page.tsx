@@ -6,7 +6,7 @@ import { getRecentJobs, getResultsStats } from "../actions";
 import { ResultsTable, type ResultsJob } from "./results-table";
 
 export default async function ResultsPage() {
-  const user = await requirePermission("camera-trap", "viewer");
+  const user = await requirePermission("camera-trap", "editor");
   const [jobs, stats] = await Promise.all([
     getRecentJobs(50),
     getResultsStats(),
@@ -46,9 +46,9 @@ export default async function ResultsPage() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold">Resultados de Procesamiento</h1>
+          <h1 className="text-2xl font-bold">Trabajos de ML</h1>
           <p className="text-sm text-muted-foreground">
-            Todos los trabajos de procesamiento y sus resultados.
+            Historial de trabajos de procesamiento con modelos de ML.
           </p>
         </div>
         <Button asChild variant="outline">

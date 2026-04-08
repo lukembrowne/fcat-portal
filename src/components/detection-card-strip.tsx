@@ -141,6 +141,7 @@ export function DetectionCardStrip({
           }
         }
         const status = ident?.verificationStatus || "unverified";
+        const isHumanVerified = status === "verified" || status === "corrected";
         const confidence = ident
           ? (ident.confidence * 100).toFixed(0)
           : (det.detectionConfidence * 100).toFixed(0);
@@ -181,9 +182,16 @@ export function DetectionCardStrip({
               <span className="text-xs font-medium truncate">
                 {CLASS_LABELS[det.detectionClass] || "?"}
               </span>
-              <span className="text-[10px] text-muted-foreground ml-auto">
-                {confidence}%
-              </span>
+              {isHumanVerified ? (
+                <CheckCircle2
+                  className="h-3.5 w-3.5 text-green-600 ml-auto flex-shrink-0"
+                  aria-label="Verificado"
+                />
+              ) : (
+                <span className="text-[10px] text-muted-foreground ml-auto">
+                  {confidence}%
+                </span>
+              )}
               <div
                 role="button"
                 tabIndex={-1}

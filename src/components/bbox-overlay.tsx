@@ -287,24 +287,37 @@ export function BBoxOverlay({
                 </text>
 
                 {/* Species label — always visible when species is assigned */}
-                {box.species && box.species !== "unknown" && (
-                  <>
-                    <rect
-                      x={px} y={py - 20}
-                      width={Math.max(pw, 100)} height={20}
-                      fill={color} fillOpacity={highlight ? 0.9 : 0.75} rx={2}
-                    />
-                    <text
-                      x={px + 4} y={py - 6}
-                      fill="white" fontSize={12}
-                      fontFamily="system-ui, sans-serif" fontWeight={500}
-                    >
-                      {box.displayLabel || box.species}{" "}
-                      {box.speciesConfidence != null &&
-                        `${(box.speciesConfidence * 100).toFixed(0)}%`}
-                    </text>
-                  </>
-                )}
+                {box.species && box.species !== "unknown" && (() => {
+                  const isHumanVerified =
+                    box.verificationStatus === "verified" ||
+                    box.verificationStatus === "corrected";
+                  // Flip label inside the box when there's no room above
+                  const labelAbove = py >= 20;
+                  const labelRectY = labelAbove ? py - 20 : py;
+                  const labelTextY = labelAbove ? py - 6 : py + 14;
+                  // When flipped inside, shift text to avoid the number badge
+                  const textX = labelAbove ? px + 4 : px + 22;
+                  return (
+                    <>
+                      <rect
+                        x={px} y={labelRectY}
+                        width={Math.max(pw, 100)} height={20}
+                        fill={color} fillOpacity={highlight ? 0.9 : 0.75} rx={2}
+                      />
+                      <text
+                        x={textX} y={labelTextY}
+                        fill="white" fontSize={12}
+                        fontFamily="system-ui, sans-serif" fontWeight={500}
+                      >
+                        {box.displayLabel || box.species}{" "}
+                        {isHumanVerified
+                          ? "✓"
+                          : box.speciesConfidence != null &&
+                            `${(box.speciesConfidence * 100).toFixed(0)}%`}
+                      </text>
+                    </>
+                  );
+                })()}
 
                 {/* Confidence badge — show when no species label or not highlighted */}
                 {(!box.species || box.species === "unknown") && !highlight && (

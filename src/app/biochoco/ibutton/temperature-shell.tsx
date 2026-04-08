@@ -5,21 +5,24 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Loader2, Thermometer } from "lucide-react";
 import { processAllIbutton } from "./actions";
-import { SummaryCards } from "./summary-cards";
-import { HabitatChart } from "./habitat-chart";
+import { TemperatureDistributions } from "./temperature-distributions";
 import { DeploymentsTable } from "./deployments-table";
-import type { IbuttonStatus, HabitatSummary, DeploymentSummary } from "./types";
+import type {
+  IbuttonStatus,
+  DeploymentStatPoint,
+  DeploymentSummary,
+} from "./types";
 
 type ProcessingState = "idle" | "processing" | "success" | "error";
 
 export function TemperatureShell({
   status,
-  habitatSummary,
+  distributionPoints,
   deployments,
   isEditor,
 }: {
   status: IbuttonStatus | null;
-  habitatSummary: HabitatSummary[];
+  distributionPoints: DeploymentStatPoint[];
   deployments: DeploymentSummary[];
   isEditor: boolean;
 }) {
@@ -107,14 +110,59 @@ export function TemperatureShell({
         )}
       </div>
 
-      {/* Summary Cards */}
-      <SummaryCards status={status} />
+      {/* Compact summary strip (matches /camera-trap style) */}
+      {status && (
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-md border bg-card px-4 py-2.5 text-sm">
+          <SummaryStat
+            label="Despliegues procesados"
+            value={`${status.processed} / ${status.total}`}
+            dotClass="bg-blue-600"
+            valueClass="text-blue-700"
+          />
+          <span className="h-4 w-px bg-border" aria-hidden />
+          <SummaryStat
+            label="Pendientes"
+            value={status.unprocessed}
+            dotClass="bg-orange-500"
+            valueClass="text-orange-600"
+          />
+          <span className="h-4 w-px bg-border" aria-hidden />
+          <SummaryStat
+            label="Lecturas totales"
+            value={status.totalReadings.toLocaleString("es")}
+            dotClass="bg-emerald-600"
+            valueClass="text-emerald-700"
+          />
+        </div>
+      )}
 
-      {/* Habitat Comparison Chart */}
-      <HabitatChart data={habitatSummary} />
+      {/* Temperature distributions (box plots) */}
+      <TemperatureDistributions points={distributionPoints} />
 
       {/* Deployments Table */}
       <DeploymentsTable deployments={deployments} isEditor={isEditor} />
     </div>
+  );
+}
+
+function SummaryStat({
+  label,
+  value,
+  dotClass,
+  valueClass,
+}: {
+  label: string;
+  value: string | number;
+  dotClass: string;
+  valueClass: string;
+}) {
+  return (
+    <span className="inline-flex items-center gap-2">
+      <span className={`h-2 w-2 rounded-full ${dotClass}`} aria-hidden />
+      <span className="text-muted-foreground">{label}</span>
+      <span className={`font-semibold tabular-nums ${valueClass}`}>
+        {value}
+      </span>
+    </span>
   );
 }

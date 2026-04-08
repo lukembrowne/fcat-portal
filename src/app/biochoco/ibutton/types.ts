@@ -15,14 +15,28 @@ export interface ProcessingResult {
   errors: string[];
 }
 
-export interface HabitatSummary {
+/**
+ * Per-deployment temperature stat triple used by the distribution box plots.
+ * One of these exists for every processed iButton deployment.
+ */
+export interface DeploymentStatPoint {
+  deploymentId: number;
+  deploymentName: string;
+  siteName: string | null;
   habitatType: string;
   habitatLabel: string;
-  deploymentCount: number;
   readingCount: number;
   tempMin: number;
-  tempMax: number;
   tempMean: number;
+  tempMax: number;
+}
+
+/**
+ * Payload returned by fetchTemperatureDistributions — a flat list of
+ * per-deployment stat points. Grouping (habitat vs. site) happens client-side.
+ */
+export interface TemperatureDistributions {
+  points: DeploymentStatPoint[];
 }
 
 export interface DeploymentSummary {

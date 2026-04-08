@@ -1,5 +1,9 @@
 import { requirePermission } from "@/lib/auth";
-import { fetchIbuttonStatus, fetchHabitatSummary, fetchProcessedDeployments } from "./actions";
+import {
+  fetchIbuttonStatus,
+  fetchTemperatureDistributions,
+  fetchProcessedDeployments,
+} from "./actions";
 import { TemperatureShell } from "./temperature-shell";
 
 export default async function IbuttonPage() {
@@ -13,16 +17,19 @@ export default async function IbuttonPage() {
         (p.role === "editor" || p.role === "admin")
     );
 
-  const [statusResult, habitatResult, deploymentsResult] = await Promise.all([
-    fetchIbuttonStatus(),
-    fetchHabitatSummary(),
-    fetchProcessedDeployments(),
-  ]);
+  const [statusResult, distributionsResult, deploymentsResult] =
+    await Promise.all([
+      fetchIbuttonStatus(),
+      fetchTemperatureDistributions(),
+      fetchProcessedDeployments(),
+    ]);
 
   return (
     <TemperatureShell
       status={statusResult.success ? statusResult.data : null}
-      habitatSummary={habitatResult.success ? habitatResult.data : []}
+      distributionPoints={
+        distributionsResult.success ? distributionsResult.data.points : []
+      }
       deployments={deploymentsResult.success ? deploymentsResult.data : []}
       isEditor={isEditor}
     />

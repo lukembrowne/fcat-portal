@@ -19,7 +19,8 @@ import type { ActionResult } from "@/lib/types";
 import type {
   IbuttonStatus,
   ProcessingResult,
-  HabitatSummary,
+  DeploymentStatPoint,
+  TemperatureDistributions,
   DeploymentSummary,
   DeploymentDetail,
 } from "./types";
@@ -577,10 +578,12 @@ export async function fetchDeploymentReadings(
 }
 
 /**
- * Aggregate temperature data across all processed deployments by habitat type.
+ * Fetch per-deployment temperature stat points (min/mean/max per deployment,
+ * tagged with site + habitat) for the distribution box plots. Grouping
+ * (habitat vs. site) happens client-side.
  */
-export async function fetchHabitatSummary(): Promise<
-  ActionResult<HabitatSummary[]>
+export async function fetchTemperatureDistributions(): Promise<
+  ActionResult<TemperatureDistributions>
 > {
   try {
     await requirePermission("biochoco", "viewer");
@@ -600,67 +603,38 @@ export async function fetchHabitatSummary(): Promise<
       .innerJoin(deployments, eq(ibuttonUploads.deploymentId, deployments.id));
 
     if (depStats.length === 0) {
-      return { success: true, data: [] };
+      return { success: true, data: { points: [] } };
     }
 
     // Get habitat types from ODK
     const habitatMap = await loadSiteHabitatMap();
 
-    // Aggregate by habitat
-    const byHabitat = new Map<
-      string,
-      { count: number; readings: number; mins: number[]; maxes: number[]; means: number[] }
-    >();
-
+    const points: DeploymentStatPoint[] = [];
     for (const dep of depStats) {
-      const habitat =
+      if (dep.tempMin === null || dep.tempMax === null || dep.tempMean === null) {
+        continue;
+      }
+      const habitatType =
         (dep.siteName ? habitatMap.get(dep.siteName) : null) ??
         habitatMap.get(extractSiteId(dep.deploymentName ?? "") ?? "") ??
         "unknown";
-
-      const entry = byHabitat.get(habitat) ?? {
-        count: 0,
-        readings: 0,
-        mins: [],
-        maxes: [],
-        means: [],
-      };
-
-      entry.count++;
-      entry.readings += dep.readingCount;
-      if (dep.tempMin !== null) entry.mins.push(dep.tempMin);
-      if (dep.tempMax !== null) entry.maxes.push(dep.tempMax);
-      if (dep.tempMean !== null) entry.means.push(dep.tempMean);
-
-      byHabitat.set(habitat, entry);
-    }
-
-    const summaries: HabitatSummary[] = [];
-    for (const [habitat, entry] of byHabitat) {
-      summaries.push({
-        habitatType: habitat,
-        habitatLabel: getHabitatName(habitat),
-        deploymentCount: entry.count,
-        readingCount: entry.readings,
-        tempMin:
-          entry.mins.length > 0 ? Math.min(...entry.mins) : 0,
-        tempMax:
-          entry.maxes.length > 0 ? Math.max(...entry.maxes) : 0,
-        tempMean:
-          entry.means.length > 0
-            ? Math.round(
-                (entry.means.reduce((a, b) => a + b, 0) /
-                  entry.means.length) *
-                  100
-              ) / 100
-            : 0,
+      points.push({
+        deploymentId: dep.deploymentId,
+        deploymentName: dep.deploymentName ?? `#${dep.deploymentId}`,
+        siteName: dep.siteName,
+        habitatType,
+        habitatLabel: getHabitatName(habitatType),
+        readingCount: dep.readingCount,
+        tempMin: dep.tempMin,
+        tempMean: dep.tempMean,
+        tempMax: dep.tempMax,
       });
     }
 
-    // Sort by habitat name
-    summaries.sort((a, b) => a.habitatLabel.localeCompare(b.habitatLabel));
+    // Stable order for deterministic rendering
+    points.sort((a, b) => a.deploymentName.localeCompare(b.deploymentName));
 
-    return { success: true, data: summaries };
+    return { success: true, data: { points } };
   } catch (err) {
     return {
       success: false,

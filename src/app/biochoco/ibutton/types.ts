@@ -53,6 +53,14 @@ export interface DeploymentSummary {
   flaggedCount: number;
   processedAt: Date | null;
   processedBy: string | null;
+  // Deployment window / coverage (computed on read, see coverage.ts)
+  odkDeployAt: string | null;
+  odkRetrieveAt: string | null;
+  odkTimeKnown: boolean;
+  expectedReadings: number | null;
+  coveragePct: number | null;
+  hasLowCoverage: boolean;
+  maxGapSeconds: number | null;
 }
 
 export interface DeploymentDetail {
@@ -75,6 +83,14 @@ export interface DeploymentDetail {
     dateRangeEnd: string | null;
     processedBy: string;
     processedAt: Date;
+    // Deployment window / coverage (computed on read, see coverage.ts)
+    odkDeployAt: string | null;
+    odkRetrieveAt: string | null;
+    odkTimeKnown: boolean;
+    expectedReadings: number | null;
+    coveragePct: number | null;
+    hasLowCoverage: boolean;
+    maxGapSeconds: number | null;
   } | null;
   readings: {
     id: number;

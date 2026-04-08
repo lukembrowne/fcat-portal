@@ -25,6 +25,7 @@ import type {
   DeploymentDetail,
 } from "./types";
 import { getHabitatName } from "@/app/biochoco/overview/types";
+import { computeCoverage, computeMaxGapSeconds } from "./coverage";
 
 const XLSX_EXTENSIONS = new Set([".xlsx"]);
 
@@ -37,11 +38,16 @@ function cleanOdkTime(raw: string): string {
   return raw.replace(/\.\d{3}.*$/, "");
 }
 
+/** An ODK-recorded install/retrieve timestamp plus whether the time of day
+ *  came from the submission (`true`) or was padded to 00:00:00 / 23:59:59
+ *  because ODK recorded only the date (`false`). */
+type OdkDateTime = { dt: string; timeKnown: boolean };
+
 /** Build deploy/retrieve datetime maps from ODK submissions.
  *  Values are "YYYY-MM-DD HH:mm:ss" for timestamp-level truncation. */
 async function loadOdkDateTimes(): Promise<{
-  deployDateTimeMap: Map<string, string>;
-  retrieveDateTimeMap: Map<string, string>;
+  deployDateTimeMap: Map<string, OdkDateTime>;
+  retrieveDateTimeMap: Map<string, OdkDateTime>;
 }> {
   const [rawDeploys, rawRetrieves] = await Promise.all([
     fetchSubmissions<Record<string, unknown>>(
@@ -54,7 +60,7 @@ async function loadOdkDateTimes(): Promise<{
     ),
   ]);
 
-  const deployDateTimeMap = new Map<string, string>();
+  const deployDateTimeMap = new Map<string, OdkDateTime>();
   for (const sub of rawDeploys) {
     const sel = sub.site_selection as Record<string, unknown> | undefined;
     const depInfo = sub.deployment_info as Record<string, unknown> | undefined;
@@ -72,11 +78,12 @@ async function loadOdkDateTimes(): Promise<{
     const time = (depInfo?.deploy_time as string) ?? "";
     const dateStr = date.slice(0, 10);
     // Fallback: if no time, use 00:00:00 (start of day = inclusive)
+    const timeKnown = Boolean(time);
     const timeStr = time ? cleanOdkTime(time) : "00:00:00";
-    deployDateTimeMap.set(depId, `${dateStr} ${timeStr}`);
+    deployDateTimeMap.set(depId, { dt: `${dateStr} ${timeStr}`, timeKnown });
   }
 
-  const retrieveDateTimeMap = new Map<string, string>();
+  const retrieveDateTimeMap = new Map<string, OdkDateTime>();
   for (const sub of rawRetrieves) {
     const sel = sub.site_selection as Record<string, unknown> | undefined;
     const retInfo = sub.retrieval_info as Record<string, unknown> | undefined;
@@ -94,8 +101,9 @@ async function loadOdkDateTimes(): Promise<{
     const time = (retInfo?.retrieval_time as string) ?? "";
     const dateStr = date.slice(0, 10);
     // Fallback: if no time, use 23:59:59 (end of day = inclusive)
+    const timeKnown = Boolean(time);
     const timeStr = time ? cleanOdkTime(time) : "23:59:59";
-    retrieveDateTimeMap.set(depId, `${dateStr} ${timeStr}`);
+    retrieveDateTimeMap.set(depId, { dt: `${dateStr} ${timeStr}`, timeKnown });
   }
 
   return { deployDateTimeMap, retrieveDateTimeMap };
@@ -247,8 +255,8 @@ export async function processAllIbutton(): Promise<
         }
 
         // 4. Truncate to deployment window (timestamp-level)
-        const deployDateTime = deployDateTimeMap.get(dep.name);
-        const retrieveDateTime = retrieveDateTimeMap.get(dep.name);
+        const deployDateTime = deployDateTimeMap.get(dep.name)?.dt;
+        const retrieveDateTime = retrieveDateTimeMap.get(dep.name)?.dt;
         let truncated = result.readings;
         let truncationWarning: string | null = null;
 
@@ -385,8 +393,8 @@ export async function reprocessDeployment(
 
     // Truncate (timestamp-level)
     const { deployDateTimeMap, retrieveDateTimeMap } = await loadOdkDateTimes();
-    const deployDateTime = deployDateTimeMap.get(dep.name);
-    const retrieveDateTime = retrieveDateTimeMap.get(dep.name);
+    const deployDateTime = deployDateTimeMap.get(dep.name)?.dt;
+    const retrieveDateTime = retrieveDateTimeMap.get(dep.name)?.dt;
     let truncated = result.readings;
 
     if (deployDateTime && retrieveDateTime && deployDateTime <= retrieveDateTime) {
@@ -499,12 +507,15 @@ export async function fetchDeploymentReadings(
       return { success: false, error: "Despliegue no encontrado" };
     }
 
-    // Get habitat type from ODK
-    const habitatMap = await loadSiteHabitatMap();
+    // Get habitat type + ODK deployment window
+    const [habitatMap, { deployDateTimeMap, retrieveDateTimeMap }] =
+      await Promise.all([loadSiteHabitatMap(), loadOdkDateTimes()]);
     const habitatType =
       (dep.siteName ? habitatMap.get(dep.siteName) : null) ??
       habitatMap.get(extractSiteId(dep.name) ?? "") ??
       null;
+    const odkDeploy = deployDateTimeMap.get(dep.name);
+    const odkRetrieve = retrieveDateTimeMap.get(dep.name);
 
     const [upload] = await db
       .select()
@@ -552,18 +563,39 @@ export async function fetchDeploymentReadings(
           dateEnd: dep.dateEnd,
         },
         upload: upload
-          ? {
-              id: upload.id,
-              filename: upload.filename,
-              deviceSerial: upload.deviceSerial,
-              sampleRate: upload.sampleRate,
-              missionStart: upload.missionStart,
-              rowsImported: upload.rowsImported,
-              dateRangeStart: upload.dateRangeStart,
-              dateRangeEnd: upload.dateRangeEnd,
-              processedBy: upload.processedBy,
-              processedAt: upload.processedAt,
-            }
+          ? (() => {
+              const coverage = computeCoverage({
+                odkDeployAt: odkDeploy?.dt ?? null,
+                odkRetrieveAt: odkRetrieve?.dt ?? null,
+                sampleRate: upload.sampleRate,
+                rowsImported: upload.rowsImported,
+                dateRangeStart: upload.dateRangeStart,
+                dateRangeEnd: upload.dateRangeEnd,
+              });
+              return {
+                id: upload.id,
+                filename: upload.filename,
+                deviceSerial: upload.deviceSerial,
+                sampleRate: upload.sampleRate,
+                missionStart: upload.missionStart,
+                rowsImported: upload.rowsImported,
+                dateRangeStart: upload.dateRangeStart,
+                dateRangeEnd: upload.dateRangeEnd,
+                processedBy: upload.processedBy,
+                processedAt: upload.processedAt,
+                odkDeployAt: coverage.odkDeployAt,
+                odkRetrieveAt: coverage.odkRetrieveAt,
+                odkTimeKnown:
+                  (odkDeploy?.timeKnown ?? false) &&
+                  (odkRetrieve?.timeKnown ?? false),
+                expectedReadings: coverage.expectedReadings,
+                coveragePct: coverage.coveragePct,
+                hasLowCoverage: coverage.hasLowCoverage,
+                maxGapSeconds: computeMaxGapSeconds(
+                  readings.map((r) => r.timestamp)
+                ),
+              };
+            })()
           : null,
         readings,
         stats,
@@ -659,6 +691,7 @@ export async function fetchProcessedDeployments(): Promise<
         siteName: deployments.siteName,
         dateStart: deployments.dateStart,
         dateEnd: deployments.dateEnd,
+        sampleRate: ibuttonUploads.sampleRate,
         rowsImported: ibuttonUploads.rowsImported,
         dateRangeStart: ibuttonUploads.dateRangeStart,
         dateRangeEnd: ibuttonUploads.dateRangeEnd,
@@ -668,32 +701,62 @@ export async function fetchProcessedDeployments(): Promise<
         tempMax: sql<number>`(SELECT max(temperature_c) FROM ibutton_readings WHERE deployment_id = ${deployments.id})`,
         tempMean: sql<number>`(SELECT round(avg(temperature_c), 2) FROM ibutton_readings WHERE deployment_id = ${deployments.id})`,
         flaggedCount: sql<number>`(SELECT count(*) FROM ibutton_readings WHERE deployment_id = ${deployments.id} AND flagged = 1)`,
+        maxGapSeconds: sql<number | null>`(
+          SELECT MAX(gap_seconds) FROM (
+            SELECT (strftime('%s', timestamp) -
+                    strftime('%s', LAG(timestamp) OVER (ORDER BY timestamp))) AS gap_seconds
+            FROM ibutton_readings
+            WHERE deployment_id = ${deployments.id}
+          )
+        )`,
       })
       .from(ibuttonUploads)
       .innerJoin(deployments, eq(ibuttonUploads.deploymentId, deployments.id))
       .orderBy(deployments.name);
 
-    // Get habitat types
-    const habitatMap = await loadSiteHabitatMap();
+    // Get habitat types + ODK deployment windows
+    const [habitatMap, { deployDateTimeMap, retrieveDateTimeMap }] =
+      await Promise.all([loadSiteHabitatMap(), loadOdkDateTimes()]);
 
-    const result: DeploymentSummary[] = rows.map((r) => ({
-      deploymentId: r.deploymentId,
-      deploymentName: r.deploymentName,
-      siteName: r.siteName,
-      habitatType:
-        (r.siteName ? habitatMap.get(r.siteName) : null) ??
-        habitatMap.get(extractSiteId(r.deploymentName) ?? "") ??
-        null,
-      dateStart: r.dateRangeStart,
-      dateEnd: r.dateRangeEnd,
-      readingCount: r.rowsImported,
-      tempMin: r.tempMin,
-      tempMax: r.tempMax,
-      tempMean: r.tempMean,
-      flaggedCount: r.flaggedCount,
-      processedAt: r.processedAt,
-      processedBy: r.processedBy,
-    }));
+    const result: DeploymentSummary[] = rows.map((r) => {
+      const odkDeploy = deployDateTimeMap.get(r.deploymentName);
+      const odkRetrieve = retrieveDateTimeMap.get(r.deploymentName);
+      const coverage = computeCoverage({
+        odkDeployAt: odkDeploy?.dt ?? null,
+        odkRetrieveAt: odkRetrieve?.dt ?? null,
+        sampleRate: r.sampleRate,
+        rowsImported: r.rowsImported,
+        dateRangeStart: r.dateRangeStart,
+        dateRangeEnd: r.dateRangeEnd,
+      });
+      return {
+        deploymentId: r.deploymentId,
+        deploymentName: r.deploymentName,
+        siteName: r.siteName,
+        habitatType:
+          (r.siteName ? habitatMap.get(r.siteName) : null) ??
+          habitatMap.get(extractSiteId(r.deploymentName) ?? "") ??
+          null,
+        dateStart: r.dateRangeStart,
+        dateEnd: r.dateRangeEnd,
+        readingCount: r.rowsImported,
+        tempMin: r.tempMin,
+        tempMax: r.tempMax,
+        tempMean: r.tempMean,
+        flaggedCount: r.flaggedCount,
+        processedAt: r.processedAt,
+        processedBy: r.processedBy,
+        odkDeployAt: coverage.odkDeployAt,
+        odkRetrieveAt: coverage.odkRetrieveAt,
+        odkTimeKnown:
+          (odkDeploy?.timeKnown ?? false) &&
+          (odkRetrieve?.timeKnown ?? false),
+        expectedReadings: coverage.expectedReadings,
+        coveragePct: coverage.coveragePct,
+        hasLowCoverage: coverage.hasLowCoverage,
+        maxGapSeconds: r.maxGapSeconds,
+      };
+    });
 
     return { success: true, data: result };
   } catch (err) {

@@ -14,14 +14,21 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ArrowUpDown, RefreshCw, Flag } from "lucide-react";
+import { ArrowUpDown, RefreshCw, Flag, AlertTriangle } from "lucide-react";
 import { getHabitatName } from "@/app/biochoco/overview/types";
 import { reprocessDeployment } from "./actions";
+import { formatDuration } from "./coverage";
 import type { DeploymentSummary } from "./types";
 
 const PAGE_SIZE = 15;
 
-type SortKey = "deploymentName" | "habitatType" | "dateStart" | "readingCount" | "tempMean";
+type SortKey =
+  | "deploymentName"
+  | "habitatType"
+  | "dateStart"
+  | "readingCount"
+  | "tempMean"
+  | "coveragePct";
 
 export function DeploymentsTable({
   deployments,
@@ -63,6 +70,13 @@ export function DeploymentsTable({
           return dir * (a.readingCount - b.readingCount);
         case "tempMean":
           return dir * (a.tempMean - b.tempMean);
+        case "coveragePct": {
+          // null always last, regardless of direction
+          if (a.coveragePct === null && b.coveragePct === null) return 0;
+          if (a.coveragePct === null) return 1;
+          if (b.coveragePct === null) return -1;
+          return dir * (a.coveragePct - b.coveragePct);
+        }
         default:
           return 0;
       }
@@ -162,6 +176,9 @@ export function DeploymentsTable({
                   <TableHead className="text-right">
                     <SortHeader label="Prom" sortKeyName="tempMean" />
                   </TableHead>
+                  <TableHead className="text-right">
+                    <SortHeader label="Cobertura" sortKeyName="coveragePct" />
+                  </TableHead>
                   {isEditor && <TableHead />}
                 </TableRow>
               </TableHeader>
@@ -208,6 +225,9 @@ export function DeploymentsTable({
                     </TableCell>
                     <TableCell className="text-right tabular-nums font-medium">
                       {d.tempMean}°C
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      <CoverageCell d={d} />
                     </TableCell>
                     {isEditor && (
                       <TableCell className="text-right">
@@ -259,5 +279,42 @@ export function DeploymentsTable({
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function CoverageCell({ d }: { d: DeploymentSummary }) {
+  if (d.coveragePct === null) {
+    return (
+      <span
+        className="text-muted-foreground"
+        title="Sin datos ODK de despliegue"
+      >
+        —
+      </span>
+    );
+  }
+
+  const windowLabel =
+    d.odkDeployAt && d.odkRetrieveAt
+      ? `ODK: ${d.odkDeployAt} → ${d.odkRetrieveAt}`
+      : "ODK: ventana desconocida";
+  const countsLabel =
+    d.expectedReadings !== null
+      ? `${d.readingCount.toLocaleString("es")} / ${d.expectedReadings.toLocaleString("es")} lecturas`
+      : `${d.readingCount.toLocaleString("es")} lecturas`;
+  const gapLabel = `Brecha máxima: ${formatDuration(d.maxGapSeconds)}`;
+  const approxLabel = d.odkTimeKnown ? "" : " (hora aproximada)";
+  const tooltip = `${windowLabel}${approxLabel}\n${countsLabel}\n${gapLabel}`;
+
+  return (
+    <span
+      title={tooltip}
+      className={`inline-flex items-center gap-1 ${
+        d.hasLowCoverage ? "text-amber-600 font-medium" : ""
+      }`}
+    >
+      {d.coveragePct}%
+      {d.hasLowCoverage && <AlertTriangle className="h-3 w-3" />}
+    </span>
   );
 }

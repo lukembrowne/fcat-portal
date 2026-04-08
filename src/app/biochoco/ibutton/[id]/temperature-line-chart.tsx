@@ -20,12 +20,25 @@ interface Reading {
   flagged: boolean;
 }
 
-export function TemperatureLineChart({ readings }: { readings: Reading[] }) {
+export function TemperatureLineChart({
+  readings,
+  odkDeployAt,
+  odkRetrieveAt,
+}: {
+  readings: Reading[];
+  odkDeployAt?: string | null;
+  odkRetrieveAt?: string | null;
+}) {
   const chartData = readings.map((r) => ({
     timestamp: r.timestamp,
     temp: r.temperatureC,
     flagged: r.flagged,
   }));
+
+  // ReferenceLine on a category axis only renders at exact data-point values,
+  // so snap the ODK install/retrieve timestamps to the nearest reading.
+  const deployMarker = snapToNearestTimestamp(readings, odkDeployAt);
+  const retrieveMarker = snapToNearestTimestamp(readings, odkRetrieveAt);
 
   // Compute mean for reference line
   const mean =
@@ -93,6 +106,32 @@ export function TemperatureLineChart({ readings }: { readings: Reading[] }) {
               stroke="#9ca3af"
               strokeDasharray="5 5"
             />
+            {deployMarker && (
+              <ReferenceLine
+                x={deployMarker}
+                stroke="#059669"
+                strokeDasharray="4 2"
+                label={{
+                  value: "Instalación",
+                  position: "insideTopLeft",
+                  fontSize: 10,
+                  fill: "#059669",
+                }}
+              />
+            )}
+            {retrieveMarker && (
+              <ReferenceLine
+                x={retrieveMarker}
+                stroke="#dc2626"
+                strokeDasharray="4 2"
+                label={{
+                  value: "Retiro",
+                  position: "insideTopRight",
+                  fontSize: 10,
+                  fill: "#dc2626",
+                }}
+              />
+            )}
             <Brush
               dataKey="timestamp"
               height={28}
@@ -122,6 +161,27 @@ const MONTH_NAMES = [
   "", "Ene", "Feb", "Mar", "Abr", "May", "Jun",
   "Jul", "Ago", "Sep", "Oct", "Nov", "Dic",
 ];
+
+function snapToNearestTimestamp(
+  readings: Reading[],
+  target: string | null | undefined
+): string | null {
+  if (!target || readings.length === 0) return null;
+  const targetMs = Date.parse(target.replace(" ", "T") + "Z");
+  if (!Number.isFinite(targetMs)) return null;
+  let best = readings[0].timestamp;
+  let bestDiff = Infinity;
+  for (const r of readings) {
+    const ms = Date.parse(r.timestamp.replace(" ", "T") + "Z");
+    if (!Number.isFinite(ms)) continue;
+    const diff = Math.abs(ms - targetMs);
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      best = r.timestamp;
+    }
+  }
+  return best;
+}
 
 function formatTickLabel(ts: string): string {
   // "2026-01-19 15:53:00" → "19 Ene 15:53"

@@ -76,7 +76,11 @@ export function DeploymentDetailShell({
 
       {/* Temperature Chart */}
       {data.readings.length > 0 && (
-        <TemperatureLineChart readings={data.readings} />
+        <TemperatureLineChart
+          readings={data.readings}
+          odkDeployAt={data.upload?.odkDeployAt ?? null}
+          odkRetrieveAt={data.upload?.odkRetrieveAt ?? null}
+        />
       )}
 
       {/* Stats + Device Info */}

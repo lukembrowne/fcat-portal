@@ -1,8 +1,26 @@
 "use client";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Thermometer, TrendingDown, TrendingUp, Hash, BarChart3, Flag, Cpu, Clock, FileText, User } from "lucide-react";
+import {
+  Thermometer,
+  TrendingDown,
+  TrendingUp,
+  Hash,
+  BarChart3,
+  Flag,
+  Cpu,
+  Clock,
+  FileText,
+  User,
+  CalendarCheck,
+  CalendarX,
+  Timer,
+  Percent,
+  AlertTriangle,
+  Activity,
+} from "lucide-react";
 import type { DeploymentDetail } from "../types";
+import { formatDuration } from "../coverage";
 
 export function StatsPanel({
   stats,
@@ -13,6 +31,9 @@ export function StatsPanel({
 }) {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      {/* Deployment window / coverage */}
+      {upload && <DeploymentWindowCard upload={upload} />}
+
       {/* Stats */}
       {stats && (
         <Card>
@@ -109,6 +130,97 @@ export function StatsPanel({
         </Card>
       )}
     </div>
+  );
+}
+
+function DeploymentWindowCard({
+  upload,
+}: {
+  upload: NonNullable<DeploymentDetail["upload"]>;
+}) {
+  const {
+    odkDeployAt,
+    odkRetrieveAt,
+    odkTimeKnown,
+    expectedReadings,
+    rowsImported,
+    coveragePct,
+    hasLowCoverage,
+    maxGapSeconds,
+  } = upload;
+
+  const hasWindow = Boolean(odkDeployAt && odkRetrieveAt);
+  const approxSuffix = odkTimeKnown ? "" : " (hora aproximada)";
+
+  let windowDuration: string = "—";
+  if (odkDeployAt && odkRetrieveAt) {
+    const start = Date.parse(odkDeployAt.replace(" ", "T") + "Z");
+    const end = Date.parse(odkRetrieveAt.replace(" ", "T") + "Z");
+    if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+      windowDuration = formatDuration(Math.floor((end - start) / 1000));
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Ventana de despliegue</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {!hasWindow ? (
+          <p className="text-sm text-muted-foreground">
+            No disponible — sin datos ODK de instalación/retiro.
+          </p>
+        ) : (
+          <div className="space-y-3 text-sm">
+            <InfoRow
+              icon={CalendarCheck}
+              label="Instalación ODK"
+              value={`${odkDeployAt}${approxSuffix}`}
+            />
+            <InfoRow
+              icon={CalendarX}
+              label="Retiro ODK"
+              value={`${odkRetrieveAt}${approxSuffix}`}
+            />
+            <InfoRow icon={Timer} label="Duración" value={windowDuration} />
+            <InfoRow
+              icon={Hash}
+              label="Lecturas esperadas"
+              value={
+                expectedReadings !== null
+                  ? expectedReadings.toLocaleString("es")
+                  : "—"
+              }
+            />
+            <InfoRow
+              icon={Hash}
+              label="Lecturas reales"
+              value={rowsImported.toLocaleString("es")}
+            />
+            <div className="flex items-start gap-2">
+              <Percent
+                className={`h-4 w-4 mt-0.5 ${hasLowCoverage ? "text-amber-600" : "text-muted-foreground"}`}
+              />
+              <div>
+                <p className="text-xs text-muted-foreground">Cobertura</p>
+                <p
+                  className={`font-medium flex items-center gap-1 ${hasLowCoverage ? "text-amber-600" : ""}`}
+                >
+                  {coveragePct !== null ? `${coveragePct}%` : "No disponible"}
+                  {hasLowCoverage && <AlertTriangle className="h-3.5 w-3.5" />}
+                </p>
+              </div>
+            </div>
+            <InfoRow
+              icon={Activity}
+              label="Brecha máxima"
+              value={formatDuration(maxGapSeconds)}
+            />
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

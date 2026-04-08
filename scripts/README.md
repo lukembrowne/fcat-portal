@@ -96,10 +96,6 @@ Install the Python ML virtual environment (`data/ml-venv/`) using `uv`. Called a
 
 Persistent model server for MegaDetector V6 + species classifier. Loads models once, then accepts job configs via stdin NDJSON. Managed by the portal's ML job queue — not run directly.
 
-### predict.py
-
-Single-shot prediction script (legacy). Accepts JSON config via stdin, runs MegaDetector detection + classification, outputs NDJSON to stdout. Superseded by `model-server.py` for production use.
-
 ## Google Drive
 
 ### copy-deployments-to-test-drive.sh

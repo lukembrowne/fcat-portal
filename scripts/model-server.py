@@ -29,6 +29,17 @@ import select
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+# Cap native thread pools BEFORE any numpy / torch / OpenMP / MKL imports.
+# These are also set on the spawn env in src/lib/ml-runner.ts (the load-bearing place
+# — native libs read them at .so load time). The setdefault here is defense-in-depth
+# in case this script is invoked outside the Node spawn path.
+# Default: (cpu_count - 1) to leave one core free for the rest of the system.
+_default_thread_cap = str(max(1, (os.cpu_count() or 2) - 1))
+os.environ.setdefault("OMP_NUM_THREADS", _default_thread_cap)
+os.environ.setdefault("MKL_NUM_THREADS", _default_thread_cap)
+os.environ.setdefault("OPENBLAS_NUM_THREADS", _default_thread_cap)
+os.environ.setdefault("NUMEXPR_NUM_THREADS", _default_thread_cap)
+
 
 def emit(msg):
     """Write a JSON line to stdout and flush immediately."""
@@ -55,6 +66,21 @@ def load_models(detector_version, classifier_name, device):
     import torch
     from PytorchWildlife.models import detection as pw_detection
     from PytorchWildlife.models import classification as pw_classification
+
+    # Cap PyTorch's intra-op + inter-op pools. set_num_interop_threads MUST be called
+    # before any parallel work has started — load_models is the only safe place.
+    # Respect OMP_NUM_THREADS (set by ml-runner.ts spawn env or our setdefault above)
+    # so all four limits agree. Falls back to (cpu_count - 1).
+    _torch_threads = int(
+        os.environ.get("OMP_NUM_THREADS") or max(1, (os.cpu_count() or 2) - 1)
+    )
+    torch.set_num_threads(_torch_threads)
+    emit({"type": "info", "message": f"PyTorch thread cap: {_torch_threads} (cpu_count={os.cpu_count()})"})
+    try:
+        torch.set_num_interop_threads(1)
+    except RuntimeError:
+        # Already initialized — only happens if load_models is called twice in one process.
+        pass
 
     # Auto-detect device
     if device == "auto":
@@ -122,67 +148,74 @@ def load_image_safe(image_path):
         }
 
 
-def process_image(item, detector, classifier, confidence_threshold):
-    """Run detection + classification on a single pre-loaded image. Returns (detections_list, error)."""
-    import numpy as np
+def detections_from_result(det_result, item, classifier, confidence_threshold):
+    """
+    Convert one PytorchWildlife detector result dict into our output schema.
+    Used by both the batched-inference path (det_result from batch_image_detection)
+    and the per-image fallback (det_result from single_image_detection).
 
-    image_path = item["path"]
+    The output format MUST stay byte-identical to the previous per-image path:
+    bbox normalization uses item["width"]/item["height"] (PIL-reported dims), and
+    floats are rounded to 4 decimal places. We deliberately ignore the library's
+    `normalized_coords` field for the same byte-identicality reason.
+    """
+    detections_list = []
+
+    if not det_result or "detections" not in det_result:
+        return detections_list
+
     img_w = item["width"]
     img_h = item["height"]
     img_array = item["array"]
+    sv_detections = det_result["detections"]
 
-    det_result = detector.single_image_detection(image_path)
+    for xyxy, class_id, conf in zip(
+        sv_detections.xyxy,
+        sv_detections.class_id,
+        sv_detections.confidence,
+    ):
+        if conf < confidence_threshold:
+            continue
 
-    detections_list = []
+        x1, y1, x2, y2 = xyxy
+        norm_x = float(x1) / img_w
+        norm_y = float(y1) / img_h
+        norm_w = float(x2 - x1) / img_w
+        norm_h = float(y2 - y1) / img_h
 
-    if det_result and "detections" in det_result:
-        sv_detections = det_result["detections"]
+        detection = {
+            "bbox": {
+                "x": round(norm_x, 4),
+                "y": round(norm_y, 4),
+                "width": round(norm_w, 4),
+                "height": round(norm_h, 4),
+            },
+            "detection_confidence": round(float(conf), 4),
+            "detection_class": int(class_id),
+            "classification": None,
+        }
 
-        for xyxy, class_id, conf in zip(
-            sv_detections.xyxy,
-            sv_detections.class_id,
-            sv_detections.confidence,
-        ):
-            if conf < confidence_threshold:
-                continue
+        # Classify animals (class_id 0). Classifier still runs per-detection
+        # on cropped arrays — animals are a small fraction of detections and
+        # the crop is cheap. Batching the classifier is not in scope for PR2.
+        if classifier and int(class_id) == 0:
+            try:
+                import supervision as sv
 
-            x1, y1, x2, y2 = xyxy
-            norm_x = float(x1) / img_w
-            norm_y = float(y1) / img_h
-            norm_w = float(x2 - x1) / img_w
-            norm_h = float(y2 - y1) / img_h
-
-            detection = {
-                "bbox": {
-                    "x": round(norm_x, 4),
-                    "y": round(norm_y, 4),
-                    "width": round(norm_w, 4),
-                    "height": round(norm_h, 4),
-                },
-                "detection_confidence": round(float(conf), 4),
-                "detection_class": int(class_id),
-                "classification": None,
-            }
-
-            # Classify animals (class_id 0)
-            if classifier and int(class_id) == 0:
-                try:
-                    import supervision as sv
-
-                    cropped = sv.crop_image(image=img_array, xyxy=xyxy)
-                    clf_result = classifier.single_image_classification(cropped)
-                    if clf_result:
-                        detection["classification"] = {
-                            "species": clf_result.get("prediction", "Unknown"),
-                            "confidence": round(float(clf_result.get("confidence", 0)), 4),
-                        }
-                except Exception:
+                cropped = sv.crop_image(image=img_array, xyxy=xyxy)
+                clf_result = classifier.single_image_classification(cropped)
+                if clf_result:
                     detection["classification"] = {
-                        "species": "Unknown",
-                        "confidence": 0.0,
+                        "species": clf_result.get("prediction", "Unknown"),
+                        "confidence": round(float(clf_result.get("confidence", 0)), 4),
                     }
+            except Exception:
+                detection["classification"] = {
+                    "species": "Unknown",
+                    "confidence": 0.0,
+                }
 
-            detections_list.append(detection)
+        detections_list.append(detection)
 
     return detections_list
 
@@ -192,6 +225,18 @@ def process_job(config, detector, classifier):
 
     Images are pre-loaded in parallel using a thread pool (num_workers threads),
     then detection runs sequentially per image within each mini-batch.
+
+    Note on "batching": we deliberately do NOT use detector.batch_image_detection
+    here. A microbenchmark on Apple Silicon CPU + YOLOv9c showed that batched
+    inference (one forward pass over 16 images) was ~20% SLOWER per image than
+    sequential per-image calls. Batching speedups come from amortizing GPU kernel
+    launch overhead — on CPU, inference is bound by memory bandwidth and one
+    large tensor actually hurts cache behavior. See benchmark in
+    docs/plans/2026-04-07-perf-camera-trap-ml-cpu-tuning-plan.md.
+
+    The mini-batch loop here is just a chunking mechanism for pre-loading +
+    cancel granularity, not a true model batch.
+
     Cancel is checked between batches AND between individual images.
     """
     image_paths = config["image_paths"]
@@ -224,7 +269,7 @@ def process_job(config, detector, classifier):
 
         # Pre-load images in parallel using thread pool
         if num_workers > 0:
-            emit({"type": "info", "message": f"Batch {batch_num}/{num_batches}: loading {len(batch_paths)} images with {num_workers} threads"})
+            emit({"type": "info", "message": f"Batch {batch_num}/{num_batches}: preloading {len(batch_paths)} images with {num_workers} I/O workers"})
             with ThreadPoolExecutor(max_workers=num_workers) as pool:
                 loaded_batch = list(pool.map(load_image_safe, batch_paths))
         else:
@@ -236,11 +281,11 @@ def process_job(config, detector, classifier):
         if failed_in_batch > 0:
             emit({"type": "info", "message": f"Batch {batch_num}: {failed_in_batch}/{len(batch_paths)} images failed to load"})
 
-        # Process each pre-loaded image
+        # Process each pre-loaded image sequentially
         batch_detections = 0
         batch_species = {}
         for i, item in enumerate(loaded_batch):
-            # Also check cancel between individual images for responsiveness
+            # Cancel check between individual images for responsiveness
             if check_cancel():
                 cancelled = True
                 break
@@ -261,8 +306,16 @@ def process_job(config, detector, classifier):
             emit({"type": "progress", "image": image_path, "index": idx, "total": total})
 
             try:
-                detections_list = process_image(
-                    item, detector, classifier, confidence_threshold
+                # Pass the already-loaded ndarray + img_path so PW uses our
+                # pre-loaded array instead of re-opening the file from disk.
+                # This is the PR1 preload fix — keep it. Verified API:
+                # PytorchWildlife YOLOV8Base.single_image_detection(img, img_path=...)
+                det_result = detector.single_image_detection(
+                    item["array"], img_path=image_path
+                )
+
+                detections_list = detections_from_result(
+                    det_result, item, classifier, confidence_threshold
                 )
 
                 emit({

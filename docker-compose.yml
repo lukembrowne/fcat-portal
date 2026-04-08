@@ -15,6 +15,11 @@ services:
       - DB_PATH=data/portal.db
       - ML_PYTHON_PATH=data/ml-venv/bin/python3
       - ML_VENV_DIR=data/ml-venv
+      # Persist torch hub model weights across container restarts.
+      # Set here (not just in docker-entrypoint.sh) so dev mode also gets it —
+      # docker-compose.override.yml replaces the entrypoint with a custom command
+      # that never sources docker-entrypoint.sh.
+      - TORCH_HOME=/app/data/ml-cache/torch
       - SUPER_ADMIN_EMAILS=lukebrowne@fcat-ecuador.org
       - ALLOWED_EMAILS_PATH=data/allowed_external_emails.txt
       - RESEND_API_KEY=${RESEND_API_KEY:-}

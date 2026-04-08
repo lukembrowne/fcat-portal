@@ -6,6 +6,13 @@ export HOME=/tmp/ml-home
 export MPLCONFIGDIR=/tmp/matplotlib-config
 export YOLO_CONFIG_DIR=/tmp/Ultralytics
 
+# Persist torch hub model weights across container restarts.
+# /app/data is a host bind mount, /tmp is wiped on every restart.
+# Without this, MegaDetector V6 (~200MB) + AI4GAmazonRainforest (~188MB) re-download
+# from the internet every time the model server boots, adding ~3 min to startup.
+export TORCH_HOME=/app/data/ml-cache/torch
+mkdir -p "$TORCH_HOME"
+
 # Ensure backup directory exists
 mkdir -p /app/data/backups
 

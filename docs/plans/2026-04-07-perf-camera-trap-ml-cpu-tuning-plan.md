@@ -41,10 +41,10 @@ print(inspect.getsource(yolov8_base.YOLOV8Base.batch_image_detection))
 
 Confirm:
 
-- [ ] `single_image_detection` accepts an `np.ndarray` as the first positional arg (not just a path string).
-- [ ] There is a kwarg to pass the original path through (commonly `img_path=...`, but some PW versions use `img_size` here — verify before writing the call).
-- [ ] `batch_image_detection` exists, accepts `data_source: list[np.ndarray]`, has a `batch_size` and `det_conf_thres` kwarg, and returns a list of result dicts aligned to input order.
-- [ ] Each result dict has the same shape as `single_image_detection`'s return (a `detections` field with `xyxy`, `class_id`, `confidence` arrays).
+- [x] `single_image_detection` accepts an `np.ndarray` as the first positional arg (not just a path string). Verified 2026-04-07: signature is `single_image_detection(self, img, img_path=None, det_conf_thres=0.2, id_strip=None)`.
+- [x] There is a kwarg to pass the original path through (commonly `img_path=...`, but some PW versions use `img_size` here — verify before writing the call). Verified: kwarg is `img_path=`.
+- [x] `batch_image_detection` exists, accepts `data_source: list[np.ndarray]`, has a `batch_size` and `det_conf_thres` kwarg, and returns a list of result dicts aligned to input order. Verified: `batch_image_detection(self, data_source, batch_size: int = 16, det_conf_thres: float = 0.2, id_strip: str = None)`.
+- [x] Each result dict has the same shape as `single_image_detection`'s return (a `detections` field with `xyxy`, `class_id`, `confidence` arrays). Verified: both call the same `results_generation` helper. Note: batch path uses `f"{start_idx + idx}"` as `img_id` — must override with our own path tracking (already in PR2 plan).
 
 If any of these don't match, stop and revise the plan. Don't write code against an unverified API.
 
@@ -123,17 +123,9 @@ This makes `single_image_detection` use the already-loaded numpy array instead o
 
 ### Step 1+2 default change
 
-**File:** `src/lib/ml-defaults.ts`
+**Deferred 2026-04-07.** Original plan was to bump `numWorkers: 2 → 4`. Skipping for now because the production droplet (8 GB RAM, 4 GB swap saturated) just OOM-killed the container at the existing settings. With 4 preload workers × 16 batch, peak in-flight decoded arrays would be ~64 — too aggressive on this box. Revisit after PR2's true batching lands and we have peak-RSS numbers.
 
-```ts
-export const ML_DEFAULTS = {
-  detectorModel: "MDV6-yolov9-c",
-  classifierModel: "AI4GAmazonRainforest",
-  confidenceThreshold: 0.1,
-  batchSize: 16,
-  numWorkers: 4, // was 2 — pre-loading now actually helps detection (step 2 fix)
-} as const;
-```
+`src/lib/ml-defaults.ts` stays at `numWorkers: 2`, `batchSize: 16` for PR1.
 
 ### PR 1 acceptance criteria
 
@@ -148,7 +140,35 @@ export const ML_DEFAULTS = {
 
 ## PR 2 — True batched inference + predict.py cleanup (steps 3 + 4)
 
-The big win. Bundles step 3 (batched inference) with step 4 (delete `scripts/predict.py`) since predict.py is dead code on the live path and the deletion can't regress anything live.
+**ABANDONED 2026-04-07.** Microbenchmark on Apple Silicon CPU (Docker, aarch64, 3 threads, MDV6-yolov9-c, 16 × 1280×1280 images) showed batched inference is *slower* than per-image, not faster:
+
+```
+single_image_detection ×16:        38.3s   (2.40s/img)
+batch_image_detection(bs=16):      46.1s   (2.88s/img)   ← 20% SLOWER
+batch_image_detection(bs=1):       38.4s   (2.40s/img)
+```
+
+Ultralytics' speed report on the bs=16 run confirmed the inference DID happen as one batched forward pass at shape `(16, 3, 1280, 1280)` — so batching is real, it just doesn't help on CPU. Per-image time inside the batched call: ~2875 ms vs ~2400 ms in the per-image path.
+
+**Why the plan was wrong:** batching speedups come from amortizing GPU kernel launch overhead and exploiting massively parallel cores. On CPU, inference is bound by memory bandwidth and sequential matmul; one large activation tensor actually hurts cache behavior and incurs more page faults, hence the slowdown. The "2-4× win" prediction was best-practice GPU advice misapplied to CPU.
+
+**What we kept from PR 2:**
+- Step 4 (delete `scripts/predict.py`) — landed, dead code regardless.
+- The `detections_from_result` helper extracted from `process_image` — cleaner code, neutral perf.
+- The cancel-handler audit (concluded the handler is fine) — useful future reference.
+
+**What we abandoned:**
+- The `process_job` rewrite to use `batch_image_detection`. Reverted to per-image with the PR1 preload fix kept.
+- The "infer-fallback" diagnostic logging.
+
+**Remaining real perf wins available on CPU:**
+- More cores (linear with thread count, until memory bandwidth saturates around 4-8 threads on this hardware).
+- Smaller / quantized model (out of scope for this plan).
+- GPU (out of scope for this plan).
+
+The original PR 2 spec follows for historical context — DO NOT IMPLEMENT.
+
+---
 
 ### Step 3 — `process_job` batched inference
 

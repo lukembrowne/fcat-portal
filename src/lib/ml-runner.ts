@@ -16,6 +16,7 @@ import { ChildProcess, spawn, execFile } from "child_process";
 import { promisify } from "util";
 import path from "path";
 import fs from "fs";
+import os from "os";
 import { createInterface } from "readline";
 import { db } from "@/db";
 import {
@@ -28,6 +29,14 @@ import { eq } from "drizzle-orm";
 import { ML_DEFAULTS } from "@/lib/ml-defaults";
 
 const execFileAsync = promisify(execFile);
+
+// Compute the ML thread cap once at module load. Used for OMP_NUM_THREADS,
+// MKL_NUM_THREADS, OPENBLAS_NUM_THREADS, NUMEXPR_NUM_THREADS in spawnModelServer().
+// availableParallelism() respects cgroup CPU limits inside containers.
+const ML_THREAD_CAP = String(Math.max(1, os.availableParallelism() - 1));
+console.log(
+  `[ml-runner] Thread cap: ${ML_THREAD_CAP} (availableParallelism=${os.availableParallelism()})`
+);
 
 export interface MLConfig {
   imagePaths: string[];
@@ -327,8 +336,26 @@ function spawnModelServer(): void {
       HOME: "/tmp/ml-home",
       MPLCONFIGDIR: "/tmp/matplotlib-config",
       YOLO_CONFIG_DIR: "/tmp/Ultralytics",
+      // Persist torch model weights across container restarts. docker-entrypoint.sh
+      // sets this for the Docker case; this fallback handles native dev (npm run dev).
+      // Without persistence, ~388 MB of detector + classifier weights re-download on
+      // every restart, adding ~3 min to model server startup.
+      TORCH_HOME:
+        process.env.TORCH_HOME ?? path.join(process.cwd(), "data", "ml-cache", "torch"),
       DETECTOR_MODEL: ML_DEFAULTS.detectorModel,
       CLASSIFIER_MODEL: ML_DEFAULTS.classifierModel,
+      // Cap native thread pools to (available cores - 1) so the rest of the box
+      // (Next.js, DB, oauth2-proxy, neighbors on shared hosts) keeps responsiveness
+      // during a long ML job. availableParallelism() respects cgroup CPU limits in
+      // containers (Node 18.14+), so this gives the right answer in all environments:
+      //   - prod 4-vCPU droplet → 3 threads
+      //   - dev Mac Docker VM with 8 cores → 7 threads
+      // Microbenchmark on Apple Silicon showed ~1.44× speedup going from 3→8 threads,
+      // so this is a real win on dev. See plan doc for details.
+      OMP_NUM_THREADS: ML_THREAD_CAP,
+      MKL_NUM_THREADS: ML_THREAD_CAP,
+      OPENBLAS_NUM_THREADS: ML_THREAD_CAP,
+      NUMEXPR_NUM_THREADS: ML_THREAD_CAP,
     },
   });
 

@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef } from "react";
 import Link from "next/link";
-import { X, Minus, ChevronUp, ChevronDown } from "lucide-react";
+import { X, Minus, ChevronUp, ChevronDown, Clock, Loader2, CheckCircle2, XCircle, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatDuration } from "@/lib/format-duration";
 import { cancelJob, cancelQueue } from "@/app/camera-trap/actions";
@@ -194,29 +194,23 @@ export function FloatingJobProgress() {
     }
   }
 
-  const statusMessage = isTerminal
+  const rawStatusMessage = isTerminal
     ? status === "completed"
       ? "Completado"
       : status === "cancelled"
         ? "Cancelado"
         : "Fallido"
     : sseData?.statusMessage || activeJob?.statusMessage || "Esperando inicio...";
+  // Strip trailing "(N de M)" — shown on its own row below the bar
+  const statusMessage = rawStatusMessage.replace(/\s*\(\d+\s+de\s+\d+\)\s*$/, "");
 
   const statusColor = isTerminal
     ? status === "completed"
-      ? "text-green-600"
+      ? "text-green-700 dark:text-green-500"
       : status === "cancelled"
-        ? "text-orange-600"
-        : "text-red-600"
-    : "text-blue-600";
-
-  const barColor = isTerminal
-    ? status === "completed"
-      ? "bg-green-500"
-      : status === "cancelled"
-        ? "bg-orange-500"
-        : "bg-red-500"
-    : "bg-primary";
+        ? "text-orange-700 dark:text-orange-500"
+        : "text-red-700 dark:text-red-500"
+    : "text-foreground";
 
   const handleCancel = async () => {
     if (!jobId || cancelling) return;
@@ -247,7 +241,7 @@ export function FloatingJobProgress() {
             isTerminal && status === "completed" && "border-green-300",
             isTerminal && status === "failed" && "border-red-300",
             isTerminal && status === "cancelled" && "border-orange-300",
-            !isTerminal && "border-blue-300"
+            !isTerminal && "border-primary/40"
           )}
         >
           <span
@@ -259,7 +253,7 @@ export function FloatingJobProgress() {
                   : status === "cancelled"
                     ? "bg-orange-500"
                     : "bg-red-500"
-                : "bg-blue-500 animate-pulse"
+                : "bg-primary animate-pulse"
             )}
           />
           <span>
@@ -312,15 +306,39 @@ export function FloatingJobProgress() {
       </div>
 
       {/* Body */}
-      <div className="px-3 py-3 space-y-3">
-        {/* Status message */}
-        <p className={cn("text-sm font-medium", statusColor)}>
-          {statusMessage}
-        </p>
+      <div className="px-3 py-3 space-y-2.5">
+        {/* Status message + percent */}
+        <div className="flex items-start justify-between gap-3">
+          <p className={cn("flex items-center gap-1.5 text-sm font-medium leading-tight", statusColor)}>
+            {(() => {
+              const Icon =
+                status === "completed" ? CheckCircle2
+                : status === "failed" ? XCircle
+                : status === "cancelled" ? AlertCircle
+                : status === "processing" ? Loader2
+                : null;
+              return Icon ? (
+                <Icon
+                  className={cn(
+                    "h-3.5 w-3.5 shrink-0",
+                    status === "processing" && "animate-spin"
+                  )}
+                />
+              ) : null;
+            })()}
+            {statusMessage}
+          </p>
+          {(hasProgress || isTerminal) && (
+            <span className={cn("flex items-baseline font-semibold tabular-nums leading-none tracking-tight shrink-0", statusColor)}>
+              <span className="text-xl">{percentage}</span>
+              <span className="ml-0.5 text-[10px] font-normal text-muted-foreground">%</span>
+            </span>
+          )}
+        </div>
 
         {/* Progress bar */}
-        <div className="space-y-1">
-          <div className="h-2 bg-muted rounded-full overflow-hidden">
+        <div className="space-y-1.5">
+          <div className="h-2 bg-muted rounded-full overflow-hidden shadow-inner">
             {status === "processing" && !hasProgress ? (
               <div className="h-full w-full bg-primary/30 rounded-full relative overflow-hidden">
                 <div className="absolute inset-0 bg-primary/60 rounded-full animate-pulse" />
@@ -328,25 +346,42 @@ export function FloatingJobProgress() {
             ) : (
               <div
                 className={cn(
-                  "h-full transition-all duration-300 rounded-full",
-                  barColor
+                  "h-full transition-all duration-500 ease-out rounded-full",
+                  isTerminal
+                    ? status === "completed"
+                      ? "bg-gradient-to-r from-green-600 to-green-500"
+                      : status === "cancelled"
+                        ? "bg-gradient-to-r from-orange-600 to-orange-500"
+                        : "bg-gradient-to-r from-red-600 to-red-500"
+                    : "bg-gradient-to-r from-primary to-primary/85 progress-shimmer"
                 )}
                 style={{ width: `${percentage}%` }}
               />
             )}
           </div>
           {(hasProgress || isTerminal) && (
-            <p className="text-xs text-muted-foreground">
-              {isDownloading
-                ? <>{dlDone} de {dlTotal} archivos · {percentage}%</>
-                : <>{processed} de {total} imágenes · {percentage}%</>
-              }
-              {etaStr && <> · {etaStr}</>}
-              {elapsed && <> · {elapsed}</>}
-            </p>
+            <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+              <span className="tabular-nums truncate">
+                {isDownloading
+                  ? <>{dlDone} de {dlTotal} archivos</>
+                  : <>{processed} de {total} imágenes</>
+                }
+              </span>
+              {(elapsed || etaStr) && (
+                <span className="flex items-center gap-1 tabular-nums shrink-0">
+                  <Clock className="h-3 w-3" />
+                  {elapsed}
+                  {elapsed && etaStr && <span className="text-muted-foreground/60">·</span>}
+                  {etaStr}
+                </span>
+              )}
+            </div>
           )}
           {!hasProgress && !isTerminal && elapsed && (
-            <p className="text-xs text-muted-foreground">{elapsed}</p>
+            <p className="flex items-center gap-1 text-xs text-muted-foreground tabular-nums">
+              <Clock className="h-3 w-3" />
+              {elapsed}
+            </p>
           )}
         </div>
 
@@ -381,29 +416,26 @@ export function FloatingJobProgress() {
         )}
 
         {/* Actions */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1 pt-1">
           {!isTerminal && (
             <>
               {!isCompressionLike && (
-                <>
-                  <Link
-                    href={`/camera-trap/process?jobId=${jobId}`}
-                    className="text-xs text-primary hover:underline"
-                  >
-                    Ver detalles
-                  </Link>
-                  <span className="text-muted-foreground">·</span>
-                </>
+                <Link
+                  href={`/camera-trap/process?jobId=${jobId}`}
+                  className="inline-flex h-7 items-center rounded px-2 text-xs font-medium text-primary hover:bg-accent transition-colors"
+                >
+                  Ver detalles
+                </Link>
               )}
               <button
                 onClick={handleCancel}
                 disabled={cancelling}
-                className="text-xs text-red-600 hover:underline disabled:opacity-50"
+                className="inline-flex h-7 items-center rounded px-2 text-xs font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors disabled:opacity-50"
               >
                 {cancelling
                   ? "Cancelando..."
                   : hasQueue
-                    ? "Cancelar Cola"
+                    ? "Cancelar cola"
                     : "Cancelar"}
               </button>
             </>
@@ -411,7 +443,7 @@ export function FloatingJobProgress() {
           {status === "completed" && !isCompressionLike && (
             <Link
               href={`/camera-trap/results/${jobId}`}
-              className="text-xs font-medium text-green-600 hover:underline"
+              className="inline-flex h-7 items-center rounded px-2 text-xs font-medium text-green-600 hover:bg-green-50 dark:hover:bg-green-950/30 transition-colors"
             >
               Ver resultados
             </Link>
@@ -429,7 +461,7 @@ export function FloatingJobProgress() {
           {(status === "failed" || status === "cancelled") && !isCompressionLike && (
             <Link
               href={`/camera-trap/process?jobId=${jobId}`}
-              className="text-xs text-muted-foreground hover:underline"
+              className="inline-flex h-7 items-center rounded px-2 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
             >
               Ver detalles
             </Link>

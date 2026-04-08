@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
+import { Clock, Loader2, CheckCircle2, XCircle, AlertCircle } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -176,34 +177,61 @@ export function ProgressTracker({
   const isTerminal = status in terminalLabels;
   const isAnalyzing = status === "processing" && progress?.processed !== undefined && progress.processed > 0;
   const hasProgress = isDownloading || isAnalyzing;
-  const statusLabel = isTerminal
+  const rawStatusLabel = isTerminal
     ? terminalLabels[status]
     : progress?.statusMessage || (status === "pending" ? "Esperando inicio..." : "Procesando imágenes...");
+  // Strip trailing "(N de M)" — the count is shown on its own row below the bar
+  const statusLabel = rawStatusLabel.replace(/\s*\(\d+\s+de\s+\d+\)\s*$/, "");
 
   const statusColor = {
     pending: "text-muted-foreground",
-    processing: "text-blue-600",
-    completed: "text-green-600",
-    failed: "text-red-600",
-    cancelled: "text-orange-600",
+    processing: "text-foreground",
+    completed: "text-green-700 dark:text-green-500",
+    failed: "text-red-700 dark:text-red-500",
+    cancelled: "text-orange-700 dark:text-orange-500",
   }[status];
+
+  const showPercent = hasProgress || isTerminal || status === "pending";
+
+  const StatusIcon =
+    status === "completed" ? CheckCircle2
+      : status === "failed" ? XCircle
+      : status === "cancelled" ? AlertCircle
+      : status === "processing" ? Loader2
+      : null;
 
   return (
     <Card>
-      <CardContent className="pt-6 space-y-4">
-        <div className="flex items-center justify-between">
-          <span className={cn("font-medium", statusColor)}>
+      <CardContent className="pt-5 pb-5 space-y-3">
+        <div className="flex items-start justify-between gap-3">
+          <span className={cn("flex items-center gap-2 font-medium leading-tight", statusColor)}>
+            {StatusIcon && (
+              <StatusIcon
+                className={cn(
+                  "h-4 w-4 shrink-0",
+                  status === "processing" && "animate-spin"
+                )}
+              />
+            )}
             {statusLabel}
           </span>
-          <ConnectionIndicator
-            state={connectionState}
-            retryCount={retryCount}
-            jobStatus={progress?.status}
-          />
+          <div className="flex items-center gap-3 shrink-0">
+            {showPercent && (
+              <span className={cn("flex items-baseline font-semibold tabular-nums leading-none tracking-tight", statusColor)}>
+                <span className="text-3xl">{percentage}</span>
+                <span className="ml-0.5 text-sm font-normal text-muted-foreground">%</span>
+              </span>
+            )}
+            <ConnectionIndicator
+              state={connectionState}
+              retryCount={retryCount}
+              jobStatus={progress?.status}
+            />
+          </div>
         </div>
 
         <div className="space-y-2">
-          <div className="h-4 bg-muted rounded-full overflow-hidden">
+          <div className="h-3 bg-muted rounded-full overflow-hidden shadow-inner">
             {status === "processing" && !hasProgress ? (
               <div className="h-full w-full bg-primary/30 rounded-full relative overflow-hidden">
                 <div className="absolute inset-0 bg-primary/60 rounded-full animate-pulse" />
@@ -211,41 +239,49 @@ export function ProgressTracker({
             ) : (
               <div
                 className={cn(
-                  "h-full transition-all duration-300 rounded-full",
+                  "h-full transition-all duration-500 ease-out rounded-full",
                   status === "completed"
-                    ? "bg-green-500"
+                    ? "bg-gradient-to-r from-green-600 to-green-500"
                     : status === "failed"
-                      ? "bg-red-500"
+                      ? "bg-gradient-to-r from-red-600 to-red-500"
                       : status === "cancelled"
-                        ? "bg-orange-500"
-                        : "bg-primary"
+                        ? "bg-gradient-to-r from-orange-600 to-orange-500"
+                        : "bg-gradient-to-r from-primary to-primary/85 progress-shimmer shadow-[0_0_12px_rgba(0,0,0,0.15)]"
                 )}
                 style={{ width: `${percentage}%` }}
               />
             )}
           </div>
           {hasProgress || isTerminal ? (
-            <div className="flex justify-between text-sm text-muted-foreground">
-              <span>
+            <div className="flex items-center justify-between gap-3 text-sm text-muted-foreground">
+              <span className="tabular-nums">
                 {isDownloading
                   ? <>{dlDone} de {dlTotal} archivos</>
                   : <>{progress?.processed || 0} de {progress?.total || 0} imágenes</>
                 }
-                {etaStr && <> · {etaStr}</>}
-                {elapsed && <> · {elapsed}</>}
               </span>
-              <span>{percentage}%</span>
+              {(elapsed || etaStr) && (
+                <span className="flex items-center gap-1.5 tabular-nums">
+                  <Clock className="h-3.5 w-3.5" />
+                  {elapsed}
+                  {elapsed && etaStr && <span className="text-muted-foreground/60">·</span>}
+                  {etaStr}
+                </span>
+              )}
             </div>
           ) : status === "processing" ? (
-            <div className="text-sm text-muted-foreground">
-              Preparando...{elapsed && <> · {elapsed}</>}
+            <div className="flex items-center justify-between gap-3 text-sm text-muted-foreground">
+              <span>Preparando...</span>
+              {elapsed && (
+                <span className="flex items-center gap-1.5 tabular-nums">
+                  <Clock className="h-3.5 w-3.5" />
+                  {elapsed}
+                </span>
+              )}
             </div>
           ) : (
-            <div className="flex justify-between text-sm text-muted-foreground">
-              <span>
-                {progress?.processed || 0} de {progress?.total || 0} imágenes
-              </span>
-              <span>{percentage}%</span>
+            <div className="text-sm text-muted-foreground tabular-nums">
+              {progress?.processed || 0} de {progress?.total || 0} imágenes
             </div>
           )}
         </div>

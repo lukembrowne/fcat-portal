@@ -101,7 +101,14 @@ export function useAnnotationShortcuts(opts: AnnotationShortcutOptions) {
           o.onAssignSpeciesByIndex?.(index);
           return;
         }
-        if (!hasModifier && (e.key === "Delete" || e.key === "Backspace") && !o.isDialogOpen) {
+        // Only hijack Delete/Backspace when the search input is empty.
+        // If the user has typed anything, let the key edit the text normally.
+        if (
+          !hasModifier &&
+          (e.key === "Delete" || e.key === "Backspace") &&
+          !o.isDialogOpen &&
+          searchInput.value === ""
+        ) {
           e.preventDefault();
           o.onDeleteSelected?.();
           return;

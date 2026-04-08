@@ -137,6 +137,12 @@ export function SidebarNav({ user }: SidebarNavProps) {
         (p.role === "editor" || p.role === "admin")
     );
 
+  const isCameraTrapAdmin =
+    user.globalRole === "super_admin" ||
+    user.permissions.some(
+      (p) => p.projectId === "camera-trap" && p.role === "admin",
+    );
+
   if (hasCameraTrap) {
     const cameraTrapChildren: NavItem[] = [
       { label: "Instalaciones", href: "/camera-trap" },
@@ -145,6 +151,10 @@ export function SidebarNav({ user }: SidebarNavProps) {
     if (isCameraTrapEditor) {
       cameraTrapChildren.push({ label: "Especies", href: "/camera-trap/species" });
       cameraTrapChildren.push({ label: "Trabajos de ML", href: "/camera-trap/results" });
+    }
+    if (isCameraTrapAdmin) {
+      cameraTrapChildren.push({ label: "Exportes", href: "/camera-trap/training-exports" });
+      cameraTrapChildren.push({ label: "Modelos", href: "/camera-trap/models" });
     }
     analysisItems.push({
       label: "Cámaras Trampa",

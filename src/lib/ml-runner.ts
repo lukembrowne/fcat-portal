@@ -24,9 +24,11 @@ import {
   images,
   detections,
   identifications,
+  cameraTrapModels,
 } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { ML_DEFAULTS } from "@/lib/ml-defaults";
+import { buildClassifierEnv, type ActiveModelForEnv } from "@/lib/ml-runner-env";
 
 const execFileAsync = promisify(execFile);
 
@@ -86,6 +88,10 @@ interface JobContext {
   totalDetections: number;
   resolve: (result: MLRunResult) => void;
   startedAt: number;
+  /** id of the camera_trap_models row that produced predictions for this
+   * job, or null when running with the legacy AI4G default. Used to stamp
+   * provenance on every identification insert. */
+  activeClassifierModelId: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -105,6 +111,11 @@ let lastModelServerInfo: string | null = null;
 /** Last fatal error message emitted by Python via NDJSON (type: "error" without
  * an image). Captured here so it survives until the close handler runs. */
 let lastModelServerError: string | null = null;
+/** Active custom classifier model loaded into the current model server, or
+ * null if running with AI4G defaults. Resolved by ensureModelServer() before
+ * spawn and read by spawnModelServer() to assemble env vars. The line handler
+ * uses the id to stamp provenance on every identification insert. */
+let activeClassifierModel: ActiveModelForEnv | null = null;
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 const PID_FILE = path.join(process.cwd(), "data", "model-server.pid");
 
@@ -343,7 +354,10 @@ function spawnModelServer(): void {
       TORCH_HOME:
         process.env.TORCH_HOME ?? path.join(process.cwd(), "data", "ml-cache", "torch"),
       DETECTOR_MODEL: ML_DEFAULTS.detectorModel,
-      CLASSIFIER_MODEL: ML_DEFAULTS.classifierModel,
+      // Classifier env (CLASSIFIER_MODEL + CUSTOM_CLASSIFIER_*) is assembled
+      // from the active camera_trap_models row by buildClassifierEnv. When no
+      // active model exists, falls back to the AI4G default.
+      ...buildClassifierEnv(activeClassifierModel),
       // Cap native thread pools to (available cores - 1) so the rest of the box
       // (Next.js, DB, oauth2-proxy, neighbors on shared hosts) keeps responsiveness
       // during a long ML job. availableParallelism() respects cgroup CPU limits in
@@ -454,6 +468,7 @@ function spawnModelServer(): void {
                 confidence: det.classification.confidence,
                 modelVersion: job.config.classifierModel,
                 verificationStatus: "unverified",
+                classifierModelId: job.activeClassifierModelId,
               });
             }
 
@@ -634,6 +649,32 @@ function spawnModelServer(): void {
   });
 }
 
+/**
+ * Look up the currently-active custom classifier model row, or null if none.
+ * Tolerates DB errors at startup (e.g. fresh DB without the table yet) by
+ * logging and returning null — the pipeline falls back to AI4G defaults.
+ */
+async function resolveActiveClassifierModel(): Promise<ActiveModelForEnv | null> {
+  try {
+    const rows = await db
+      .select({
+        id: cameraTrapModels.id,
+        modelDir: cameraTrapModels.modelDir,
+        classMappingJson: cameraTrapModels.classMappingJson,
+        metricsJson: cameraTrapModels.metricsJson,
+      })
+      .from(cameraTrapModels)
+      .where(eq(cameraTrapModels.active, true))
+      .limit(1);
+    return rows[0] ?? null;
+  } catch (err) {
+    console.warn(
+      `[ml-runner] Failed to resolve active classifier model, falling back to default: ${err instanceof Error ? err.message : err}`,
+    );
+    return null;
+  }
+}
+
 async function ensureModelServer(): Promise<void> {
   // Already ready — just clear idle timer
   if (serverStatus === "ready" && serverProc) {
@@ -656,6 +697,10 @@ async function ensureModelServer(): Promise<void> {
   if (!python) {
     throw new Error("Python 3 no encontrado");
   }
+
+  // Resolve the active custom classifier (if any) BEFORE spawn so the env
+  // vars are correct on the very first job after a model swap.
+  activeClassifierModel = await resolveActiveClassifierModel();
 
   // Re-check after async gap (another caller may have started while we awaited findPython)
   if (serverReadyPromise) {
@@ -767,6 +812,7 @@ export async function runMLPredictions(
       totalDetections: 0,
       resolve,
       startedAt: Date.now(),
+      activeClassifierModelId: activeClassifierModel?.id ?? null,
     };
 
     serverStatus = "busy";

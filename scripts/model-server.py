@@ -106,22 +106,131 @@ def load_models(detector_version, classifier_name, device):
     classifier_device = device
     if classifier_name and classifier_name != "none":
         emit({"type": "info", "message": f"Loading classifier: {classifier_name}"})
-        classifier_class = getattr(pw_classification, classifier_name, None)
-        if classifier_class:
+
+        # Custom Chocó classifier — fine-tuned timm model whose weights and
+        # transform live in data/models/<version>/. The portal passes the paths
+        # via env vars set by ml-runner.ts/buildClassifierEnv. Loaded with
+        # strict=True so any class-mapping or backbone drift fails loudly.
+        if classifier_name == "custom_timm":
             try:
-                classifier = classifier_class(device=device)
+                classifier = TimmClassifier.from_env(device=device)
+                emit({"type": "info", "message": f"Loaded custom_timm ({classifier.backbone}, {len(classifier.class_list)} classes) on {device}"})
             except Exception as e:
-                if device == "mps" and "float64" in str(e):
-                    emit({"type": "info", "message": f"Classifier failed on MPS ({e}). Retrying on CPU."})
-                    classifier = classifier_class(device="cpu")
-                    classifier_device = "cpu"
-                    emit({"type": "info", "message": "Classifier loaded on CPU."})
-                else:
-                    raise
+                emit({"type": "info", "message": f"custom_timm load failed: {e}"})
+                raise
         else:
-            emit({"type": "info", "message": f"Unknown classifier: {classifier_name}, skipping classification"})
+            classifier_class = getattr(pw_classification, classifier_name, None)
+            if classifier_class:
+                try:
+                    classifier = classifier_class(device=device)
+                except Exception as e:
+                    if device == "mps" and "float64" in str(e):
+                        emit({"type": "info", "message": f"Classifier failed on MPS ({e}). Retrying on CPU."})
+                        classifier = classifier_class(device="cpu")
+                        classifier_device = "cpu"
+                        emit({"type": "info", "message": "Classifier loaded on CPU."})
+                    else:
+                        raise
+            else:
+                emit({"type": "info", "message": f"Unknown classifier: {classifier_name}, skipping classification"})
 
     return detector, classifier, device
+
+
+class TimmClassifier:
+    """Wrapper around a timm classifier loaded from local weights.
+
+    Matches the PytorchWildlife classifier protocol used by detections_from_result:
+    `single_image_classification(cropped_array) -> {"prediction": str, "confidence": float}`.
+
+    Loaded from env vars set by buildClassifierEnv() in ml-runner-env.ts:
+      CUSTOM_CLASSIFIER_WEIGHTS         path to weights.pt
+      CUSTOM_CLASSIFIER_CLASS_MAPPING   path to class_mapping.json (ordered list)
+      CUSTOM_CLASSIFIER_BACKBONE        timm model name, e.g. efficientnet_b0
+      CUSTOM_CLASSIFIER_TRANSFORM_JSON  {"imageSize": 224, "mean": [...], "std": [...]}
+
+    Transform config is stored explicitly (not derived from
+    timm.data.resolve_model_data_config defaults) so any non-default training
+    augmentation choices are honored at inference time. Drift here = silent
+    accuracy regression.
+    """
+
+    def __init__(self, model, class_list, device, transform, backbone):
+        import torch  # local import — only fires if custom_timm is loaded
+        self._torch = torch
+        self.model = model
+        self.class_list = class_list
+        self.device = device
+        self.transform = transform
+        self.backbone = backbone
+
+    @classmethod
+    def from_env(cls, device):
+        import json as _json
+        import torch
+        import timm
+        from torchvision import transforms
+
+        weights_path = os.environ.get("CUSTOM_CLASSIFIER_WEIGHTS")
+        class_mapping_path = os.environ.get("CUSTOM_CLASSIFIER_CLASS_MAPPING")
+        backbone = os.environ.get("CUSTOM_CLASSIFIER_BACKBONE")
+        transform_json = os.environ.get("CUSTOM_CLASSIFIER_TRANSFORM_JSON")
+
+        if not (weights_path and class_mapping_path and backbone and transform_json):
+            raise RuntimeError(
+                "custom_timm requires CUSTOM_CLASSIFIER_{WEIGHTS,CLASS_MAPPING,BACKBONE,TRANSFORM_JSON}"
+            )
+
+        with open(class_mapping_path, "r") as f:
+            class_list = _json.load(f)
+        if not isinstance(class_list, list) or not all(isinstance(s, str) for s in class_list):
+            raise RuntimeError(f"class_mapping.json must be a list of strings, got: {type(class_list).__name__}")
+
+        transform_cfg = _json.loads(transform_json)
+        image_size = int(transform_cfg["imageSize"])
+        mean = list(transform_cfg["mean"])
+        std = list(transform_cfg["std"])
+
+        # Build the model with the right number of classes BEFORE loading
+        # weights so load_state_dict can be strict.
+        model = timm.create_model(backbone, pretrained=False, num_classes=len(class_list))
+        state = torch.load(weights_path, map_location="cpu")
+        # Tolerate either a bare state_dict or a checkpoint dict {state_dict: ...}
+        if isinstance(state, dict) and "state_dict" in state and not any(
+            k.startswith("conv") or k.startswith("blocks") or "." in k for k in state.keys()
+        ):
+            state = state["state_dict"]
+        model.load_state_dict(state, strict=True)
+        model.eval()
+        model = model.to(device)
+
+        transform = transforms.Compose([
+            transforms.ToPILImage(),
+            transforms.Resize((image_size, image_size)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=mean, std=std),
+        ])
+
+        return cls(
+            model=model,
+            class_list=class_list,
+            device=device,
+            transform=transform,
+            backbone=backbone,
+        )
+
+    def single_image_classification(self, cropped_array):
+        """Classify a single cropped numpy array. Matches the PW protocol."""
+        torch = self._torch
+        with torch.no_grad():
+            tensor = self.transform(cropped_array).unsqueeze(0).to(self.device)
+            logits = self.model(tensor)
+            probs = torch.softmax(logits, dim=1)[0]
+            top_conf, top_idx = torch.max(probs, dim=0)
+            return {
+                "prediction": self.class_list[int(top_idx.item())],
+                "confidence": float(top_conf.item()),
+            }
 
 
 def load_image_safe(image_path):

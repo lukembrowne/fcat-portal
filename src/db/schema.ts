@@ -185,6 +185,8 @@ export const deployments = sqliteTable(
     uploadNewestCameraDate: text("upload_newest_camera_date"),
     uploadNewestAudioDate: text("upload_newest_audio_date"),
     uploadNewestIbuttonDate: text("upload_newest_ibutton_date"),
+    // Training split assignment for custom classifier (write-once, set by exporter)
+    trainingSplit: text("training_split", { enum: ["train", "val", "test"] }),
   },
   (table) => [
     uniqueIndex("idx_biochoco_deployments_project_path").on(
@@ -374,9 +376,68 @@ export const identifications = sqliteTable(
     correctedSpecies: text("corrected_species"),
     verifiedBy: text("verified_by"),
     verifiedAt: integer("verified_at", { mode: "timestamp" }),
+    // Custom classifier provenance — null for legacy AI4G identifications
+    classifierModelId: integer("classifier_model_id").references(
+      () => cameraTrapModels.id,
+      { onDelete: "set null" }
+    ),
   },
   (table) => [
     index("idx_biochoco_identifications_detection_id").on(table.detectionId),
+  ]
+);
+
+// ---------------------------------------------------------------------------
+// Camera Trap — Training Datasets (versioned exports for custom classifier)
+// ---------------------------------------------------------------------------
+
+export const cameraTrapTrainingDatasets = sqliteTable(
+  "camera_trap_training_datasets",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    version: text("version").notNull().unique(),
+    contentHash: text("content_hash").notNull().unique(),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+    createdBy: text("created_by").notNull(),
+    imageCount: integer("image_count").notNull(),
+    classCount: integer("class_count").notNull(),
+    minExamplesThreshold: integer("min_examples_threshold").notNull(),
+    classListJson: text("class_list_json").notNull(),
+    droppedSpeciesJson: text("dropped_species_json").notNull(),
+    deploymentsJson: text("deployments_json").notNull(),
+    manifestPath: text("manifest_path").notNull(),
+  }
+);
+
+// ---------------------------------------------------------------------------
+// Camera Trap — Models (registered custom classifier weights)
+// ---------------------------------------------------------------------------
+
+export const cameraTrapModels = sqliteTable(
+  "camera_trap_models",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    version: text("version").notNull().unique(),
+    modelDir: text("model_dir").notNull(),
+    classMappingJson: text("class_mapping_json").notNull(),
+    metricsJson: text("metrics_json").notNull(),
+    confidenceThreshold: real("confidence_threshold").notNull(),
+    trainingDatasetId: integer("training_dataset_id").references(
+      () => cameraTrapTrainingDatasets.id,
+      { onDelete: "set null" }
+    ),
+    active: integer("active", { mode: "boolean" }).notNull().default(false),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+    createdBy: text("created_by").notNull(),
+  },
+  (table) => [
+    uniqueIndex("idx_camera_trap_models_active")
+      .on(table.active)
+      .where(sql`active = 1`),
   ]
 );
 
@@ -841,6 +902,14 @@ export type NewDetection = typeof detections.$inferInsert;
 
 export type Identification = typeof identifications.$inferSelect;
 export type NewIdentification = typeof identifications.$inferInsert;
+
+export type CameraTrapTrainingDataset =
+  typeof cameraTrapTrainingDatasets.$inferSelect;
+export type NewCameraTrapTrainingDataset =
+  typeof cameraTrapTrainingDatasets.$inferInsert;
+
+export type CameraTrapModel = typeof cameraTrapModels.$inferSelect;
+export type NewCameraTrapModel = typeof cameraTrapModels.$inferInsert;
 
 export type Species = typeof species.$inferSelect;
 export type NewSpecies = typeof species.$inferInsert;

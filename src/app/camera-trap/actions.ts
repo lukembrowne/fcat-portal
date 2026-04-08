@@ -12,10 +12,15 @@ import {
   identifications,
   species,
   cameraTrapProjects,
+  cameraTrapModels,
   activityLog,
   shareTokens,
   IMAGE_TIMESTAMP_ORDER,
 } from "@/db/schema";
+import {
+  displaySpecies,
+  type ModelForDisplay,
+} from "@/lib/display-species";
 import { eq, desc, inArray, and, or, gte, ne, sql, count, sum, isNotNull, isNull, notExists } from "drizzle-orm";
 import { runMLPredictions, checkPytorchWildlife, cancelModelServerJob } from "@/lib/ml-runner";
 import {
@@ -3038,6 +3043,51 @@ export async function getJobResultsData(jobId: number) {
     identByDetection.set(ident.detectionId, ident);
   }
 
+  // Resolve confidence thresholds for any custom classifier models referenced
+  // by these identifications. Used by displaySpecies() at the read boundary
+  // so re-tuning a threshold is a single UPDATE — no reprocess needed.
+  const modelIdSet = new Set<number>();
+  for (const ident of jobIdentifications) {
+    if (ident.classifierModelId != null) modelIdSet.add(ident.classifierModelId);
+  }
+  const modelRows =
+    modelIdSet.size > 0
+      ? await db
+          .select({
+            id: cameraTrapModels.id,
+            confidenceThreshold: cameraTrapModels.confidenceThreshold,
+          })
+          .from(cameraTrapModels)
+          .where(inArray(cameraTrapModels.id, [...modelIdSet]))
+      : [];
+  const modelById = new Map<number, ModelForDisplay>(
+    modelRows.map((m) => [m.id, { confidenceThreshold: m.confidenceThreshold }]),
+  );
+
+  // Effective species label for display. Verified/corrected identifications
+  // are NEVER relabeled — human verdict always wins. Unverified custom-
+  // classifier predictions below their model's confidence threshold collapse
+  // into "Sin identificar".
+  function effectiveSpecies(
+    ident: (typeof jobIdentifications)[number] | undefined,
+  ): string | null {
+    if (!ident) return null;
+    if (
+      ident.verificationStatus === "verified" ||
+      ident.verificationStatus === "corrected"
+    ) {
+      return ident.correctedSpecies || ident.species;
+    }
+    return displaySpecies(
+      {
+        species: ident.species,
+        confidence: ident.confidence,
+        classifierModelId: ident.classifierModelId,
+      },
+      modelById,
+    ).label;
+  }
+
   const detectionsByImage = new Map<number, (typeof jobDetections)>();
   for (const det of jobDetections) {
     const existing = detectionsByImage.get(det.imageId) || [];
@@ -3047,7 +3097,8 @@ export async function getJobResultsData(jobId: number) {
 
   const speciesCount: Record<string, number> = {};
   for (const ident of jobIdentifications) {
-    const sp = ident.correctedSpecies || ident.species;
+    const sp = effectiveSpecies(ident);
+    if (!sp) continue;
     speciesCount[sp] = (speciesCount[sp] || 0) + 1;
   }
 
@@ -3107,7 +3158,7 @@ export async function getJobResultsData(jobId: number) {
         const ident = identByDetection.get(det.id);
         return {
           id: det.id,
-          species: ident?.correctedSpecies || ident?.species || null,
+          species: effectiveSpecies(ident),
           confidence: ident?.confidence || null,
           detectionConfidence: det.detectionConfidence,
           detectionClass: det.detectionClass,

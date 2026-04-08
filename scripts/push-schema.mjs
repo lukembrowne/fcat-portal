@@ -460,6 +460,38 @@ const statements = [
     value TEXT,
     updated_at INTEGER NOT NULL DEFAULT (unixepoch())
   )`,
+
+  // Camera Trap — Training Datasets (versioned exports for custom classifier)
+  `CREATE TABLE IF NOT EXISTS camera_trap_training_datasets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    version TEXT NOT NULL UNIQUE,
+    content_hash TEXT NOT NULL UNIQUE,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    created_by TEXT NOT NULL,
+    image_count INTEGER NOT NULL,
+    class_count INTEGER NOT NULL,
+    min_examples_threshold INTEGER NOT NULL,
+    class_list_json TEXT NOT NULL,
+    dropped_species_json TEXT NOT NULL,
+    deployments_json TEXT NOT NULL,
+    manifest_path TEXT NOT NULL
+  )`,
+
+  // Camera Trap — Models (registered custom classifier weights)
+  `CREATE TABLE IF NOT EXISTS camera_trap_models (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    version TEXT NOT NULL UNIQUE,
+    model_dir TEXT NOT NULL,
+    class_mapping_json TEXT NOT NULL,
+    metrics_json TEXT NOT NULL,
+    confidence_threshold REAL NOT NULL,
+    training_dataset_id INTEGER REFERENCES camera_trap_training_datasets(id) ON DELETE SET NULL,
+    active INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    created_by TEXT NOT NULL
+  )`,
+  // Partial unique index — at most one active model
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_camera_trap_models_active ON camera_trap_models(active) WHERE active = 1`,
 ];
 
 for (const stmt of statements) {
@@ -541,6 +573,9 @@ const migrations = [
   `ALTER TABLE upload_count_snapshots ADD COLUMN total_ibutton_size_bytes INTEGER NOT NULL DEFAULT 0`,
   // Deployment field notes — operational context (2026-04-04)
   `ALTER TABLE biochoco_deployments ADD COLUMN field_notes TEXT`,
+  // Custom classifier training infrastructure (2026-04-08)
+  `ALTER TABLE biochoco_deployments ADD COLUMN training_split TEXT`,
+  `ALTER TABLE biochoco_identifications ADD COLUMN classifier_model_id INTEGER REFERENCES camera_trap_models(id) ON DELETE SET NULL`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }

@@ -117,7 +117,7 @@ PYWARM
 
 # Check if venv already exists and has all required packages
 if [ -x "$ML_PYTHON" ]; then
-  if "$ML_PYTHON" -c "import PytorchWildlife; import librosa" 2>/dev/null; then
+  if "$ML_PYTHON" -c "import PytorchWildlife; import librosa; import timm" 2>/dev/null; then
     echo "[ml-setup] ML venv ready at $ML_VENV_DIR"
     warm_model_cache
     exit 0
@@ -141,6 +141,9 @@ fi
 echo "[ml-setup] Installing PytorchWildlife + missing runtime deps..."
 uv pip install --python "$ML_PYTHON" PytorchWildlife lightning omegaconf
 
+echo "[ml-setup] Installing timm (custom Chocó classifier)..."
+uv pip install --python "$ML_PYTHON" timm
+
 echo "[ml-setup] Installing librosa + audio spectrogram deps..."
 uv pip install --python "$ML_PYTHON" librosa soundfile numpy matplotlib Pillow
 
@@ -152,8 +155,8 @@ echo "[ml-setup] Installing setuptools<75 (provides pkg_resources for yolov5)...
 uv pip install --python "$ML_PYTHON" --reinstall-package setuptools "setuptools<75"
 
 # Verify the import actually works
-echo "[ml-setup] Verifying PytorchWildlife import..."
-if "$ML_PYTHON" -c "import PytorchWildlife; print('version:', PytorchWildlife.__version__)" 2>&1; then
+echo "[ml-setup] Verifying PytorchWildlife + timm imports..."
+if "$ML_PYTHON" -c "import PytorchWildlife, timm; print('PytorchWildlife', PytorchWildlife.__version__, 'timm', timm.__version__)" 2>&1; then
   echo "[ml-setup] ML venv ready!"
   warm_model_cache
 else

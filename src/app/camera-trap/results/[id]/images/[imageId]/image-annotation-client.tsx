@@ -47,7 +47,7 @@ import {
   toggleSetupTag,
   applySetupTagDate,
 } from "@/app/camera-trap/actions";
-import { Camera } from "lucide-react";
+import { Camera, Loader2 } from "lucide-react";
 import type { Species } from "@/db/schema";
 import type { TaxonomicRank } from "@/lib/types";
 
@@ -81,6 +81,14 @@ interface ImageAnnotationClientProps {
   containerClassName?: string;
   /** Called after any data mutation; use to re-fetch data in embedded mode */
   onMutate?: () => void;
+  /**
+   * When true, render a translucent loading spinner over the image area
+   * only (sidebar, detection cards, and toolbar stay visible). Used by
+   * the embedded overlay while it fetches the next image's payload on a
+   * prefetch cache miss, so the user gets feedback without a full
+   * white-screen flash.
+   */
+  loadingOverlay?: boolean;
 }
 
 export function ImageAnnotationClient({
@@ -103,6 +111,7 @@ export function ImageAnnotationClient({
   onBack,
   containerClassName,
   onMutate,
+  loadingOverlay = false,
 }: ImageAnnotationClientProps) {
   const router = useRouter();
   const refresh = useCallback(() => {
@@ -580,6 +589,13 @@ export function ImageAnnotationClient({
               <span className="absolute top-2 right-2 px-1.5 py-0.5 text-xs font-mono bg-black/60 text-white rounded">
                 {zoomScale.toFixed(1)}x
               </span>
+            )}
+            {loadingOverlay && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/40 pointer-events-none">
+                <div className="rounded-full bg-black/70 p-3">
+                  <Loader2 className="h-6 w-6 animate-spin text-white" />
+                </div>
+              </div>
             )}
           </div>
 

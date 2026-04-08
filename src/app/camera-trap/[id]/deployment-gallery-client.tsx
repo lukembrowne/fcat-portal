@@ -38,11 +38,25 @@ export function DeploymentGalleryClient({
   const router = useRouter();
 
   // --- Overlay state ---
+  // `currentImageId` is the user's *intent* — what they pressed → toward.
+  // It updates synchronously on every navigation.
+  // `displayedPayload` is what's actually rendered; it lags behind on a
+  // cache miss so the user keeps seeing the previous image (with a small
+  // spinner overlay) instead of a full-screen white flash.
   const [currentImageId, setCurrentImageId] = useState<number | null>(null);
-  const [currentPayload, setCurrentPayload] = useState<ImagePayload | null>(null);
+  const [displayedPayload, setDisplayedPayload] = useState<ImagePayload | null>(null);
   const [sessionContext, setSessionContext] = useState<SessionContext | null>(null);
   const [direction, setDirection] = useState<PrefetchDirection>("forward");
   const [coldOpenLoading, setColdOpenLoading] = useState(false);
+
+  // Mirror of `currentImageId` accessible from inside async fetch
+  // callbacks so a slow response for an image the user has already
+  // navigated past doesn't overwrite the displayed payload (stale-fetch
+  // guard).
+  const currentImageIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    currentImageIdRef.current = currentImageId;
+  }, [currentImageId]);
 
   // Live ordered list of currently filtered image IDs (updated by ResultsClient
   // whenever the user changes a filter). When the annotation overlay opens we
@@ -99,17 +113,20 @@ export function DeploymentGalleryClient({
         setNavigationIds(snapshot);
       }
 
-      // Cache hit → synchronous swap, no spinner.
+      // Cache hit → synchronous swap, no spinner. The displayed payload
+      // updates in the same render as the keypress.
       const cached = cacheRef.current.get(imageId);
       if (cached && !isColdOpen) {
         setCurrentImageId(imageId);
-        setCurrentPayload(cached);
+        setDisplayedPayload(cached);
         return;
       }
 
-      // Cache miss. Show spinner for cold opens; for in-overlay navigation
-      // we keep the previous image painted until the new one resolves so
-      // the user doesn't see a flash of empty state.
+      // Cache miss. Show the full-screen spinner only on a cold open
+      // (no payload has ever been displayed yet). For in-overlay
+      // navigation we keep the previous payload rendered and let
+      // ImageAnnotationClient draw a spinner over just the image area
+      // via its `loadingOverlay` prop.
       if (isColdOpen) setColdOpenLoading(true);
       setCurrentImageId(imageId);
 
@@ -123,11 +140,16 @@ export function DeploymentGalleryClient({
         if (payload == null) {
           // Permission denied or image gone — bail back to the grid.
           setCurrentImageId(null);
-          setCurrentPayload(null);
+          setDisplayedPayload(null);
           return;
         }
         cacheRef.current.set(imageId, payload);
-        setCurrentPayload(payload);
+        // Stale-fetch guard: only swap the displayed payload if the user
+        // is still on this image. Otherwise just leave it in the cache
+        // for the next visit.
+        if (currentImageIdRef.current === imageId) {
+          setDisplayedPayload(payload);
+        }
         if (ctx) setSessionContext(ctx);
       } finally {
         setColdOpenLoading(false);
@@ -138,7 +160,7 @@ export function DeploymentGalleryClient({
 
   const handleBack = useCallback(() => {
     setCurrentImageId(null);
-    setCurrentPayload(null);
+    setDisplayedPayload(null);
     setSessionContext(null);
     setNavigationIds(null);
     cacheRef.current.clear();
@@ -162,7 +184,10 @@ export function DeploymentGalleryClient({
     ]);
     if (payload) {
       cacheRef.current.set(currentImageId, payload);
-      setCurrentPayload(payload);
+      // Same stale-fetch guard as loadImage.
+      if (currentImageIdRef.current === currentImageId) {
+        setDisplayedPayload(payload);
+      }
     }
     if (ctx) setSessionContext(ctx);
   }, [currentImageId, jobId, deploymentId, navigationIds]);
@@ -197,15 +222,18 @@ export function DeploymentGalleryClient({
         : null;
     const totalImages = ids.length;
 
-    // Show spinner whenever the rendered payload doesn't match the
-    // requested image. Cache hits make this false in the same render
-    // cycle as the keypress; misses (cold open or scrolling past the
-    // prefetch window) flash a brief spinner until the fetch resolves.
-    const payloadMatches =
-      currentPayload != null && currentPayload.image.id === currentImageId;
-    const showSpinner = coldOpenLoading || sessionContext == null || !payloadMatches;
-    const headerImage = payloadMatches ? currentPayload!.image : null;
-    const headerName = currentPayload?.deploymentName ?? deploymentName;
+    // The displayed payload may briefly lag behind currentImageId on a
+    // cache miss. While that's true we paint a spinner overlay just on
+    // the image area (not the whole screen) via ImageAnnotationClient's
+    // `loadingOverlay` prop. The very first cold open has no displayed
+    // payload at all, so we fall back to a centered loader for that
+    // single moment.
+    const isLoadingNew =
+      displayedPayload != null && displayedPayload.image.id !== currentImageId;
+    const showColdSpinner =
+      coldOpenLoading || sessionContext == null || displayedPayload == null;
+    const headerImage = displayedPayload?.image ?? null;
+    const headerName = displayedPayload?.deploymentName ?? deploymentName;
 
     return (
       <div className="fixed inset-0 z-50 bg-background flex flex-col">
@@ -220,9 +248,9 @@ export function DeploymentGalleryClient({
             <span className="font-medium text-sm truncate">
               {headerImage?.filename ?? ""}
             </span>
-            {payloadMatches && currentPayload?.timestamp && (
+            {displayedPayload?.timestamp && (
               <span className="text-xs text-muted-foreground hidden md:inline">
-                {currentPayload.timestamp}
+                {displayedPayload.timestamp}
               </span>
             )}
           </div>
@@ -261,32 +289,41 @@ export function DeploymentGalleryClient({
 
         {/* Annotation area fills the rest */}
         <div className="flex-1 min-h-0 p-3">
-          {showSpinner ? (
+          {showColdSpinner ? (
             <div className="flex items-center justify-center h-full">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
           ) : (
             <ImageAnnotationClient
-              key={currentImageId}
-              src={`/api/ct-images/${currentImageId}?size=full`}
-              alt={headerImage!.filename}
-              boxes={currentPayload!.boxes}
-              detections={currentPayload!.detections}
+              // Key on the displayed image (not currentImageId) so the
+              // component doesn't remount mid-load — keeping local state
+              // (selectedBoxId, zoom, etc.) intact for the visible image.
+              key={displayedPayload!.image.id}
+              src={`/api/ct-images/${displayedPayload!.image.id}?size=full`}
+              alt={displayedPayload!.image.filename}
+              boxes={displayedPayload!.boxes}
+              detections={displayedPayload!.detections}
               speciesList={sessionContext!.speciesList}
               frequentSpecies={sessionContext!.frequentSpecies}
               jobId={jobId}
-              imageId={currentImageId}
+              // imageId stays in sync with the rendered payload so any
+              // action (verify/reject/delete) targets the visible image.
+              imageId={displayedPayload!.image.id}
+              // Prev/next, however, are computed from the user's intent
+              // (`currentImageId`) so a second arrow press during a slow
+              // load advances correctly instead of looping back.
               prevImageId={prevImageId}
               nextImageId={nextImageId}
               navigationIds={navigationIds ?? undefined}
-              confirmedBlank={headerImage!.confirmedBlank}
-              starred={headerImage!.starred}
-              starredBy={headerImage!.starredBy}
-              setupTag={headerImage!.setupTag}
+              confirmedBlank={displayedPayload!.image.confirmedBlank}
+              starred={displayedPayload!.image.starred}
+              starredBy={displayedPayload!.image.starredBy}
+              setupTag={displayedPayload!.image.setupTag}
               onNavigate={loadImage}
               onBack={handleBack}
               containerClassName="h-full"
               onMutate={handleMutate}
+              loadingOverlay={isLoadingNew}
             />
           )}
         </div>

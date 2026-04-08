@@ -144,15 +144,15 @@ The primary workflow is the `DeploymentGalleryClient` overlay (called from `/cam
 
 ### Phase 1 — Server-side split (pure refactor, no behavior change)
 
-- [ ] Add `getAnnotationSessionContext(jobId, deploymentId, navigationIds?)` in `src/app/camera-trap/actions.ts`:
+- [x] Add `getAnnotationSessionContext(jobId, deploymentId, navigationIds?)` in `src/app/camera-trap/actions.ts`:
   - Returns `{ speciesList, frequentSpecies, deploymentName, jobImageIds, verificationStatsBaseline }`.
-- [ ] Add `getImagePayload(imageId)` in the same file:
+- [x] Add `getImagePayload(imageId)` in the same file:
   - Returns `{ image, boxes, detections, timestamp }` — only queries `images` + `detections` + `identifications` + one deployment name lookup (or skip it since it's in session context).
-- [ ] Keep `getImageAnnotationData` untouched for now so the standalone page and any other callers continue to work.
+- [x] Keep `getImageAnnotationData` untouched for now so the standalone page and any other callers continue to work.
 
 ### Phase 2 — Client cache + prefetch primitives
 
-- [ ] New file `src/lib/annotation-prefetch.ts`:
+- [x] New file `src/lib/annotation-prefetch.ts`:
   ```ts
   // src/lib/annotation-prefetch.ts
   export class AnnotationPayloadCache {
@@ -174,7 +174,7 @@ The primary workflow is the `DeploymentGalleryClient` overlay (called from `/cam
   ): number[]
   ```
 
-- [ ] New file `src/hooks/use-annotation-prefetch.ts`:
+- [x] New file `src/hooks/use-annotation-prefetch.ts`:
   ```ts
   // src/hooks/use-annotation-prefetch.ts
   export function useAnnotationPrefetch(opts: {
@@ -190,15 +190,15 @@ The primary workflow is the `DeploymentGalleryClient` overlay (called from `/cam
   - On `currentImageId` change: compute window, kick off image preloads + metadata fetches for uncached entries, cancel prefetches outside the window.
   - Honors concurrency cap via a simple promise queue.
 
-- [ ] New file `tests/unit/annotation-prefetch.test.ts`:
+- [x] New file `tests/unit/annotation-prefetch.test.ts`:
   - LRU eviction order.
   - `computePrefetchWindow` edge cases (start of list, end of list, backward direction).
-  - Concurrency cap respects maximum in-flight.
-  - Cancellation clears the queue.
+  - Concurrency cap respects maximum in-flight. *(deferred — covered in hook integration testing instead)*
+  - Cancellation clears the queue. *(deferred — covered in hook integration testing instead)*
 
 ### Phase 3 — Wire into the overlay
 
-- [ ] Update `src/app/camera-trap/[id]/deployment-gallery-client.tsx`:
+- [x] Update `src/app/camera-trap/[id]/deployment-gallery-client.tsx`:
   - On overlay open, fetch `sessionContext` once via `getAnnotationSessionContext(...)` and hold it in state.
   - Replace per-navigation `getImageAnnotationData` call with `getImagePayload` + merge with session context.
   - Instantiate `AnnotationPayloadCache` and `useAnnotationPrefetch` keyed on `navigationIds`.
@@ -207,17 +207,17 @@ The primary workflow is the `DeploymentGalleryClient` overlay (called from `/cam
   - Track a client-side verification delta; inject `verificationStats.reviewed + delta` into the header.
   - On `navigationIds` change, unmount, or deployment change: clear cache and cancel in-flight prefetches.
 
-- [ ] Update `src/app/camera-trap/actions.ts` `createSpecies` return or add a companion signal so the overlay knows to refetch session context on success. (Simpler: just unconditionally refetch session context after successful `createSpecies`.)
+- [x] Update `src/app/camera-trap/actions.ts` `createSpecies` return or add a companion signal so the overlay knows to refetch session context on success. (Implemented as: `handleMutate` unconditionally refetches session context, which covers `createSpecies` because that path triggers `refresh` → `onMutate` → `handleMutate`.)
 
 ### Phase 4 — Standalone page lightweight prefetch
 
-- [ ] In `src/app/camera-trap/results/[id]/images/[imageId]/image-annotation-client.tsx`, on mount and on `nextImageId` change: call `router.prefetch(\`/camera-trap/results/${jobId}/images/${nextImageId}\`)` to warm the Next.js RSC payload. Also kick off `preloadImage(\`/api/ct-images/${nextImageId}?size=full\`)` for the next image.
-- [ ] Same treatment for `prevImageId`.
+- [x] In `src/app/camera-trap/results/[id]/images/[imageId]/image-annotation-client.tsx`, on mount and on `nextImageId` change: call `router.prefetch(\`/camera-trap/results/${jobId}/images/${nextImageId}\`)` to warm the Next.js RSC payload. Also kick off `preloadImage(\`/api/ct-images/${nextImageId}?size=full\`)` for the next image.
+- [x] Same treatment for `prevImageId`.
 
 ### Phase 5 — Instrumentation & manual verification
 
-- [ ] Add a `console.timeLog`-style marker (behind `NEXT_PUBLIC_DEBUG_PREFETCH=1`) that logs cache hit/miss and image decode latency. Remove or silence before merge.
-- [ ] Manual test plan (below).
+- [ ] Add a `console.timeLog`-style marker (behind `NEXT_PUBLIC_DEBUG_PREFETCH=1`) that logs cache hit/miss and image decode latency. Remove or silence before merge. *(deferred — add only if perf needs measuring after manual smoke test)*
+- [ ] Manual test plan (below). *(awaiting user smoke test)*
 
 ## Files to Touch
 

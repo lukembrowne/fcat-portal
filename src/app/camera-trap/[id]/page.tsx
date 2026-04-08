@@ -206,6 +206,7 @@ export default async function DeploymentDetailPage({ params }: PageProps) {
         <DeploymentGalleryClient
           images={resultsData.gridImages}
           jobId={stats.latestCompletedJobId!}
+          deploymentId={deployment.id}
           speciesList={resultsData.speciesList}
           deploymentName={deployment.name}
         />

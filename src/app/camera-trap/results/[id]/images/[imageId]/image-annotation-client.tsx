@@ -24,6 +24,7 @@ import Link from "next/link";
 import { toast } from "sonner";
 import { useAnnotationShortcuts } from "@/hooks/use-annotation-shortcuts";
 import { useImageZoom } from "@/hooks/use-image-zoom";
+import { preloadImage } from "@/lib/annotation-prefetch";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -187,6 +188,28 @@ export function ImageAnnotationClient({
       searchInputRef.current?.blur();
     }
   }, [selectedBoxId]);
+
+  // Standalone-page prefetch: when this component is rendered as the
+  // top-level annotation page (no `onNavigate` callback), warm the next /
+  // previous image's RSC payload and full image bytes so arrow-key
+  // navigation feels closer to instant. The overlay-mode parent
+  // (`DeploymentGalleryClient`) handles its own richer prefetching, so we
+  // skip this effect when `onNavigate` is provided.
+  useEffect(() => {
+    if (onNavigate) return;
+    const handles: { cancel(): void }[] = [];
+    if (nextImageId) {
+      router.prefetch(`/camera-trap/results/${jobId}/images/${nextImageId}`);
+      handles.push(preloadImage(`/api/ct-images/${nextImageId}?size=full`));
+    }
+    if (prevImageId) {
+      router.prefetch(`/camera-trap/results/${jobId}/images/${prevImageId}`);
+      handles.push(preloadImage(`/api/ct-images/${prevImageId}?size=full`));
+    }
+    return () => {
+      for (const h of handles) h.cancel();
+    };
+  }, [router, onNavigate, jobId, nextImageId, prevImageId]);
 
   // Visible species list for hotkey assignment
   const visibleSpecies = useMemo(

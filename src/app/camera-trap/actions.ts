@@ -3699,6 +3699,132 @@ export async function getImageAnnotationData(
   };
 }
 
+/**
+ * Session-wide annotation context, fetched once when the annotation overlay
+ * opens. Returns data that is stable across neighbor images in the same
+ * deployment / job, so per-navigation queries don't have to refetch it.
+ *
+ * Pair with `getImagePayload` for the per-image cost.
+ *
+ * When `navigationIds` is provided (and non-empty), it's returned as `imageIds`
+ * directly; otherwise the full job image list is fetched.
+ */
+export async function getAnnotationSessionContext(
+  jobId: number,
+  deploymentId: number,
+  navigationIds?: number[],
+) {
+  const user = await requirePermission("camera-trap", "viewer");
+  await requireDeploymentAccess(user, deploymentId);
+
+  const useFilter = navigationIds !== undefined && navigationIds.length > 0;
+
+  const [speciesList, freqResult, verificationStats, fullJobImageIds, deploymentRow] =
+    await Promise.all([
+      getSpeciesList(),
+      getFrequentSpecies(deploymentId),
+      getDeploymentVerificationStats(deploymentId),
+      useFilter ? Promise.resolve([] as number[]) : getJobImageIds(jobId),
+      db
+        .select({ name: deployments.name })
+        .from(deployments)
+        .where(eq(deployments.id, deploymentId)),
+    ]);
+
+  return {
+    speciesList,
+    frequentSpecies: freqResult.success ? freqResult.data : [],
+    deploymentName: deploymentRow[0]?.name ?? null,
+    imageIds: useFilter ? navigationIds! : fullJobImageIds,
+    verificationStats,
+  };
+}
+
+/**
+ * Lightweight per-image annotation payload. Only fetches the image row,
+ * its detections, and their identifications — about a third of the work of
+ * `getImageAnnotationData`. Designed to be safe to call speculatively from
+ * the client-side prefetch queue while the user is annotating.
+ *
+ * Returns `null` for images the current user can't access (consistent with
+ * `getImageWithDetections`), so prefetch consumers can ignore failures.
+ */
+export async function getImagePayload(imageId: number) {
+  const data = await getImageWithDetections(imageId);
+  if (!data) return null;
+
+  const { image, deploymentName, detections: rawDetections } = data;
+
+  const boxes = rawDetections.map((det) => ({
+    id: det.id,
+    x: det.bboxX,
+    y: det.bboxY,
+    width: det.bboxWidth,
+    height: det.bboxHeight,
+    detectionConfidence: det.detectionConfidence,
+    detectionClass: det.detectionClass,
+    species: det.identification?.correctedSpecies || det.identification?.species || null,
+    speciesConfidence: det.identification?.confidence || null,
+    verificationStatus: det.identification?.verificationStatus || "unverified",
+  }));
+
+  const annotationDetections = rawDetections.map((det) => ({
+    id: det.id,
+    detectionClass: det.detectionClass,
+    detectionConfidence: det.detectionConfidence,
+    bboxX: det.bboxX,
+    bboxY: det.bboxY,
+    bboxWidth: det.bboxWidth,
+    bboxHeight: det.bboxHeight,
+    identification: det.identification
+      ? {
+          id: det.identification.id,
+          species: det.identification.species,
+          confidence: det.identification.confidence,
+          verificationStatus: det.identification.verificationStatus,
+          correctedSpecies: det.identification.correctedSpecies,
+        }
+      : null,
+  }));
+
+  const rawTimestamp = image.exifTimestamp
+    ? new Date(image.exifTimestamp)
+    : image.fileModified
+      ? new Date(image.fileModified)
+      : null;
+  const timestamp =
+    rawTimestamp && !isNaN(rawTimestamp.getTime())
+      ? rawTimestamp.toLocaleDateString("es-EC", {
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+        }) +
+        ", " +
+        rawTimestamp.toLocaleTimeString("es-EC", {
+          hour: "2-digit",
+          minute: "2-digit",
+        })
+      : null;
+
+  return {
+    image: {
+      id: image.id,
+      filename: image.filename,
+      deploymentId: image.deploymentId,
+      confirmedBlank: image.confirmedBlank,
+      starred: image.starred,
+      starredBy: image.starredBy,
+      setupTag: image.setupTag as "deployment" | "retrieval" | null,
+      videoId: image.videoId,
+      frameIndex: image.frameIndex,
+    },
+    deploymentName,
+    timestamp,
+    boxes,
+    detections: annotationDetections,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Annotation / Verification
 // ---------------------------------------------------------------------------

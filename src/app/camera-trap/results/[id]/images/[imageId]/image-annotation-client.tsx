@@ -670,9 +670,12 @@ export function ImageAnnotationClient({
             deleteButtonRef.current?.focus();
           }}
           onKeyDown={(e: React.KeyboardEvent) => {
+            // Note: Backspace is intentionally NOT handled here — it opens the
+            // dialog via the window-level shortcut, and if it also auto-confirmed
+            // here the detection would be deleted in a single keypress with no
+            // real confirmation step. Require explicit Enter/click to confirm.
             if (
               e.key === "Delete" ||
-              e.key === "Backspace" ||
               e.key === "d" ||
               e.key === "Enter"
             ) {

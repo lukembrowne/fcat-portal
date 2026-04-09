@@ -67,6 +67,10 @@ export async function addUser(
       })
       .onConflictDoNothing();
 
+    if (isExternal) {
+      await writeAllowedEmailsFile();
+    }
+
     revalidatePath("/admin");
     return { success: true, data: undefined };
   } catch (error) {
@@ -81,8 +85,17 @@ export async function removeUser(email: string): Promise<ActionResult> {
   await requireAdmin();
 
   try {
+    const [existing] = await db
+      .select({ isExternal: users.isExternal })
+      .from(users)
+      .where(eq(users.email, email));
+
     // Permissions are cascade-deleted via foreign key
     await db.delete(users).where(eq(users.email, email));
+
+    if (existing?.isExternal) {
+      await writeAllowedEmailsFile();
+    }
 
     revalidatePath("/admin");
     return { success: true, data: undefined };
@@ -175,29 +188,34 @@ export async function removePermission(
 // External Email Allowlist Sync
 // ---------------------------------------------------------------------------
 
+async function writeAllowedEmailsFile(): Promise<number> {
+  const filePath =
+    process.env.ALLOWED_EMAILS_PATH || "data/allowed_external_emails.txt";
+  const absolutePath = path.isAbsolute(filePath)
+    ? filePath
+    : path.join(process.cwd(), filePath);
+
+  const externalUsers = await db
+    .select({ email: users.email })
+    .from(users)
+    .where(eq(users.isExternal, true));
+
+  const emails = externalUsers.map((u) => u.email).sort();
+  const content = emails.join("\n") + "\n";
+
+  const dir = path.dirname(absolutePath);
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(absolutePath, content, "utf-8");
+
+  return emails.length;
+}
+
 export async function syncAllowedEmails(): Promise<ActionResult<{ count: number }>> {
   await requireAdmin();
 
   try {
-    const filePath =
-      process.env.ALLOWED_EMAILS_PATH || "data/allowed_external_emails.txt";
-    const absolutePath = path.isAbsolute(filePath)
-      ? filePath
-      : path.join(process.cwd(), filePath);
-
-    const externalUsers = await db
-      .select({ email: users.email })
-      .from(users)
-      .where(eq(users.isExternal, true));
-
-    const emails = externalUsers.map((u) => u.email).sort();
-    const content = emails.join("\n") + "\n";
-
-    const dir = path.dirname(absolutePath);
-    await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(absolutePath, content, "utf-8");
-
-    return { success: true, data: { count: emails.length } };
+    const count = await writeAllowedEmailsFile();
+    return { success: true, data: { count } };
   } catch (error) {
     return {
       success: false,

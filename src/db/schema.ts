@@ -848,6 +848,46 @@ export const shareTokens = sqliteTable(
 );
 
 // ---------------------------------------------------------------------------
+// Site Share Tokens (public share links for biochoco site results pages)
+// ---------------------------------------------------------------------------
+//
+// Scope: an entire biochoco site (e.g. "NAC-005"), aggregating every camera
+// trap deployment, habitat assessment, and iButton record at that site.
+//
+// `deploymentIds` is materialized at creation time as a JSON array of
+// deployment row IDs. The biochoco "site" is an ODK entity (no DB FK),
+// and the deployment→site mapping has a name-pattern fallback that pure
+// SQL can't reproduce, so we snapshot the resolved list at create time.
+//
+// `heroImageId` is chosen at creation time for OG link previews.
+// `idx_site_share_tokens_site_active` is a UNIQUE partial index — only one
+// active (non-revoked) token may exist per site. The create action revokes
+// any existing active token in the same transaction before inserting.
+
+export const siteShareTokens = sqliteTable(
+  "site_share_tokens",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    token: text("token").notNull().unique(),
+    biochocoSiteId: text("biochoco_site_id").notNull(),
+    deploymentIds: text("deployment_ids").notNull(),
+    heroImageId: integer("hero_image_id"),
+    createdBy: text("created_by").notNull(),
+    label: text("label"),
+    revokedAt: integer("revoked_at", { mode: "timestamp" }),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [
+    index("idx_site_share_tokens_token").on(table.token),
+    uniqueIndex("idx_site_share_tokens_site_active")
+      .on(table.biochocoSiteId)
+      .where(sql`${table.revokedAt} IS NULL`),
+  ]
+);
+
+// ---------------------------------------------------------------------------
 // Upload Count Snapshots (daily aggregate of Drive upload counts)
 // ---------------------------------------------------------------------------
 
@@ -969,6 +1009,9 @@ export type NewUploadCountSnapshot = typeof uploadCountSnapshots.$inferInsert;
 
 export type ShareToken = typeof shareTokens.$inferSelect;
 export type NewShareToken = typeof shareTokens.$inferInsert;
+
+export type SiteShareToken = typeof siteShareTokens.$inferSelect;
+export type NewSiteShareToken = typeof siteShareTokens.$inferInsert;
 
 // ---------------------------------------------------------------------------
 // Query helpers

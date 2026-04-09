@@ -11,17 +11,15 @@ import {
   species as speciesTable,
 } from "@/db/schema";
 import { eq, and, desc, inArray, sql } from "drizzle-orm";
+import { isValidShareToken } from "@/lib/public-tokens";
 import { PublicImageGrid } from "./public-image-grid";
 
 interface PageProps {
   params: Promise<{ token: string }>;
 }
 
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
 const getShareData = cache(async function getShareData(token: string) {
-  // Validate token format (UUID v4)
-  if (!token || !UUID_REGEX.test(token)) {
+  if (!isValidShareToken(token)) {
     return null;
   }
 

@@ -14,6 +14,7 @@ import { shareTokens, images } from "@/db/schema";
 import { eq, and, sql } from "drizzle-orm";
 import { downloadFileToBuffer } from "@/lib/drive-client";
 import { getOrGenerateThumbnail } from "@/lib/thumbnail";
+import { isValidShareToken } from "@/lib/public-tokens";
 
 export const dynamic = "force-dynamic";
 
@@ -23,9 +24,7 @@ export async function GET(
 ) {
   const { token, id: idParam } = await params;
 
-  // Validate token format (UUID v4)
-  const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-  if (!token || !UUID_REGEX.test(token)) {
+  if (!isValidShareToken(token)) {
     return NextResponse.json({ error: "Bad request" }, { status: 400 });
   }
 

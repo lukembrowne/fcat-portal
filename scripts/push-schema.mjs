@@ -454,6 +454,25 @@ const statements = [
   `CREATE INDEX IF NOT EXISTS idx_share_tokens_token ON share_tokens(token)`,
   `CREATE INDEX IF NOT EXISTS idx_share_tokens_deployment ON share_tokens(deployment_id)`,
 
+  // Site Share Tokens (public share links for biochoco site results pages)
+  // Aggregates camera trap deployments + habitat + temperature for one site.
+  // deployment_ids is materialized as a JSON array at creation time.
+  // The unique partial index enforces one active token per site.
+  `CREATE TABLE IF NOT EXISTS site_share_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token TEXT NOT NULL UNIQUE,
+    biochoco_site_id TEXT NOT NULL,
+    deployment_ids TEXT NOT NULL,
+    hero_image_id INTEGER,
+    created_by TEXT NOT NULL,
+    label TEXT,
+    revoked_at INTEGER,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_site_share_tokens_token ON site_share_tokens(token)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_site_share_tokens_site_active
+    ON site_share_tokens(biochoco_site_id) WHERE revoked_at IS NULL`,
+
   // App State (generic key/value for cross-module timestamps/flags)
   `CREATE TABLE IF NOT EXISTS app_state (
     key TEXT PRIMARY KEY,

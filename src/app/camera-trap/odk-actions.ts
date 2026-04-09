@@ -235,7 +235,16 @@ export async function matchOdkDeployments(
 }
 
 /**
- * Match all unmatched deployments (those without an odkSubmissionId).
+ * Match all deployments with incomplete ODK metadata. Picks up:
+ *   - never-matched deployments (no odkSubmissionId), AND
+ *   - already-matched deployments that are still missing dateStart or dateEnd.
+ *
+ * The second case matters because retrieve_sensors is submitted AFTER the
+ * install match runs. Without this, once a deployment's install is matched
+ * it would never pick up its later retrieval date — the results page would
+ * compute 0 camera days forever. matchOdkDeployments() only fills nulls, so
+ * this is safe for manually-edited rows (metadataSource=manual is preserved
+ * and null-only updates won't clobber user edits).
  */
 export async function matchAllUnmatched(): Promise<ActionResult<MatchResult>> {
   const user = await requirePermission("camera-trap", "editor");
@@ -248,7 +257,9 @@ export async function matchAllUnmatched(): Promise<ActionResult<MatchResult>> {
       and(
         or(
           isNull(deployments.odkSubmissionId),
-          eq(deployments.odkSubmissionId, "")
+          eq(deployments.odkSubmissionId, ""),
+          isNull(deployments.dateStart),
+          isNull(deployments.dateEnd),
         ),
         ctProjectFilter(ctProjects),
       )

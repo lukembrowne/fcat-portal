@@ -47,7 +47,7 @@ import { DeploymentRowActions } from "./deployment-row-actions";
 import { BatchEditDialog } from "./batch-edit-dialog";
 import { BatchDeleteDialog } from "./batch-delete-dialog";
 import { syncWithDrive, scanDeploymentImages } from "./drive-actions";
-import { matchOdkDeployments } from "./odk-actions";
+import { matchOdkDeployments, matchAllUnmatched } from "./odk-actions";
 import { ProcessConfirmDialog } from "./process-confirm-dialog";
 import type { ProjectGroup } from "./page";
 
@@ -454,6 +454,23 @@ export function DeploymentsTable({
         if (errors.length > 0) {
           messages.push(`${errors.length} error(es) de sincronización.`);
         }
+      }
+
+      // Step 2b: Backfill ODK metadata for previously-matched deployments
+      // whose dateStart / dateEnd are still null. retrieve_sensors is
+      // submitted AFTER the install match runs, so without this pass the
+      // retrieval date would never flow into `biochoco_deployments.date_end`
+      // and the results page would show 0 camera days indefinitely.
+      const backfillResult = await matchAllUnmatched();
+      if (backfillResult.success) {
+        const filled = backfillResult.data.matched.length;
+        if (filled > 0) {
+          messages.push(`${filled} fecha(s) de ODK actualizada(s).`);
+        }
+      } else {
+        collectedErrors.push(
+          `Error al sincronizar fechas ODK: ${backfillResult.error}`
+        );
       }
 
       // Step 3: Re-scan all deployments except those a human has already verified.

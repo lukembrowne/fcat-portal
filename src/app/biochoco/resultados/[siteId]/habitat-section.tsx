@@ -7,13 +7,18 @@ import {
   DISTURBANCE_LABELS,
   HEIGHT_CLASS_LABELS,
 } from "../../habitat/types";
-import { Card, CardContent } from "@/components/ui/card";
 import { TreePine } from "lucide-react";
 import { BIOCHOCO_PROJECT_ID, BIOCHOCO_FORM_HABITAT } from "@/lib/odk-constants";
 
 interface HabitatSectionProps {
   habitat: HabitatAssessment | null;
   totalCount: number;
+  /**
+   * If false, hides the directional habitat photos. The photos are
+   * served by /api/odk/photos which requires an authenticated session,
+   * so they don't load on the public landowner-share view.
+   */
+  showPhotos?: boolean;
 }
 
 function StatCard({ label, value }: { label: string; value: string | number }) {
@@ -63,7 +68,11 @@ function HabitatPhoto({
   );
 }
 
-export function HabitatSection({ habitat, totalCount }: HabitatSectionProps) {
+export function HabitatSection({
+  habitat,
+  totalCount,
+  showPhotos = true,
+}: HabitatSectionProps) {
   return (
     <section>
       <h2 className="text-lg font-semibold flex items-center gap-2 mb-4">
@@ -127,36 +136,40 @@ export function HabitatSection({ habitat, totalCount }: HabitatSectionProps) {
             </p>
           )}
 
-          {/* Directional photos — 3 on top, 2 on bottom */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            <HabitatPhoto
-              label="Norte"
-              filename={habitat.photoNorth}
-              instanceId={habitat.instanceId}
-            />
-            <HabitatPhoto
-              label="Este"
-              filename={habitat.photoEast}
-              instanceId={habitat.instanceId}
-            />
-            <HabitatPhoto
-              label="Sur"
-              filename={habitat.photoSouth}
-              instanceId={habitat.instanceId}
-            />
-          </div>
-          <div className="grid grid-cols-2 sm:grid-cols-2 gap-3 sm:w-2/3">
-            <HabitatPhoto
-              label="Oeste"
-              filename={habitat.photoWest}
-              instanceId={habitat.instanceId}
-            />
-            <HabitatPhoto
-              label="Dosel"
-              filename={habitat.photoCanopy}
-              instanceId={habitat.instanceId}
-            />
-          </div>
+          {showPhotos && (
+            <>
+              {/* Directional photos — 3 on top, 2 on bottom */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                <HabitatPhoto
+                  label="Norte"
+                  filename={habitat.photoNorth}
+                  instanceId={habitat.instanceId}
+                />
+                <HabitatPhoto
+                  label="Este"
+                  filename={habitat.photoEast}
+                  instanceId={habitat.instanceId}
+                />
+                <HabitatPhoto
+                  label="Sur"
+                  filename={habitat.photoSouth}
+                  instanceId={habitat.instanceId}
+                />
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-2 gap-3 sm:w-2/3">
+                <HabitatPhoto
+                  label="Oeste"
+                  filename={habitat.photoWest}
+                  instanceId={habitat.instanceId}
+                />
+                <HabitatPhoto
+                  label="Dosel"
+                  filename={habitat.photoCanopy}
+                  instanceId={habitat.instanceId}
+                />
+              </div>
+            </>
+          )}
         </div>
       )}
     </section>

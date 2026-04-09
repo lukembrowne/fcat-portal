@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import type { SiteSpecies } from "../types";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -8,6 +9,17 @@ import { Bug, Bird, Squirrel } from "lucide-react";
 interface SpeciesCardsProps {
   species: SiteSpecies[];
   totalDetections: number;
+  /**
+   * Resolves an image ID to a URL. Allows public pages to swap to the
+   * token-gated public image API without children learning about it.
+   */
+  resolveImageUrl?: (imageId: number, size: "thumb" | "large") => string;
+  /**
+   * Optional href builder per species. If provided, each card becomes a
+   * link to its own gallery sub-route. If null/undefined the cards
+   * render as static (used by the internal results page for now).
+   */
+  speciesHref?: ((speciesName: string) => string) | null;
 }
 
 const TAXONOMIC_LABELS: Record<string, string> = {
@@ -30,7 +42,12 @@ function TaxonomicIcon({ type }: { type: string | null }) {
   }
 }
 
-export function SpeciesCards({ species, totalDetections }: SpeciesCardsProps) {
+export function SpeciesCards({
+  species,
+  totalDetections,
+  resolveImageUrl,
+  speciesHref,
+}: SpeciesCardsProps) {
   if (species.length === 0) {
     return (
       <div className="flex items-center justify-center h-[200px] bg-muted rounded-xl">
@@ -40,6 +57,9 @@ export function SpeciesCards({ species, totalDetections }: SpeciesCardsProps) {
       </div>
     );
   }
+
+  const buildImageUrl =
+    resolveImageUrl ?? ((id) => `/api/ct-images/${id}?size=thumb`);
 
   // Count unique taxonomic groups
   const groupCounts = new Map<string, number>();
@@ -65,51 +85,70 @@ export function SpeciesCards({ species, totalDetections }: SpeciesCardsProps) {
       </div>
 
       {/* Cards grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {species.map((sp) => (
-          <Card key={sp.speciesName} className="overflow-hidden">
-            {/* Photo */}
-            <div className="relative h-40 bg-muted">
-              {sp.photoImageId ? (
-                /* eslint-disable-next-line @next/next/no-img-element */
-                <img
-                  src={`/api/ct-images/${sp.photoImageId}?size=thumb`}
-                  alt={sp.speciesName}
-                  className="object-cover w-full h-full"
-                  loading="lazy"
-                />
-              ) : (
-                <div className="flex items-center justify-center h-full">
-                  <TaxonomicIcon type={sp.taxonomicType} />
-                </div>
-              )}
-            </div>
-
-            <CardContent className="p-3 space-y-1.5">
-              <div>
-                <p className="font-medium text-sm italic">{sp.speciesName}</p>
-                {(sp.spanishName || sp.commonName) && (
-                  <p className="text-xs text-muted-foreground">
-                    {sp.spanishName ?? sp.commonName}
-                  </p>
-                )}
-              </div>
-
-              <div className="flex items-center justify-between">
-                <Badge variant="secondary" className="text-xs">
-                  {sp.detectionCount}{" "}
-                  {sp.detectionCount === 1 ? "detección" : "detecciones"}
-                </Badge>
-                {sp.taxonomicType && (
-                  <Badge variant="outline" className="text-xs gap-1">
+      <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
+        {species.map((sp) => {
+          const cardBody = (
+            <Card
+              key={sp.speciesName}
+              className="overflow-hidden h-full transition-shadow hover:shadow-md"
+            >
+              {/* Photo */}
+              <div className="relative h-40 bg-muted">
+                {sp.photoImageId ? (
+                  /* eslint-disable-next-line @next/next/no-img-element */
+                  <img
+                    src={buildImageUrl(sp.photoImageId, "thumb")}
+                    alt={sp.speciesName}
+                    className="object-cover w-full h-full"
+                    loading="lazy"
+                  />
+                ) : (
+                  <div className="flex items-center justify-center h-full">
                     <TaxonomicIcon type={sp.taxonomicType} />
-                    {TAXONOMIC_LABELS[sp.taxonomicType] ?? sp.taxonomicType}
-                  </Badge>
+                  </div>
                 )}
               </div>
-            </CardContent>
-          </Card>
-        ))}
+
+              <CardContent className="p-3 space-y-1.5">
+                <div>
+                  <p className="font-medium text-sm italic">{sp.speciesName}</p>
+                  {(sp.spanishName || sp.commonName) && (
+                    <p className="text-xs text-muted-foreground">
+                      {sp.spanishName ?? sp.commonName}
+                    </p>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <Badge variant="secondary" className="text-xs">
+                    {sp.detectionCount}{" "}
+                    {sp.detectionCount === 1 ? "detección" : "detecciones"}
+                  </Badge>
+                  {sp.taxonomicType && (
+                    <Badge variant="outline" className="text-xs gap-1">
+                      <TaxonomicIcon type={sp.taxonomicType} />
+                      {TAXONOMIC_LABELS[sp.taxonomicType] ?? sp.taxonomicType}
+                    </Badge>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          );
+
+          if (speciesHref) {
+            const href = speciesHref(sp.speciesName);
+            return (
+              <Link
+                key={sp.speciesName}
+                href={href}
+                className="block focus:outline-none focus:ring-2 focus:ring-primary rounded-xl"
+              >
+                {cardBody}
+              </Link>
+            );
+          }
+          return cardBody;
+        })}
       </div>
     </div>
   );

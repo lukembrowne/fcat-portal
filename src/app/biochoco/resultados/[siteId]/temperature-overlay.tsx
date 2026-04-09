@@ -19,6 +19,16 @@ import { Thermometer, ExternalLink } from "lucide-react";
 interface TemperatureOverlayProps {
   temperature: DeploymentTemperature[];
   temperatureStats: SiteDetail["temperatureStats"];
+  /**
+   * If false, hides the recharts overlay (which depends on JS to render
+   * a meaningful size). The summary stats are still shown.
+   */
+  showChart?: boolean;
+  /**
+   * If false, hides the per-deployment links to internal iButton pages.
+   * The public landowner share view doesn't have access to those routes.
+   */
+  showDeploymentLinks?: boolean;
 }
 
 // Distinct colors for overlaid deployments
@@ -51,6 +61,8 @@ function formatTickLabel(ts: string): string {
 export function TemperatureOverlay({
   temperature,
   temperatureStats,
+  showChart = true,
+  showDeploymentLinks = true,
 }: TemperatureOverlayProps) {
   // Merge all readings into a unified dataset keyed by timestamp
   const { chartData, deploymentKeys } = useMemo(() => {
@@ -121,6 +133,7 @@ export function TemperatureOverlay({
           )}
 
           {/* Overlay chart */}
+          {showChart && (
           <Card>
             <CardHeader>
               <CardTitle className="text-base">
@@ -174,25 +187,28 @@ export function TemperatureOverlay({
               </ResponsiveContainer>
             </CardContent>
           </Card>
+          )}
 
           {/* Links to individual deployment pages */}
-          <div className="flex flex-wrap gap-2">
-            {temperature.map((dep) => (
-              <Link
-                key={dep.deploymentId}
-                href={`/biochoco/ibutton/${dep.deploymentId}`}
-                className="text-xs text-blue-600 hover:underline flex items-center gap-1"
-              >
-                <ExternalLink className="h-3 w-3" />
-                {dep.deploymentName}
-                {dep.dateRangeStart && (
-                  <span className="text-muted-foreground ml-1">
-                    ({dep.dateRangeStart.slice(0, 10)})
-                  </span>
-                )}
-              </Link>
-            ))}
-          </div>
+          {showDeploymentLinks && (
+            <div className="flex flex-wrap gap-2">
+              {temperature.map((dep) => (
+                <Link
+                  key={dep.deploymentId}
+                  href={`/biochoco/ibutton/${dep.deploymentId}`}
+                  className="text-xs text-blue-600 hover:underline flex items-center gap-1"
+                >
+                  <ExternalLink className="h-3 w-3" />
+                  {dep.deploymentName}
+                  {dep.dateRangeStart && (
+                    <span className="text-muted-foreground ml-1">
+                      ({dep.dateRangeStart.slice(0, 10)})
+                    </span>
+                  )}
+                </Link>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </section>

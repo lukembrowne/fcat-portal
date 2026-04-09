@@ -4,19 +4,19 @@ import Link from "next/link";
 import type { SiteDetail } from "../types";
 import { getHabitatName } from "../../overview/types";
 import { SiteLocationMap } from "./site-location-map";
-import { SpeciesCards } from "./species-cards";
-import { TemperatureOverlay } from "./temperature-overlay";
-import { HabitatSection } from "./habitat-section";
-import { Separator } from "@/components/ui/separator";
+import { SiteResultsContent } from "./site-results-content";
 import { Card, CardContent } from "@/components/ui/card";
-import { MapPin, Calendar, Camera, Volume2, Thermometer, TreePine } from "lucide-react";
+import { MapPin, Calendar, Camera, Thermometer, TreePine } from "lucide-react";
 
 interface SiteDetailShellProps {
   data: SiteDetail;
   siteId: string;
 }
 
-export function SiteDetailShell({ data, siteId }: SiteDetailShellProps) {
+const internalImageUrl = (id: number, size: "thumb" | "large") =>
+  `/api/ct-images/${id}?size=${size}`;
+
+export function SiteDetailShell({ data }: SiteDetailShellProps) {
   const { site } = data;
   if (!site) return null;
 
@@ -143,57 +143,12 @@ export function SiteDetailShell({ data, siteId }: SiteDetailShellProps) {
         </Card>
       </div>
 
-      <Separator />
-
-      {/* Hábitat */}
-      <HabitatSection
-        habitat={data.habitat}
-        totalCount={data.habitatAssessmentCount}
+      <SiteResultsContent
+        data={data}
+        resolveImageUrl={internalImageUrl}
+        speciesHref={null}
+        variant="internal"
       />
-
-      <Separator />
-
-      {/* Fauna */}
-      <section>
-        <h2 className="text-lg font-semibold flex items-center gap-2 mb-4">
-          <Camera className="h-5 w-5" />
-          Fauna
-        </h2>
-        <SpeciesCards
-          species={data.species}
-          totalDetections={data.species.reduce(
-            (sum, s) => sum + s.detectionCount,
-            0
-          )}
-        />
-      </section>
-
-      <Separator />
-
-      {/* Temperatura */}
-      <TemperatureOverlay
-        temperature={data.temperature}
-        temperatureStats={data.temperatureStats}
-      />
-
-      <Separator />
-
-      {/* Audio placeholder */}
-      <section>
-        <h2 className="text-lg font-semibold flex items-center gap-2 mb-4">
-          <Volume2 className="h-5 w-5" />
-          Audio
-        </h2>
-        <Card className="border-dashed">
-          <CardContent className="py-8 text-center">
-            <p className="text-muted-foreground font-medium">Próximamente</p>
-            <p className="text-sm text-muted-foreground mt-1">
-              Los datos de monitoreo acústico se integrarán en una futura
-              actualización.
-            </p>
-          </CardContent>
-        </Card>
-      </section>
     </div>
   );
 }

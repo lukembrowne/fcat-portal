@@ -3,7 +3,7 @@ import { cookies } from "next/headers";
 import Script from "next/script";
 import { Geist, Geist_Mono } from "next/font/google";
 import { getCurrentUser } from "@/lib/auth";
-import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar";
+import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar";
 import { SidebarNav } from "@/components/sidebar-nav";
 import { FloatingJobProgress } from "@/components/floating-job-progress";
 import { Toaster } from "@/components/ui/sonner";
@@ -43,6 +43,10 @@ export default async function RootLayout({
           <SidebarProvider defaultOpen={defaultOpen}>
             <SidebarNav user={user} />
             <SidebarInset className="min-w-0">
+              <header className="sticky top-0 z-30 flex h-12 items-center gap-2 border-b bg-background px-4 md:hidden">
+                <SidebarTrigger />
+                <span className="font-semibold">Portal FCAT</span>
+              </header>
               <main className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-6 min-w-0">
                 <div className="mx-auto max-w-screen-2xl">{children}</div>
               </main>

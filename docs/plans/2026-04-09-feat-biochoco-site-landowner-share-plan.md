@@ -177,7 +177,7 @@ Files:
 
 **2b. Public image API**
 
-- [ ] Create `src/app/api/public/site-images/[token]/[id]/route.ts`:
+- [x] Create `src/app/api/public/site-images/[token]/[id]/route.ts`:
   - Validate token via `isValidShareToken`
   - Parse `id` as integer
   - Parse `?size=thumb|large` (default `thumb`), `?download=1`
@@ -189,7 +189,7 @@ Files:
   - `?download=1` → `Content-Disposition: attachment; filename="<sanitized>.jpg"`
     - Filename: `FCAT-${siteId}-${imageId}.jpg` — simple, deterministic, no multi-species ambiguity. (Open question #4 resolved: don't try to embed species name, since one image can have multiple verified identifications.)
   - Headers: `Cache-Control: public, max-age=31536000, immutable`, `Content-Type: image/jpeg`, `X-Content-Type-Options: nosniff`
-- [ ] Test: create a token for site A, request an image ID from site B's deployment → 404
+- [x] Test: create a token for site A, request an image ID from site B's deployment → 404 (`tests/unit/api-public-site-images.test.ts` — 13 tests covering token validation, JSON parsing, cross-site rejection, thumb happy path, large+download)
 
 Files:
 - `src/app/biochoco/resultados/[siteId]/site-results-content.tsx` (new)

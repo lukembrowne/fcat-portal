@@ -2,9 +2,13 @@
  * Public species gallery sub-route.
  *
  * Renders every verified image of a species at the site, paginated.
- * Server-rendered HTML — no client modal, no JS-only behavior. The
- * "save image" button is a plain <a download>, so it works in
- * WhatsApp's in-app browser even with JavaScript disabled.
+ * The page shell (header, back link, pagination) is server-rendered so
+ * the page still loads and paginates without JavaScript. The thumbnail
+ * grid is a small Client Component (`GalleryClient`) that progressively
+ * enhances clicks into a zoomable image viewer dialog. Download links
+ * stay as plain <a download> anchors both in the grid and inside the
+ * dialog, so downloads keep working in JS-restricted browsers like
+ * WhatsApp's in-app view even if the enhancement layer breaks.
  *
  * URL shape:
  *   /public/biochoco/[token]/especies/[slug]?page=2
@@ -20,9 +24,9 @@ import Link from "next/link";
 import {
   fetchSiteDetailByToken,
   fetchSpeciesImagesForDeployments,
-  type SpeciesImageRow,
 } from "@/app/biochoco/resultados/actions";
-import { Download, ChevronLeft, ChevronRight, ArrowLeft } from "lucide-react";
+import { ChevronLeft, ChevronRight, ArrowLeft } from "lucide-react";
+import { GalleryClient } from "./gallery-client";
 
 interface PageProps {
   params: Promise<{ token: string; slug: string }>;
@@ -148,13 +152,18 @@ export default async function PublicSpeciesGalleryPage({
         </p>
       </header>
 
-      {/* Image grid */}
+      {/* Image grid (client-enhanced with zoomable viewer) */}
       {result.images.length === 0 ? (
         <p className="text-muted-foreground py-10 text-center">
           No hay imágenes disponibles en esta página.
         </p>
       ) : (
-        <ImageGrid token={token} siteId={data.siteId} images={result.images} />
+        <GalleryClient
+          token={token}
+          siteId={data.siteId}
+          speciesLabel={display}
+          images={result.images}
+        />
       )}
 
       {/* Pagination */}
@@ -198,43 +207,3 @@ export default async function PublicSpeciesGalleryPage({
   );
 }
 
-function ImageGrid({
-  token,
-  siteId,
-  images,
-}: {
-  token: string;
-  siteId: string;
-  images: SpeciesImageRow[];
-}) {
-  return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 sm:gap-3">
-      {images.map((img) => {
-        const thumbUrl = `/api/public/site-images/${token}/${img.id}?size=thumb`;
-        const downloadUrl = `/api/public/site-images/${token}/${img.id}?size=large&download=1`;
-        return (
-          <div
-            key={img.id}
-            className="relative aspect-[4/3] rounded-lg overflow-hidden bg-muted"
-          >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={thumbUrl}
-              alt=""
-              loading="lazy"
-              className="object-cover w-full h-full"
-            />
-            <a
-              href={downloadUrl}
-              download={`FCAT-${siteId}-${img.id}.jpg`}
-              className="absolute bottom-1.5 right-1.5 bg-black/50 hover:bg-black/70 text-white p-1.5 rounded-md"
-              aria-label="Descargar imagen"
-            >
-              <Download className="w-4 h-4" />
-            </a>
-          </div>
-        );
-      })}
-    </div>
-  );
-}

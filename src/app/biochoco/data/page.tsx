@@ -1,5 +1,9 @@
 import { requirePermission } from "@/lib/auth";
-import { fetchSchedule, fetchUploadSummary } from "./actions";
+import {
+  fetchSchedule,
+  fetchUploadSummary,
+  fetchUploadWindowQc,
+} from "./actions";
 import { UploadStatusTable } from "./upload-status-table";
 import { CreateFoldersPanel } from "./create-folders-panel";
 import { DataUploadGuide } from "./data-upload-guide";
@@ -8,9 +12,10 @@ import { UploadSummaryCards } from "./upload-summary-cards";
 export default async function BiochocoDataPage() {
   const user = await requirePermission("biochoco", "viewer");
 
-  const [result, summary] = await Promise.all([
+  const [result, summary, windowQcResult] = await Promise.all([
     fetchSchedule(),
     fetchUploadSummary(),
+    fetchUploadWindowQc(),
   ]);
 
   if (!result.success) {
@@ -51,7 +56,11 @@ export default async function BiochocoDataPage() {
         totalRetrieved={retrieved.length}
       />
       {isEditor && <CreateFoldersPanel />}
-      <UploadStatusTable schedule={result.data} canEditNotes={isEditor} />
+      <UploadStatusTable
+        schedule={result.data}
+        canEditNotes={isEditor}
+        windowQcByDeployment={windowQcResult.success ? windowQcResult.data : {}}
+      />
     </div>
   );
 }

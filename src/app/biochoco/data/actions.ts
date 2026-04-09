@@ -9,8 +9,23 @@ import { checkDeploymentUploads, extractFolderId, type UploadStatus } from "@/li
 import type { ScheduleRow } from "@/lib/schedule-types";
 import type { ActionResult } from "@/lib/types";
 import { db } from "@/db";
-import { deployments, uploadCountSnapshots } from "@/db/schema";
-import { eq, isNotNull, sql } from "drizzle-orm";
+import {
+  deployments,
+  uploadCountSnapshots,
+  images,
+  audioFiles,
+  ibuttonUploads,
+} from "@/db/schema";
+import { eq, isNotNull, inArray, sql } from "drizzle-orm";
+import { loadOdkDateTimes } from "@/lib/odk-deployment-window";
+import {
+  computeWindowQc,
+  type WindowQcResult,
+} from "@/lib/deployment-window-qc";
+import {
+  computeCoverage,
+  type CoverageResult,
+} from "@/app/biochoco/ibutton/coverage";
 
 export interface DriveStatusResult {
   deploymentId: string;
@@ -385,4 +400,177 @@ export async function fetchUploadSummary(): Promise<UploadSummary> {
     deltaIbuttonSizeBytes: prev ? ibuttonSizeBytes - prev.totalIbuttonSizeBytes : null,
     previousSnapshotDate: prev ? prev.date : null,
   };
+}
+
+// ---------------------------------------------------------------------------
+// ODK deployment-window QC for camera-trap & audio uploads
+// ---------------------------------------------------------------------------
+
+export interface DeploymentWindowQc {
+  /** Camera-trap image timestamp range vs ODK install/retrieve window. */
+  camera: WindowQcResult;
+  /** Audio recording timestamp range vs ODK install/retrieve window. */
+  audio: WindowQcResult;
+  /** iButton coverage % computed from sample rate vs ODK window.
+   *  Null when there is no iButton upload for this deployment yet. */
+  ibutton: CoverageResult | null;
+}
+
+export type WindowQcByDeployment = Record<string, DeploymentWindowQc>;
+
+/**
+ * For every BioChoco deployment with a Drive folder, compare the actual
+ * camera-trap image timestamps and audio file timestamps against the
+ * ODK-reported install/retrieve window. Used by the upload status table to
+ * flag deployments where files fall outside the deployment window — a sign
+ * the camera was running before install / after retrieval, or has a
+ * misconfigured clock.
+ *
+ * The result is keyed by deployment **name** (e.g. "SEC-006_V1") so the
+ * upload status table can join it against `ScheduleRow.deploymentId`.
+ */
+export async function fetchUploadWindowQc(): Promise<
+  ActionResult<WindowQcByDeployment>
+> {
+  try {
+    await requirePermission("biochoco", "viewer");
+
+    // Pull every biochoco deployment that has a Drive folder. We need both
+    // the integer DB id (to join file tables) and the deployment name (to
+    // key the result map and look up ODK windows).
+    const deps = await db
+      .select({ id: deployments.id, name: deployments.name })
+      .from(deployments)
+      .where(isNotNull(deployments.driveFolderId));
+
+    if (deps.length === 0) return { success: true, data: {} };
+
+    const deploymentIds = deps.map((d) => d.id);
+
+    // Image timestamp range per deployment. EXIF is already a local-time
+    // string ("YYYY-MM-DD HH:mm:ss"); file_modified is epoch seconds and
+    // gets converted to Ecuador local (UTC-5) so both branches share a
+    // single comparable string format.
+    const imageTsExpr = sql<
+      string | null
+    >`COALESCE(${images.exifTimestamp}, strftime('%Y-%m-%d %H:%M:%S', ${images.fileModified}, 'unixepoch', '-5 hours'))`;
+    const imageRanges = await db
+      .select({
+        deploymentId: images.deploymentId,
+        firstAt: sql<string | null>`MIN(${imageTsExpr})`,
+        lastAt: sql<string | null>`MAX(${imageTsExpr})`,
+        cnt: sql<number>`COUNT(*)`,
+      })
+      .from(images)
+      .where(inArray(images.deploymentId, deploymentIds))
+      .groupBy(images.deploymentId);
+    const imageRangeMap = new Map<
+      number,
+      { firstAt: string | null; lastAt: string | null; cnt: number }
+    >();
+    for (const r of imageRanges) {
+      imageRangeMap.set(r.deploymentId, r);
+    }
+
+    // Audio file timestamp range per deployment. modifiedAt is epoch seconds.
+    const audioTsExpr = sql<
+      string | null
+    >`strftime('%Y-%m-%d %H:%M:%S', ${audioFiles.modifiedAt}, 'unixepoch', '-5 hours')`;
+    const audioRanges = await db
+      .select({
+        deploymentId: audioFiles.deploymentId,
+        firstAt: sql<string | null>`MIN(${audioTsExpr})`,
+        lastAt: sql<string | null>`MAX(${audioTsExpr})`,
+        cnt: sql<number>`COUNT(*)`,
+      })
+      .from(audioFiles)
+      .where(inArray(audioFiles.deploymentId, deploymentIds))
+      .groupBy(audioFiles.deploymentId);
+    const audioRangeMap = new Map<
+      number,
+      { firstAt: string | null; lastAt: string | null; cnt: number }
+    >();
+    for (const r of audioRanges) {
+      audioRangeMap.set(r.deploymentId, r);
+    }
+
+    // iButton uploads — one row per processed deployment, with the sample
+    // rate and row count needed to compute the same coverage % shown on
+    // /biochoco/ibutton. Readings are pre-truncated to the ODK window at
+    // ingest, so a simple in/out check is uninformative; we report coverage
+    // % instead.
+    const ibuttonRows = await db
+      .select({
+        deploymentId: ibuttonUploads.deploymentId,
+        sampleRate: ibuttonUploads.sampleRate,
+        rowsImported: ibuttonUploads.rowsImported,
+        dateRangeStart: ibuttonUploads.dateRangeStart,
+        dateRangeEnd: ibuttonUploads.dateRangeEnd,
+      })
+      .from(ibuttonUploads)
+      .where(inArray(ibuttonUploads.deploymentId, deploymentIds));
+    const ibuttonUploadMap = new Map<number, (typeof ibuttonRows)[number]>();
+    for (const r of ibuttonRows) {
+      ibuttonUploadMap.set(r.deploymentId, r);
+    }
+
+    // ODK install/retrieve windows. Fail-soft: an ODK outage must not break
+    // the data page — fall back to empty maps and the QC will simply report
+    // hasWindow=false everywhere.
+    let deployDtMap = new Map<string, { dt: string; timeKnown: boolean }>();
+    let retrieveDtMap = new Map<string, { dt: string; timeKnown: boolean }>();
+    try {
+      const maps = await loadOdkDateTimes();
+      deployDtMap = maps.deployDateTimeMap;
+      retrieveDtMap = maps.retrieveDateTimeMap;
+    } catch (err) {
+      console.warn("[biochoco/data] loadOdkDateTimes failed:", err);
+    }
+
+    const byName: WindowQcByDeployment = {};
+    for (const dep of deps) {
+      const odkDeployAt = deployDtMap.get(dep.name)?.dt ?? null;
+      const odkRetrieveAt = retrieveDtMap.get(dep.name)?.dt ?? null;
+      const imgRange = imageRangeMap.get(dep.id);
+      const audRange = audioRangeMap.get(dep.id);
+      const ibUpload = ibuttonUploadMap.get(dep.id);
+
+      byName[dep.name] = {
+        camera: computeWindowQc({
+          odkDeployAt,
+          odkRetrieveAt,
+          firstFileAt: imgRange?.firstAt ?? null,
+          lastFileAt: imgRange?.lastAt ?? null,
+          totalFiles: imgRange?.cnt ?? 0,
+          outsideCount: null,
+        }),
+        audio: computeWindowQc({
+          odkDeployAt,
+          odkRetrieveAt,
+          firstFileAt: audRange?.firstAt ?? null,
+          lastFileAt: audRange?.lastAt ?? null,
+          totalFiles: audRange?.cnt ?? 0,
+          outsideCount: null,
+        }),
+        ibutton: ibUpload
+          ? computeCoverage({
+              odkDeployAt,
+              odkRetrieveAt,
+              sampleRate: ibUpload.sampleRate,
+              rowsImported: ibUpload.rowsImported,
+              dateRangeStart: ibUpload.dateRangeStart,
+              dateRangeEnd: ibUpload.dateRangeEnd,
+            })
+          : null,
+      };
+    }
+
+    return { success: true, data: byName };
+  } catch (err) {
+    console.error("Failed to compute window QC:", err);
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : "Error desconocido",
+    };
+  }
 }

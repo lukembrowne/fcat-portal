@@ -26,9 +26,22 @@ import {
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import type { ScheduleRow, ScheduleStatus } from "@/lib/schedule-types";
-import { refreshSingleUploadCount, saveUploadSnapshot, type DriveStatusResult } from "./actions";
+import {
+  refreshSingleUploadCount,
+  saveUploadSnapshot,
+  type DriveStatusResult,
+  type WindowQcByDeployment,
+} from "./actions";
 import { recreateDriveFolder } from "./drive-folder-actions";
 import { FieldNotesPopover } from "@/app/biochoco/field-notes/field-notes-popover";
+import type { WindowQcResult } from "@/lib/deployment-window-qc";
+import type { CoverageResult } from "@/app/biochoco/ibutton/coverage";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 // --- Helpers ---
 
@@ -108,10 +121,19 @@ function DataTypeCell({
   parentFolderLink,
   driveStatus,
   dataTypeKey,
+  windowQc,
+  fileLabel,
+  ibuttonCoverage,
 }: {
   parentFolderLink: string | null;
   driveStatus: DriveStatusResult | undefined;
   dataTypeKey: "camarasTrampas" | "grabadoresDeAudio" | "ibutton";
+  /** ODK-window QC for camera/audio modalities. Omit for iButton. */
+  windowQc?: WindowQcResult;
+  /** Singular noun for the file type, used in tooltip labels. */
+  fileLabel?: string;
+  /** iButton coverage % (shown only on the iButton cell). */
+  ibuttonCoverage?: CoverageResult | null;
 }) {
   if (!parentFolderLink) {
     return (
@@ -148,6 +170,16 @@ function DataTypeCell({
         )
       )}
 
+      {/* ODK window QC badge — only when we have an ODK window AND files in DB */}
+      {windowQc && windowQc.hasWindow && windowQc.totalFiles > 0 && fileLabel && (
+        <WindowQcMiniBadge qc={windowQc} fileLabel={fileLabel} />
+      )}
+
+      {/* iButton coverage % badge */}
+      {ibuttonCoverage && ibuttonCoverage.coveragePct !== null && (
+        <IbuttonCoverageMiniBadge coverage={ibuttonCoverage} />
+      )}
+
       {/* "Subir" link */}
       <a
         href={href}
@@ -160,6 +192,111 @@ function DataTypeCell({
         Subir
       </a>
     </div>
+  );
+}
+
+/** Compact icon-only badge that flags whether the file timestamps fall inside
+ *  the ODK-reported deployment window. Hover for the full breakdown. */
+function WindowQcMiniBadge({
+  qc,
+  fileLabel,
+}: {
+  qc: WindowQcResult;
+  fileLabel: string;
+}) {
+  const Icon = qc.hasOutOfWindow ? AlertTriangle : CheckCircle2;
+  const colorClass = qc.hasOutOfWindow ? "text-amber-600" : "text-emerald-600";
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span
+            className={`inline-flex items-center ${colorClass}`}
+            aria-label={qc.hasOutOfWindow ? "Fuera de ventana ODK" : "Dentro de ventana ODK"}
+          >
+            <Icon className="size-3.5" />
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="top" className="max-w-xs">
+          <div className="space-y-1 text-xs">
+            <div className="font-medium pb-0.5">Ventana ODK vs archivos</div>
+            <QcRow label="Instalación ODK" value={qc.odkDeployAt} />
+            <QcRow label="Retiro ODK" value={qc.odkRetrieveAt} />
+            <QcRow label={`Primera ${fileLabel}`} value={qc.firstFileAt} />
+            <QcRow label={`Última ${fileLabel}`} value={qc.lastFileAt} />
+            <QcRow
+              label="Total archivos"
+              value={qc.totalFiles.toLocaleString("es")}
+            />
+            {qc.hasOutOfWindow && (
+              <p className="pt-1 text-amber-600">
+                Hay archivos fuera del rango ODK — revisa el reloj del sensor
+                o las fechas de instalación.
+              </p>
+            )}
+          </div>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
+function QcRow({ label, value }: { label: string; value: string | null }) {
+  return (
+    <div className="flex justify-between gap-3">
+      <span className="text-muted-foreground">{label}:</span>
+      <span className="tabular-nums">{value ?? "—"}</span>
+    </div>
+  );
+}
+
+/** Compact iButton coverage % badge — same coverage logic as
+ *  /biochoco/ibutton, surfaced inline next to the upload count. */
+function IbuttonCoverageMiniBadge({ coverage }: { coverage: CoverageResult }) {
+  const pct = coverage.coveragePct!;
+  const colorClass = coverage.hasLowCoverage
+    ? "text-amber-600"
+    : "text-emerald-600";
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span
+            className={`inline-flex items-center gap-0.5 ${colorClass}`}
+            aria-label={`Cobertura iButton: ${pct}%`}
+          >
+            {coverage.hasLowCoverage ? (
+              <AlertTriangle className="size-3.5" />
+            ) : (
+              <CheckCircle2 className="size-3.5" />
+            )}
+            <span className="text-[10px] tabular-nums font-medium">{pct}%</span>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="top" className="max-w-xs">
+          <div className="space-y-1 text-xs">
+            <div className="font-medium pb-0.5">Cobertura iButton</div>
+            <QcRow label="Instalación ODK" value={coverage.odkDeployAt} />
+            <QcRow label="Retiro ODK" value={coverage.odkRetrieveAt} />
+            <QcRow
+              label="Lecturas esperadas"
+              value={
+                coverage.expectedReadings !== null
+                  ? coverage.expectedReadings.toLocaleString("es")
+                  : null
+              }
+            />
+            <QcRow label="Cobertura" value={`${pct}%`} />
+            {coverage.hasLowCoverage && (
+              <p className="pt-1 text-amber-600">
+                Cobertura baja — el sensor pudo haberse detenido antes del
+                retiro o la frecuencia de muestreo no coincide.
+              </p>
+            )}
+          </div>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   );
 }
 
@@ -210,9 +347,14 @@ function SortButton({ field, current, dir, onSort }: {
 interface UploadStatusTableProps {
   schedule: ScheduleRow[];
   canEditNotes?: boolean;
+  windowQcByDeployment?: WindowQcByDeployment;
 }
 
-export function UploadStatusTable({ schedule, canEditNotes = false }: UploadStatusTableProps) {
+export function UploadStatusTable({
+  schedule,
+  canEditNotes = false,
+  windowQcByDeployment = {},
+}: UploadStatusTableProps) {
   const router = useRouter();
   const [search, setSearch] = useState("");
   const [sortField, setSortField] = useState<SortField | null>("deploymentId");
@@ -492,6 +634,7 @@ export function UploadStatusTable({ schedule, canEditNotes = false }: UploadStat
                 {filtered.map((row) => {
                   const driveStatus = driveCache.get(row.deploymentId);
                   const parentLink = row.driveFolderLink || null;
+                  const qc = windowQcByDeployment[row.deploymentId];
 
                   return (
                     <TableRow key={row.deploymentId}>
@@ -534,6 +677,8 @@ export function UploadStatusTable({ schedule, canEditNotes = false }: UploadStat
                           parentFolderLink={parentLink}
                           driveStatus={driveStatus}
                           dataTypeKey="camarasTrampas"
+                          windowQc={qc?.camera}
+                          fileLabel="imagen"
                         />
                       </TableCell>
                       <TableCell className="text-center">
@@ -541,6 +686,8 @@ export function UploadStatusTable({ schedule, canEditNotes = false }: UploadStat
                           parentFolderLink={parentLink}
                           driveStatus={driveStatus}
                           dataTypeKey="grabadoresDeAudio"
+                          windowQc={qc?.audio}
+                          fileLabel="grabación"
                         />
                       </TableCell>
                       <TableCell className="text-center">
@@ -548,6 +695,7 @@ export function UploadStatusTable({ schedule, canEditNotes = false }: UploadStat
                           parentFolderLink={parentLink}
                           driveStatus={driveStatus}
                           dataTypeKey="ibutton"
+                          ibuttonCoverage={qc?.ibutton}
                         />
                       </TableCell>
                       <TableCell className="text-center text-sm whitespace-nowrap text-muted-foreground">

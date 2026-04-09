@@ -5108,11 +5108,37 @@ export async function getDeploymentImageIds(
   return rows.map((r) => r.id);
 }
 
-export async function getStarredImages() {
+export interface StarredSpeciesEntry {
+  scientificName: string;
+  commonName: string | null;
+  spanishName: string | null;
+  count: number;
+}
+
+export interface StarredImageEntry {
+  id: number;
+  filename: string;
+  path: string | null;
+  status: "pending" | "processed" | "failed";
+  thumbnailPath: string | null;
+  starred: boolean;
+  starredBy: string | null;
+  starredAt: Date | null;
+  jobId: number | null;
+  deploymentId: number;
+  deploymentName: string;
+  siteName: string | null;
+  species: string[];
+}
+
+export async function getStarredImages(): Promise<{
+  images: StarredImageEntry[];
+  speciesList: StarredSpeciesEntry[];
+}> {
   const user = await requirePermission("camera-trap", "viewer");
   const ctProjects = await getUserCameraTrapProjects(user);
 
-  return db
+  const rows = await db
     .select({
       id: images.id,
       filename: images.filename,
@@ -5131,6 +5157,81 @@ export async function getStarredImages() {
     .innerJoin(deployments, eq(images.deploymentId, deployments.id))
     .where(and(eq(images.starred, true), ctProjectFilter(ctProjects)))
     .orderBy(desc(images.starredAt));
+
+  const imageIds = rows.map((r) => r.id);
+
+  // Fetch detections + identifications so we can attach species to each image.
+  const allDetections = imageIds.length > 0
+    ? await db
+        .select({ id: detections.id, imageId: detections.imageId })
+        .from(detections)
+        .where(inArray(detections.imageId, imageIds))
+    : [];
+
+  const detectionIds = allDetections.map((d) => d.id);
+  const allIdentifications = detectionIds.length > 0
+    ? await db
+        .select({
+          detectionId: identifications.detectionId,
+          species: identifications.species,
+          correctedSpecies: identifications.correctedSpecies,
+        })
+        .from(identifications)
+        .where(inArray(identifications.detectionId, detectionIds))
+    : [];
+
+  const speciesByDetection = new Map<number, string>();
+  for (const ident of allIdentifications) {
+    const sp = ident.correctedSpecies || ident.species;
+    if (sp) speciesByDetection.set(ident.detectionId, sp);
+  }
+
+  const speciesByImage = new Map<number, Set<string>>();
+  for (const det of allDetections) {
+    const sp = speciesByDetection.get(det.id);
+    if (!sp) continue;
+    const set = speciesByImage.get(det.imageId) ?? new Set<string>();
+    set.add(sp);
+    speciesByImage.set(det.imageId, set);
+  }
+
+  // Species count (each image counted once per species).
+  const speciesCount: Record<string, number> = {};
+  for (const set of speciesByImage.values()) {
+    for (const sp of set) {
+      speciesCount[sp] = (speciesCount[sp] ?? 0) + 1;
+    }
+  }
+
+  const speciesNames = Object.keys(speciesCount);
+  const speciesRecords = speciesNames.length > 0
+    ? await db
+        .select()
+        .from(species)
+        .where(inArray(species.scientificName, speciesNames))
+    : [];
+  const speciesRecordMap = new Map(
+    speciesRecords.map((r) => [r.scientificName, r])
+  );
+
+  const speciesList: StarredSpeciesEntry[] = Object.entries(speciesCount)
+    .sort(([, a], [, b]) => b - a)
+    .map(([name, cnt]) => {
+      const r = speciesRecordMap.get(name);
+      return {
+        scientificName: name,
+        commonName: r?.commonName ?? null,
+        spanishName: r?.spanishName ?? null,
+        count: cnt,
+      };
+    });
+
+  const imagesOut: StarredImageEntry[] = rows.map((r) => ({
+    ...r,
+    species: Array.from(speciesByImage.get(r.id) ?? []),
+  }));
+
+  return { images: imagesOut, speciesList };
 }
 
 // ---------------------------------------------------------------------------

@@ -95,9 +95,6 @@ function ResultsClientInner({
   };
 
   const [selectedSpecies, setSelectedSpecies] = useState<string | null>(null);
-  const [confidenceRange, setConfidenceRange] = useState<[number, number]>([
-    0, 1,
-  ]);
   const [verificationFilter, setVerificationFilter] = useState("all");
   const [showEmpty, setShowEmpty] = useState(true);
   const [showStarredOnly, setShowStarredOnly] = useState(false);
@@ -119,15 +116,6 @@ function ResultsClientInner({
           (d) => d.species === selectedSpecies
         );
         if (!hasSpecies) return false;
-      }
-
-      if (img.detections.length > 0) {
-        const maxConf = Math.max(
-          ...img.detections.map((d) => d.confidence ?? d.detectionConfidence)
-        );
-        if (maxConf < confidenceRange[0] || maxConf > confidenceRange[1]) {
-          return false;
-        }
       }
 
       if (verificationFilter !== "all") {
@@ -171,7 +159,7 @@ function ResultsClientInner({
 
       return true;
     });
-  }, [images, selectedSpecies, confidenceRange, verificationFilter, showEmpty, showStarredOnly, showBlanksOnly, personFilter, setupFilter]);
+  }, [images, selectedSpecies, verificationFilter, showEmpty, showStarredOnly, showBlanksOnly, personFilter, setupFilter]);
 
   // Notify parent of the current ordered filtered ID set so it can scope
   // downstream navigation (e.g. annotation overlay prev/next) to the visible
@@ -183,7 +171,6 @@ function ResultsClientInner({
 
   const clearFilters = () => {
     setSelectedSpecies(null);
-    setConfidenceRange([0, 1]);
     setVerificationFilter("all");
     setShowEmpty(true);
     setShowStarredOnly(false);
@@ -194,8 +181,6 @@ function ResultsClientInner({
 
   const hasActiveFilters =
     selectedSpecies !== null ||
-    confidenceRange[0] > 0 ||
-    confidenceRange[1] < 1 ||
     verificationFilter !== "all" ||
     !showEmpty ||
     showStarredOnly ||
@@ -223,7 +208,6 @@ function ResultsClientInner({
                     <TooltipContent side="bottom" className="max-w-xs bg-popover text-popover-foreground border shadow-md p-3">
                       <div className="flex flex-col gap-1.5 text-xs">
                         <p><strong>Especie:</strong> muestra solo imágenes con la especie seleccionada.</p>
-                        <p><strong>Confianza mínima:</strong> oculta detecciones del modelo ML por debajo del umbral.</p>
                         <p><strong>Verificación:</strong> filtra por estado de revisión (sin verificar, verificado, rechazado).</p>
                         <p><strong>Mostrar imágenes sin detecciones:</strong> incluye fotos donde el ML no detectó nada.</p>
                         <p><strong>Solo destacadas:</strong> muestra solo las imágenes marcadas con estrella.</p>
@@ -309,23 +293,6 @@ function ResultsClientInner({
                 </div>
               </div>
             )}
-
-            <div className="space-y-1.5">
-              <Label className="text-[10px] text-muted-foreground uppercase tracking-wide">
-                Confianza mínima: {(confidenceRange[0] * 100).toFixed(0)}%
-              </Label>
-              <input
-                type="range"
-                min={0}
-                max={1}
-                step={0.05}
-                value={confidenceRange[0]}
-                onChange={(e) =>
-                  setConfidenceRange([parseFloat(e.target.value), confidenceRange[1]])
-                }
-                className="w-full accent-primary"
-              />
-            </div>
 
             <div className="space-y-1.5">
               <Label className="text-[10px] text-muted-foreground uppercase tracking-wide">

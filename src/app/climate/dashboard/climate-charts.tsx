@@ -11,6 +11,7 @@ import {
   Tooltip,
   Legend,
   ResponsiveContainer,
+  Brush,
 } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -101,8 +102,11 @@ export function ClimateCharts({ data, aggregation, activeTab, onTabChange }: Cli
         <TabsTrigger value="presion">Presión</TabsTrigger>
       </TabsList>
 
-      <p className="text-xs text-muted-foreground mb-4">
+      <p className="text-xs text-muted-foreground mb-1">
         {VARIABLE_DESCRIPTIONS[activeTab]}
+      </p>
+      <p className="text-xs text-muted-foreground mb-4">
+        Arrastre el selector inferior del gráfico para acercar un rango de fechas.
       </p>
 
       <TabsContent value="temperatura">
@@ -116,6 +120,7 @@ export function ClimateCharts({ data, aggregation, activeTab, onTabChange }: Cli
             <Line type="monotone" dataKey="airTempMax" name="Máx" stroke="var(--chart-1, #ef4444)" dot={false} connectNulls={false} strokeWidth={1.5} />
             <Line type="monotone" dataKey="airTempAvg" name="Prom" stroke="var(--chart-2, #f97316)" dot={false} connectNulls={false} strokeWidth={2} />
             <Line type="monotone" dataKey="airTempMin" name="Mín" stroke="var(--chart-3, #3b82f6)" dot={false} connectNulls={false} strokeWidth={1.5} />
+            <Brush dataKey="label" height={24} stroke="#94a3b8" travellerWidth={8} />
           </LineChart>
         </ChartCard>
       </TabsContent>
@@ -131,6 +136,7 @@ export function ClimateCharts({ data, aggregation, activeTab, onTabChange }: Cli
             <Line type="monotone" dataKey="humidityMax" name="Máx" stroke="var(--chart-1, #ef4444)" dot={false} connectNulls={false} strokeWidth={1.5} />
             <Line type="monotone" dataKey="humidityAvg" name="Prom" stroke="var(--chart-4, #06b6d4)" dot={false} connectNulls={false} strokeWidth={2} />
             <Line type="monotone" dataKey="humidityMin" name="Mín" stroke="var(--chart-3, #3b82f6)" dot={false} connectNulls={false} strokeWidth={1.5} />
+            <Brush dataKey="label" height={24} stroke="#94a3b8" travellerWidth={8} />
           </LineChart>
         </ChartCard>
       </TabsContent>
@@ -143,6 +149,7 @@ export function ClimateCharts({ data, aggregation, activeTab, onTabChange }: Cli
             <YAxis tick={{ fontSize: 11 }} />
             <Tooltip />
             <Bar dataKey="rainMm" name="Precipitación" fill="var(--chart-3, #3b82f6)" radius={[2, 2, 0, 0]} />
+            <Brush dataKey="label" height={24} stroke="#94a3b8" travellerWidth={8} />
           </BarChart>
         </ChartCard>
       </TabsContent>
@@ -158,6 +165,7 @@ export function ClimateCharts({ data, aggregation, activeTab, onTabChange }: Cli
             <Line type="monotone" dataKey="solarMax" name="Máx" stroke="var(--chart-1, #ef4444)" dot={false} connectNulls={false} strokeWidth={1.5} />
             <Line type="monotone" dataKey="solarAvg" name="Prom" stroke="var(--chart-5, #eab308)" dot={false} connectNulls={false} strokeWidth={2} />
             <Line type="monotone" dataKey="solarMin" name="Mín" stroke="var(--chart-3, #3b82f6)" dot={false} connectNulls={false} strokeWidth={1.5} />
+            <Brush dataKey="label" height={24} stroke="#94a3b8" travellerWidth={8} />
           </LineChart>
         </ChartCard>
       </TabsContent>
@@ -173,6 +181,7 @@ export function ClimateCharts({ data, aggregation, activeTab, onTabChange }: Cli
               <Legend />
               <Line type="monotone" dataKey="windSpeedMax" name="Máx" stroke="var(--chart-1, #ef4444)" dot={false} connectNulls={false} strokeWidth={1.5} />
               <Line type="monotone" dataKey="windSpeedAvg" name="Prom" stroke="var(--chart-2, #f97316)" dot={false} connectNulls={false} strokeWidth={2} />
+              <Brush dataKey="label" height={24} stroke="#94a3b8" travellerWidth={8} />
             </LineChart>
           </ChartCard>
 
@@ -184,6 +193,7 @@ export function ClimateCharts({ data, aggregation, activeTab, onTabChange }: Cli
                 <YAxis tick={{ fontSize: 11 }} domain={[0, 360]} />
                 <Tooltip />
                 <Line type="monotone" dataKey="windDirAvg" name="Dir Prom" stroke="var(--chart-4, #06b6d4)" dot={false} connectNulls={false} strokeWidth={1.5} />
+                <Brush dataKey="label" height={24} stroke="#94a3b8" travellerWidth={8} />
               </LineChart>
             </ChartCard>
           ) : (
@@ -207,6 +217,7 @@ export function ClimateCharts({ data, aggregation, activeTab, onTabChange }: Cli
             <Line type="monotone" dataKey="pressureMax" name="Máx" stroke="var(--chart-1, #ef4444)" dot={false} connectNulls={false} strokeWidth={1.5} />
             <Line type="monotone" dataKey="pressureAvg" name="Prom" stroke="var(--chart-2, #f97316)" dot={false} connectNulls={false} strokeWidth={2} />
             <Line type="monotone" dataKey="pressureMin" name="Mín" stroke="var(--chart-3, #3b82f6)" dot={false} connectNulls={false} strokeWidth={1.5} />
+            <Brush dataKey="label" height={24} stroke="#94a3b8" travellerWidth={8} />
           </LineChart>
         </ChartCard>
       </TabsContent>

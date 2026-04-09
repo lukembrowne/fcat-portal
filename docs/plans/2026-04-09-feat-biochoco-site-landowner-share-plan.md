@@ -205,24 +205,24 @@ Files:
 
 **3a. Public landing page**
 
-- [ ] Create `src/app/public/biochoco/[token]/public-site-shell.tsx` — simple component:
+- [x] Create `src/app/public/biochoco/[token]/public-site-shell.tsx` — simple component:
   - Header: site name, site code (`NAC-005`), date range, compact stat line (`🐾 8 especies · 📷 54 días · 🌡️ 21.4°C promedio · 🌳 85% dosel`) — reuses whatever inline formatting is convenient. **No separate `StatBar` component** (out of scope — follow-up if staff want a dashboard-wide refactor).
   - No breadcrumb, no GPS text, no `SiteLocationMap`, no share button
   - `<SiteResultsContent variant="public" resolveImageUrl={(id, size) => \`/api/public/site-images/${token}/${id}?size=${size}\`} speciesHref={(name) => \`/public/biochoco/${token}/especies/${slugify(name)}\`} />`
-- [ ] Create `src/app/public/biochoco/[token]/page.tsx`:
+- [x] Create `src/app/public/biochoco/[token]/page.tsx`:
   - `const data = await fetchSiteDetailByToken(token)` (already `cache()`-wrapped)
   - If null/revoked/invalid → friendly Spanish error: "Este enlace ya no es válido"
   - Renders `<PublicSiteShell data={data} token={token} />`
-- [ ] `generateMetadata({ params })`:
+- [x] `generateMetadata({ params })`:
   - Same cached call
   - `title`: `${siteName} — Portal FCAT`
   - `description`: `${speciesCount} especies detectadas en ${deploymentCount} visitas` (Kieran's suggestion — don't parade `totalImages`)
   - `openGraph.images`: `[\`/api/public/site-images/${token}/${heroImageId}?size=large\`]`
-- [ ] No `loading.tsx` — page is one query; renders or 404s
+- [x] No `loading.tsx` — page is one query; renders or 404s
 
 **3b. Species gallery sub-route (replaces the rejected modal)**
 
-- [ ] Create `src/app/public/biochoco/[token]/especies/[slug]/page.tsx`:
+- [x] Create `src/app/public/biochoco/[token]/especies/[slug]/page.tsx`:
   - Cached token lookup (reuses `fetchSiteDetailByToken`)
   - Resolves slug → species name via the site's species list on the token data
   - Calls `fetchSpeciesImagesForDeployments(depIds, speciesName, page, 50)` (`?page` from `searchParams`)
@@ -248,7 +248,7 @@ Files:
     </nav>
     ```
   - Zero client components. `<a download>` natively triggers save. Works in WhatsApp in-app browser with JS disabled.
-- [ ] Back link: `<a href={\`/public/biochoco/${token}\`}>← Volver al sitio</a>`
+- [x] Back link: `<a href={\`/public/biochoco/${token}\`}>← Volver al sitio</a>`
 
 Files:
 - `src/app/public/biochoco/[token]/public-site-shell.tsx` (new)

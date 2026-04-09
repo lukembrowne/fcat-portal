@@ -263,16 +263,14 @@ Files:
 **Goal:** One server-rendered button with copy / WhatsApp / revoke.
 
 Tasks:
-- [ ] In `src/app/biochoco/resultados/[siteId]/page.tsx`, fetch the active share link alongside the site detail and pass both to the shell. Also fetch the user's biochoco role on the server.
-- [ ] Conditionally render `<SiteShareButton siteId={siteId} existingLink={link} canShare={role === "editor" || role === "admin"} />` in the shell's header row.
-- [ ] `src/app/biochoco/resultados/[siteId]/site-share-button.tsx` (client, minimal):
-  - If no link: `<form action={createSiteShareLinkAction}>` with a hidden `siteId` input and a "Compartir" submit button. On success, revalidate + redirect back (URL now rendered in the UI).
-  - If link exists: show the URL in a readonly input with three buttons:
-    - "Copiar" — `navigator.clipboard.writeText(url)` with selection fallback on unsupported browsers
-    - "WhatsApp" — `<a href={\`https://wa.me/?text=${encodeURIComponent("Hola, aquí están los resultados del monitoreo de biodiversidad en su finca: " + url)}\`} target="_blank">`
-    - "Revocar" — `<form action={revokeSiteShareLinkAction}>` with `confirm()` in an `onClick`
-  - `useTransition` only for the copy button's toast feedback
-- [ ] Server-side permission gate: `SiteShareButton` is only rendered when `canShare` is true. Unit test the gate (viewer role → button absent).
+- [x] In `src/app/biochoco/resultados/[siteId]/page.tsx`, fetch the active share link alongside the site detail and compute `canShare` from `user.permissions` server-side; pass both to the shell
+- [x] Conditionally render `<SiteShareButton siteId={siteId} existingLink={...} />` in the shell's header row, but only when `canShare`
+- [x] `src/app/biochoco/resultados/[siteId]/site-share-button.tsx` (client component):
+  - No link: single "Compartir" button → calls `createSiteShareLink`, copies URL to clipboard, refreshes
+  - Link exists: popover with readonly URL input + Copiar / WhatsApp / Revocar buttons; `confirm()` on revoke
+  - WhatsApp prefill message in Spanish
+  - Clipboard fallback selects the input text on copy failure
+- [x] Server-side permission gate is the source of truth — `canShare` is computed from `user.permissions.find(p => p.projectId === "biochoco")?.role` on the server, not trusted from the client
 
 Files:
 - `src/app/biochoco/resultados/[siteId]/site-share-button.tsx` (new)

@@ -5,18 +5,35 @@ import type { SiteDetail } from "../types";
 import { getHabitatName } from "../../overview/types";
 import { SiteLocationMap } from "./site-location-map";
 import { SiteResultsContent } from "./site-results-content";
+import { SiteShareButton } from "./site-share-button";
 import { Card, CardContent } from "@/components/ui/card";
 import { MapPin, Calendar, Camera, Thermometer, TreePine } from "lucide-react";
+
+interface SiteShareLink {
+  token: string;
+  url: string;
+  createdAt: Date;
+  createdBy: string;
+  label: string | null;
+}
 
 interface SiteDetailShellProps {
   data: SiteDetail;
   siteId: string;
+  /** True only for biochoco editors+ — gates the share button render. */
+  canShare: boolean;
+  existingShareLink: SiteShareLink | null;
 }
 
 const internalImageUrl = (id: number, size: "thumb" | "large") =>
   `/api/ct-images/${id}?size=${size}`;
 
-export function SiteDetailShell({ data }: SiteDetailShellProps) {
+export function SiteDetailShell({
+  data,
+  siteId,
+  canShare,
+  existingShareLink,
+}: SiteDetailShellProps) {
   const { site } = data;
   if (!site) return null;
 
@@ -34,7 +51,15 @@ export function SiteDetailShell({ data }: SiteDetailShellProps) {
       {/* Header + Map */}
       <div className="flex flex-col lg:flex-row gap-6">
         <div className="flex-1 min-w-0">
-          <h1 className="text-2xl font-bold tracking-tight">{site.siteName}</h1>
+          <div className="flex items-start justify-between gap-4">
+            <h1 className="text-2xl font-bold tracking-tight">{site.siteName}</h1>
+            {canShare && (
+              <SiteShareButton
+                siteId={siteId}
+                existingLink={existingShareLink}
+              />
+            )}
+          </div>
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground mt-1">
             <span className="flex items-center gap-1">
               <MapPin className="h-3.5 w-3.5" />

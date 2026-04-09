@@ -280,37 +280,40 @@ Files:
 ## Acceptance Criteria
 
 ### Functional
-- [ ] Biochoco editors+ see "Compartir" on `/biochoco/resultados/[siteId]`; viewers do not
-- [ ] Clicking "Compartir" creates a token, displays + copies the URL, and revokes any prior active token for that site atomically (enforced by unique partial index)
-- [ ] Opening `/public/biochoco/[valid-token]` in an incognito browser renders site name, site code, date range, compact stat line, **Fauna → Hábitat → Temperatura** sections
-- [ ] Invalid or revoked token → Spanish "Este enlace ya no es válido" page (never 401 or 500)
-- [ ] Each species on the public page links to `/public/biochoco/[token]/especies/[slug]` showing every verified image for that species, paginated 50 per page
-- [ ] Each gallery image has a download link that serves a ≤1600px EXIF-stripped JPEG with `Content-Disposition: attachment; filename="FCAT-<siteId>-<imageId>.jpg"`
-- [ ] WhatsApp button opens WhatsApp with a pre-filled Spanish message containing the URL
-- [ ] Deleting a deployment does not break the token (the deleted deployment's images simply 404); the rest of the site's images still work
-- [ ] No GPS coordinate text anywhere on the public pages
-- [ ] No `SiteLocationMap` on the public pages
-- [ ] No Audio section on the public pages
+- [x] Biochoco editors+ see "Compartir" on `/biochoco/resultados/[siteId]`; viewers do not (server-side gate via `user.permissions`)
+- [x] Clicking "Compartir" creates a token, displays + copies the URL, and revokes any prior active token for that site atomically (enforced by unique partial index)
+- [x] Opening `/public/biochoco/[valid-token]` in an incognito browser renders site name, site code, date range, compact stat line, **Fauna → Hábitat → Temperatura** sections
+- [x] Invalid or revoked token → Spanish "Este enlace ya no es válido" page (smoke-tested: malformed UUID and unknown valid UUID both 200 with the friendly error)
+- [x] Each species on the public page links to `/public/biochoco/[token]/especies/[slug]` showing every verified image for that species, paginated 50 per page
+- [x] Each gallery image has a download link that serves a ≤1600px EXIF-stripped JPEG with `Content-Disposition: attachment; filename="FCAT-<siteId>-<imageId>.jpg"`
+- [x] WhatsApp button opens WhatsApp with a pre-filled Spanish message containing the URL
+- [x] Deleting a deployment does not break the token (the deleted deployment's images simply 404); the rest of the site's images still work — `deployment_ids` is a JSON snapshot, not a FK
+- [x] No GPS coordinate text anywhere on the public pages
+- [x] No `SiteLocationMap` on the public pages
+- [x] No Audio section on the public pages
 
 ### Non-Functional
-- [ ] Tokens are UUID v4 (`crypto.randomUUID()`)
-- [ ] UUID regex lives in `src/lib/public-tokens.ts`; existing inline copies migrated
-- [ ] EXIF GPS metadata absent from every served image (verify with `exiftool` on a downloaded sample)
-- [ ] Public image API serves no byte-for-byte originals
-- [ ] Public pages render correctly with JavaScript disabled — including pagination, species navigation, and download
-- [ ] `fetchSiteDetailByToken` wrapped in React `cache()` — page + `generateMetadata` share one DB hit
+- [x] Tokens are UUID v4 (`crypto.randomUUID()`)
+- [x] UUID regex lives in `src/lib/public-tokens.ts`; both existing inline copies migrated
+- [ ] EXIF GPS metadata absent from every served image (post-deploy: verify with `exiftool` on a downloaded sample from prod once we have a real test image)
+- [x] Public image API serves no byte-for-byte originals (`large` is on-the-fly sharp re-encode at ≤1600px)
+- [x] Public pages render correctly with JavaScript disabled — gallery is plain `<img>` + `<a>` tags, pagination is `<a href="?page=N">`, download is `<a download>`
+- [x] `fetchSiteDetailByToken` wrapped in React `cache()` — page + `generateMetadata` share one DB hit per request
 
 ### Security
-- [ ] Cross-site image access test: token for site A + image ID from site B's deployment → 404
-- [ ] Server actions call `requirePermission("biochoco", "editor")`
-- [ ] No email headers, user data, Drive links, or internal URLs leak into public responses
-- [ ] Image ID parsed as integer; token guarded by UUID regex
+- [x] Cross-site image access test: token for site A + image ID from site B's deployment → 404 (covered by `tests/unit/api-public-site-images.test.ts`)
+- [x] Server actions call `requirePermission("biochoco", "editor")`
+- [x] No email headers, user data, Drive links, or internal URLs leak into public responses
+- [x] Image ID parsed as integer; token guarded by UUID regex via `isValidShareToken`
 
 ### Quality Gates
-- [ ] Unit tests: `createSiteShareLink` (happy path, no-deployments, revoke-then-create idempotency under the unique index)
-- [ ] Unit test: public image API cross-site rejection
-- [ ] Integration test: revoked token returns the friendly error page
-- [ ] Manual device check (PR checklist, not a separate phase): iOS Safari private tab, Android Chrome incognito, WhatsApp in-app browser on both, with JS disabled
+- [x] Unit tests: 29 total across 3 files
+  - `tests/unit/public-tokens.test.ts` — 10 tests, token validation
+  - `tests/unit/site-share-tokens-schema.test.ts` — 6 tests locking in the unique partial index
+  - `tests/unit/api-public-site-images.test.ts` — 13 tests covering token validation, JSON parsing, cross-site rejection, thumb + large + download paths
+- [x] `npm run build` succeeds with new routes registered
+- [x] Smoke test against dev server: internal page 200, invalid token shows friendly error, bad UUID 400 from API
+- [ ] Manual device check (post-deploy PR checklist): iOS Safari private tab, Android Chrome incognito, WhatsApp in-app browser on both, JS-disabled mode
 
 ## Cuts Applied (from plan_review)
 

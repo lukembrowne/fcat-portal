@@ -63,7 +63,6 @@ interface CombinedRow {
   siteId: string;
   siteName: string;
   habitat: string;
-  habitatAssessed: string;
   deploymentId: string;
   status: "scheduled" | "deployed" | "retrieved";
   lat: number | null;
@@ -107,7 +106,6 @@ function buildRows(
       siteId: r.siteId,
       siteName: r.siteName,
       habitat: getHabitatName(r.habitatType),
-      habitatAssessed: site?.habitatAssessed ?? "",
       deploymentId: r.deploymentId,
       status: getDeploymentStatus(r.deploymentId, deployedSet, retrievedSet),
       lat: site?.lat ?? null,
@@ -126,7 +124,6 @@ function downloadCsv(rows: CombinedRow[]) {
     "ID Sitio",
     "Nombre",
     "Hábitat",
-    "Hab. Evaluado",
     "ID Instalación",
     "Notas de campo",
     "Estado",
@@ -157,7 +154,6 @@ function downloadCsv(rows: CombinedRow[]) {
       r.siteId,
       r.siteName,
       r.habitat,
-      r.habitatAssessed,
       r.deploymentId,
       r.fieldNotes ?? "",
       statusLabel[r.status] ?? r.status,
@@ -275,23 +271,12 @@ export function ScheduleTable({
       {
         accessorKey: "siteName",
         header: "Nombre",
-        cell: ({ getValue }) => (
-          <span className="whitespace-normal">{getValue<string>()}</span>
-        ),
+        cell: ({ getValue }) => getValue<string>(),
       },
       {
         accessorKey: "habitat",
         header: "Hábitat",
-        cell: ({ getValue }) => (
-          <span className="whitespace-normal">{getValue<string>()}</span>
-        ),
-      },
-      {
-        accessorKey: "habitatAssessed",
-        header: "Hab. Evaluado",
-        cell: ({ getValue }) => (
-          <span className="whitespace-normal">{getValue<string>() || "—"}</span>
-        ),
+        cell: ({ getValue }) => getValue<string>(),
       },
       {
         accessorKey: "deploymentId",
@@ -467,7 +452,7 @@ export function ScheduleTable({
       <div className="space-y-3">
 
         <div className="rounded-xl border overflow-auto">
-          <Table className="text-xs">
+          <Table className="text-xs w-auto">
             <TableHeader>
               {table.getHeaderGroups().map((headerGroup) => (
                 <TableRow key={headerGroup.id}>

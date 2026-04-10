@@ -57,25 +57,42 @@ export async function fetchBiochocoData(): Promise<ActionResult<BiochocoOverview
       habitatAssessed: (s.habitat_assessed as string) ?? "",
     }));
 
-    // Extract deployment_ids from form submissions
+    // Extract deployment_ids and actual dates from form submissions
     // ODK groups come as nested objects in OData
+    const deployDateMap = new Map<string, string>();
     const deployedIds = rawDeploys
       .map((sub) => {
         const sel = sub.site_selection as Record<string, unknown> | undefined;
-        return (sel?.deployment_id as string) ?? (sub.deployment_id as string) ?? "";
+        const depInfo = sub.deployment_info as Record<string, unknown> | undefined;
+        const depId = (sel?.deployment_id as string) ?? (sub.deployment_id as string) ?? "";
+        const date = (depInfo?.deploy_date as string) ?? (sel?.fecha_instalacion as string) ?? (sub.fecha_instalacion as string) ?? "";
+        if (depId && date) deployDateMap.set(depId, date.slice(0, 10));
+        return depId;
       })
       .filter(Boolean);
 
+    const retrieveDateMap = new Map<string, string>();
     const retrievedIds = rawRetrieves
       .map((sub) => {
         const sel = sub.site_selection as Record<string, unknown> | undefined;
-        return (sel?.deployment_id as string) ?? (sub.deployment_id as string) ?? "";
+        const retInfo = sub.retrieval_info as Record<string, unknown> | undefined;
+        const depId = (sel?.deployment_id as string) ?? (sub.deployment_id as string) ?? "";
+        const date = (retInfo?.retrieval_date as string) ?? (sel?.fecha_recuperacion as string) ?? (sub.fecha_recuperacion as string) ?? "";
+        if (depId && date) retrieveDateMap.set(depId, date.slice(0, 10));
+        return depId;
       })
       .filter(Boolean);
 
+    // Enrich schedule with actual ODK dates
+    const scheduleWithDates = enrichedSchedule.map((row) => ({
+      ...row,
+      actualDeployDate: deployDateMap.get(row.deploymentId) ?? row.actualDeployDate,
+      actualRetrieveDate: retrieveDateMap.get(row.deploymentId) ?? row.actualRetrieveDate,
+    }));
+
     return {
       success: true,
-      data: { schedule: enrichedSchedule, sites, deployedIds, retrievedIds },
+      data: { schedule: scheduleWithDates, sites, deployedIds, retrievedIds },
     };
   } catch (err) {
     log.error({ err }, "Failed to fetch BioChoco data");

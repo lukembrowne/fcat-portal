@@ -3,7 +3,7 @@
 import type { PublicSiteDetail } from "@/app/biochoco/resultados/actions";
 import { getHabitatName } from "@/app/biochoco/overview/types";
 import { SiteResultsContent } from "@/app/biochoco/resultados/[siteId]/site-results-content";
-import { CompactStatBar } from "@/app/biochoco/resultados/[siteId]/compact-stat-bar";
+import { CompactStatBar } from "@/components/compact-stat-bar";
 import {
   buildSiteStats,
   formatSiteDateRange,

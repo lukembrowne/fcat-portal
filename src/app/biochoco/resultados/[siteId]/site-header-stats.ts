@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import type { SiteDetail } from "../types";
-import type { CompactStat } from "./compact-stat-bar";
+import type { CompactStat } from "@/components/compact-stat-bar";
 
 /**
  * Builds the compact stat row shown at the top of both the internal and

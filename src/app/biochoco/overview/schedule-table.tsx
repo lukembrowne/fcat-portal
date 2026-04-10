@@ -33,6 +33,7 @@ import {
   ChevronsRight,
   Search,
   ExternalLink,
+  MapPin,
   Download,
 } from "lucide-react";
 import type { ScheduleRow } from "@/lib/schedule-types";
@@ -50,10 +51,14 @@ interface ScheduleTableProps {
   retrievedSet: Set<string>;
   selectedMonth: { year: number; month: number };
   canEditNotes?: boolean;
+  onFocusSite?: (lat: number, lng: number) => void;
+  onPrevMonth?: () => void;
+  onNextMonth?: () => void;
 }
 
 interface CombinedRow {
   date: string;
+  actualDate: string;
   type: "deploy" | "retrieve";
   siteId: string;
   siteName: string;
@@ -86,10 +91,6 @@ function isRowComplete(row: CombinedRow): boolean {
   return row.status === "retrieved";
 }
 
-function buildArcGISUrl(lat: number, lng: number): string {
-  return `https://enlace-eliminado/apps/mapviewer/index.html?configurableview=true&webmap=webmap-id-eliminado&theme=light&heading=true&legend=true&share=true&center=${lng},${lat}&scale=5000`;
-}
-
 function buildRows(
   scheduleRows: ScheduleRow[],
   type: "deploy" | "retrieve",
@@ -101,6 +102,7 @@ function buildRows(
     const site = siteMap.get(r.siteId);
     return {
       date: type === "deploy" ? (r.plannedDeployDate ?? "") : (r.plannedRetrieveDate ?? ""),
+      actualDate: type === "deploy" ? (r.actualDeployDate ?? "") : (r.actualRetrieveDate ?? ""),
       type,
       siteId: r.siteId,
       siteName: r.siteName,
@@ -118,7 +120,8 @@ function buildRows(
 
 function downloadCsv(rows: CombinedRow[]) {
   const headers = [
-    "Fecha",
+    "Fecha Plan",
+    "Fecha Real",
     "Tipo",
     "ID Sitio",
     "Nombre",
@@ -149,6 +152,7 @@ function downloadCsv(rows: CombinedRow[]) {
     }
     return [
       r.date,
+      r.actualDate,
       r.type === "deploy" ? "Instalación" : "Recuperación",
       r.siteId,
       r.siteName,
@@ -191,6 +195,9 @@ export function ScheduleTable({
   retrievedSet,
   selectedMonth,
   canEditNotes = false,
+  onFocusSite,
+  onPrevMonth,
+  onNextMonth,
 }: ScheduleTableProps) {
   const [showAll, setShowAll] = useState(false);
   const [sorting, setSorting] = useState<SortingState>([]);
@@ -235,10 +242,19 @@ export function ScheduleTable({
     () => [
       {
         accessorKey: "date",
-        header: "Fecha",
+        header: "Fecha Plan",
         cell: ({ getValue }) => (
           <span className="tabular-nums">{getValue<string>() || "—"}</span>
         ),
+      },
+      {
+        accessorKey: "actualDate",
+        header: "Fecha Real",
+        cell: ({ getValue }) => {
+          const v = getValue<string>();
+          if (!v) return <span className="text-muted-foreground">—</span>;
+          return <span className="tabular-nums text-green-600">{v}</span>;
+        },
       },
       {
         accessorKey: "type",
@@ -350,15 +366,14 @@ export function ScheduleTable({
           const { lat, lng } = row.original;
           if (lat == null || lng == null) return "—";
           return (
-            <a
-              href={buildArcGISUrl(lat, lng)}
-              target="_blank"
-              rel="noopener noreferrer"
+            <button
+              type="button"
+              onClick={() => onFocusSite?.(lat, lng)}
               className="inline-flex items-center gap-1 text-blue-600 hover:underline"
             >
-              <ExternalLink className="h-3.5 w-3.5" />
+              <MapPin className="h-3.5 w-3.5" />
               Ver
-            </a>
+            </button>
           );
         },
         enableSorting: false,
@@ -386,7 +401,7 @@ export function ScheduleTable({
         enableGlobalFilter: false,
       },
     ],
-    [canEditNotes],
+    [canEditNotes, onFocusSite],
   );
 
   const table = useReactTable({
@@ -404,42 +419,52 @@ export function ScheduleTable({
 
   return (
     <section>
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex flex-wrap items-center gap-2 mb-3">
+        {!showAll && (
+          <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={onPrevMonth}>
+            <ChevronLeft className="h-4 w-4" />
+            Anterior
+          </Button>
+        )}
         <h2 className="text-lg font-semibold">
-          {showAll ? "Cronograma — Todo el cronograma" : `Cronograma — ${monthLabel}`}
+          {showAll ? "Cronograma — Todo" : `Cronograma — ${monthLabel}`}
         </h2>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => downloadCsv(table.getFilteredRowModel().rows.map((r) => r.original))}
-          >
-            <Download className="h-4 w-4 mr-1" />
-            CSV
+        {!showAll && (
+          <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={onNextMonth}>
+            Siguiente
+            <ChevronRight className="h-4 w-4" />
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              setShowAll((v) => !v);
-              setPagination((p) => ({ ...p, pageIndex: 0 }));
-            }}
-          >
-            {showAll ? "Este mes" : "Todo el cronograma"}
-          </Button>
+        )}
+        <div className="relative ml-auto w-48">
+          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Buscar..."
+            value={globalFilter}
+            onChange={(e) => setGlobalFilter(e.target.value)}
+            className="pl-9 h-9"
+          />
         </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => downloadCsv(table.getFilteredRowModel().rows.map((r) => r.original))}
+        >
+          <Download className="h-4 w-4 mr-1" />
+          CSV
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            setShowAll((v) => !v);
+            setPagination((p) => ({ ...p, pageIndex: 0 }));
+          }}
+        >
+          {showAll ? "Este mes" : "Todo el cronograma"}
+        </Button>
       </div>
 
       <div className="space-y-3">
-        <div className="relative max-w-sm">
-          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Buscar en la tabla..."
-            value={globalFilter}
-            onChange={(e) => setGlobalFilter(e.target.value)}
-            className="pl-9"
-          />
-        </div>
 
         <div className="rounded-xl border overflow-auto">
           <Table className="text-xs">

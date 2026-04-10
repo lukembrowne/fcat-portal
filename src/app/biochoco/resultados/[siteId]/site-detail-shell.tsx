@@ -5,7 +5,7 @@ import type { SiteDetail } from "../types";
 import { getHabitatName } from "../../overview/types";
 import { SiteResultsContent } from "./site-results-content";
 import { SiteShareButton } from "./site-share-button";
-import { CompactStatBar } from "./compact-stat-bar";
+import { CompactStatBar } from "@/components/compact-stat-bar";
 import { buildSiteStats, formatSiteDateRange } from "./site-header-stats";
 import { MapPin, Calendar, Camera, Thermometer, TreePine } from "lucide-react";
 

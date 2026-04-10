@@ -13,6 +13,7 @@ interface OverviewMapProps {
   retrievalsThisMonth: ScheduleRow[];
   deployedSet: Set<string>;
   retrievedSet: Set<string>;
+  onMapReady?: (flyTo: (lat: number, lng: number) => void) => void;
 }
 
 export function OverviewMap(props: OverviewMapProps) {

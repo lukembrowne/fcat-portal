@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useEffect } from "react";
 import {
   MapContainer,
   TileLayer,
@@ -9,12 +9,25 @@ import {
   Popup,
   LayersControl,
   GeoJSON,
+  useMap,
 } from "react-leaflet";
 import L from "leaflet";
 import type { ScheduleRow } from "@/lib/schedule-types";
 import type { SiteInfo } from "./types";
 import { useReserveBoundary } from "@/lib/use-reserve-boundary";
 import { getHabitatName } from "./types";
+
+function MapController({ onMapReady }: { onMapReady?: (fn: (lat: number, lng: number) => void) => void }) {
+  const map = useMap();
+  useEffect(() => {
+    if (onMapReady) {
+      onMapReady((lat, lng) => {
+        map.flyTo([lat, lng], 17, { duration: 1 });
+      });
+    }
+  }, [map, onMapReady]);
+  return null;
+}
 
 const CAMERA_ICON = L.divIcon({
   html: `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>`,
@@ -29,6 +42,7 @@ interface OverviewMapInnerProps {
   retrievalsThisMonth: ScheduleRow[];
   deployedSet: Set<string>;
   retrievedSet: Set<string>;
+  onMapReady?: (flyTo: (lat: number, lng: number) => void) => void;
 }
 
 export default function OverviewMapInner({
@@ -37,6 +51,7 @@ export default function OverviewMapInner({
   retrievalsThisMonth,
   deployedSet,
   retrievedSet,
+  onMapReady,
 }: OverviewMapInnerProps) {
   const boundary = useReserveBoundary();
 
@@ -77,6 +92,7 @@ export default function OverviewMapInner({
         zoom={13}
         style={{ height: "500px", width: "100%" }}
       >
+        <MapController onMapReady={onMapReady} />
         <LayersControl position="topright">
           <LayersControl.BaseLayer name="Calles">
             <TileLayer

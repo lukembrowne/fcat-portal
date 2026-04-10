@@ -13,10 +13,7 @@ interface CompactStatBarProps {
 }
 
 /**
- * Single-row compact stat pills used at the top of biochoco site
- * results pages. Wraps to multiple rows on narrow screens. Replaces the
- * earlier 3-card grid that wasted vertical space and didn't match the
- * compact style of other dashboards in the portal.
+ * Single-row compact stat pills. Wraps to multiple rows on narrow screens.
  */
 export function CompactStatBar({ stats }: CompactStatBarProps) {
   return (

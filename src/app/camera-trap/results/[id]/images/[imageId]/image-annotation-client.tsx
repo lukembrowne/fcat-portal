@@ -77,6 +77,9 @@ interface ImageAnnotationClientProps {
   /** When provided, navigation uses these callbacks instead of router.push */
   onNavigate?: (imageId: number) => void;
   onBack?: () => void;
+  /** When false, all mutation UI (verify, assign, draw, delete, tags) is hidden.
+   *  Defaults to true for backwards compatibility with embedded mode. */
+  canEdit?: boolean;
   /** Override the main container height class (default: viewport-based calc) */
   containerClassName?: string;
   /** Called after any data mutation; use to re-fetch data in embedded mode */
@@ -107,6 +110,7 @@ export function ImageAnnotationClient({
   starred,
   starredBy,
   setupTag,
+  canEdit = true,
   onNavigate,
   onBack,
   containerClassName,
@@ -433,14 +437,14 @@ export function ImageAnnotationClient({
 
   useAnnotationShortcuts({
     enabled: true,
-    onVerify: handleVerifySelected,
-    onReject: handleRejectSelected,
-    onQuickVerifyAll: handleQuickVerifyAll,
-    onDeleteSelected: handleDeleteSelected,
-    onToggleConfirmedBlank: handleToggleConfirmedBlank,
-    onToggleStarred: handleToggleStarred,
-    onToggleSetupDeployment: () => handleToggleSetupTag("deployment"),
-    onToggleSetupRetrieval: () => handleToggleSetupTag("retrieval"),
+    onVerify: canEdit ? handleVerifySelected : undefined,
+    onReject: canEdit ? handleRejectSelected : undefined,
+    onQuickVerifyAll: canEdit ? handleQuickVerifyAll : undefined,
+    onDeleteSelected: canEdit ? handleDeleteSelected : undefined,
+    onToggleConfirmedBlank: canEdit ? handleToggleConfirmedBlank : undefined,
+    onToggleStarred: canEdit ? handleToggleStarred : undefined,
+    onToggleSetupDeployment: canEdit ? () => handleToggleSetupTag("deployment") : undefined,
+    onToggleSetupRetrieval: canEdit ? () => handleToggleSetupTag("retrieval") : undefined,
     onToggleBboxes: () => setBboxesHidden((prev) => !prev),
     onResetZoom: resetZoom,
     isDialogOpen,
@@ -480,11 +484,11 @@ export function ImageAnnotationClient({
         router.push(`/camera-trap/results/${jobId}`, { scroll: false });
       }
     },
-    onAssignSpeciesByIndex: (index) => {
+    onAssignSpeciesByIndex: canEdit ? (index) => {
       if (index < visibleSpecies.length) {
         handleSelectSpecies(visibleSpecies[index].scientificName);
       }
-    },
+    } : undefined,
     detectionCount: detections.length,
     selectedDetectionId: selectedBoxId,
     searchInputRef,
@@ -510,8 +514,8 @@ export function ImageAnnotationClient({
             currentSpecies={currentSpecies}
             searchQuery={searchQuery}
             onSearchChange={setSearchQuery}
-            onSelectSpecies={handleSelectSpecies}
-            onAddSpecies={handleAddSpecies}
+            onSelectSpecies={canEdit ? handleSelectSpecies : undefined}
+            onAddSpecies={canEdit ? handleAddSpecies : undefined}
             searchInputRef={searchInputRef}
             nameDisplay={nameDisplay}
             onCycleDisplay={cycleDisplay}
@@ -527,9 +531,9 @@ export function ImageAnnotationClient({
             onSelectDetection={(id) =>
               setSelectedBoxId((prev) => (prev === id ? null : id))
             }
-            onDeleteDetection={handleDeleteDetection}
+            onDeleteDetection={canEdit ? handleDeleteDetection : undefined}
             confirmedBlank={isConfirmedBlank}
-            onToggleConfirmedBlank={handleToggleConfirmedBlank}
+            onToggleConfirmedBlank={canEdit ? handleToggleConfirmedBlank : undefined}
             nameDisplay={nameDisplay}
             speciesList={speciesList}
           />
@@ -581,8 +585,8 @@ export function ImageAnnotationClient({
                 onBoxClick={(box) =>
                   setSelectedBoxId((prev) => (prev === box.id ? null : box.id))
                 }
-                editable={!isPanning}
-                onDrawComplete={handleDrawComplete}
+                editable={!isPanning && canEdit}
+                onDrawComplete={canEdit ? handleDrawComplete : undefined}
               />
             </div>
             {zoomScale > 1 && (
@@ -604,44 +608,48 @@ export function ImageAnnotationClient({
             <div className="flex-1 min-w-0">
               <AnnotationHelpPanel />
             </div>
-            <Button
-              variant={currentSetupTag === "deployment" ? "default" : "outline"}
-              size="sm"
-              className={`shrink-0 gap-1.5 ${currentSetupTag === "deployment" ? "bg-blue-600 hover:bg-blue-700 text-white" : ""}`}
-              onClick={() => handleToggleSetupTag("deployment")}
-              title="Marcar como instalación (i)"
-            >
-              <Camera className="size-4" />
-              Instalación
-            </Button>
-            <Button
-              variant={currentSetupTag === "retrieval" ? "default" : "outline"}
-              size="sm"
-              className={`shrink-0 gap-1.5 ${currentSetupTag === "retrieval" ? "bg-orange-600 hover:bg-orange-700 text-white" : ""}`}
-              onClick={() => handleToggleSetupTag("retrieval")}
-              title="Marcar como recogida (t)"
-            >
-              <Camera className="size-4" />
-              Recogida
-            </Button>
-            <Button
-              variant={isStarred ? "default" : "outline"}
-              size="sm"
-              className={`shrink-0 gap-1.5 ${isStarred ? "bg-amber-500 hover:bg-amber-600 text-white" : ""}`}
-              onClick={handleToggleStarred}
-              title={isStarred && starredBy ? `Destacada por ${starredBy}` : "Destacar imagen (s)"}
-            >
-              <svg
-                className="size-4"
-                fill={isStarred ? "currentColor" : "none"}
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={1.5}
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" d="M11.48 3.499a.562.562 0 0 1 1.04 0l2.125 5.111a.563.563 0 0 0 .475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 0 0-.182.557l1.285 5.385a.562.562 0 0 1-.84.61l-4.725-2.885a.562.562 0 0 0-.586 0L6.982 20.54a.562.562 0 0 1-.84-.61l1.285-5.386a.562.562 0 0 0-.182-.557l-4.204-3.602a.562.562 0 0 1 .321-.988l5.518-.442a.563.563 0 0 0 .475-.345L11.48 3.5Z" />
-              </svg>
-              {isStarred ? "Destacada" : "Destacar"}
-            </Button>
+            {canEdit && (
+              <>
+                <Button
+                  variant={currentSetupTag === "deployment" ? "default" : "outline"}
+                  size="sm"
+                  className={`shrink-0 gap-1.5 ${currentSetupTag === "deployment" ? "bg-blue-600 hover:bg-blue-700 text-white" : ""}`}
+                  onClick={() => handleToggleSetupTag("deployment")}
+                  title="Marcar como instalación (i)"
+                >
+                  <Camera className="size-4" />
+                  Instalación
+                </Button>
+                <Button
+                  variant={currentSetupTag === "retrieval" ? "default" : "outline"}
+                  size="sm"
+                  className={`shrink-0 gap-1.5 ${currentSetupTag === "retrieval" ? "bg-orange-600 hover:bg-orange-700 text-white" : ""}`}
+                  onClick={() => handleToggleSetupTag("retrieval")}
+                  title="Marcar como recogida (t)"
+                >
+                  <Camera className="size-4" />
+                  Recogida
+                </Button>
+                <Button
+                  variant={isStarred ? "default" : "outline"}
+                  size="sm"
+                  className={`shrink-0 gap-1.5 ${isStarred ? "bg-amber-500 hover:bg-amber-600 text-white" : ""}`}
+                  onClick={handleToggleStarred}
+                  title={isStarred && starredBy ? `Destacada por ${starredBy}` : "Destacar imagen (s)"}
+                >
+                  <svg
+                    className="size-4"
+                    fill={isStarred ? "currentColor" : "none"}
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={1.5}
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M11.48 3.499a.562.562 0 0 1 1.04 0l2.125 5.111a.563.563 0 0 0 .475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 0 0-.182.557l1.285 5.385a.562.562 0 0 1-.84.61l-4.725-2.885a.562.562 0 0 0-.586 0L6.982 20.54a.562.562 0 0 1-.84-.61l1.285-5.386a.562.562 0 0 0-.182-.557l-4.204-3.602a.562.562 0 0 1 .321-.988l5.518-.442a.563.563 0 0 0 .475-.345L11.48 3.5Z" />
+                  </svg>
+                  {isStarred ? "Destacada" : "Destacar"}
+                </Button>
+              </>
+            )}
             {onBack ? (
               <Button variant="outline" size="sm" className="shrink-0" onClick={onBack}>
                 Volver a Cuadrícula
@@ -657,8 +665,8 @@ export function ImageAnnotationClient({
         </div>
       </div>
 
-      {/* Delete confirmation dialog */}
-      <Dialog
+      {/* Delete confirmation dialog — editors only */}
+      {canEdit && <Dialog
         open={deleteDialogDetectionId !== null}
         onOpenChange={(open) => {
           if (!open) setDeleteDialogDetectionId(null);
@@ -706,10 +714,10 @@ export function ImageAnnotationClient({
             </Button>
           </DialogFooter>
         </DialogContent>
-      </Dialog>
+      </Dialog>}
 
-      {/* Add species dialog */}
-      <Dialog
+      {/* Add species dialog — editors only */}
+      {canEdit && <Dialog
         open={addSpeciesOpen}
         onOpenChange={(open) => {
           if (!open) setAddSpeciesOpen(false);
@@ -811,7 +819,7 @@ export function ImageAnnotationClient({
             </Button>
           </DialogFooter>
         </DialogContent>
-      </Dialog>
+      </Dialog>}
     </>
   );
 }

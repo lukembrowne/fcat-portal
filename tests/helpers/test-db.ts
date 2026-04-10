@@ -112,7 +112,8 @@ const CAMERA_TRAP_DDL = `
     upload_ibutton_size_bytes INTEGER,
     upload_newest_camera_date TEXT,
     upload_newest_audio_date TEXT,
-    upload_newest_ibutton_date TEXT
+    upload_newest_ibutton_date TEXT,
+    training_split TEXT
   );
 
   CREATE TABLE biochoco_processing_jobs (
@@ -201,7 +202,8 @@ const CAMERA_TRAP_DDL = `
     verification_status TEXT NOT NULL DEFAULT 'unverified',
     corrected_species TEXT,
     verified_by TEXT,
-    verified_at INTEGER
+    verified_at INTEGER,
+    classifier_model_id INTEGER
   );
 
   CREATE TABLE biochoco_species (

@@ -209,6 +209,7 @@ export default async function DeploymentDetailPage({ params }: PageProps) {
           deploymentId={deployment.id}
           speciesList={resultsData.speciesList}
           deploymentName={deployment.name}
+          canEdit={isEditor}
         />
       ) : (
         <div className="rounded-lg border bg-card px-6 py-10">

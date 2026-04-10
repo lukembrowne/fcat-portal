@@ -25,7 +25,7 @@ interface DetectionCardStripProps {
   detections: DetectionWithIdentification[];
   selectedDetectionId: number | null;
   onSelectDetection: (id: number) => void;
-  onDeleteDetection: (id: number) => void;
+  onDeleteDetection?: (id: number) => void;
   confirmedBlank?: boolean;
   onToggleConfirmedBlank?: () => void;
   nameDisplay?: NameDisplay;
@@ -86,7 +86,7 @@ export function DetectionCardStrip({
           </>
         ) : (
           <>
-            No hay detecciones — clic y arrastrar en la imagen para dibujar un cuadro
+            No hay detecciones{onToggleConfirmedBlank && " — clic y arrastrar en la imagen para dibujar un cuadro"}
             {onToggleConfirmedBlank && (
               <button
                 type="button"
@@ -194,18 +194,20 @@ export function DetectionCardStrip({
                   {confidence}%
                 </span>
               )}
-              <div
-                role="button"
-                tabIndex={-1}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onDeleteDetection(det.id);
-                }}
-                className="p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-destructive/10 hover:text-destructive transition-opacity flex-shrink-0 cursor-pointer"
-                title="Eliminar detección"
-              >
-                <Trash2 className="h-3 w-3" />
-              </div>
+              {onDeleteDetection && (
+                <div
+                  role="button"
+                  tabIndex={-1}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDeleteDetection(det.id);
+                  }}
+                  className="p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-destructive/10 hover:text-destructive transition-opacity flex-shrink-0 cursor-pointer"
+                  title="Eliminar detección"
+                >
+                  <Trash2 className="h-3 w-3" />
+                </div>
+              )}
             </div>
 
             {/* Species */}

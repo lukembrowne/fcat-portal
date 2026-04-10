@@ -26,6 +26,7 @@ interface DeploymentGalleryClientProps {
   deploymentId: number;
   speciesList: ResultsSpeciesEntry[];
   deploymentName: string;
+  canEdit?: boolean;
 }
 
 export function DeploymentGalleryClient({
@@ -34,6 +35,7 @@ export function DeploymentGalleryClient({
   deploymentId,
   speciesList,
   deploymentName,
+  canEdit = true,
 }: DeploymentGalleryClientProps) {
   const router = useRouter();
 
@@ -319,6 +321,7 @@ export function DeploymentGalleryClient({
               starred={displayedPayload!.image.starred}
               starredBy={displayedPayload!.image.starredBy}
               setupTag={displayedPayload!.image.setupTag}
+              canEdit={canEdit}
               onNavigate={loadImage}
               onBack={handleBack}
               containerClassName="h-full"

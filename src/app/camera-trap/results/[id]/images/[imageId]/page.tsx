@@ -13,7 +13,11 @@ interface PageProps {
 }
 
 export default async function ImageDetailPage({ params }: PageProps) {
-  await requirePermission("camera-trap", "viewer");
+  const user = await requirePermission("camera-trap", "viewer");
+  const canEdit = user.globalRole === "super_admin" ||
+    user.permissions.some(
+      (p) => p.projectId === "camera-trap" && (p.role === "editor" || p.role === "admin")
+    );
   const { id, imageId } = await params;
   const jobId = parseInt(id, 10);
   const imgId = parseInt(imageId, 10);
@@ -166,6 +170,7 @@ export default async function ImageDetailPage({ params }: PageProps) {
         imageId={imgId}
         prevImageId={prevImageId}
         nextImageId={nextImageId}
+        canEdit={canEdit}
         confirmedBlank={image.confirmedBlank}
         starred={image.starred}
         starredBy={image.starredBy}

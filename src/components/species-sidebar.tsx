@@ -40,7 +40,7 @@ interface SpeciesSidebarProps {
   currentSpecies: string | null;
   searchQuery: string;
   onSearchChange: (query: string) => void;
-  onSelectSpecies: (scientificName: string) => void;
+  onSelectSpecies?: (scientificName: string) => void;
   onAddSpecies?: () => void;
   searchInputRef: React.RefObject<HTMLInputElement | null>;
   nameDisplay: NameDisplay;
@@ -220,21 +220,22 @@ function SpeciesRow({
   hotkeyNum: number | null;
   isActive: boolean;
   isDisabled: boolean;
-  onSelect: (scientificName: string) => void;
+  onSelect?: (scientificName: string) => void;
   nameDisplay: NameDisplay;
 }) {
   const title = `${sp.scientificName} — ${sp.commonName}${sp.spanishName ? ` — ${sp.spanishName}` : ""}`;
+  const readOnly = !onSelect;
 
   return (
     <button
       type="button"
-      disabled={isDisabled}
-      onClick={() => onSelect(sp.scientificName)}
+      disabled={isDisabled || readOnly}
+      onClick={() => onSelect?.(sp.scientificName)}
       title={title}
       className={`w-full text-left px-2 py-1 rounded text-sm flex items-center gap-1.5 min-w-0 transition-colors ${
         isActive
           ? "bg-primary/10 text-primary"
-          : isDisabled
+          : isDisabled || readOnly
             ? "opacity-50 cursor-not-allowed"
             : "hover:bg-accent cursor-pointer"
       }`}

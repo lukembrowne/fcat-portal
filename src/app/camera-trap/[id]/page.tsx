@@ -121,7 +121,7 @@ export default async function DeploymentDetailPage({ params }: PageProps) {
 
           {/* Actions */}
           <div className="flex items-center gap-2 shrink-0">
-            {canProcess && !isProcessing && !hasResults && (hasImages || hasVideos) && (
+            {isEditor && canProcess && !isProcessing && !hasResults && (hasImages || hasVideos) && (
               <ProcessButton
                 deploymentId={deployment.id}
                 isAdmin={isAdmin}

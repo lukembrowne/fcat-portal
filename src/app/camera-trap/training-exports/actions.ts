@@ -38,6 +38,7 @@ import {
 import { requireAdmin } from "@/lib/auth";
 import type { ActionResult } from "@/lib/types";
 import { downloadFileToBuffer } from "@/lib/drive-client";
+import { log } from "@/lib/log";
 import {
   speciesSlug,
   assignSplit,
@@ -296,7 +297,7 @@ export async function getExportPreview(
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error("[training-export] preview failed:", err);
+    log.error({ err }, "[training-export] preview failed");
     return { success: false, error: msg };
   }
 }
@@ -411,8 +412,9 @@ export async function exportTrainingDataset(
     const warnings: string[] = [];
     let written = 0;
 
-    console.log(
-      `[training-export] starting export ${version}: ${filtered.length} crops, ${classList.length} classes`,
+    log.info(
+      { version, crops: filtered.length, classes: classList.length },
+      "[training-export] starting export",
     );
     const startedAt = Date.now();
 
@@ -431,8 +433,9 @@ export async function exportTrainingDataset(
         const msg = err instanceof Error ? err.message : String(err);
         warnings.push(`detection ${row.detectionId}: ${msg}`);
         if (warnings.length <= 5) {
-          console.warn(
-            `[training-export] crop failed for detection ${row.detectionId}: ${msg}`,
+          log.warn(
+            { detectionId: row.detectionId, err: msg },
+            "[training-export] crop failed for detection",
           );
         }
       }
@@ -441,8 +444,9 @@ export async function exportTrainingDataset(
         const elapsed = (Date.now() - startedAt) / 1000;
         const rate = written / elapsed;
         const eta = Math.round((filtered.length - written) / rate);
-        console.log(
-          `[training-export] ${written}/${filtered.length} crops (${rate.toFixed(1)}/s, ETA ${eta}s)`,
+        log.info(
+          { written, total: filtered.length, ratePerSec: +rate.toFixed(1), etaSec: eta },
+          "[training-export] progress",
         );
       }
     }
@@ -509,8 +513,16 @@ export async function exportTrainingDataset(
     });
 
     const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
-    console.log(
-      `[training-export] done ${version} in ${elapsed}s — ${written}/${filtered.length} crops written, ${classList.length} classes, ${warnings.length} warnings`,
+    log.info(
+      {
+        version,
+        elapsedSec: elapsed,
+        written,
+        total: filtered.length,
+        classes: classList.length,
+        warnings: warnings.length,
+      },
+      "[training-export] done",
     );
 
     return {
@@ -527,7 +539,7 @@ export async function exportTrainingDataset(
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error("[training-export] failed:", err);
+    log.error({ err }, "[training-export] failed");
     return { success: false, error: msg };
   }
 }

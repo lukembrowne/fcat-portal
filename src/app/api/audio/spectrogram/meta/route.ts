@@ -19,6 +19,7 @@ import {
   ensureSpectrogramGenerated,
   type SpectrogramMetadata,
 } from "@/lib/audio-cache";
+import { log } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
 
@@ -104,7 +105,7 @@ export async function GET(request: NextRequest) {
       ensureAudioCached(audioFileId)
         .then(() => ensureSpectrogramGenerated(audioFileId))
         .catch((err) =>
-          console.error(`[spectrogram-meta] Background work failed for ${audioFileId}:`, err)
+          log.error({ err, audioFileId }, "[spectrogram-meta] Background work failed")
         );
 
       return NextResponse.json({
@@ -117,7 +118,7 @@ export async function GET(request: NextRequest) {
     if (!audioFile.spectrogramPath) {
       // Audio cached but spectrogram not yet generated — kick off in background
       ensureSpectrogramGenerated(audioFileId).catch((err) =>
-        console.error(`[spectrogram-meta] Background generation failed for ${audioFileId}:`, err)
+        log.error({ err, audioFileId }, "[spectrogram-meta] Background generation failed")
       );
 
       return NextResponse.json({
@@ -137,9 +138,9 @@ export async function GET(request: NextRequest) {
         .where(eq(audioFiles.id, audioFileId));
 
       ensureSpectrogramGenerated(audioFileId).catch((err) =>
-        console.error(
-          `[spectrogram-meta] Re-generation failed for ${audioFileId}:`,
-          err
+        log.error(
+          { err, audioFileId },
+          "[spectrogram-meta] Re-generation failed"
         )
       );
 
@@ -152,9 +153,9 @@ export async function GET(request: NextRequest) {
     const { metadata } = await ensureSpectrogramGenerated(audioFileId);
     return NextResponse.json({ ready: true, ...metadata });
   } catch (err) {
-    console.error(
-      `[spectrogram-meta] Failed for file ${audioFileId}:`,
-      err instanceof Error ? err.message : err
+    log.error(
+      { err, audioFileId },
+      "[spectrogram-meta] Failed for file"
     );
 
     return NextResponse.json({

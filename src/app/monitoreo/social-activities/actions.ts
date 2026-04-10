@@ -7,6 +7,7 @@ import {
   MONITOREO_FORM_SOCIAL_ACTIVITIES,
 } from "@/lib/odk-constants";
 import type { ActionResult } from "@/lib/types";
+import { log } from "@/lib/log";
 import type {
   OdkSocialActivitySubmission,
   SocialActivityRecord,
@@ -155,7 +156,7 @@ export async function fetchSocialActivities(): Promise<
 
     return { success: true, data: { activities, metrics } };
   } catch (err) {
-    console.error("Failed to fetch social activities:", err);
+    log.error({ err }, "Failed to fetch social activities");
     return {
       success: false,
       error: err instanceof Error ? err.message : "Error desconocido",

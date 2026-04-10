@@ -25,6 +25,7 @@ import {
 } from "@/lib/odk-constants";
 import type { OdkSiteEntity } from "@/lib/odk-types";
 import type { ActionResult } from "@/lib/types";
+import { log } from "@/lib/log";
 import type { SiteInfo } from "../overview/types";
 import type { HabitatAssessment } from "../habitat/types";
 import type {
@@ -206,7 +207,7 @@ export async function fetchResultadosData(): Promise<ActionResult<ResultadosData
 
     return { success: true, data: { sites: result } };
   } catch (err) {
-    console.error("Failed to fetch resultados data:", err);
+    log.error({ err }, "Failed to fetch resultados data");
     return {
       success: false,
       error: err instanceof Error ? err.message : "Error al cargar datos de resultados",
@@ -343,7 +344,7 @@ export async function fetchSiteDetail(
       },
     };
   } catch (err) {
-    console.error("Failed to fetch site detail:", err);
+    log.error({ err }, "Failed to fetch site detail");
     return {
       success: false,
       error: err instanceof Error ? err.message : "Error al cargar detalle del sitio",
@@ -744,7 +745,7 @@ export async function createSiteShareLink(
       data: { token, url: buildSiteShareUrl(token) },
     };
   } catch (err) {
-    console.error("Failed to create site share link:", err);
+    log.error({ err }, "Failed to create site share link");
     return {
       success: false,
       error: err instanceof Error ? err.message : "Error al crear enlace",
@@ -785,7 +786,7 @@ export async function revokeSiteShareLink(
     revalidatePath(`/biochoco/resultados/${siteId}`);
     return { success: true, data: undefined };
   } catch (err) {
-    console.error("Failed to revoke site share link:", err);
+    log.error({ err }, "Failed to revoke site share link");
     return {
       success: false,
       error: err instanceof Error ? err.message : "Error al revocar enlace",

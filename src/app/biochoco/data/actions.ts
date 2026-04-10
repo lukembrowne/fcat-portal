@@ -8,6 +8,7 @@ import { getDeploymentStatus } from "@/app/biochoco/overview/types";
 import { checkDeploymentUploads, extractFolderId, type UploadStatus } from "@/lib/drive-client";
 import type { ScheduleRow } from "@/lib/schedule-types";
 import type { ActionResult } from "@/lib/types";
+import { log } from "@/lib/log";
 import { db } from "@/db";
 import {
   deployments,
@@ -144,7 +145,7 @@ export async function fetchSchedule(): Promise<ActionResult<ScheduleRow[]>> {
 
     return { success: true, data: filtered };
   } catch (err) {
-    console.error("Failed to load schedule:", err);
+    log.error({ err }, "Failed to load schedule");
     return {
       success: false,
       error: err instanceof Error ? err.message : "Error desconocido",
@@ -202,7 +203,7 @@ export async function checkDriveForDeployments(
 
     return { success: true, data: results };
   } catch (err) {
-    console.error("Failed to check Drive status:", err);
+    log.error({ err }, "Failed to check Drive status");
     return {
       success: false,
       error: err instanceof Error ? err.message : "Error desconocido",
@@ -524,7 +525,7 @@ export async function fetchUploadWindowQc(): Promise<
       deployDtMap = maps.deployDateTimeMap;
       retrieveDtMap = maps.retrieveDateTimeMap;
     } catch (err) {
-      console.warn("[biochoco/data] loadOdkDateTimes failed:", err);
+      log.warn({ err }, "[biochoco/data] loadOdkDateTimes failed");
     }
 
     const byName: WindowQcByDeployment = {};
@@ -567,7 +568,7 @@ export async function fetchUploadWindowQc(): Promise<
 
     return { success: true, data: byName };
   } catch (err) {
-    console.error("Failed to compute window QC:", err);
+    log.error({ err }, "Failed to compute window QC");
     return {
       success: false,
       error: err instanceof Error ? err.message : "Error desconocido",

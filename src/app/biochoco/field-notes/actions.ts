@@ -6,6 +6,7 @@ import { deployments, cameraTrapProjects } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import type { ActionResult } from "@/lib/types";
+import { log } from "@/lib/log";
 
 const MAX_FIELD_NOTES_LENGTH = 2000;
 
@@ -70,7 +71,7 @@ export async function updateDeploymentFieldNotes(
     revalidatePath("/biochoco/data");
     return { success: true, data: undefined };
   } catch (error) {
-    console.error("Failed to update field notes:", error);
+    log.error({ err: error }, "Failed to update field notes");
     return {
       success: false,
       error: error instanceof Error ? error.message : "Error al guardar notas de campo",

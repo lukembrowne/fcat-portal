@@ -8,6 +8,7 @@
 import { db } from "@/db";
 import { processingJobs } from "@/db/schema";
 import { eq } from "drizzle-orm";
+import { log } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
 
@@ -82,7 +83,7 @@ export async function GET(request: Request) {
             setTimeout(poll, 500);
           }
         } catch (error) {
-          console.error("SSE poll error:", error);
+          log.error({ err: error }, "SSE poll error");
           if (isActive) {
             sendEvent({ error: "Database error", status: "error" });
             isActive = false;

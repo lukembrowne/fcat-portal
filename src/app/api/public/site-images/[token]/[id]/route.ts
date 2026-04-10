@@ -31,6 +31,7 @@ import { eq, and, sql, inArray } from "drizzle-orm";
 import { downloadFileToBuffer } from "@/lib/drive-client";
 import { getOrGenerateThumbnail } from "@/lib/thumbnail";
 import { isValidShareToken } from "@/lib/public-tokens";
+import { log } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
 
@@ -177,9 +178,9 @@ export async function GET(
       }
       return new NextResponse(new Uint8Array(thumb), { headers: baseHeaders });
     } catch (err) {
-      console.error(
-        `[public-site-images] Thumbnail generation failed for image ${imageId}:`,
-        err,
+      log.error(
+        { err, imageId },
+        "[public-site-images] Thumbnail generation failed",
       );
       return NextResponse.json(
         { error: "Failed to load image" },
@@ -207,9 +208,9 @@ export async function GET(
     }
     return new NextResponse(new Uint8Array(large), { headers });
   } catch (err) {
-    console.error(
-      `[public-site-images] Large generation failed for image ${imageId}:`,
-      err,
+    log.error(
+      { err, imageId },
+      "[public-site-images] Large generation failed",
     );
     return NextResponse.json(
       { error: "Failed to load image" },

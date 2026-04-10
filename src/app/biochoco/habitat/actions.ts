@@ -11,6 +11,7 @@ import type { OdkSiteEntity } from "@/lib/odk-types";
 import type { ActionResult } from "@/lib/types";
 import type { SiteInfo } from "../overview/types";
 import type { HabitatAssessment } from "./types";
+import { log } from "@/lib/log";
 
 interface HabitatDataResult {
   sites: SiteInfo[];
@@ -84,7 +85,7 @@ export async function fetchHabitatData(): Promise<
       data: { sites, assessments, assessedSiteIds },
     };
   } catch (err) {
-    console.error("Failed to fetch habitat data:", err);
+    log.error({ err }, "Failed to fetch habitat data");
     return {
       success: false,
       error: err instanceof Error ? err.message : "Unknown error",

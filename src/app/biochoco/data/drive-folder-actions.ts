@@ -16,6 +16,7 @@ import { deployments, cameraTrapProjects } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import type { ActionResult } from "@/lib/types";
+import { log } from "@/lib/log";
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -194,7 +195,7 @@ export async function getMissingDriveFolders(): Promise<
 
     return { success: true, data: missing };
   } catch (err) {
-    console.error("[Drive Folders] Failed to find missing folders:", err);
+    log.error({ err }, "[Drive Folders] Failed to find missing folders");
     return {
       success: false,
       error: err instanceof Error ? err.message : "Error al buscar instalaciones sin carpeta",
@@ -254,9 +255,9 @@ export async function createSingleDriveFolder(
           },
         ]);
       } catch (err) {
-        console.error(
-          `[Drive Folders] Failed to update sheet for ${deploymentId}:`,
-          err
+        log.error(
+          { err, deploymentId },
+          "[Drive Folders] Failed to update sheet"
         );
       }
     }
@@ -289,9 +290,9 @@ export async function createSingleDriveFolder(
         })
         .onConflictDoNothing();
     } catch (err) {
-      console.error(
-        `[Drive Folders] Failed to insert DB row for ${deploymentId}:`,
-        err
+      log.error(
+        { err, deploymentId },
+        "[Drive Folders] Failed to insert DB row"
       );
     }
 
@@ -305,9 +306,9 @@ export async function createSingleDriveFolder(
       folderLink: folder.webViewLink,
     };
   } catch (err) {
-    console.error(
-      `[Drive Folders] Failed to create folder for ${deploymentId}:`,
-      err
+    log.error(
+      { err, deploymentId },
+      "[Drive Folders] Failed to create folder"
     );
     return {
       deploymentId,
@@ -357,9 +358,9 @@ export async function recreateDriveFolder(
           },
         ]);
       } catch (err) {
-        console.error(
-          `[Drive Folders] Failed to update sheet for ${deploymentId}:`,
-          err
+        log.error(
+          { err, deploymentId },
+          "[Drive Folders] Failed to update sheet"
         );
       }
     }
@@ -380,9 +381,9 @@ export async function recreateDriveFolder(
         })
         .where(eq(deployments.name, deploymentId));
     } catch (err) {
-      console.error(
-        `[Drive Folders] Failed to update DB row for ${deploymentId}:`,
-        err
+      log.error(
+        { err, deploymentId },
+        "[Drive Folders] Failed to update DB row"
       );
     }
 
@@ -396,9 +397,9 @@ export async function recreateDriveFolder(
       folderLink: folder.webViewLink,
     };
   } catch (err) {
-    console.error(
-      `[Drive Folders] Failed to recreate folder for ${deploymentId}:`,
-      err
+    log.error(
+      { err, deploymentId },
+      "[Drive Folders] Failed to recreate folder"
     );
     return {
       deploymentId,

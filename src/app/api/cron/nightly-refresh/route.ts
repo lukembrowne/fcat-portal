@@ -14,6 +14,7 @@ import { checkDeploymentUploads, type UploadStatus } from "@/lib/drive-client";
 import { verifyCronSecret } from "@/lib/cron-auth";
 import { isNotNull, eq, sql } from "drizzle-orm";
 import { Resend } from "resend";
+import { log } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
 
@@ -74,7 +75,7 @@ export async function POST(request: Request) {
   try {
     const startTime = Date.now();
     const today = new Date().toISOString().slice(0, 10);
-    console.log(`[nightly] Starting BioChoco data refresh — ${today}`);
+    log.info({ today }, "[nightly] Starting BioChoco data refresh");
 
     // Step 1: Query all deployments with a Drive folder
     const allDeployments = db
@@ -88,18 +89,18 @@ export async function POST(request: Request) {
       .where(isNotNull(deployments.driveFolderId))
       .all();
 
-    console.log(`[nightly] Found ${allDeployments.length} deployments with Drive folders`);
+    log.info({ count: allDeployments.length }, "[nightly] Found deployments with Drive folders");
 
     // Step 2: Check each deployment sequentially
     const results: DeploymentResult[] = [];
 
     for (const dep of allDeployments) {
-      console.log(`[nightly] Checking ${dep.name} (folder: ${dep.driveFolderId})`);
+      log.info({ name: dep.name, folderId: dep.driveFolderId }, "[nightly] Checking deployment");
 
       const result = await checkDeploymentUploads(dep.driveFolderId!);
 
       if (!result.success) {
-        console.error(`[nightly] FAILED ${dep.name}: ${result.error}`);
+        log.error({ name: dep.name, err: result.error }, "[nightly] FAILED");
         results.push({
           id: dep.id,
           name: dep.name,
@@ -111,8 +112,14 @@ export async function POST(request: Request) {
       }
 
       const uploads = result.data;
-      console.log(
-        `[nightly] ${dep.name}: cameras=${uploads.camarasTrampas}, audio=${uploads.grabadoresDeAudio}, ibutton=${uploads.ibutton}`
+      log.info(
+        {
+          name: dep.name,
+          cameras: uploads.camarasTrampas,
+          audio: uploads.grabadoresDeAudio,
+          ibutton: uploads.ibutton,
+        },
+        "[nightly] deployment counts"
       );
 
       // Persist counts, sizes, newest dates to DB
@@ -175,7 +182,7 @@ export async function POST(request: Request) {
       })
       .run();
 
-    console.log("[nightly] Snapshot saved");
+    log.info("[nightly] Snapshot saved");
 
     // Step 4: Compute deltas from previous snapshot
     const prevRows = db
@@ -205,13 +212,16 @@ export async function POST(request: Request) {
     if (RESEND_API_KEY && NIGHTLY_REPORT_EMAILS) {
       await sendReport(RESEND_API_KEY, NIGHTLY_REPORT_EMAILS, today, results, delta);
     } else {
-      console.warn("[nightly] Email skipped — RESEND_API_KEY or NIGHTLY_REPORT_EMAILS not set");
+      log.warn("[nightly] Email skipped — RESEND_API_KEY or NIGHTLY_REPORT_EMAILS not set");
     }
 
     const errorCount = results.filter((r) => r.error).length;
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     const totalSize = snapshot.totalCameraSizeBytes + snapshot.totalAudioSizeBytes + snapshot.totalIbuttonSizeBytes;
-    console.log(`[nightly] Done in ${elapsed}s — ${results.length} deployments, ${errorCount} errors, ${formatBytes(totalSize)} total`);
+    log.info(
+      { elapsedSec: elapsed, deployments: results.length, errors: errorCount, totalSize: formatBytes(totalSize) },
+      "[nightly] Done"
+    );
 
     return Response.json({
       ok: true,
@@ -221,7 +231,7 @@ export async function POST(request: Request) {
       elapsed: `${elapsed}s`,
     });
   } catch (err) {
-    console.error("[nightly] Fatal error:", err);
+    log.error({ err }, "[nightly] Fatal error");
     return Response.json(
       { error: err instanceof Error ? err.message : "Unknown error" },
       { status: 500 }
@@ -282,7 +292,7 @@ async function sendReport(
   const to = recipientEmails.split(",").map((e) => e.trim()).filter(Boolean);
 
   if (to.length === 0) {
-    console.warn("[nightly] No recipient emails configured");
+    log.warn("[nightly] No recipient emails configured");
     return;
   }
 
@@ -302,12 +312,12 @@ async function sendReport(
     });
 
     if (error) {
-      console.error("[nightly] Resend API error:", error);
+      log.error({ err: error }, "[nightly] Resend API error");
     } else {
-      console.log(`[nightly] Email sent to ${to.join(", ")}`);
+      log.info({ to }, "[nightly] Email sent");
     }
   } catch (err) {
-    console.error("[nightly] Failed to send email:", err);
+    log.error({ err }, "[nightly] Failed to send email");
   }
 }
 

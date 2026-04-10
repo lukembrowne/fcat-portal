@@ -15,6 +15,7 @@ import { eq, and, sql } from "drizzle-orm";
 import { downloadFileToBuffer } from "@/lib/drive-client";
 import { getOrGenerateThumbnail } from "@/lib/thumbnail";
 import { isValidShareToken } from "@/lib/public-tokens";
+import { log } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
 
@@ -77,7 +78,7 @@ export async function GET(
     }
     return new NextResponse(new Uint8Array(thumb), { headers });
   } catch (err) {
-    console.error(`[public-ct-images] Thumbnail generation failed for image ${imageId}:`, err);
+    log.error({ err, imageId }, "[public-ct-images] Thumbnail generation failed");
     return NextResponse.json({ error: "Failed to load image" }, { status: 502 });
   }
 }

@@ -43,6 +43,7 @@ import type { ActionResult, VerificationStats, TaxonomicRank } from "@/lib/types
 import type { Deployment, ProcessingJob, Species, NewSpecies, ShareToken } from "@/db/schema";
 import crypto from "crypto";
 import { ML_DEFAULTS } from "@/lib/ml-defaults";
+import { log } from "@/lib/log";
 
 const CAMERA_TRAP_PATH = "/camera-trap";
 
@@ -138,7 +139,7 @@ export async function createProcessingJob(
           error: "No hay imágenes nuevas para procesar",
         };
       }
-      console.log(`[createProcessingJob] Empty deployment ${deploymentId} — 0 images, 0 videos`);
+      log.info({ deploymentId }, "[createProcessingJob] Empty deployment — 0 images, 0 videos");
     }
 
     // Atomically clean up stale state from any prior jobs and link all images
@@ -327,9 +328,7 @@ async function processJobInternal(
       };
 
       // --- Download images ---
-      console.log(
-        `[process] Job ${jobId}: starting image download phase`
-      );
+      log.info({ jobId }, "[process] starting image download phase");
 
       const downloadResult = await downloadDeploymentForProcessing(
         deployment.id,
@@ -368,9 +367,7 @@ async function processJobInternal(
         .where(eq(videos.deploymentId, deployment.id));
 
       if (deploymentVideos.length > 0) {
-        console.log(
-          `[process] Job ${jobId}: starting video download phase`
-        );
+        log.info({ jobId }, "[process] starting video download phase");
 
         await downloadVideosForProcessing(
           deployment.id,
@@ -514,9 +511,9 @@ async function processJobInternal(
                   .toBuffer();
                 await fs.writeFile(thumbPath, thumb);
               } catch (err) {
-                console.warn(
-                  `[processJob] Thumbnail failed for frame ${frameName}:`,
-                  err instanceof Error ? err.message : err
+                log.warn(
+                  { err, frameName },
+                  "[processJob] Thumbnail failed for frame"
                 );
               }
             }
@@ -576,8 +573,9 @@ async function processJobInternal(
               }
             }
 
-            console.log(
-              `[processJob] Uploaded ${driveFileIds.size}/${framesToUpload.length} frames to Drive`
+            log.info(
+              { uploaded: driveFileIds.size, total: framesToUpload.length },
+              "[processJob] Uploaded frames to Drive"
             );
           }
 
@@ -586,7 +584,7 @@ async function processJobInternal(
             if (vid.path) {
               try {
                 await fs.unlink(vid.path);
-                console.log(`[processJob] Deleted cached video: ${vid.path}`);
+                log.info({ path: vid.path }, "[processJob] Deleted cached video");
               } catch {
                 // File may already be gone
               }
@@ -607,7 +605,7 @@ async function processJobInternal(
 
     // --- Zombie check: bail out if job was externally killed (e.g., hot-reload recovery) ---
     if (!(await isJobStillActive(jobId))) {
-      console.warn(`[processJob] Job ${jobId} is no longer active after download phase — aborting`);
+      log.warn({ jobId }, "[processJob] Job is no longer active after download phase — aborting");
       return { success: false, error: "Job was externally terminated" };
     }
 
@@ -652,7 +650,7 @@ async function processJobInternal(
 
     // --- Zombie check before ML phase ---
     if (!(await isJobStillActive(jobId))) {
-      console.warn(`[processJob] Job ${jobId} is no longer active after compression phase — aborting`);
+      log.warn({ jobId }, "[processJob] Job is no longer active after compression phase — aborting");
       return { success: false, error: "Job was externally terminated" };
     }
 
@@ -692,14 +690,14 @@ async function processJobInternal(
     }
 
     // No mock fallback — ML must work
-    console.log(`[processJob] Checking ML availability...`);
+    log.info("[processJob] Checking ML availability...");
     await db
       .update(processingJobs)
       .set({ statusMessage: "Verificando disponibilidad ML..." })
       .where(eq(processingJobs.id, jobId));
 
     const mlCheck = await checkPytorchWildlife();
-    console.log(`[processJob] ML check: available=${mlCheck.available}, message=${mlCheck.message}`);
+    log.info({ available: mlCheck.available, message: mlCheck.message }, "[processJob] ML check");
 
     if (!mlCheck.available) {
       if (cacheDir) await cleanupJobTempDir(jobId, cacheDir);
@@ -729,7 +727,10 @@ async function processJobInternal(
       return { success: false, error: mlCheck.message };
     }
 
-    console.log(`[processJob] Starting ML predictions for ${jobImages.length} images (${jobImages.filter(i => i.path).length} with paths)`);
+    log.info(
+      { total: jobImages.length, withPaths: jobImages.filter((i) => i.path).length },
+      "[processJob] Starting ML predictions"
+    );
     await db
       .update(processingJobs)
       .set({ statusMessage: "Cargando modelos ML..." })
@@ -747,7 +748,15 @@ async function processJobInternal(
       numWorkers: ML_DEFAULTS.numWorkers,
     });
 
-    console.log(`[processJob] ML result: success=${mlResult.success}, processed=${mlResult.totalProcessed}, detections=${mlResult.totalDetections}, error=${mlResult.error || "none"}`);
+    log.info(
+      {
+        success: mlResult.success,
+        processed: mlResult.totalProcessed,
+        detections: mlResult.totalDetections,
+        err: mlResult.error || "none",
+      },
+      "[processJob] ML result"
+    );
 
     // Cache persists after processing — no cleanup on success
 
@@ -791,7 +800,7 @@ async function processJobInternal(
       ? { success: true, data: { job: updatedJob } }
       : { success: false, error: mlResult.error || "Procesamiento falló" };
   } catch (error) {
-    console.error(`[processJob] Unhandled error:`, error);
+    log.error({ err: error }, "[processJob] Unhandled error");
     // cleanupJobTempDir is cache-aware — only cleans legacy temp dirs
     if (cacheDir) {
       try {
@@ -1924,7 +1933,7 @@ export async function deleteImagesFromDrive(
         if (result.status === "fulfilled") {
           deleted++;
         } else {
-          console.error("[DeleteImages] Failed:", result.reason);
+          log.error({ err: result.reason }, "[DeleteImages] Failed");
           failed++;
         }
       }
@@ -1962,7 +1971,7 @@ export async function deleteImagesFromDrive(
     revalidatePath("/camera-trap/results");
     return { success: true, data: { deleted, failed } };
   } catch (err) {
-    console.error("[DeleteImages] Failed:", err);
+    log.error({ err }, "[DeleteImages] Failed");
     return {
       success: false,
       error: err instanceof Error ? err.message : "Error al eliminar imágenes",
@@ -2199,8 +2208,15 @@ export async function bulkDeleteBlankImages(
     const skipped = sets.eligible.length - imagesToDelete.length;
     const totalBatches = Math.ceil(imagesToDelete.length / DELETE_BATCH_SIZE);
 
-    console.log(
-      `[BulkDeleteBlanks] Starting: ${imagesToDelete.length} images to delete for job ${jobId} (${totalBatches} batch${totalBatches !== 1 ? "es" : ""}, scope: ${JSON.stringify(scope)}, skipped: ${skipped})`
+    log.info(
+      {
+        toDelete: imagesToDelete.length,
+        jobId,
+        totalBatches,
+        scope,
+        skipped,
+      },
+      "[BulkDeleteBlanks] Starting"
     );
 
     let deleted = 0;
@@ -2235,7 +2251,7 @@ export async function bulkDeleteBlankImages(
           tx.delete(images).where(inArray(images.id, batchImageIds)).run();
         });
       } catch (err) {
-        console.error("[BulkDeleteBlanks] DB batch failed, skipping Drive trash:", err);
+        log.error({ err }, "[BulkDeleteBlanks] DB batch failed, skipping Drive trash");
         failed += batch.length;
         continue;
       }
@@ -2261,15 +2277,22 @@ export async function bulkDeleteBlankImages(
           // DB row is gone but Drive trash failed — count as deleted (the
           // primary intent succeeded) and log so the orphaned Drive file can
           // be cleaned up manually.
-          console.error(
-            "[BulkDeleteBlanks] Drive/cache cleanup failed (DB row deleted):",
-            result.reason
+          log.error(
+            { err: result.reason },
+            "[BulkDeleteBlanks] Drive/cache cleanup failed (DB row deleted)"
           );
           deleted++;
         }
       }
-      console.log(
-        `[BulkDeleteBlanks] Batch ${batchNum}/${totalBatches}: deleted ${deleted}, failed ${failed} (total: ${deleted + failed}/${imagesToDelete.length})`
+      log.info(
+        {
+          batchNum,
+          totalBatches,
+          deleted,
+          failed,
+          total: imagesToDelete.length,
+        },
+        "[BulkDeleteBlanks] Batch progress"
       );
     }
 
@@ -2287,8 +2310,9 @@ export async function bulkDeleteBlankImages(
         .where(eq(deployments.id, depId));
     }
 
-    console.log(
-      `[BulkDeleteBlanks] Complete for job ${jobId}: deleted ${deleted}, failed ${failed}, skipped ${skipped}`
+    log.info(
+      { jobId, deleted, failed, skipped },
+      "[BulkDeleteBlanks] Complete"
     );
 
     // Activity log
@@ -2310,7 +2334,7 @@ export async function bulkDeleteBlankImages(
     revalidatePath(`/camera-trap/results/${jobId}`);
     return { success: true, data: { deleted, failed, skipped } };
   } catch (err) {
-    console.error("[BulkDeleteBlanks] Failed:", err);
+    log.error({ err }, "[BulkDeleteBlanks] Failed");
     return {
       success: false,
       error: err instanceof Error ? err.message : "Error al eliminar imágenes",
@@ -2788,7 +2812,7 @@ async function processNextInQueue(): Promise<void> {
     .limit(1);
 
   if (nextJob) {
-    console.log(`[Queue] Auto-advancing to job ${nextJob.id} for deployment ${nextJob.deploymentId}`);
+    log.info({ jobId: nextJob.id, deploymentId: nextJob.deploymentId }, "[Queue] Auto-advancing to next job");
     processJobInternal(nextJob.id);
   }
 }

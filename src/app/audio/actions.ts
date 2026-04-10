@@ -21,6 +21,7 @@ import {
 import { revalidatePath } from "next/cache";
 import type { ActionResult } from "@/lib/types";
 import path from "path";
+import { log } from "@/lib/log";
 
 // Browser-native audio formats
 const PLAYABLE_FORMATS = new Set(["wav", "mp3", "flac", "ogg", "aac", "m4a"]);
@@ -352,9 +353,9 @@ export async function scanAllAudio(): Promise<
       await scanDeploymentAudio(dep.id);
       scanned++;
     } catch (err) {
-      console.error(
-        `[audio] Failed to scan deployment ${dep.id}:`,
-        err instanceof Error ? err.message : err
+      log.error(
+        { err, deploymentId: dep.id },
+        "[audio] Failed to scan deployment"
       );
       errors++;
     }

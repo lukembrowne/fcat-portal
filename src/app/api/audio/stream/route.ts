@@ -19,6 +19,7 @@ import { eq } from "drizzle-orm";
 import { getCurrentUser } from "@/lib/auth";
 import { getUserCameraTrapProjects } from "@/lib/camera-trap-auth";
 import { downloadFileAsStream } from "@/lib/drive-client";
+import { log } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
 
@@ -117,9 +118,9 @@ export async function GET(request: NextRequest) {
       headers,
     });
   } catch (err) {
-    console.error(
-      `[audio-stream] Failed to stream file ${fileId}:`,
-      err instanceof Error ? err.message : err
+    log.error(
+      { err, fileId },
+      "[audio-stream] Failed to stream file"
     );
     const is404 =
       err && typeof err === "object" && "code" in err && (err as { code: number }).code === 404;

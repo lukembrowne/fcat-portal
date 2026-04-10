@@ -9,6 +9,7 @@ import type {
   CacaoMetrics,
 } from "@/lib/odk-types";
 import type { ActionResult } from "@/lib/types";
+import { log } from "@/lib/log";
 
 /** Parse a value that should be numeric — ODK OData may return numbers as strings. */
 function toNum(v: unknown): number | null {
@@ -68,7 +69,7 @@ export async function fetchCacaoData(): Promise<ActionResult<{ records: CacaoRec
 
     return { success: true, data: { records, metrics } };
   } catch (err) {
-    console.error("Failed to fetch cacao data:", err);
+    log.error({ err }, "Failed to fetch cacao data");
     return {
       success: false,
       error: err instanceof Error ? err.message : "Unknown error",

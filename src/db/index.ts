@@ -16,6 +16,7 @@ import { eq } from "drizzle-orm";
 import path from "path";
 import fs from "fs";
 import * as schema from "./schema";
+import { log } from "@/lib/log";
 
 const TEMP_BASE = path.join(process.cwd(), "data", "tmp");
 
@@ -57,12 +58,12 @@ export function getDb(): BetterSQLite3Database<typeof schema> {
       (r) => !typeAffinityPattern.test(r.integrity_check)
     );
     if (structuralIssues.length > 0) {
-      console.error("[db] DATABASE INTEGRITY CHECK FAILED:", structuralIssues);
+      log.error({ structuralIssues }, "[db] DATABASE INTEGRITY CHECK FAILED");
       throw new Error("Database integrity check failed — the database file may be corrupted");
     }
-    console.warn(`[db] Integrity check: ${integrity.length} type affinity warnings (non-critical)`);
+    log.warn({ count: integrity.length }, "[db] Integrity check: type affinity warnings (non-critical)");
   } else {
-    console.log("[db] Integrity check: ok");
+    log.info("[db] Integrity check: ok");
   }
 
   // Startup health report
@@ -102,7 +103,7 @@ function logStartupHealth(dbPath: string) {
     const walPath = dbPath + "-wal";
     const walSize = fs.existsSync(walPath) ? fs.statSync(walPath).size : 0;
 
-    console.log(
+    log.info(
       `[db] Database: ${(dbStat.size / 1024 / 1024).toFixed(1)}MB, WAL: ${(walSize / 1024 / 1024).toFixed(1)}MB`
     );
     // Integrity check result is logged in getDb() before this function runs
@@ -121,20 +122,20 @@ function logStartupHealth(dbPath: string) {
         const ageHours = (Date.now() - latestStat.mtimeMs) / (1000 * 60 * 60);
 
         if (ageHours > 2) {
-          console.warn(
+          log.warn(
             `[db] WARNING: Latest backup is ${ageHours.toFixed(1)}h old (${backups[0]})`
           );
         } else {
-          console.log(`[db] Latest backup: ${backups[0]} (${ageHours.toFixed(1)}h ago)`);
+          log.info(`[db] Latest backup: ${backups[0]} (${ageHours.toFixed(1)}h ago)`);
         }
       } else {
-        console.warn("[db] WARNING: No backups found in data/backups/");
+        log.warn("[db] WARNING: No backups found in data/backups/");
       }
     } else {
-      console.warn("[db] WARNING: Backup directory does not exist (data/backups/)");
+      log.warn("[db] WARNING: Backup directory does not exist (data/backups/)");
     }
   } catch (e) {
-    console.warn("[db] Could not complete startup health check:", e);
+    log.warn({ err: e }, "[db] Could not complete startup health check");
   }
 }
 
@@ -144,7 +145,7 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
     if (_sqlite) {
       try {
         _sqlite.pragma("wal_checkpoint(TRUNCATE)");
-        console.log("[db] WAL checkpoint completed on shutdown");
+        log.info("[db] WAL checkpoint completed on shutdown");
       } catch {
         // DB might already be closed
       }
@@ -162,8 +163,15 @@ function recoverStuckJobs(database: BetterSQLite3Database<typeof schema>) {
       .all();
 
     for (const job of stuckJobs) {
-      console.warn(
-        `[db] Recovering stuck job ${job.id}: deployment=${job.deploymentId}, type=${job.jobType}, phase="${job.statusMessage}", started=${job.startedAt}`
+      log.warn(
+        {
+          jobId: job.id,
+          deploymentId: job.deploymentId,
+          jobType: job.jobType,
+          phase: job.statusMessage,
+          startedAt: job.startedAt,
+        },
+        "[db] Recovering stuck job"
       );
 
       database
@@ -201,7 +209,7 @@ function recoverStuckJobs(database: BetterSQLite3Database<typeof schema>) {
     }
 
     if (stuckJobs.length > 0) {
-      console.log(`[db] Recovered ${stuckJobs.length} stuck processing job(s)`);
+      log.info({ count: stuckJobs.length }, "[db] Recovered stuck processing jobs");
     }
 
     // Clean up orphaned temp directories
@@ -212,7 +220,7 @@ function recoverStuckJobs(database: BetterSQLite3Database<typeof schema>) {
           if (entry.startsWith("ct-job-")) {
             const dirPath = path.join(TEMP_BASE, entry);
             fs.rmSync(dirPath, { recursive: true, force: true });
-            console.log(`[db] Cleaned up orphaned temp dir: ${dirPath}`);
+            log.info({ dirPath }, "[db] Cleaned up orphaned temp dir");
           }
         }
       }

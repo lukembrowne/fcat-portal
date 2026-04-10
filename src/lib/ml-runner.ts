@@ -29,6 +29,7 @@ import {
 import { eq } from "drizzle-orm";
 import { ML_DEFAULTS } from "@/lib/ml-defaults";
 import { buildClassifierEnv, type ActiveModelForEnv } from "@/lib/ml-runner-env";
+import { log } from "@/lib/log";
 
 const execFileAsync = promisify(execFile);
 
@@ -36,8 +37,9 @@ const execFileAsync = promisify(execFile);
 // MKL_NUM_THREADS, OPENBLAS_NUM_THREADS, NUMEXPR_NUM_THREADS in spawnModelServer().
 // availableParallelism() respects cgroup CPU limits inside containers.
 const ML_THREAD_CAP = String(Math.max(1, os.availableParallelism() - 1));
-console.log(
-  `[ml-runner] Thread cap: ${ML_THREAD_CAP} (availableParallelism=${os.availableParallelism()})`
+log.info(
+  { threadCap: ML_THREAD_CAP, availableParallelism: os.availableParallelism() },
+  "[ml-runner] Thread cap"
 );
 
 export interface MLConfig {
@@ -129,15 +131,15 @@ async function findPython(): Promise<string | null> {
     ? [envPython, "python3", "python"]
     : ["python3", "python"];
 
-  console.log(`[ml-runner] findPython: ML_PYTHON_PATH=${envPython}, candidates=${candidates.join(", ")}`);
+  log.info({ envPython, candidates }, "[ml-runner] findPython");
 
   for (const candidate of candidates) {
     try {
       const { stdout } = await execFileAsync(candidate, ["--version"]);
-      console.log(`[ml-runner] findPython: ${candidate} → ${stdout.trim()}`);
+      log.info({ candidate, version: stdout.trim() }, "[ml-runner] findPython: found");
       return candidate;
     } catch (err) {
-      console.log(`[ml-runner] findPython: ${candidate} failed: ${err instanceof Error ? err.message : err}`);
+      log.info({ candidate, err }, "[ml-runner] findPython: candidate failed");
       continue;
     }
   }
@@ -181,7 +183,7 @@ export async function checkPytorchWildlife(): Promise<{
   } catch (err: unknown) {
     const stderr = (err as { stderr?: string })?.stderr || "";
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[ml-runner] PytorchWildlife import failed:\n  error: ${msg}\n  stderr: ${stderr}`);
+    log.error({ err: msg, stderr }, "[ml-runner] PytorchWildlife import failed");
     return {
       available: false,
       python,
@@ -200,7 +202,7 @@ function killStaleModelServer(): void {
     if (pid && !isNaN(pid)) {
       try {
         process.kill(pid, "SIGTERM");
-        console.log(`[ml-runner] Killed stale model server (PID ${pid})`);
+        log.info({ pid }, "[ml-runner] Killed stale model server");
       } catch {
         // Process already dead — fine
       }
@@ -214,7 +216,7 @@ function writePidFile(pid: number): void {
   try {
     fs.writeFileSync(PID_FILE, String(pid), "utf-8");
   } catch (err) {
-    console.error(`[ml-runner] Failed to write PID file: ${err}`);
+    log.error({ err }, "[ml-runner] Failed to write PID file");
   }
 }
 
@@ -232,7 +234,7 @@ function resetIdleTimer(): void {
     idleTimer = null;
   }
   idleTimer = setTimeout(() => {
-    console.log("[ml-runner] Idle timeout reached, shutting down model server");
+    log.info("[ml-runner] Idle timeout reached, shutting down model server");
     shutdownModelServer();
   }, IDLE_TIMEOUT_MS);
 }
@@ -247,7 +249,7 @@ function clearIdleTimer(): void {
 export function shutdownModelServer(): void {
   clearIdleTimer();
   if (serverProc) {
-    console.log("[ml-runner] Shutting down model server");
+    log.info("[ml-runner] Shutting down model server");
     try {
       serverProc.kill("SIGTERM");
     } catch {
@@ -334,7 +336,7 @@ function spawnModelServer(): void {
   const pythonPath = process.env.ML_PYTHON_PATH || "python3";
   const absolutePython = path.resolve(pythonPath);
 
-  console.log(`[ml-runner] Spawning model server: ${absolutePython} ${scriptPath}`);
+  log.info({ python: absolutePython, scriptPath }, "[ml-runner] Spawning model server");
 
   // Kill any orphaned model server from a previous Node.js process
   killStaleModelServer();
@@ -388,7 +390,7 @@ function spawnModelServer(): void {
       const msg: NDJSONMessage = JSON.parse(line);
 
       if (msg.type === "server_ready") {
-        console.log(`[ml-runner] Model server ready (device=${msg.device})`);
+        log.info({ device: msg.device }, "[ml-runner] Model server ready");
         serverStatus = "ready";
         if (serverReadyResolve) {
           serverReadyResolve();
@@ -399,7 +401,7 @@ function spawnModelServer(): void {
       }
 
       if (msg.type === "info") {
-        console.log(`[ml-runner] ${msg.message}`);
+        log.info({ message: msg.message }, "[ml-runner] info");
         lastModelServerInfo = msg.message ?? null;
         // Forward model-loading info as status messages if a job is active
         if (currentJob) {
@@ -424,7 +426,7 @@ function spawnModelServer(): void {
       // currentJob guard so they're not silently dropped during startup
       // (e.g. "Fatal: failed to load models: ...").
       if (msg.type === "error" && !msg.image) {
-        console.error(`[ml-runner] ${msg.message}`);
+        log.error({ message: msg.message }, "[ml-runner] error");
         lastModelServerError = msg.message ?? null;
         return;
       }
@@ -511,11 +513,18 @@ function spawnModelServer(): void {
         const mem = process.memoryUsage();
         const rssMB = (mem.rss / 1024 / 1024).toFixed(0);
         const heapMB = (mem.heapUsed / 1024 / 1024).toFixed(0);
-        console.log(
-          `[ml-runner] Job ${job.jobId} complete: ${job.processedCount} processed, ` +
-          `${job.failedCount} failed, ${job.totalDetections} detections in ${elapsedSec}s ` +
-          `(RSS: ${rssMB}MB, heap: ${heapMB}MB)` +
-          (msg.cancelled ? " [CANCELLED]" : "")
+        log.info(
+          {
+            jobId: job.jobId,
+            processed: job.processedCount,
+            failed: job.failedCount,
+            detections: job.totalDetections,
+            elapsedSec,
+            rssMB,
+            heapMB,
+            cancelled: !!msg.cancelled,
+          },
+          "[ml-runner] Job complete"
         );
 
         const result: MLRunResult = {
@@ -555,7 +564,7 @@ function spawnModelServer(): void {
     const lines = stderrBuffer.split("\n");
     stderrBuffer = lines.pop() || "";
     for (const l of lines) {
-      if (l.trim()) console.error(`[model-server stderr] ${l}`);
+      if (l.trim()) log.error({ line: l }, "[model-server stderr]");
     }
   });
 
@@ -595,12 +604,13 @@ function spawnModelServer(): void {
   proc.on("close", (code, signal) => {
     // Flush any partial stderr line that never got a trailing newline
     if (stderrBuffer.trim()) {
-      console.error(`[model-server stderr] ${stderrBuffer}`);
+      log.error({ line: stderrBuffer }, "[model-server stderr]");
       stderrLog += stderrBuffer;
       stderrBuffer = "";
     }
-    console.log(
-      `[ml-runner] Model server exited (code=${code}, signal=${signal ?? "none"})`
+    log.info(
+      { code, signal: signal ?? "none" },
+      "[ml-runner] Model server exited"
     );
     serverProc = null;
     serverStatus = "dead";
@@ -614,7 +624,7 @@ function spawnModelServer(): void {
   });
 
   proc.on("error", (err) => {
-    console.error(`[ml-runner] Model server spawn error: ${err.message}`);
+    log.error({ err: err.message }, "[ml-runner] Model server spawn error");
     serverProc = null;
     serverStatus = "dead";
 
@@ -668,8 +678,9 @@ async function resolveActiveClassifierModel(): Promise<ActiveModelForEnv | null>
       .limit(1);
     return rows[0] ?? null;
   } catch (err) {
-    console.warn(
-      `[ml-runner] Failed to resolve active classifier model, falling back to default: ${err instanceof Error ? err.message : err}`,
+    log.warn(
+      { err },
+      "[ml-runner] Failed to resolve active classifier model, falling back to default",
     );
     return null;
   }
@@ -735,7 +746,7 @@ export function cancelModelServerJob(): void {
     return;
   }
 
-  console.log("[ml-runner] Sending cancel to model server");
+  log.info("[ml-runner] Sending cancel to model server");
   try {
     serverProc.stdin.write(JSON.stringify({ cancel: true }) + "\n");
   } catch {
@@ -746,7 +757,7 @@ export function cancelModelServerJob(): void {
   // (batch processing takes longer per cancel check than sequential)
   setTimeout(() => {
     if (currentJob) {
-      console.log("[ml-runner] Cancel timeout — killing model server");
+      log.info("[ml-runner] Cancel timeout — killing model server");
       shutdownModelServer();
     }
   }, 30_000);

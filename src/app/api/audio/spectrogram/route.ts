@@ -15,6 +15,7 @@ import { eq } from "drizzle-orm";
 import { getCurrentUser } from "@/lib/auth";
 import { getUserCameraTrapProjects } from "@/lib/camera-trap-auth";
 import { ensureAudioCached, ensureSpectrogramGenerated } from "@/lib/audio-cache";
+import { log } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
 
@@ -104,9 +105,9 @@ export async function GET(request: NextRequest) {
       },
     });
   } catch (err) {
-    console.error(
-      `[spectrogram] Failed for file ${audioFileId}:`,
-      err instanceof Error ? err.message : err
+    log.error(
+      { err, audioFileId },
+      "[spectrogram] Failed for file"
     );
 
     const message =

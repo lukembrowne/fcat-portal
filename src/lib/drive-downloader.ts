@@ -20,6 +20,7 @@ import { images, videos } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { downloadDeploymentImages } from "./drive-client";
 import { THUMBNAIL_DIR, THUMBNAIL_WIDTH, THUMBNAIL_QUALITY, thumbnailPath } from "./thumbnail";
+import { log } from "@/lib/log";
 
 const TEMP_BASE = path.join(process.cwd(), "data", "tmp");
 const CACHE_BASE = path.join(process.cwd(), "data", "cache", "ct-images");
@@ -112,17 +113,22 @@ export async function downloadDeploymentForProcessing(
   let rejectedTooLarge = 0;
   for (const img of driveImages) {
     if (!isSafeCacheFilename(cacheDir, img.filename)) {
-      console.warn(
-        `[drive-downloader] Skipping image ${img.id} — unsafe filename: ${JSON.stringify(img.filename)}`
+      log.warn(
+        { imageId: img.id, filename: img.filename },
+        "[drive-downloader] Skipping image — unsafe filename"
       );
       rejectedUnsafe++;
       continue;
     }
     if ((img.fileSize ?? 0) > MAX_FILE_SIZE_BYTES) {
-      console.warn(
-        `[drive-downloader] Skipping image ${img.id} (${img.filename}) — ${(
-          (img.fileSize ?? 0) / 1024 / 1024
-        ).toFixed(1)} MB exceeds ${MAX_FILE_SIZE_BYTES / 1024 / 1024} MB cap`
+      log.warn(
+        {
+          imageId: img.id,
+          filename: img.filename,
+          sizeMb: +((img.fileSize ?? 0) / 1024 / 1024).toFixed(1),
+          capMb: MAX_FILE_SIZE_BYTES / 1024 / 1024,
+        },
+        "[drive-downloader] Skipping image — exceeds size cap"
       );
       rejectedTooLarge++;
       continue;
@@ -142,15 +148,23 @@ export async function downloadDeploymentForProcessing(
     }
   }
   if (rejectedUnsafe > 0 || rejectedTooLarge > 0) {
-    console.warn(
-      `[drive-downloader] Job ${jobId}, deployment ${deploymentId}: rejected ${rejectedUnsafe} unsafe filename(s), ${rejectedTooLarge} oversized file(s)`
+    log.warn(
+      { jobId, deploymentId, rejectedUnsafe, rejectedTooLarge },
+      "[drive-downloader] Rejected unsafe/oversized files"
     );
   }
 
   // Pre-flight: estimate download size and report
   const downloadSize = toDownload.reduce((sum, f) => sum + f.size, 0);
-  console.log(
-    `[drive-downloader] Job ${jobId}, deployment ${deploymentId}: ${alreadyCached.size} cached, ${toDownload.length} to download (~${(downloadSize / 1024 / 1024).toFixed(1)} MB)`
+  log.info(
+    {
+      jobId,
+      deploymentId,
+      cached: alreadyCached.size,
+      toDownload: toDownload.length,
+      downloadSizeMb: +(downloadSize / 1024 / 1024).toFixed(1),
+    },
+    "[drive-downloader] Pre-flight summary"
   );
 
   if (onProgress) {
@@ -176,8 +190,9 @@ export async function downloadDeploymentForProcessing(
     }
 
     const dlSec = ((Date.now() - downloadStart) / 1000).toFixed(1);
-    console.log(
-      `[drive-downloader] Job ${jobId}: download complete — ${downloaded} ok, ${failed} failed (${dlSec}s)`
+    log.info(
+      { jobId, downloaded, failed, dlSec },
+      "[drive-downloader] Download complete"
     );
   }
 
@@ -221,9 +236,9 @@ export async function downloadDeploymentForProcessing(
               .toBuffer();
             await fs.writeFile(tp, thumb);
           } catch (err) {
-            console.warn(
-              `[drive-downloader] Thumbnail generation failed for image ${img.id}:`,
-              err instanceof Error ? err.message : err
+            log.warn(
+              { err, imageId: img.id },
+              "[drive-downloader] Thumbnail generation failed"
             );
           }
         }
@@ -238,8 +253,9 @@ export async function downloadDeploymentForProcessing(
     }
   }
 
-  console.log(
-    `[drive-downloader] Job ${jobId}: thumbnails complete — ${imagesWithPaths.length} generated`
+  log.info(
+    { jobId, generated: imagesWithPaths.length },
+    "[drive-downloader] Thumbnails complete"
   );
 
   return { cacheDir, downloaded, skipped: alreadyCached.size, failed };
@@ -289,17 +305,22 @@ export async function downloadVideosForProcessing(
   let rejectedTooLarge = 0;
   for (const vid of driveVideos) {
     if (!isSafeCacheFilename(cacheDir, vid.filename)) {
-      console.warn(
-        `[drive-downloader] Skipping video ${vid.id} — unsafe filename: ${JSON.stringify(vid.filename)}`
+      log.warn(
+        { videoId: vid.id, filename: vid.filename },
+        "[drive-downloader] Skipping video — unsafe filename"
       );
       rejectedUnsafe++;
       continue;
     }
     if ((vid.fileSize ?? 0) > MAX_VIDEO_SIZE_BYTES) {
-      console.warn(
-        `[drive-downloader] Skipping video ${vid.id} (${vid.filename}) — ${(
-          (vid.fileSize ?? 0) / 1024 / 1024
-        ).toFixed(1)} MB exceeds ${MAX_VIDEO_SIZE_BYTES / 1024 / 1024} MB cap`
+      log.warn(
+        {
+          videoId: vid.id,
+          filename: vid.filename,
+          sizeMb: +((vid.fileSize ?? 0) / 1024 / 1024).toFixed(1),
+          capMb: MAX_VIDEO_SIZE_BYTES / 1024 / 1024,
+        },
+        "[drive-downloader] Skipping video — exceeds size cap"
       );
       rejectedTooLarge++;
       continue;
@@ -319,14 +340,22 @@ export async function downloadVideosForProcessing(
     }
   }
   if (rejectedUnsafe > 0 || rejectedTooLarge > 0) {
-    console.warn(
-      `[drive-downloader] Job ${jobId} videos, deployment ${deploymentId}: rejected ${rejectedUnsafe} unsafe filename(s), ${rejectedTooLarge} oversized file(s)`
+    log.warn(
+      { jobId, deploymentId, rejectedUnsafe, rejectedTooLarge },
+      "[drive-downloader] Videos: rejected unsafe/oversized files"
     );
   }
 
   const downloadSize = toDownload.reduce((sum, f) => sum + f.size, 0);
-  console.log(
-    `[drive-downloader] Job ${jobId} videos, deployment ${deploymentId}: ${alreadyCached.size} cached, ${toDownload.length} to download (~${(downloadSize / 1024 / 1024).toFixed(1)} MB)`
+  log.info(
+    {
+      jobId,
+      deploymentId,
+      cached: alreadyCached.size,
+      toDownload: toDownload.length,
+      downloadSizeMb: +(downloadSize / 1024 / 1024).toFixed(1),
+    },
+    "[drive-downloader] Videos: pre-flight summary"
   );
 
   if (onProgress) {
@@ -367,8 +396,9 @@ export async function downloadVideosForProcessing(
       .where(eq(videos.id, vid.id));
   }
 
-  console.log(
-    `[drive-downloader] Job ${jobId} videos: ${alreadyCached.size} cached, ${downloaded} downloaded, ${failed} failed`
+  log.info(
+    { jobId, cached: alreadyCached.size, downloaded, failed },
+    "[drive-downloader] Videos complete"
   );
 
   return { cacheDir, downloaded, skipped: alreadyCached.size, failed };
@@ -402,7 +432,7 @@ export async function cleanupJobTempDir(
   if (dirToRemove.includes("/tmp/")) {
     try {
       await fs.rm(dirToRemove, { recursive: true, force: true });
-      console.log(`[drive-downloader] Cleaned up ${dirToRemove}`);
+      log.info({ dirToRemove }, "[drive-downloader] Cleaned up");
     } catch {
       // Directory may not exist
     }
@@ -421,7 +451,7 @@ export async function cleanupOrphanedTempDirs(): Promise<void> {
       if (entry.startsWith("ct-job-")) {
         const dirPath = path.join(TEMP_BASE, entry);
         await fs.rm(dirPath, { recursive: true, force: true });
-        console.log(`[drive-downloader] Cleaned up orphaned ${dirPath}`);
+        log.info({ dirPath }, "[drive-downloader] Cleaned up orphaned dir");
       }
     }
   } catch {
@@ -502,8 +532,9 @@ async function evictIfOverLimit(currentDeploymentId: number): Promise<void> {
       });
       totalSize -= dir.size;
 
-      console.log(
-        `[drive-downloader] Evicted cache for deployment ${deploymentId} (${(dir.size / 1024 / 1024).toFixed(1)} MB)`
+      log.info(
+        { deploymentId, sizeMb: +(dir.size / 1024 / 1024).toFixed(1) },
+        "[drive-downloader] Evicted cache for deployment"
       );
     }
   } catch {

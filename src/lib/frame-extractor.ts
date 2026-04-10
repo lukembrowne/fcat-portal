@@ -12,6 +12,7 @@ import "server-only";
 import { execFile } from "child_process";
 import { promises as fs } from "fs";
 import path from "path";
+import { log } from "@/lib/log";
 
 const MAX_FRAMES_DEFAULT = 300;
 
@@ -38,7 +39,7 @@ async function getVideoDuration(videoPath: string): Promise<number | null> {
       { timeout: 30_000 },
       (err, stdout) => {
         if (err) {
-          console.error(`[frame-extractor] ffprobe failed for ${videoPath}:`, err.message);
+          log.error({ videoPath, err: err.message }, "[frame-extractor] ffprobe failed");
           resolve(null);
           return;
         }
@@ -123,10 +124,9 @@ export async function extractFrames(
       { timeout: 300_000 }, // 5 minute timeout
       (err, _stdout, stderr) => {
         if (err) {
-          console.error(
-            `[frame-extractor] ffmpeg failed for ${videoPath}:`,
-            err.message,
-            stderr
+          log.error(
+            { videoPath, err: err.message, stderr },
+            "[frame-extractor] ffmpeg failed"
           );
           resolve(err.message);
           return;
@@ -174,14 +174,16 @@ export async function extractFrames(
   }
 
   if (ffmpegError && frames.length > 0) {
-    console.warn(
-      `[frame-extractor] Partial extraction for ${videoPath}: ${frames.length} frames extracted before error`
+    log.warn(
+      { videoPath, frameCount: frames.length },
+      "[frame-extractor] Partial extraction: frames extracted before error"
     );
   }
 
   if (framesToExtract < expectedFrames) {
-    console.warn(
-      `[frame-extractor] Capped at ${maxFrames} frames for ${videoPath} (video is ${duration.toFixed(1)}s, would produce ${expectedFrames} frames at ${fps}fps)`
+    log.warn(
+      { videoPath, maxFrames, durationSec: +duration.toFixed(1), expectedFrames, fps },
+      "[frame-extractor] Capped frames for long video"
     );
   }
 

@@ -28,5 +28,8 @@ cron
 echo "[entrypoint] Starting ML venv setup in background..."
 sh scripts/ensure-ml-venv.sh &
 
-# Start the Next.js server
-exec node server.js
+# Start the Next.js server via the log-tee supervisor.
+# log-tee spawns server.js, mirrors all stdout/stderr to /app/data/logs/portal.log
+# (rotated at 50MB), and forwards SIGTERM for graceful shutdown.
+mkdir -p /app/data/logs
+exec node scripts/log-tee.mjs

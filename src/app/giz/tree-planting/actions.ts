@@ -10,6 +10,7 @@ import type {
   OdkGeoPoint,
 } from "@/lib/odk-types";
 import type { ActionResult } from "@/lib/types";
+import { log } from "@/lib/log";
 
 function transformSubmissions(raw: OdkTreeSubmission[]): TreeRecord[] {
   return raw.map((s) => {
@@ -64,7 +65,7 @@ export async function fetchTreeData(): Promise<ActionResult<{ trees: TreeRecord[
 
     return { success: true, data: { trees, metrics } };
   } catch (err) {
-    console.error("Failed to fetch tree data:", err);
+    log.error({ err }, "Failed to fetch tree data");
     return {
       success: false,
       error: err instanceof Error ? err.message : "Unknown error",

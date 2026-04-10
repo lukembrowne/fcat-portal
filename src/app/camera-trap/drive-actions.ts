@@ -23,6 +23,7 @@ import path from "path";
 import { promises as fs } from "fs";
 import type { ActionResult } from "@/lib/types";
 import type { Deployment } from "@/db/schema";
+import { log } from "@/lib/log";
 
 const CAMERA_TRAP_PATH = "/camera-trap";
 
@@ -140,7 +141,7 @@ export async function syncWithDrive(
       try {
         await scanDeploymentImages(dep.id);
       } catch (err) {
-        console.error(`[Drive] Auto-scan failed for ${dep.name}:`, err);
+        log.error({ err, name: dep.name }, "[Drive] Auto-scan failed");
         allErrors.push(`Error al escanear ${dep.name}: ${err instanceof Error ? err.message : "Error desconocido"}`);
       }
     }
@@ -150,7 +151,7 @@ export async function syncWithDrive(
       try {
         await matchOdkDeployments(allCreated.map((d) => d.id));
       } catch (err) {
-        console.error("[Drive] Auto ODK match failed:", err);
+        log.error({ err }, "[Drive] Auto ODK match failed");
       }
 
       // Auto-refresh biochoco upload counts from Drive subfolders
@@ -174,7 +175,7 @@ export async function syncWithDrive(
               .where(eq(deployments.id, dep.id));
           }
         } catch (err) {
-          console.error(`[Drive] Upload count refresh failed for ${dep.name}:`, err);
+          log.error({ err, name: dep.name }, "[Drive] Upload count refresh failed");
         }
       }
     }
@@ -183,7 +184,7 @@ export async function syncWithDrive(
     revalidatePath(CAMERA_TRAP_PATH);
     return { success: true, data: { created: allCreated, existing, errors: allErrors } };
   } catch (err) {
-    console.error("[Drive] Sync failed:", err);
+    log.error({ err }, "[Drive] Sync failed");
     const message =
       err instanceof Error ? err.message : "Error al sincronizar con Drive";
     return { success: false, error: message };
@@ -294,7 +295,7 @@ export async function scanDeploymentImages(
     revalidatePath(CAMERA_TRAP_PATH);
     return { success: true, data: { imageCount: totalImageRows.length } };
   } catch (err) {
-    console.error("[Drive] Scan failed:", err);
+    log.error({ err }, "[Drive] Scan failed");
     return {
       success: false,
       error: err instanceof Error ? err.message : "Error al escanear imágenes",
@@ -394,7 +395,7 @@ export async function compressDeploymentImages(
     revalidatePath(CAMERA_TRAP_PATH);
     return { success: true, data: { jobId: job.id } };
   } catch (err) {
-    console.error("[compress] Enqueue failed:", err);
+    log.error({ err }, "[compress] Enqueue failed");
     return {
       success: false,
       error: err instanceof Error ? err.message : "Error al iniciar compresión",
@@ -431,7 +432,7 @@ export async function compressImageBatch(
       .where(eq(processingJobs.id, options.jobId));
 
     if (currentJob?.status === "cancelled") {
-      console.log(`[compress] Deployment ${options.deploymentId}: cancelled by user`);
+      log.info({ deploymentId: options.deploymentId }, "[compress] Deployment cancelled by user");
       break;
     }
 
@@ -515,7 +516,7 @@ export async function compressImageBatch(
         compressed++;
         savedBytes += result.value.saved;
       } else {
-        console.error("[compress]   FAILED:", result.reason);
+        log.error({ err: result.reason }, "[compress] FAILED");
         failed++;
       }
     }
@@ -528,8 +529,20 @@ export async function compressImageBatch(
     const rate = processedSoFar / ((Date.now() - startTime) / 1000);
     const etaSec = rate > 0 ? ((imgs.length - processedSoFar) / rate).toFixed(0) : "?";
     const rssMB = (process.memoryUsage.rss() / (1024 * 1024)).toFixed(0);
-    console.log(
-      `[compress] Deployment ${options.deploymentId}: batch ${batchNum}/${totalBatches} — ${processedSoFar}/${imgs.length} (${batchSec}s batch, ${totalElapsed}s total, ~${etaSec}s remaining, ${savedMB} MB saved, RSS: ${rssMB}MB)`
+    log.info(
+      {
+        deploymentId: options.deploymentId,
+        batchNum,
+        totalBatches,
+        processed: processedSoFar,
+        total: imgs.length,
+        batchSec,
+        totalElapsed,
+        etaSec,
+        savedMB,
+        rssMB,
+      },
+      "[compress] Deployment batch progress"
     );
 
     if (onProgress) {
@@ -577,7 +590,7 @@ async function compressJobInternal(
       })
       .where(eq(processingJobs.id, jobId));
 
-    console.log(`[compress] Deployment ${deploymentId}: starting — ${jpegImages.length} images to compress`);
+    log.info({ deploymentId, count: jpegImages.length }, "[compress] Deployment starting");
 
     const result = await compressImageBatch(
       jpegImages.map((img) => ({ ...img, deploymentId })),
@@ -621,11 +634,19 @@ async function compressJobInternal(
       details: JSON.stringify({ compressed: result.compressed, skipped, failed: result.failed, savedBytes: result.savedBytes }),
     });
 
-    console.log(
-      `[compress] Deployment ${deploymentId}: complete — ${result.compressed} compressed, ${skipped} skipped, ${result.failed} failed, ${totalSavedMB} MB saved (${elapsedSec}s)`
+    log.info(
+      {
+        deploymentId,
+        compressed: result.compressed,
+        skipped,
+        failed: result.failed,
+        totalSavedMB,
+        elapsedSec,
+      },
+      "[compress] Deployment complete"
     );
   } catch (err) {
-    console.error(`[compress] Deployment ${deploymentId}: FAILED —`, err);
+    log.error({ err, deploymentId }, "[compress] Deployment FAILED");
 
     await db
       .update(processingJobs)
@@ -723,7 +744,7 @@ export async function revertCompression(
     revalidatePath(CAMERA_TRAP_PATH);
     return { success: true, data: { jobId: job.id } };
   } catch (err) {
-    console.error("[revert] Enqueue failed:", err);
+    log.error({ err }, "[revert] Enqueue failed");
     return {
       success: false,
       error: err instanceof Error ? err.message : "Error al iniciar reversión",
@@ -764,7 +785,7 @@ async function revertJobInternal(
     let failed = 0;
     const totalBatches = Math.ceil(revertibleImages.length / REVERT_BATCH_SIZE);
 
-    console.log(`[revert] Deployment ${deploymentId}: starting — ${revertibleImages.length} images to revert`);
+    log.info({ deploymentId, count: revertibleImages.length }, "[revert] Deployment starting");
 
     for (let i = 0; i < revertibleImages.length; i += REVERT_BATCH_SIZE) {
       const batchNum = Math.floor(i / REVERT_BATCH_SIZE) + 1;
@@ -777,7 +798,7 @@ async function revertJobInternal(
         .where(eq(processingJobs.id, jobId));
 
       if (currentJob?.status === "cancelled") {
-        console.log(`[revert] Deployment ${deploymentId}: cancelled by user`);
+        log.info({ deploymentId }, "[revert] Deployment cancelled by user");
         return;
       }
 
@@ -820,7 +841,7 @@ async function revertJobInternal(
             })
             .where(eq(images.id, img.id));
 
-          console.log(`[revert]   ${img.filename}: restored (${(originalBuffer.length / (1024 * 1024)).toFixed(1)}MB)`);
+          log.info({ filename: img.filename, sizeMb: +(originalBuffer.length / (1024 * 1024)).toFixed(1) }, "[revert] restored");
         }),
       );
 
@@ -828,7 +849,7 @@ async function revertJobInternal(
         if (result.status === "fulfilled") {
           reverted++;
         } else {
-          console.error("[revert]   FAILED:", result.reason);
+          log.error({ err: result.reason }, "[revert] FAILED");
           failed++;
         }
       }
@@ -847,8 +868,18 @@ async function revertJobInternal(
       const revertRate = processedSoFar / ((Date.now() - startTime) / 1000);
       const revertEtaSec = revertRate > 0 ? ((revertibleImages.length - processedSoFar) / revertRate).toFixed(0) : "?";
       const revertRssMB = (process.memoryUsage.rss() / (1024 * 1024)).toFixed(0);
-      console.log(
-        `[revert] Deployment ${deploymentId}: batch ${batchNum}/${totalBatches} — ${processedSoFar}/${revertibleImages.length} (${batchElapsed}s total, ~${revertEtaSec}s remaining, RSS: ${revertRssMB}MB)`
+      log.info(
+        {
+          deploymentId,
+          batchNum,
+          totalBatches,
+          processed: processedSoFar,
+          total: revertibleImages.length,
+          batchElapsed,
+          etaSec: revertEtaSec,
+          rssMB: revertRssMB,
+        },
+        "[revert] Deployment batch progress"
       );
     }
 
@@ -874,11 +905,12 @@ async function revertJobInternal(
       details: JSON.stringify({ reverted, failed }),
     });
 
-    console.log(
-      `[revert] Deployment ${deploymentId}: complete — ${reverted} reverted, ${failed} failed (${elapsedSec}s)`
+    log.info(
+      { deploymentId, reverted, failed, elapsedSec },
+      "[revert] Deployment complete"
     );
   } catch (err) {
-    console.error(`[revert] Deployment ${deploymentId}: FAILED —`, err);
+    log.error({ err, deploymentId }, "[revert] Deployment FAILED");
 
     await db
       .update(processingJobs)

@@ -20,6 +20,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { getUserCameraTrapProjects } from "@/lib/camera-trap-auth";
 import { downloadFileToBuffer } from "@/lib/drive-client";
 import { getOrGenerateThumbnail } from "@/lib/thumbnail";
+import { log } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
 
@@ -122,7 +123,7 @@ export async function GET(
         headers: { ...headers, "Content-Type": "image/jpeg" },
       });
     } catch (err) {
-      console.error(`[ct-images] Thumbnail generation failed for image ${imageId}:`, err);
+      log.error({ err, imageId }, "[ct-images] Thumbnail generation failed");
       const status = isDriveNotFound(err) ? 404 : 502;
       return NextResponse.json(
         { error: status === 404 ? "File not found on Drive" : "Drive API error" },
@@ -162,7 +163,7 @@ export async function GET(
       },
     });
   } catch (err) {
-    console.error(`[ct-images] Failed to serve image ${imageId}:`, err);
+    log.error({ err, imageId }, "[ct-images] Failed to serve image");
     const status = isDriveNotFound(err) ? 404 : 502;
     return NextResponse.json(
       { error: status === 404 ? "File not found on Drive" : "Drive API error" },

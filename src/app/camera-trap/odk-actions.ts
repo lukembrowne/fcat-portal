@@ -13,6 +13,7 @@ import {
 import type { OdkSiteEntity } from "@/lib/odk-types";
 import { requirePermission } from "@/lib/auth";
 import { getUserCameraTrapProjects, ctProjectFilter, requireDeploymentAccess } from "@/lib/camera-trap-auth";
+import { log } from "@/lib/log";
 import { revalidatePath } from "next/cache";
 import type { ActionResult } from "@/lib/types";
 
@@ -226,7 +227,7 @@ export async function matchOdkDeployments(
     revalidatePath("/camera-trap");
     return { success: true, data: { matched, unmatched } };
   } catch (err) {
-    console.error("[ODK] Match failed:", err);
+    log.error({ err }, "[ODK] Match failed");
     return {
       success: false,
       error: err instanceof Error ? err.message : "Error al vincular con ODK",

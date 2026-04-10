@@ -18,6 +18,7 @@ import { db } from "@/db";
 import { audioFiles } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { downloadFile } from "./drive-client";
+import { log } from "@/lib/log";
 
 const execFileAsync = promisify(execFile);
 
@@ -314,8 +315,9 @@ async function evictIfOverLimit(currentDeploymentId: number): Promise<void> {
       });
       totalSize -= dir.size;
 
-      console.log(
-        `[audio-cache] Evicted cache for deployment ${deploymentId} (${(dir.size / 1024 / 1024).toFixed(1)} MB)`
+      log.info(
+        { deploymentId, sizeMb: +(dir.size / 1024 / 1024).toFixed(1) },
+        "[audio-cache] Evicted cache for deployment"
       );
     }
   } catch {

@@ -12,6 +12,7 @@ import { promises as fs, createReadStream } from "fs";
 import path from "path";
 import { Readable } from "stream";
 import type { ActionResult } from "./types";
+import { log } from "@/lib/log";
 
 // --- Types ---
 
@@ -253,7 +254,7 @@ export async function checkDeploymentUploads(
     }
 
     // Step 1: List subfolders of the deployment folder
-    console.log(`[Drive] Checking folder ${folderId}`);
+    log.info({ folderId }, "[Drive] Checking folder");
     const foldersRes = await drive.files.list({
       q: `'${folderId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
       fields: "files(id, name)",
@@ -263,7 +264,7 @@ export async function checkDeploymentUploads(
     });
 
     const subfolders = foldersRes.data.files ?? [];
-    console.log(`[Drive] Found ${subfolders.length} subfolders:`, subfolders.map((f) => f.name));
+    log.info({ count: subfolders.length, names: subfolders.map((f) => f.name) }, "[Drive] Found subfolders");
 
     // Build a map of subfolder name → subfolder ID
     const subfolderMap = new Map<string, string>();
@@ -308,17 +309,17 @@ export async function checkDeploymentUploads(
         const k = key as keyof typeof DATA_TYPE_FOLDERS;
         const subfolderId = subfolderMap.get(folderName);
         if (!subfolderId) {
-          console.log(`[Drive] ${folderName}: subfolder not found in parent`);
+          log.info({ folderName }, "[Drive] subfolder not found in parent");
           return { key: k, stats: { count: 0, totalBytes: 0, newestDate: null } as FileStats };
         }
 
         try {
           const extensions = DATA_TYPE_EXTENSIONS[k];
           const stats = await countFilesRecursive(subfolderId, extensions);
-          console.log(`[Drive] ${folderName} (${subfolderId}): ${stats.count} files, ${(stats.totalBytes / 1024 / 1024).toFixed(0)}MB`);
+          log.info({ folderName, subfolderId, count: stats.count, sizeMb: +(stats.totalBytes / 1024 / 1024).toFixed(0) }, "[Drive] folder stats");
           return { key: k, stats };
         } catch (err) {
-          console.error(`[Drive] Error counting files in ${folderName}:`, err);
+          log.error({ err, folderName }, "[Drive] Error counting files");
           return { key: k, stats: null };
         }
       }
@@ -337,7 +338,7 @@ export async function checkDeploymentUploads(
 
     return { success: true, data: status };
   } catch (err) {
-    console.error(`[Drive] Failed to check folder ${folderId}:`, err);
+    log.error({ err, folderId }, "[Drive] Failed to check folder");
     return {
       success: false,
       error: err instanceof Error ? err.message : "Failed to check Drive folder",
@@ -587,7 +588,7 @@ export async function downloadDeploymentImages(
   for (let i = 0; i < imageFiles.length; i += BATCH_SIZE) {
     // Check for cancellation between batches
     if (isCancelled && await isCancelled()) {
-      console.log(`[Drive] Download cancelled after ${downloaded} files`);
+      log.info({ downloaded }, "[Drive] Download cancelled");
       break;
     }
 
@@ -603,7 +604,7 @@ export async function downloadDeploymentImages(
           pathMap.set(file.id, localPath);
           downloaded++;
         } catch (err) {
-          console.error(`[Drive] Failed to download ${file.name} (${file.id}):`, err instanceof Error ? err.message : err);
+          log.error({ err, fileName: file.name, fileId: file.id }, "[Drive] Failed to download file");
           failed++;
         }
       })
@@ -613,8 +614,9 @@ export async function downloadDeploymentImages(
     const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
     const mem = process.memoryUsage();
     const rssMB = (mem.rss / 1024 / 1024).toFixed(0);
-    console.log(
-      `[Drive] Batch ${batchNum}/${totalBatches}: ${downloaded} ok, ${failed} failed (${batchSec}s batch, ${elapsedSec}s total, RSS: ${rssMB}MB)`
+    log.info(
+      { batchNum, totalBatches, downloaded, failed, batchSec, elapsedSec, rssMB },
+      "[Drive] Batch complete"
     );
 
     onProgress?.(downloaded, failed, imageFiles.length);
@@ -719,7 +721,7 @@ export async function createDeploymentFolder(
 
   const existing = existingRes.data.files?.[0];
   if (existing?.id) {
-    console.log(`[Drive] Reusing existing folder: ${deploymentName} (${existing.id})`);
+    log.info({ deploymentName, folderId: existing.id }, "[Drive] Reusing existing folder");
     folderId = existing.id;
     webViewLink = existing.webViewLink ?? `https://drive.google.com/drive/folders/${folderId}`;
   } else {
@@ -736,7 +738,7 @@ export async function createDeploymentFolder(
 
     folderId = createRes.data.id!;
     webViewLink = createRes.data.webViewLink ?? `https://drive.google.com/drive/folders/${folderId}`;
-    console.log(`[Drive] Created folder: ${deploymentName} (${folderId})`);
+    log.info({ deploymentName, folderId }, "[Drive] Created folder");
   }
 
   // List existing subfolders to avoid duplicates
@@ -759,7 +761,7 @@ export async function createDeploymentFolder(
   for (const [key, subName] of Object.entries(DATA_TYPE_FOLDERS)) {
     const existingId = existingSubfolderMap.get(subName);
     if (existingId) {
-      console.log(`[Drive] Subfolder already exists: ${subName}`);
+      log.info({ subName }, "[Drive] Subfolder already exists");
       subfolderIdMap.set(key, existingId);
       continue;
     }
@@ -776,7 +778,7 @@ export async function createDeploymentFolder(
     if (res.data.id) {
       subfolderIdMap.set(key, res.data.id);
     }
-    console.log(`[Drive] Created subfolder: ${subName}`);
+    log.info({ subName }, "[Drive] Created subfolder");
   }
 
   return {
@@ -829,7 +831,7 @@ async function findOrCreateSubfolder(
     supportsAllDrives: true,
   });
 
-  console.log(`[Drive] Created '${name}' subfolder in ${parentId}`);
+  log.info({ name, parentId }, "[Drive] Created subfolder in parent");
   return created.data.id!;
 }
 
@@ -918,9 +920,9 @@ export async function uploadFramesToDrive(
           );
           result.set(frame.filename, driveFileId);
         } catch (err) {
-          console.error(
-            `[Drive] Failed to upload frame ${frame.filename}:`,
-            err instanceof Error ? err.message : err
+          log.error(
+            { err, filename: frame.filename },
+            "[Drive] Failed to upload frame"
           );
         }
       })
@@ -931,7 +933,7 @@ export async function uploadFramesToDrive(
     }
   }
 
-  console.log(`[Drive] Uploaded ${result.size}/${frames.length} frames to _frames/`);
+  log.info({ uploaded: result.size, total: frames.length }, "[Drive] Uploaded frames to _frames/");
   return result;
 }
 
@@ -952,7 +954,7 @@ async function withRetry<T>(
       const status = (err as { code?: number })?.code;
       if ((status === 429 || status === 403) && attempt < RATE_LIMIT_DELAYS.length) {
         const delay = RATE_LIMIT_DELAYS[attempt];
-        console.warn(`[Drive] Rate limited on ${label}, retrying in ${delay}ms (attempt ${attempt + 1})`);
+        log.warn({ label, delay, attempt: attempt + 1 }, "[Drive] Rate limited, retrying");
         await new Promise((r) => setTimeout(r, delay));
         continue;
       }

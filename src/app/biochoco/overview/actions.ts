@@ -9,6 +9,7 @@ import type { ActionResult } from "@/lib/types";
 import type { BiochocoOverviewData, SiteInfo } from "./types";
 import { db } from "@/db";
 import { deployments } from "@/db/schema";
+import { log } from "@/lib/log";
 
 export async function fetchBiochocoData(): Promise<ActionResult<BiochocoOverviewData>> {
   try {
@@ -77,7 +78,7 @@ export async function fetchBiochocoData(): Promise<ActionResult<BiochocoOverview
       data: { schedule: enrichedSchedule, sites, deployedIds, retrievedIds },
     };
   } catch (err) {
-    console.error("Failed to fetch BioChoco data:", err);
+    log.error({ err }, "Failed to fetch BioChoco data");
     return {
       success: false,
       error: err instanceof Error ? err.message : "Unknown error",

@@ -28,6 +28,7 @@ import {
 import { requireAdmin } from "@/lib/auth";
 import type { ActionResult } from "@/lib/types";
 import { shutdownModelServer } from "@/lib/ml-runner";
+import { log } from "@/lib/log";
 
 const MODELS_ROOT = path.join(process.cwd(), "data", "models");
 
@@ -286,7 +287,7 @@ export async function registerModelFromDir(
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error("[ct-models] register failed:", err);
+    log.error({ err }, "[ct-models] register failed");
     return { success: false, error: msg };
   }
 }
@@ -357,7 +358,7 @@ export async function setActiveModel(
     try {
       shutdownModelServer();
     } catch (err) {
-      console.warn("[ct-models] shutdownModelServer failed:", err);
+      log.warn({ err }, "[ct-models] shutdownModelServer failed");
     }
 
     await db.insert(activityLog).values({
@@ -371,7 +372,7 @@ export async function setActiveModel(
     return { success: true, data: { modelId } };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error("[ct-models] activate failed:", err);
+    log.error({ err }, "[ct-models] activate failed");
     return { success: false, error: msg };
   }
 }
@@ -421,7 +422,7 @@ export async function deleteModel(
     return { success: true, data: { modelId } };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error("[ct-models] delete failed:", err);
+    log.error({ err }, "[ct-models] delete failed");
     return { success: false, error: msg };
   }
 }

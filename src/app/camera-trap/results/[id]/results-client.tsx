@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -11,9 +11,14 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { Info } from "lucide-react";
+import { Info, BookmarkCheck } from "lucide-react";
 import { ImageGrid, type ImageGridItem } from "@/components/image-grid";
 import { cn } from "@/lib/utils";
+import {
+  findLastVerifiedId,
+  isVerifiedImage,
+  scrollToImageCard,
+} from "./resume-helpers";
 import {
   SpeciesDisplayProvider,
   useSpeciesDisplay,
@@ -187,6 +192,52 @@ function ResultsClientInner({
     showBlanksOnly ||
     personFilter !== "all" ||
     setupFilter !== "all";
+
+  // --- Resume ("Continuar donde dejé") ---
+  // Computed from the *unfiltered* images so the resume point never depends
+  // on the current filter state. We want both the last verified image (the
+  // boundary) and whether any unverified images remain (if not, nothing to
+  // resume — just hide the button).
+  const { resumeTargetId, hasUnverified } = useMemo(() => {
+    const target = findLastVerifiedId(images);
+    const anyUnverified = images.some((img) => !isVerifiedImage(img));
+    return { resumeTargetId: target, hasUnverified: anyUnverified };
+  }, [images]);
+
+  const canResume = resumeTargetId != null && hasUnverified;
+
+  const handleResume = useCallback(() => {
+    if (resumeTargetId == null) return;
+    // Reset filters first so the target card is guaranteed to be in the
+    // rendered DOM. scrollToImageCard waits a frame for the re-render.
+    if (hasActiveFilters) clearFilters();
+    void scrollToImageCard(resumeTargetId);
+  }, [resumeTargetId, hasActiveFilters]);
+
+  // Keyboard shortcut: 'r' to resume. Ignored when focus is in a text input
+  // or textarea (so it doesn't fight with typing), or while any modifier key
+  // is pressed (so browser shortcuts like Ctrl-R reload still work).
+  useEffect(() => {
+    if (!canResume) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "r" && e.key !== "R") return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        tag === "SELECT" ||
+        (target?.isContentEditable ?? false)
+      ) {
+        return;
+      }
+      e.preventDefault();
+      handleResume();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [canResume, handleResume]);
 
   return (
     <div className="grid gap-4 lg:grid-cols-[210px_1fr]">
@@ -396,29 +447,44 @@ function ResultsClientInner({
 
       {/* Image Grid */}
       <div>
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
           <h2 className="text-lg font-semibold">
             Imágenes ({filteredImages.length}
             {filteredImages.length !== images.length &&
               ` de ${images.length}`}
             )
           </h2>
-          <div className="flex items-center gap-1 border rounded-md p-0.5">
-            {COLUMN_OPTIONS.map((cols) => (
-              <button
-                key={cols}
-                className={cn(
-                  "px-2 py-1 text-xs rounded transition-colors",
-                  gridColumns === cols
-                    ? "bg-primary text-primary-foreground"
-                    : "hover:bg-accent"
-                )}
-                onClick={() => handleColumnChange(cols)}
-                title={`${cols} columnas`}
+          <div className="flex items-center gap-2">
+            {canResume && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleResume}
+                className="gap-1.5"
+                title="Atajo: R"
+                aria-label="Continuar donde dejé: saltar a la última imagen verificada"
               >
-                {cols}
-              </button>
-            ))}
+                <BookmarkCheck className="h-4 w-4" />
+                Continuar donde dejé
+              </Button>
+            )}
+            <div className="flex items-center gap-1 border rounded-md p-0.5">
+              {COLUMN_OPTIONS.map((cols) => (
+                <button
+                  key={cols}
+                  className={cn(
+                    "px-2 py-1 text-xs rounded transition-colors",
+                    gridColumns === cols
+                      ? "bg-primary text-primary-foreground"
+                      : "hover:bg-accent"
+                  )}
+                  onClick={() => handleColumnChange(cols)}
+                  title={`${cols} columnas`}
+                >
+                  {cols}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
         <ImageGrid

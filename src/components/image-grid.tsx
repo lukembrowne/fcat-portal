@@ -272,6 +272,7 @@ function ImageCard({
   const cardContent = (
     <div
       ref={ref}
+      data-image-id={image.id}
       className={`group relative aspect-[4/3] rounded-lg overflow-hidden border bg-muted cursor-pointer hover:ring-2 hover:ring-primary transition-all ${
         selected ? "ring-2 ring-blue-500 border-blue-500" : ""
       }`}

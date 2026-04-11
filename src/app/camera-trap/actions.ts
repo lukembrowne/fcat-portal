@@ -10,6 +10,7 @@ import {
   videos,
   detections,
   identifications,
+  audioIdentifications,
   species,
   cameraTrapProjects,
   cameraTrapModels,
@@ -4407,6 +4408,18 @@ export async function updateSpecies(
         tx.update(identifications)
           .set({ correctedSpecies: newName })
           .where(eq(identifications.correctedSpecies, old.scientificName))
+          .run();
+
+        // Cascade to audioIdentifications.species
+        tx.update(audioIdentifications)
+          .set({ species: newName })
+          .where(eq(audioIdentifications.species, old.scientificName))
+          .run();
+
+        // Cascade to audioIdentifications.correctedSpecies
+        tx.update(audioIdentifications)
+          .set({ correctedSpecies: newName })
+          .where(eq(audioIdentifications.correctedSpecies, old.scientificName))
           .run();
 
         tx.insert(activityLog).values({

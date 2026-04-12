@@ -376,6 +376,16 @@ export function ApplyForm() {
                   </div>
                 </div>
               </div>
+
+              <div className="rounded-lg border border-blue-200 bg-blue-50 dark:border-blue-900 dark:bg-blue-950 p-4 space-y-2">
+                <h3 className="font-medium">Final Report Requirement</h3>
+                <p className="text-sm text-muted-foreground">
+                  If your application is approved, you will be required to submit
+                  a final report within 3 months of your project&apos;s completion
+                  date. A link to the report submission form will be sent to you
+                  by email as your deadline approaches.
+                </p>
+              </div>
             </>
           )}
 

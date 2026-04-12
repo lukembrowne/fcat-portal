@@ -56,10 +56,11 @@ export async function sendSubmissionReceipt(
     <p><strong>Reference Code:</strong> ${escapeHtml(referenceCode)}</p>
     <p><strong>Project:</strong> ${escapeHtml(projectTitle)}</p>
     <p>The FCAT Scientific Committee will review your application and notify you of their decision. Please keep your reference code for future correspondence.</p>
-    <p>— Fundación para la Conservación de los Andes Tropicales</p>
+    <p><strong>Final Report Requirement:</strong> If your application is approved, you will be required to submit a final report within 3 months of your project's completion date. A link to the report submission form will be sent to you by email as your deadline approaches.</p>
+    <p>— FCAT (Fundación para la Conservación de los Andes Tropicales)</p>
   `;
 
-  const text = `Application Received\n\nThank you for submitting your research application to FCAT.\n\nReference Code: ${referenceCode}\nProject: ${projectTitle}\n\nThe FCAT Scientific Committee will review your application and notify you of their decision.\n\n— Fundación para la Conservación de los Andes Tropicales`;
+  const text = `Application Received\n\nThank you for submitting your research application to FCAT.\n\nReference Code: ${referenceCode}\nProject: ${projectTitle}\n\nThe FCAT Scientific Committee will review your application and notify you of their decision. Please keep your reference code for future correspondence.\n\nFinal Report Requirement: If your application is approved, you will be required to submit a final report within 3 months of your project's completion date. A link to the report submission form will be sent to you by email as your deadline approaches.\n\n— FCAT (Fundación para la Conservación de los Andes Tropicales)`;
 
   try {
     const { error } = await resend.emails.send({
@@ -145,11 +146,11 @@ export async function sendDecisionNotification(
     <p><strong>Project:</strong> ${escapeHtml(projectTitle)}</p>
     <p><strong>Decision:</strong> ${escapeHtml(decisionText[decision])}</p>
     ${notes ? `<p><strong>Notes:</strong> ${escapeHtml(notes)}</p>` : ""}
-    <p>If you have questions, please contact FCAT directly.</p>
-    <p>— Fundación para la Conservación de los Andes Tropicales</p>
+    <p>If you have questions about the report requirements, please contact Luis Carrasco at <a href="mailto:luis.carrasco@fcat-ecuador.org">luis.carrasco@fcat-ecuador.org</a>.</p>
+    <p>— FCAT (Fundación para la Conservación de los Andes Tropicales)</p>
   `;
 
-  const text = `Application Decision — ${decisionText[decision]}\n\nReference: ${referenceCode}\nProject: ${projectTitle}\nDecision: ${decisionText[decision]}${notes ? `\nNotes: ${notes}` : ""}\n\nIf you have questions, please contact FCAT directly.\n\n— Fundación para la Conservación de los Andes Tropicales`;
+  const text = `Application Decision — ${decisionText[decision]}\n\nReference: ${referenceCode}\nProject: ${projectTitle}\nDecision: ${decisionText[decision]}${notes ? `\nNotes: ${notes}` : ""}\n\nIf you have questions about the report requirements, please contact Luis Carrasco at luis.carrasco@fcat-ecuador.org.\n\n— FCAT (Fundación para la Conservación de los Andes Tropicales)`;
 
   try {
     const { error } = await resend.emails.send({
@@ -190,11 +191,11 @@ export async function sendReportReminder(
     <p><strong>Project:</strong> ${escapeHtml(projectTitle)} (${escapeHtml(referenceCode)})</p>
     <p>Please submit your final report using the link below:</p>
     <p><a href="${escapeHtml(reportLink)}">Submit Final Report</a></p>
-    <p>If you have questions about the report requirements, please contact FCAT.</p>
-    <p>— Fundación para la Conservación de los Andes Tropicales</p>
+    <p>If you have questions about the report requirements, please contact Luis Carrasco at <a href="mailto:luis.carrasco@fcat-ecuador.org">luis.carrasco@fcat-ecuador.org</a>.</p>
+    <p>— FCAT (Fundación para la Conservación de los Andes Tropicales)</p>
   `;
 
-  const text = `Final Report Reminder\n\n${urgency}\n\nProject: ${projectTitle} (${referenceCode})\n\nSubmit your final report: ${reportLink}\n\n— Fundación para la Conservación de los Andes Tropicales`;
+  const text = `Final Report Reminder\n\n${urgency}\n\nProject: ${projectTitle} (${referenceCode})\n\nSubmit your final report: ${reportLink}\n\nIf you have questions about the report requirements, please contact Luis Carrasco at luis.carrasco@fcat-ecuador.org.\n\n— FCAT (Fundación para la Conservación de los Andes Tropicales)`;
 
   try {
     const { error } = await resend.emails.send({

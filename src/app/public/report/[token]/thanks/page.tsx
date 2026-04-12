@@ -18,7 +18,10 @@ export default function ReportThanksPage() {
         </p>
         <p className="text-sm text-muted-foreground">
           A confirmation email has been sent to the address on file. If you have
-          any questions, please contact FCAT directly.
+          any questions, please contact Luis Carrasco at{" "}
+          <a href="mailto:luis.carrasco@fcat-ecuador.org" className="underline">
+            luis.carrasco@fcat-ecuador.org
+          </a>.
         </p>
       </CardContent>
     </Card>

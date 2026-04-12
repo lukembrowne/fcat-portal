@@ -191,6 +191,8 @@ export async function generateReportLink(
     .select({
       status: researchApplications.status,
       finalReportDueDate: researchApplications.finalReportDueDate,
+      reportSubmitToken: researchApplications.reportSubmitToken,
+      reportSubmitTokenExpiresAt: researchApplications.reportSubmitTokenExpiresAt,
     })
     .from(researchApplications)
     .where(eq(researchApplications.id, id))
@@ -215,6 +217,19 @@ export async function generateReportLink(
     return { success: false, error: "Ya se entregó el informe final" };
   }
 
+  const siteUrl =
+    process.env.NEXT_PUBLIC_SITE_URL ?? "https://portal.fcat-ecuador.org";
+
+  // Reuse existing token if it hasn't expired yet
+  if (app.reportSubmitToken && app.reportSubmitTokenExpiresAt) {
+    const expiresAt = new Date(app.reportSubmitTokenExpiresAt);
+    if (expiresAt > new Date()) {
+      const url = `${siteUrl}/public/report/${app.reportSubmitToken}`;
+      return { success: true, data: { url } };
+    }
+  }
+
+  // Generate a new token only if none exists or the existing one expired
   const token = crypto.randomBytes(32).toString("base64url");
   const dueMs = app.finalReportDueDate
     ? new Date(app.finalReportDueDate).getTime()
@@ -232,8 +247,6 @@ export async function generateReportLink(
     .where(eq(researchApplications.id, id))
     .run();
 
-  const siteUrl =
-    process.env.NEXT_PUBLIC_SITE_URL ?? "https://portal.fcat-ecuador.org";
   const url = `${siteUrl}/public/report/${token}`;
 
   revalidatePath(`/research-applications/${id}`);

@@ -1,12 +1,10 @@
 "use client";
 
-import { useState, useTransition, useRef } from "react";
+import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { FileDropzone } from "@/components/file-dropzone";
 import { submitFinalReport } from "./actions";
 import type { ResearchApplication } from "@/db/schema";
 
@@ -19,21 +17,16 @@ export function ReportForm({ token, app }: ReportFormProps) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
-  const [summary, setSummary] = useState("");
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [reportFiles, setReportFiles] = useState<File[]>([]);
 
   function handleSubmit() {
     setError(null);
 
     startTransition(async () => {
       const fd = new FormData();
-      fd.set("summary", summary);
 
-      const files = fileInputRef.current?.files;
-      if (files) {
-        for (const file of Array.from(files)) {
-          fd.append("reportFiles", file);
-        }
+      for (const file of reportFiles) {
+        fd.append("reportFiles", file);
       }
 
       const result = await submitFinalReport(fd, token);
@@ -65,33 +58,23 @@ export function ReportForm({ token, app }: ReportFormProps) {
           </p>
         </div>
 
-        <div>
-          <Label htmlFor="summary">Report Summary</Label>
-          <Textarea
-            id="summary"
-            value={summary}
-            onChange={(e) => setSummary(e.target.value)}
-            placeholder="Brief summary of findings and conclusions..."
-            rows={6}
-          />
-        </div>
-
-        <div>
-          <Label htmlFor="reportFiles">
-            Report Documents (PDF, JPEG, PNG — max 10 MB each) *
-          </Label>
-          <Input
-            id="reportFiles"
-            type="file"
-            ref={fileInputRef}
-            multiple
-            accept=".pdf,.jpg,.jpeg,.png"
-            className="mt-1"
-          />
-          <p className="text-xs text-muted-foreground mt-1">
-            Upload your final report PDF and any supporting materials.
+        <div className="text-sm text-muted-foreground space-y-2">
+          <p>
+            Within 3 months of completion of their research, researchers should
+            provide FCAT with a final report summarizing their methods, results,
+            and conclusions. This report should be written in a format that is
+            accessible to a general audience. When possible, researchers should
+            provide copies of publications in both English and Spanish.
           </p>
         </div>
+
+        <FileDropzone
+          id="reportFiles"
+          files={reportFiles}
+          onChange={setReportFiles}
+          label="Report Documents (PDF, JPEG, PNG — max 10 MB each, 25 MB total) *"
+          hint="Upload your final report and any supporting materials such as publications, data summaries, or presentations."
+        />
 
         {error && (
           <div className="rounded-md bg-destructive/10 text-destructive px-4 py-3 text-sm">

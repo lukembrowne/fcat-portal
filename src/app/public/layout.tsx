@@ -28,7 +28,7 @@ export default function PublicLayout({
 
       {/* Footer */}
       <footer className="border-t py-4 text-center text-xs text-muted-foreground">
-        Fundación para la Conservación de los Andes Tropicales
+        FCAT (Fundación para la Conservación de los Andes Tropicales)
       </footer>
     </div>
   );

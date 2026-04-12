@@ -43,7 +43,13 @@ export function DetailClient({ app, isEditor }: DetailClientProps) {
   const [error, setError] = useState<string | null>(null);
   const [commentText, setCommentText] = useState("");
   const [statusNotes, setStatusNotes] = useState("");
-  const [reportLinkUrl, setReportLinkUrl] = useState<string | null>(null);
+  const siteUrl =
+    process.env.NEXT_PUBLIC_SITE_URL ?? "https://portal.fcat-ecuador.org";
+  const [reportLinkUrl, setReportLinkUrl] = useState<string | null>(
+    app.reportSubmitToken
+      ? `${siteUrl}/public/report/${app.reportSubmitToken}`
+      : null
+  );
   const [linkCopied, setLinkCopied] = useState(false);
   const [linkEmailSent, setLinkEmailSent] = useState(false);
 
@@ -339,8 +345,8 @@ export function DetailClient({ app, isEditor }: DetailClientProps) {
                   <div className="space-y-2 pt-2 border-t">
                     <Label>Enlace de Informe Final</Label>
                     <p className="text-xs text-muted-foreground">
-                      Generar un enlace para que el investigador suba su informe.
-                      Puede copiar el enlace o enviarlo por email.
+                      Enlace para que el investigador suba su informe.
+                      Puede copiar el enlace o reenviarlo por email.
                     </p>
 
                     {reportLinkUrl ? (
@@ -402,7 +408,7 @@ export function DetailClient({ app, isEditor }: DetailClientProps) {
                           });
                         }}
                       >
-                        Generar enlace de informe
+                        Generar enlace
                       </Button>
                     )}
                   </div>

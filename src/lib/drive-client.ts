@@ -1089,3 +1089,124 @@ export async function trashFile(fileId: string): Promise<void> {
     `trashFile(${fileId})`,
   );
 }
+
+// ---------------------------------------------------------------------------
+// Researcher Applications — file upload & folder management
+// ---------------------------------------------------------------------------
+
+export interface UploadedFileInfo {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  category?: string;
+}
+
+/**
+ * Get or create an application subfolder under the research applications
+ * root folder. Returns the subfolder ID.
+ */
+export async function getOrCreateApplicationFolder(
+  referenceCode: string
+): Promise<string> {
+  const rootFolderId = process.env.RESEARCH_APPLICATIONS_DRIVE_FOLDER_ID;
+  if (!rootFolderId) {
+    throw new Error("RESEARCH_APPLICATIONS_DRIVE_FOLDER_ID not configured");
+  }
+  return findOrCreateSubfolder(rootFolderId, referenceCode);
+}
+
+/**
+ * Rename a Drive folder or file.
+ */
+export async function renameDriveFile(
+  fileId: string,
+  newName: string
+): Promise<void> {
+  const drive = getDrive();
+  await withRetry(
+    () =>
+      drive.files.update({
+        fileId,
+        requestBody: { name: newName },
+        supportsAllDrives: true,
+      }),
+    `renameDriveFile(${fileId})`,
+  );
+}
+
+/**
+ * Upload a file buffer to a Shared Drive folder. Returns file metadata.
+ */
+export async function uploadFileToSharedDrive(
+  buffer: Buffer,
+  filename: string,
+  mimeType: string,
+  parentFolderId: string
+): Promise<UploadedFileInfo> {
+  const drive = getDrive();
+
+  const res = await withRetry(
+    () =>
+      drive.files.create({
+        requestBody: {
+          name: filename,
+          parents: [parentFolderId],
+        },
+        media: {
+          mimeType,
+          body: Readable.from(buffer),
+        },
+        fields: "id,name,mimeType,size",
+        supportsAllDrives: true,
+      }),
+    `uploadFileToSharedDrive(${filename})`,
+  );
+
+  return {
+    id: res.data.id!,
+    name: res.data.name!,
+    mimeType: res.data.mimeType!,
+    size: Number(res.data.size ?? 0),
+  };
+}
+
+/**
+ * Delete a file from Drive permanently. Used for cleanup on partial upload failure.
+ */
+export async function deleteDriveFile(fileId: string): Promise<void> {
+  const drive = getDrive();
+
+  await withRetry(
+    () =>
+      drive.files.delete({
+        fileId,
+        supportsAllDrives: true,
+      }),
+    `deleteDriveFile(${fileId})`,
+  );
+}
+
+/**
+ * Get file metadata from Drive (name, mimeType). Used for proxy downloads.
+ */
+export async function getFileMetadata(
+  fileId: string
+): Promise<{ name: string; mimeType: string }> {
+  const drive = getDrive();
+
+  const meta = await withRetry(
+    () =>
+      drive.files.get({
+        fileId,
+        fields: "name,mimeType",
+        supportsAllDrives: true,
+      }),
+    `getFileMetadata(${fileId})`,
+  );
+
+  return {
+    mimeType: meta.data.mimeType ?? "application/octet-stream",
+    name: meta.data.name ?? "download",
+  };
+}

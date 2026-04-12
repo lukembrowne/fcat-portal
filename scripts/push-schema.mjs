@@ -595,6 +595,8 @@ const migrations = [
   // Custom classifier training infrastructure (2026-04-08)
   `ALTER TABLE biochoco_deployments ADD COLUMN training_split TEXT`,
   `ALTER TABLE biochoco_identifications ADD COLUMN classifier_model_id INTEGER REFERENCES camera_trap_models(id) ON DELETE SET NULL`,
+  // Video timestamp method — how to derive capture time for extracted frames (2026-04-12)
+  `ALTER TABLE biochoco_processing_jobs ADD COLUMN video_timestamp_method TEXT DEFAULT 'metadata'`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }

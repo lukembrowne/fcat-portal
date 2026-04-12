@@ -60,7 +60,7 @@ export async function createProcessingJob(
     confidenceThreshold?: number;
     frameExtractionRate?: number;
   },
-  options?: { compressFirst?: boolean; incremental?: boolean; frameExtractionRate?: number }
+  options?: { compressFirst?: boolean; incremental?: boolean; frameExtractionRate?: number; videoTimestampMethod?: "metadata" | "filename_folder" | "none" }
 ): Promise<ActionResult<{ jobId: number }>> {
   const incremental = options?.incremental ?? false;
   const user = await requirePermission("camera-trap", "editor");
@@ -213,6 +213,7 @@ export async function createProcessingJob(
           confidenceThreshold: modelConfig?.confidenceThreshold ?? ML_DEFAULTS.confidenceThreshold,
           frameExtractionRate: options?.frameExtractionRate ?? modelConfig?.frameExtractionRate ?? 1.0,
           compressFirst: options?.compressFirst ?? false,
+          videoTimestampMethod: options?.videoTimestampMethod ?? "metadata",
           status: "pending",
           totalImages: deploymentImages.length,
           totalVideos: deploymentVideos.length,
@@ -433,6 +434,7 @@ async function processJobInternal(
 
       if (videosToExtract.length > 0) {
         const fps = job.frameExtractionRate ?? 1.0;
+        const tsMethod = job.videoTimestampMethod ?? "metadata";
         let totalExtractedFrames = 0;
         const FFMPEG_CONCURRENCY = 4;
 
@@ -443,6 +445,25 @@ async function processJobInternal(
           String(deployment.id)
         );
         await fs.mkdir(thumbDir, { recursive: true });
+
+        // For "filename_folder" method, pre-fetch each video's Drive parent
+        // folder name (date). Cache per parent folder ID to avoid redundant calls.
+        const folderDateCache = new Map<string, string | null>();
+        async function getFolderDateForVideo(driveFileId: string | null): Promise<string | null> {
+          if (!driveFileId || tsMethod !== "filename_folder") return null;
+          if (folderDateCache.has(driveFileId)) return folderDateCache.get(driveFileId)!;
+          try {
+            const { getDriveFileParentName } = await import("@/lib/drive-client");
+            const name = await getDriveFileParentName(driveFileId);
+            const match = name?.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+            const date = match ? `${match[1]}-${match[2]}-${match[3]}` : null;
+            folderDateCache.set(driveFileId, date);
+            return date;
+          } catch {
+            folderDateCache.set(driveFileId, null);
+            return null;
+          }
+        }
 
         // Process videos in parallel batches (up to FFMPEG_CONCURRENCY at a time)
         for (let i = 0; i < videosToExtract.length; i += FFMPEG_CONCURRENCY) {
@@ -481,10 +502,32 @@ async function processJobInternal(
               })
               .where(eq(videos.id, vid.id));
 
+            // Compute the video's start time based on the selected method
+            let videoStartMs: number | null = null;
+            if (tsMethod === "metadata") {
+              videoStartMs = result.creationTime ? result.creationTime.getTime() : null;
+            } else if (tsMethod === "filename_folder") {
+              // Parse HHMMSS from filename + date from Drive parent folder
+              const timeMatch = vid.filename.match(/^(\d{2})(\d{2})(\d{2})_/);
+              if (timeMatch) {
+                const folderDate = await getFolderDateForVideo(vid.driveFileId);
+                if (folderDate) {
+                  const ts = new Date(`${folderDate}T${timeMatch[1]}:${timeMatch[2]}:${timeMatch[3]}`);
+                  if (!isNaN(ts.getTime())) {
+                    videoStartMs = ts.getTime();
+                  }
+                }
+              }
+            }
+            // tsMethod === "none" → videoStartMs stays null
+
             // Insert frame rows and collect IDs for thumbnail generation
             const frameRecords: { id: number; framePath: string; frameName: string }[] = [];
             for (const frame of result.frames) {
               const frameName = path.basename(frame.path);
+              const frameTimestamp = videoStartMs !== null
+                ? new Date(videoStartMs + (frame.index / fps) * 1000).toISOString()
+                : null;
               const [frameImage] = await db
                 .insert(images)
                 .values({
@@ -495,6 +538,7 @@ async function processJobInternal(
                   videoId: vid.id,
                   frameIndex: frame.index,
                   status: "pending",
+                  exifTimestamp: frameTimestamp,
                 })
                 .returning();
               frameRecords.push({ id: frameImage.id, framePath: frame.path, frameName });
@@ -2710,7 +2754,7 @@ export async function undoVerifiedEmpty(
 
 export async function queueProcessing(
   deploymentIds: number[],
-  options?: { compressFirst?: boolean; frameExtractionRate?: number }
+  options?: { compressFirst?: boolean; frameExtractionRate?: number; videoTimestampMethod?: "metadata" | "filename_folder" | "none" }
 ): Promise<ActionResult<{ jobIds: number[] }>> {
   const user = await requirePermission("camera-trap", "editor");
 
@@ -2774,7 +2818,7 @@ export async function queueProcessing(
  */
 export async function queueIncrementalProcessing(
   deploymentId: number,
-  options?: { frameExtractionRate?: number },
+  options?: { frameExtractionRate?: number; videoTimestampMethod?: "metadata" | "filename_folder" | "none" },
 ): Promise<ActionResult<{ jobId: number }>> {
   const user = await requirePermission("camera-trap", "editor");
 
@@ -2784,6 +2828,7 @@ export async function queueIncrementalProcessing(
     const result = await createProcessingJob(deploymentId, undefined, {
       incremental: true,
       frameExtractionRate: options?.frameExtractionRate,
+      videoTimestampMethod: options?.videoTimestampMethod,
     });
     if (!result.success) return result;
 

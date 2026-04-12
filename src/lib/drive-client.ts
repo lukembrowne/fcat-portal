@@ -548,6 +548,30 @@ export async function listMediaRecursive(
 }
 
 /**
+ * Get the name of a Drive file's parent folder.
+ * Useful for extracting date-based folder names (e.g. "2026-02-25").
+ */
+export async function getDriveFileParentName(
+  fileId: string,
+): Promise<string | null> {
+  const drive = getDrive();
+  const fileMeta = await drive.files.get({
+    fileId,
+    fields: "parents",
+    supportsAllDrives: true,
+  });
+  const parentId = fileMeta.data.parents?.[0];
+  if (!parentId) return null;
+
+  const parentMeta = await drive.files.get({
+    fileId: parentId,
+    fields: "name",
+    supportsAllDrives: true,
+  });
+  return parentMeta.data.name ?? null;
+}
+
+/**
  * Download a single file from Drive to a local path.
  * Retries once on failure.
  */

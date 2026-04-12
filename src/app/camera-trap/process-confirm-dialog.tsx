@@ -17,9 +17,11 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { Loader2, Info } from "lucide-react";
+import { Loader2, Info, CheckCircle2, XCircle, Clock } from "lucide-react";
 import { queueProcessing } from "./actions";
 import { getCompressionPreviewBatch } from "./preview-actions";
+import { probeVideoTimestamp } from "./video-timestamp-actions";
+import type { VideoTimestampProbe, VideoTimestampMethod } from "./video-timestamp-actions";
 
 interface ProcessConfirmDialogProps {
   deploymentIds: number[] | null;
@@ -46,6 +48,12 @@ export function ProcessConfirmDialog({
   const [preview, setPreview] = useState<{ count: number; totalSizeMB: number } | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
 
+  // Video timestamp probe state
+  const [timestampMethod, setTimestampMethod] = useState<VideoTimestampMethod>("metadata");
+  const [probe, setProbe] = useState<VideoTimestampProbe | null>(null);
+  const [probing, setProbing] = useState(false);
+  const [probeError, setProbeError] = useState<string | null>(null);
+
   const count = deploymentIds?.length ?? 0;
   const isBatch = count > 1;
 
@@ -67,12 +75,44 @@ export function ProcessConfirmDialog({
     return () => { cancelled = true; };
   }, [deploymentIds, isAdmin, compressFirst, hasImages]);
 
+  // Auto-probe video timestamp when dialog opens with videos (single deployment only)
+  useEffect(() => {
+    if (!deploymentIds || !hasVideos || isBatch) {
+      setProbe(null);
+      setProbeError(null);
+      return;
+    }
+    let cancelled = false;
+    setProbing(true);
+    setProbe(null);
+    setProbeError(null);
+    probeVideoTimestamp(deploymentIds[0]).then((result) => {
+      if (cancelled) return;
+      setProbing(false);
+      if (result.success) {
+        setProbe(result.data);
+        // Auto-select the best method based on probe results
+        if (result.data.creationTime) {
+          setTimestampMethod("metadata");
+        } else if (result.data.filenameTimestamp) {
+          setTimestampMethod("filename_folder");
+        } else {
+          setTimestampMethod("none");
+        }
+      } else {
+        setProbeError(result.error);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [deploymentIds, hasVideos, isBatch]);
+
   const handleConfirm = async () => {
     if (!deploymentIds || deploymentIds.length === 0) return;
     setStarting(true);
     const result = await queueProcessing(deploymentIds, {
       compressFirst: isAdmin && hasImages && compressFirst,
       frameExtractionRate: hasVideos ? frameRate : undefined,
+      videoTimestampMethod: hasVideos ? timestampMethod : undefined,
     });
     setStarting(false);
     if (result.success) {
@@ -90,6 +130,9 @@ export function ProcessConfirmDialog({
       setCompressFirst(isAdmin);
       setFrameRate(1.0);
       setPreview(null);
+      setProbe(null);
+      setProbeError(null);
+      setTimestampMethod("metadata");
     }
   };
 
@@ -164,6 +207,16 @@ export function ProcessConfirmDialog({
             </div>
           )}
 
+          {hasVideos && !isBatch && (
+            <VideoTimestampSection
+              probing={probing}
+              probe={probe}
+              probeError={probeError}
+              method={timestampMethod}
+              onMethodChange={setTimestampMethod}
+            />
+          )}
+
           {hasImages && isAdmin && compressFirst && (
             <div className="ml-6 space-y-1">
               <p className="text-xs text-muted-foreground flex items-start gap-1.5">
@@ -195,7 +248,7 @@ export function ProcessConfirmDialog({
           <Button variant="outline" onClick={onClose}>
             Cancelar
           </Button>
-          <Button onClick={handleConfirm} disabled={starting}>
+          <Button onClick={handleConfirm} disabled={starting || probing}>
             {starting ? (
               <>
                 <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
@@ -211,6 +264,149 @@ export function ProcessConfirmDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+function VideoTimestampSection({
+  probing,
+  probe,
+  probeError,
+  method,
+  onMethodChange,
+}: {
+  probing: boolean;
+  probe: VideoTimestampProbe | null;
+  probeError: string | null;
+  method: VideoTimestampMethod;
+  onMethodChange: (m: VideoTimestampMethod) => void;
+}) {
+  return (
+    <div className="space-y-2 rounded-md border p-3">
+      <label className="text-sm font-medium leading-none">
+        Marca de tiempo de videos
+      </label>
+
+      {probing && (
+        <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          Probando metadatos de un video de muestra...
+        </p>
+      )}
+
+      {probeError && (
+        <p className="text-xs text-destructive flex items-center gap-1.5">
+          <XCircle className="h-3 w-3 shrink-0" />
+          {probeError}
+        </p>
+      )}
+
+      {probe && (
+        <div className="space-y-2">
+          <p className="text-xs text-muted-foreground">
+            Archivo de prueba: <span className="font-mono">{probe.sampleFilename}</span>
+          </p>
+
+          {/* Option: Metadata */}
+          <label className="flex items-start gap-2 cursor-pointer">
+            <input
+              type="radio"
+              name="ts-method"
+              value="metadata"
+              checked={method === "metadata"}
+              onChange={() => onMethodChange("metadata")}
+              disabled={!probe.creationTime}
+              className="mt-0.5"
+            />
+            <div className="text-sm">
+              <span className={!probe.creationTime ? "text-muted-foreground" : ""}>
+                Metadatos del video
+              </span>
+              {probe.creationTime ? (
+                <span className="flex items-center gap-1 text-xs text-emerald-600 mt-0.5">
+                  <CheckCircle2 className="h-3 w-3" />
+                  {formatTimestamp(probe.creationTime)}
+                </span>
+              ) : (
+                <span className="flex items-center gap-1 text-xs text-muted-foreground mt-0.5">
+                  <XCircle className="h-3 w-3" />
+                  Sin metadatos de fecha en el archivo
+                </span>
+              )}
+            </div>
+          </label>
+
+          {/* Option: Filename + folder */}
+          <label className="flex items-start gap-2 cursor-pointer">
+            <input
+              type="radio"
+              name="ts-method"
+              value="filename_folder"
+              checked={method === "filename_folder"}
+              onChange={() => onMethodChange("filename_folder")}
+              disabled={!probe.filenameTimestamp}
+              className="mt-0.5"
+            />
+            <div className="text-sm">
+              <span className={!probe.filenameTimestamp ? "text-muted-foreground" : ""}>
+                Nombre de archivo + carpeta
+              </span>
+              {probe.filenameTime && probe.folderDate ? (
+                <span className="flex items-center gap-1 text-xs text-emerald-600 mt-0.5">
+                  <CheckCircle2 className="h-3 w-3" />
+                  {probe.folderDate} {probe.filenameTime}
+                  <span className="text-muted-foreground">
+                    (carpeta: {probe.folderName})
+                  </span>
+                </span>
+              ) : probe.filenameTime ? (
+                <span className="flex items-center gap-1 text-xs text-amber-600 mt-0.5">
+                  <Clock className="h-3 w-3" />
+                  Hora: {probe.filenameTime} — carpeta no tiene fecha
+                  {probe.folderName && (
+                    <span className="text-muted-foreground">({probe.folderName})</span>
+                  )}
+                </span>
+              ) : (
+                <span className="flex items-center gap-1 text-xs text-muted-foreground mt-0.5">
+                  <XCircle className="h-3 w-3" />
+                  Nombre no contiene hora (HHMMSS)
+                </span>
+              )}
+            </div>
+          </label>
+
+          {/* Option: None */}
+          <label className="flex items-start gap-2 cursor-pointer">
+            <input
+              type="radio"
+              name="ts-method"
+              value="none"
+              checked={method === "none"}
+              onChange={() => onMethodChange("none")}
+              className="mt-0.5"
+            />
+            <span className="text-sm">Sin marca de tiempo</span>
+          </label>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function formatTimestamp(iso: string): string {
+  try {
+    const d = new Date(iso);
+    return d.toLocaleDateString("es-EC", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    }) + ", " + d.toLocaleTimeString("es-EC", {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+  } catch {
+    return iso;
+  }
 }
 
 function describeTargets(hasImages: boolean, hasVideos: boolean): string {

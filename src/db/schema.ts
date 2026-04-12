@@ -234,6 +234,9 @@ export const processingJobs = sqliteTable("biochoco_processing_jobs", {
   totalVideos: integer("total_videos").default(0),
   extractedFrames: integer("extracted_frames").default(0),
   compressFirst: integer("compress_first", { mode: "boolean" }).default(false),
+  videoTimestampMethod: text("video_timestamp_method", {
+    enum: ["metadata", "filename_folder", "none"],
+  }).default("metadata"),
   downloadedImages: integer("downloaded_images").default(0),
   downloadTotal: integer("download_total").default(0),
   cachedImages: integer("cached_images").default(0),

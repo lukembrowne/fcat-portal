@@ -19,14 +19,25 @@ const MAX_FRAMES_DEFAULT = 300;
 export interface FrameExtractionResult {
   frames: { path: string; index: number }[];
   duration: number;
+  creationTime: Date | null;
   error?: string;
 }
 
+export interface VideoMetadata {
+  duration: number;
+  creationTime: Date | null;
+}
+
 /**
- * Get video duration in seconds using ffprobe.
+ * Get video duration and creation time using ffprobe.
+ *
+ * creation_time is read from container metadata (format.tags and stream tags).
+ * Camera trap firmware typically writes this when recording, so it reflects
+ * actual capture time — unlike Drive's modifiedTime which is upload time.
+ *
  * Returns null if the video is corrupt or ffprobe fails.
  */
-async function getVideoDuration(videoPath: string): Promise<number | null> {
+export async function getVideoMetadata(videoPath: string): Promise<VideoMetadata | null> {
   return new Promise((resolve) => {
     execFile(
       "ffprobe",
@@ -34,6 +45,7 @@ async function getVideoDuration(videoPath: string): Promise<number | null> {
         "-v", "quiet",
         "-print_format", "json",
         "-show_format",
+        "-show_streams",
         videoPath,
       ],
       { timeout: 30_000 },
@@ -46,7 +58,27 @@ async function getVideoDuration(videoPath: string): Promise<number | null> {
         try {
           const data = JSON.parse(stdout);
           const duration = parseFloat(data.format?.duration);
-          resolve(isNaN(duration) ? null : duration);
+          if (isNaN(duration)) {
+            resolve(null);
+            return;
+          }
+
+          // Look for creation_time in format tags first, then any stream tag.
+          const rawCreation: string | undefined =
+            data.format?.tags?.creation_time ??
+            data.streams?.find(
+              (s: { tags?: { creation_time?: string } }) => s.tags?.creation_time
+            )?.tags?.creation_time;
+
+          let creationTime: Date | null = null;
+          if (rawCreation) {
+            const parsed = new Date(rawCreation);
+            if (!isNaN(parsed.getTime())) {
+              creationTime = parsed;
+            }
+          }
+
+          resolve({ duration, creationTime });
         } catch {
           resolve(null);
         }
@@ -72,22 +104,24 @@ export async function extractFrames(
   fps: number = 1.0,
   maxFrames: number = MAX_FRAMES_DEFAULT
 ): Promise<FrameExtractionResult> {
-  // 1. Get video duration
-  const duration = await getVideoDuration(videoPath);
-  if (duration === null) {
+  // 1. Get video duration and creation time
+  const metadata = await getVideoMetadata(videoPath);
+  if (metadata === null) {
     return {
       frames: [],
       duration: 0,
+      creationTime: null,
       error: "No se pudo leer el video (archivo corrupto o formato no soportado)",
     };
   }
+  const { duration, creationTime } = metadata;
 
   // 2. Calculate expected frame count and apply cap
   const expectedFrames = Math.ceil(duration * fps);
   const framesToExtract = Math.min(expectedFrames, maxFrames);
 
   if (framesToExtract === 0) {
-    return { frames: [], duration, error: "Video demasiado corto para extraer cuadros" };
+    return { frames: [], duration, creationTime, error: "Video demasiado corto para extraer cuadros" };
   }
 
   // If we need to cap, adjust the effective duration
@@ -169,6 +203,7 @@ export async function extractFrames(
     return {
       frames: [],
       duration,
+      creationTime,
       error: `Error al extraer cuadros: ${ffmpegError}`,
     };
   }
@@ -190,6 +225,7 @@ export async function extractFrames(
   return {
     frames,
     duration,
+    creationTime,
     error: ffmpegError ? `Extracción parcial: ${ffmpegError}` : undefined,
   };
 }

@@ -223,6 +223,46 @@ export async function submitFinalReport(
       log.error({ err }, "[ReportSubmit] Confirmation email failed");
     }
 
+    // Notify committee (best-effort)
+    try {
+      const { getCommitteeEmails } = await import(
+        "@/lib/research-applications/emails"
+      );
+      const { Resend } = await import("resend");
+      const resend = new Resend(process.env.RESEND_API_KEY);
+      const from =
+        process.env.RESEARCH_APP_FROM_EMAIL ??
+        process.env.RESEND_FROM_EMAIL ??
+        "portal@fcat-ecuador.org";
+
+      const committeeEmails = await getCommitteeEmails();
+      if (committeeEmails.length > 0) {
+        const portalUrl =
+          process.env.NEXT_PUBLIC_SITE_URL ?? "https://portal.fcat-ecuador.org";
+        const escHtml = (s: string) =>
+          s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+        await resend.emails.send({
+          from,
+          to: committeeEmails,
+          subject: `Informe final recibido \u2014 ${app.referenceCode ?? `#${app.id}`}`,
+          html: `
+<h2>Informe Final Recibido</h2>
+<p>Se ha recibido el informe final para la siguiente aplicación:</p>
+<table>
+  <tr><td><strong>Código:</strong></td><td>${escHtml(app.referenceCode ?? String(app.id))}</td></tr>
+  <tr><td><strong>Proyecto:</strong></td><td>${escHtml(app.projectTitle)}</td></tr>
+  <tr><td><strong>Investigador:</strong></td><td>${escHtml(app.piFullName)}</td></tr>
+</table>
+<p><a href="${portalUrl}/research-applications/${app.id}">Ver en el Portal</a></p>
+`,
+          text: `Informe Final Recibido\n\nCódigo: ${app.referenceCode ?? String(app.id)}\nProyecto: ${app.projectTitle}\nInvestigador: ${app.piFullName}\n\nVer en el Portal: ${portalUrl}/research-applications/${app.id}`,
+        });
+      }
+    } catch (err) {
+      log.error({ err }, "[ReportSubmit] Committee notification failed");
+    }
+
     log.info(
       { applicationId: app.id, referenceCode: app.referenceCode },
       "[ReportSubmit] Final report submitted"

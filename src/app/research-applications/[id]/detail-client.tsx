@@ -128,6 +128,49 @@ export function DetailClient({ app, isEditor }: DetailClientProps) {
       <div className="grid gap-6 lg:grid-cols-3">
         {/* Main content — 2 cols */}
         <div className="lg:col-span-2 space-y-6">
+          {/* Reports — shown at top when they exist */}
+          {app.reports.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Informe Final</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {app.reports.map((report) => {
+                  const reportFiles = report.driveFilesJson
+                    ? (JSON.parse(report.driveFilesJson) as Array<{ id: string; name: string; size: number }>)
+                    : [];
+                  return (
+                    <div key={report.id} className="space-y-2">
+                      {report.summary && (
+                        <p className="text-sm">{report.summary}</p>
+                      )}
+                      <p className="text-xs text-muted-foreground">
+                        Entregado:{" "}
+                        {report.submittedAt.toLocaleDateString("es-EC")}
+                      </p>
+                      {reportFiles.map((f) => (
+                        <div
+                          key={f.id}
+                          className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm"
+                        >
+                          <span className="flex-1 truncate">{f.name}</span>
+                          <a
+                            href={`https://drive.google.com/file/d/${f.id}/view`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs text-primary hover:underline whitespace-nowrap"
+                          >
+                            Abrir en Drive
+                          </a>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })}
+              </CardContent>
+            </Card>
+          )}
+
           {/* Detalles */}
           <Card>
             <CardHeader>
@@ -217,42 +260,6 @@ export function DetailClient({ app, isEditor }: DetailClientProps) {
             </Card>
           )}
 
-          {/* Reports */}
-          {app.reports.length > 0 && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Informe Final</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {app.reports.map((report) => {
-                  const reportFiles = report.driveFilesJson
-                    ? (JSON.parse(report.driveFilesJson) as Array<{ id: string; name: string; size: number }>)
-                    : [];
-                  return (
-                    <div key={report.id} className="space-y-2">
-                      {report.summary && (
-                        <p className="text-sm">{report.summary}</p>
-                      )}
-                      <p className="text-xs text-muted-foreground">
-                        Entregado:{" "}
-                        {report.submittedAt.toLocaleDateString("es-EC")}
-                      </p>
-                      {reportFiles.map((f) => (
-                        <a
-                          key={f.id}
-                          href={`/api/research-applications/files/${f.id}`}
-                          className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm hover:bg-muted"
-                          download
-                        >
-                          {f.name}
-                        </a>
-                      ))}
-                    </div>
-                  );
-                })}
-              </CardContent>
-            </Card>
-          )}
         </div>
 
         {/* Sidebar — 1 col */}

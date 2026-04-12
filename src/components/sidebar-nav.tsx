@@ -12,7 +12,7 @@ import { hasProjectAccess } from "@/lib/auth";
 import type { AuthUser } from "@/lib/types";
 import { SidebarShell } from "@/components/sidebar-shell";
 
-export type IconName = "home" | "tree-pine" | "leaf" | "camera" | "shield" | "dollar-sign" | "bar-chart-3" | "cloud-sun" | "clipboard-list" | "thermometer" | "audio-lines" | "scroll-text";
+export type IconName = "home" | "tree-pine" | "leaf" | "camera" | "shield" | "dollar-sign" | "bar-chart-3" | "cloud-sun" | "clipboard-list" | "thermometer" | "audio-lines" | "scroll-text" | "file-text";
 
 export interface NavItem {
   label: string;
@@ -122,6 +122,8 @@ export function SidebarNav({ user }: SidebarNavProps) {
     });
   }
 
+  const hasResearcherApps = hasProjectAccess(user, "researcher-applications");
+
   const sections: NavSection[] = [
     { title: "Proyectos", items: projectItems },
   ];
@@ -197,6 +199,14 @@ export function SidebarNav({ user }: SidebarNavProps) {
       label: "Finanzas",
       icon: "dollar-sign",
       children: financeChildren,
+    });
+  }
+
+  if (hasResearcherApps) {
+    adminItems.push({
+      label: "Aplicaciones de Investigadores",
+      href: "/research-applications",
+      icon: "file-text",
     });
   }
 

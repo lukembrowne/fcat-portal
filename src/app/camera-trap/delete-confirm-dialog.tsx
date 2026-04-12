@@ -57,16 +57,24 @@ export function DeleteConfirmDialog({
             <AlertTriangle className="h-5 w-5 text-destructive" />
             Eliminar Instalación
           </DialogTitle>
-          <DialogDescription>
-            Se eliminará <strong>{deploymentName}</strong> y todos sus datos asociados.
-            Esta acción no se puede deshacer.
+          <DialogDescription asChild>
+            <div className="space-y-1.5">
+              <p>
+                Se eliminará <strong>{deploymentName}</strong> y todos sus
+                registros del portal (detecciones, identificaciones, etc.).
+                Esta acción no se puede deshacer.
+              </p>
+              <p className="text-muted-foreground">
+                Los archivos originales en Google Drive no serán afectados.
+              </p>
+            </div>
           </DialogDescription>
         </DialogHeader>
 
         {stats ? (
           <div className="rounded-md border p-3 text-sm space-y-1">
             <p>
-              <span className="font-medium">{stats.totalImages}</span> imágenes
+              <span className="font-medium">{stats.totalImages}</span> registros de imágenes
             </p>
             <p>
               <span className="font-medium">{stats.totalDetections}</span> detecciones

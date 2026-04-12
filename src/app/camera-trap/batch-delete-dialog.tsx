@@ -75,16 +75,23 @@ export function BatchDeleteDialog({
             <AlertTriangle className="h-5 w-5 text-destructive" />
             Eliminar {selectedCount} Instalaciones
           </DialogTitle>
-          <DialogDescription>
-            Esta acción no se puede deshacer. Se eliminarán todos los datos
-            asociados.
+          <DialogDescription asChild>
+            <div className="space-y-1.5">
+              <p>
+                Se eliminarán todos los registros del portal (detecciones,
+                identificaciones, etc.). Esta acción no se puede deshacer.
+              </p>
+              <p className="text-muted-foreground">
+                Los archivos originales en Google Drive no serán afectados.
+              </p>
+            </div>
           </DialogDescription>
         </DialogHeader>
 
         {stats && (
           <div className="rounded-md border p-3 text-sm space-y-1">
             <p>
-              <span className="font-medium">{stats.totalImages}</span> imágenes
+              <span className="font-medium">{stats.totalImages}</span> registros de imágenes
             </p>
             <p>
               <span className="font-medium">{stats.totalDetections}</span>{" "}

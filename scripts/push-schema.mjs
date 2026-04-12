@@ -511,6 +511,83 @@ const statements = [
   )`,
   // Partial unique index — at most one active model
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_camera_trap_models_active ON camera_trap_models(active) WHERE active = 1`,
+
+  // --- Researcher Applications ---
+  `CREATE TABLE IF NOT EXISTS research_applications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    external_id TEXT,
+    reference_code TEXT,
+    status TEXT NOT NULL DEFAULT 'submitted' CHECK(status IN ('submitted','under_review','accepted','rejected','revisions_requested')),
+    project_title TEXT NOT NULL,
+    pi_full_name TEXT NOT NULL,
+    pi_email TEXT NOT NULL,
+    pi_phone TEXT,
+    pi_institution TEXT,
+    collaborators TEXT,
+    project_start_date TEXT,
+    project_end_date TEXT,
+    project_goals TEXT,
+    methods TEXT,
+    samples_details TEXT,
+    genetic_resources TEXT,
+    needs_fcat_assistance INTEGER NOT NULL DEFAULT 0,
+    facilities_needs TEXT,
+    permanent_equipment TEXT,
+    personnel_collaboration TEXT,
+    community_engagement TEXT,
+    data_sharing TEXT,
+    code_of_conduct_agreed INTEGER NOT NULL DEFAULT 0,
+    guidelines_agreed INTEGER NOT NULL DEFAULT 0,
+    permits_status TEXT,
+    drive_folder_id TEXT,
+    drive_files_json TEXT,
+    primary_reviewer_email TEXT,
+    decision_notes TEXT,
+    final_report_due_date TEXT,
+    report_submit_token TEXT,
+    report_submit_token_expires_at TEXT,
+    reminder_30_sent_at INTEGER,
+    reminder_0_sent_at INTEGER,
+    reminder_overdue_sent_at INTEGER,
+    decision_email_sent_at INTEGER,
+    submitter_ip TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    decided_at INTEGER
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_research_apps_external_id ON research_applications(external_id) WHERE external_id IS NOT NULL`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_research_apps_reference_code ON research_applications(reference_code) WHERE reference_code IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS idx_research_apps_status_created ON research_applications(status, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_research_apps_pi_email ON research_applications(pi_email)`,
+
+  `CREATE TABLE IF NOT EXISTS research_application_references (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    application_id INTEGER NOT NULL REFERENCES research_applications(id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    email TEXT,
+    phone TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_research_refs_app_id ON research_application_references(application_id)`,
+
+  `CREATE TABLE IF NOT EXISTS research_application_comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    application_id INTEGER NOT NULL REFERENCES research_applications(id) ON DELETE CASCADE,
+    author_email TEXT NOT NULL,
+    body TEXT NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_research_comments_app_id_created ON research_application_comments(application_id, created_at)`,
+
+  `CREATE TABLE IF NOT EXISTS research_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    application_id INTEGER NOT NULL REFERENCES research_applications(id) ON DELETE CASCADE,
+    summary TEXT,
+    drive_files_json TEXT,
+    submitter_ip TEXT,
+    submitted_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_research_reports_app_id ON research_reports(application_id)`,
 ];
 
 for (const stmt of statements) {
@@ -784,6 +861,7 @@ const coreProjects = [
   ["climate", "Datos Climáticos", "Datos de la estación meteorológica central de FCAT"],
   ["monitoreo", "Monitoreo Programático", "Seguimiento de actividades sociales y programáticas de FCAT"],
   ["grabaciones", "Grabaciones", "Grabaciones de audio y detección de especies acústicas"],
+  ["researcher-applications", "Aplicaciones de Investigadores", "Sistema de aplicación y revisión de investigadores externos"],
 ];
 
 const insertProject = db.prepare(

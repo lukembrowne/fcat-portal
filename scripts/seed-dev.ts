@@ -53,7 +53,13 @@ insertProject.run(
   "Datos de la estación meteorológica central de FCAT"
 );
 
-console.log("Seeded projects: camera-trap, giz, biochoco, finance, climate");
+insertProject.run(
+  "researcher-applications",
+  "Aplicaciones de Investigadores",
+  "Sistema de aplicación y revisión de investigadores externos"
+);
+
+console.log("Seeded projects: camera-trap, giz, biochoco, finance, climate, researcher-applications");
 
 // --- Super admin user ---
 const superAdminEmail =

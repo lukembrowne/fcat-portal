@@ -1017,6 +1017,169 @@ export type SiteShareToken = typeof siteShareTokens.$inferSelect;
 export type NewSiteShareToken = typeof siteShareTokens.$inferInsert;
 
 // ---------------------------------------------------------------------------
+// Researcher Applications
+// ---------------------------------------------------------------------------
+
+export const researchApplicationStatusEnum = [
+  "submitted",
+  "under_review",
+  "accepted",
+  "rejected",
+  "revisions_requested",
+] as const;
+export type ResearchApplicationStatus =
+  (typeof researchApplicationStatusEnum)[number];
+
+export const researchApplications = sqliteTable(
+  "research_applications",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    externalId: text("external_id"),
+    referenceCode: text("reference_code"),
+    status: text("status", { enum: researchApplicationStatusEnum })
+      .notNull()
+      .default("submitted"),
+    projectTitle: text("project_title").notNull(),
+    piFullName: text("pi_full_name").notNull(),
+    piEmail: text("pi_email").notNull(),
+    piPhone: text("pi_phone"),
+    piInstitution: text("pi_institution"),
+    collaborators: text("collaborators"),
+    projectStartDate: text("project_start_date"),
+    projectEndDate: text("project_end_date"),
+    projectGoals: text("project_goals"),
+    methods: text("methods"),
+    samplesDetails: text("samples_details"),
+    geneticResources: text("genetic_resources"),
+    needsFcatAssistance: integer("needs_fcat_assistance", {
+      mode: "boolean",
+    })
+      .notNull()
+      .default(false),
+    facilitiesNeeds: text("facilities_needs"),
+    permanentEquipment: text("permanent_equipment"),
+    personnelCollaboration: text("personnel_collaboration"),
+    communityEngagement: text("community_engagement"),
+    dataSharing: text("data_sharing"),
+    codeOfConductAgreed: integer("code_of_conduct_agreed", {
+      mode: "boolean",
+    })
+      .notNull()
+      .default(false),
+    guidelinesAgreed: integer("guidelines_agreed", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    permitsStatus: text("permits_status"),
+    driveFolderId: text("drive_folder_id"),
+    driveFilesJson: text("drive_files_json"),
+    primaryReviewerEmail: text("primary_reviewer_email"),
+    decisionNotes: text("decision_notes"),
+    finalReportDueDate: text("final_report_due_date"),
+    reportSubmitToken: text("report_submit_token"),
+    reportSubmitTokenExpiresAt: text("report_submit_token_expires_at"),
+    reminder30SentAt: integer("reminder_30_sent_at", { mode: "timestamp" }),
+    reminder0SentAt: integer("reminder_0_sent_at", { mode: "timestamp" }),
+    reminderOverdueSentAt: integer("reminder_overdue_sent_at", {
+      mode: "timestamp",
+    }),
+    decisionEmailSentAt: integer("decision_email_sent_at", {
+      mode: "timestamp",
+    }),
+    submitterIp: text("submitter_ip"),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+    updatedAt: integer("updated_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+    decidedAt: integer("decided_at", { mode: "timestamp" }),
+  },
+  (table) => [
+    uniqueIndex("idx_research_apps_external_id").on(table.externalId),
+    uniqueIndex("idx_research_apps_reference_code").on(table.referenceCode),
+    index("idx_research_apps_status_created").on(
+      table.status,
+      table.createdAt
+    ),
+    index("idx_research_apps_pi_email").on(table.piEmail),
+  ]
+);
+
+export const researchApplicationReferences = sqliteTable(
+  "research_application_references",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    applicationId: integer("application_id")
+      .notNull()
+      .references(() => researchApplications.id, { onDelete: "cascade" }),
+    ordinal: integer("ordinal").notNull(),
+    name: text("name").notNull(),
+    email: text("email"),
+    phone: text("phone"),
+  },
+  (table) => [
+    index("idx_research_refs_app_id").on(table.applicationId),
+  ]
+);
+
+export const researchApplicationComments = sqliteTable(
+  "research_application_comments",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    applicationId: integer("application_id")
+      .notNull()
+      .references(() => researchApplications.id, { onDelete: "cascade" }),
+    authorEmail: text("author_email").notNull(),
+    body: text("body").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [
+    index("idx_research_comments_app_id_created").on(
+      table.applicationId,
+      table.createdAt
+    ),
+  ]
+);
+
+export const researchReports = sqliteTable(
+  "research_reports",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    applicationId: integer("application_id")
+      .notNull()
+      .references(() => researchApplications.id, { onDelete: "cascade" }),
+    summary: text("summary"),
+    driveFilesJson: text("drive_files_json"),
+    submitterIp: text("submitter_ip"),
+    submittedAt: integer("submitted_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [
+    index("idx_research_reports_app_id").on(table.applicationId),
+  ]
+);
+
+// Types
+export type ResearchApplication = typeof researchApplications.$inferSelect;
+export type NewResearchApplication = typeof researchApplications.$inferInsert;
+
+export type ResearchApplicationReference =
+  typeof researchApplicationReferences.$inferSelect;
+export type NewResearchApplicationReference =
+  typeof researchApplicationReferences.$inferInsert;
+
+export type ResearchApplicationComment =
+  typeof researchApplicationComments.$inferSelect;
+export type NewResearchApplicationComment =
+  typeof researchApplicationComments.$inferInsert;
+
+export type ResearchReport = typeof researchReports.$inferSelect;
+export type NewResearchReport = typeof researchReports.$inferInsert;
+
+// ---------------------------------------------------------------------------
 // Query helpers
 // ---------------------------------------------------------------------------
 

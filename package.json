@@ -13,12 +13,14 @@
     "test:all": "vitest run && playwright test"
   },
   "dependencies": {
+    "@marsidev/react-turnstile": "^1.5.0",
     "@tanstack/react-table": "^8.21.3",
     "better-sqlite3": "^12.6.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "drizzle-orm": "^0.45.1",
+    "file-type": "^22.0.1",
     "googleapis": "^171.4.0",
     "leaflet": "^1.9.4",
     "lucide-react": "^0.563.0",

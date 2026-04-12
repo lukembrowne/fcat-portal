@@ -32,6 +32,38 @@ const STATUS_COLORS: Record<string, string> = {
   revisions_requested: "bg-orange-100 text-orange-800",
 };
 
+const ALL_STATUSES: ResearchApplicationStatus[] = [
+  "submitted",
+  "under_review",
+  "accepted",
+  "rejected",
+  "revisions_requested",
+];
+
+const STATUS_BORDER_COLORS: Record<string, string> = {
+  submitted: "border-blue-300 bg-blue-50",
+  under_review: "border-yellow-300 bg-yellow-50",
+  accepted: "border-green-300 bg-green-50",
+  rejected: "border-red-300 bg-red-50",
+  revisions_requested: "border-orange-300 bg-orange-50",
+};
+
+const STATUS_RADIO_COLORS: Record<string, string> = {
+  submitted: "border-blue-500",
+  under_review: "border-yellow-500",
+  accepted: "border-green-600",
+  rejected: "border-red-500",
+  revisions_requested: "border-orange-500",
+};
+
+const STATUS_DOT_COLORS: Record<string, string> = {
+  submitted: "bg-blue-500",
+  under_review: "bg-yellow-500",
+  accepted: "bg-green-600",
+  rejected: "bg-red-500",
+  revisions_requested: "bg-orange-500",
+};
+
 interface DetailClientProps {
   app: ApplicationDetail;
   isEditor: boolean;
@@ -43,6 +75,7 @@ export function DetailClient({ app, isEditor }: DetailClientProps) {
   const [error, setError] = useState<string | null>(null);
   const [commentText, setCommentText] = useState("");
   const [statusNotes, setStatusNotes] = useState("");
+  const [selectedStatus, setSelectedStatus] = useState<ResearchApplicationStatus>(app.status);
   const siteUrl =
     process.env.NEXT_PUBLIC_SITE_URL ?? "https://portal.fcat-ecuador.org";
   const [reportLinkUrl, setReportLinkUrl] = useState<string | null>(
@@ -271,42 +304,98 @@ export function DetailClient({ app, isEditor }: DetailClientProps) {
                 <CardTitle>Revisión</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
-                {/* Status transitions */}
-                {validTransitions.length > 0 && (
-                  <div className="space-y-2">
-                    <Label>Cambiar Estado</Label>
-                    <Textarea
-                      value={statusNotes}
-                      onChange={(e) => setStatusNotes(e.target.value)}
-                      placeholder="Notas de decisión (opcional)..."
-                      rows={2}
-                    />
-                    <div className="flex flex-wrap gap-2">
-                      {validTransitions.map((status) => {
-                        const isReopen =
-                          status === "under_review" &&
-                          (app.status === "accepted" || app.status === "rejected");
-                        return (
-                          <Button
-                            key={status}
-                            size="sm"
-                            variant={
-                              status === "accepted"
-                                ? "default"
-                                : status === "rejected"
-                                  ? "destructive"
-                                  : "outline"
-                            }
-                            onClick={() => handleStatusChange(status)}
-                            disabled={isPending}
+                {/* Status selector */}
+                <div className="space-y-3">
+                  <Label>Estado</Label>
+                  <div className="space-y-1">
+                    {ALL_STATUSES.map((status) => {
+                      const isCurrent = status === app.status;
+                      const isSelected = status === selectedStatus;
+                      const isValid = validTransitions.includes(status) || isCurrent;
+                      return (
+                        <label
+                          key={status}
+                          className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 cursor-pointer transition-colors ${
+                            isSelected
+                              ? STATUS_BORDER_COLORS[status]
+                              : "border-transparent"
+                          } ${
+                            isValid
+                              ? "opacity-100 hover:bg-muted/50"
+                              : "opacity-40 cursor-not-allowed"
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="status"
+                            value={status}
+                            checked={isSelected}
+                            onChange={() => isValid && setSelectedStatus(status)}
+                            disabled={!isValid}
+                            className="sr-only"
+                          />
+                          <span
+                            className={`flex h-4 w-4 items-center justify-center rounded-full border-2 ${
+                              isSelected
+                                ? STATUS_RADIO_COLORS[status]
+                                : "border-muted-foreground/30"
+                            }`}
                           >
-                            {isReopen ? "Reabrir revisión" : STATUS_LABELS[status]}
-                          </Button>
-                        );
-                      })}
-                    </div>
+                            {isSelected && (
+                              <span
+                                className={`h-2 w-2 rounded-full ${STATUS_DOT_COLORS[status]}`}
+                              />
+                            )}
+                          </span>
+                          <span className="flex-1 text-sm font-medium">
+                            {STATUS_LABELS[status]}
+                          </span>
+                          {isCurrent && (
+                            <span className="text-xs text-muted-foreground">
+                              actual
+                            </span>
+                          )}
+                        </label>
+                      );
+                    })}
                   </div>
-                )}
+
+                  {selectedStatus !== app.status && (
+                    <div className="space-y-2 pt-2 border-t">
+                      <Textarea
+                        value={statusNotes}
+                        onChange={(e) => setStatusNotes(e.target.value)}
+                        placeholder="Notas de decisión (opcional)..."
+                        rows={2}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        {["accepted", "rejected", "revisions_requested"].includes(selectedStatus)
+                          ? "Se enviará un email de notificación al investigador."
+                          : ""}
+                      </p>
+                      <Button
+                        size="sm"
+                        className="w-full"
+                        onClick={() => {
+                          const label = STATUS_LABELS[selectedStatus];
+                          const emailWarning = ["accepted", "rejected", "revisions_requested"].includes(selectedStatus)
+                            ? "\n\nSe enviará un email de notificación al investigador."
+                            : "";
+                          if (
+                            confirm(
+                              `¿Cambiar estado a "${label}"?${emailWarning}`
+                            )
+                          ) {
+                            handleStatusChange(selectedStatus);
+                          }
+                        }}
+                        disabled={isPending}
+                      >
+                        {isPending ? "Guardando..." : `Cambiar a ${STATUS_LABELS[selectedStatus]}`}
+                      </Button>
+                    </div>
+                  )}
+                </div>
 
                 {/* Primary reviewer */}
                 <form action={handleSetReviewer} className="space-y-2">

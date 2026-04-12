@@ -187,12 +187,37 @@ export async function submitFinalReport(
         process.env.RESEND_FROM_EMAIL ??
         "portal@fcat-ecuador.org";
 
+      const escHtml = (s: string) =>
+        s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+      const html = `
+<h2>Final Report Received</h2>
+<p>Thank you for submitting your final report for the following project:</p>
+<p><strong>Project:</strong> ${escHtml(app.projectTitle)}<br>
+<strong>Reference:</strong> ${escHtml(app.referenceCode ?? String(app.id))}</p>
+<p>The FCAT team will review your submission. If you have any questions, please contact Luis Carrasco at <a href="mailto:luis.carrasco@fcat-ecuador.org">luis.carrasco@fcat-ecuador.org</a>.</p>
+<p>&mdash; FCAT (Fundaci\u00f3n para la Conservaci\u00f3n de los Andes Tropicales)</p>
+`;
+
+      const text = [
+        "Final Report Received",
+        "",
+        "Thank you for submitting your final report for the following project:",
+        "",
+        `Project: ${app.projectTitle}`,
+        `Reference: ${app.referenceCode ?? String(app.id)}`,
+        "",
+        "The FCAT team will review your submission. If you have any questions, please contact Luis Carrasco at luis.carrasco@fcat-ecuador.org.",
+        "",
+        "\u2014 FCAT (Fundaci\u00f3n para la Conservaci\u00f3n de los Andes Tropicales)",
+      ].join("\n");
+
       await resend.emails.send({
         from,
         to: [app.piEmail],
-        subject: `Final Report Received — ${app.referenceCode}`,
-        html: `<h2>Final Report Received</h2><p>Thank you for submitting your final report for "${app.projectTitle}" (${app.referenceCode}).</p><p>��� FCAT</p>`,
-        text: `Final Report Received\n\nThank you for submitting your final report for "${app.projectTitle}" (${app.referenceCode}).\n\n— FCAT`,
+        subject: `Final Report Received \u2014 ${app.referenceCode ?? `#${app.id}`}`,
+        html,
+        text,
       });
     } catch (err) {
       log.error({ err }, "[ReportSubmit] Confirmation email failed");

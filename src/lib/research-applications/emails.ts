@@ -55,12 +55,14 @@ export async function sendSubmissionReceipt(
     <p>Thank you for submitting your research application to FCAT.</p>
     <p><strong>Reference Code:</strong> ${escapeHtml(referenceCode)}</p>
     <p><strong>Project:</strong> ${escapeHtml(projectTitle)}</p>
-    <p>The FCAT Scientific Committee will review your application and notify you of their decision. Please keep your reference code for future correspondence.</p>
-    <p><strong>Final Report Requirement:</strong> If your application is approved, you will be required to submit a final report within 3 months of your project's completion date. A link to the report submission form will be sent to you by email as your deadline approaches.</p>
-    <p>— FCAT (Fundación para la Conservación de los Andes Tropicales)</p>
+    <p>The FCAT Scientific Committee will review your application and notify you of their decision. You will receive an email when a decision has been made. Please keep your reference code for future correspondence.</p>
+    <p><strong>Final Report Requirement:</strong> If your application is approved, you will be required to submit a final report within 3 months of your project's completion date. A link to the report submission form will be included in your approval email and reminder emails will be sent as your deadline approaches.</p>
+    <p>If you have any questions, please contact Luis Carrasco at <a href="mailto:luis.carrasco@fcat-ecuador.org">luis.carrasco@fcat-ecuador.org</a>.</p>
+    <p style="color: #666; font-size: 12px;">This is an automated message from the FCAT Research Portal.</p>
+    <p>\u2014 FCAT (Fundaci\u00f3n para la Conservaci\u00f3n de los Andes Tropicales)</p>
   `;
 
-  const text = `Application Received\n\nThank you for submitting your research application to FCAT.\n\nReference Code: ${referenceCode}\nProject: ${projectTitle}\n\nThe FCAT Scientific Committee will review your application and notify you of their decision. Please keep your reference code for future correspondence.\n\nFinal Report Requirement: If your application is approved, you will be required to submit a final report within 3 months of your project's completion date. A link to the report submission form will be sent to you by email as your deadline approaches.\n\n— FCAT (Fundación para la Conservación de los Andes Tropicales)`;
+  const text = `Application Received\n\nThank you for submitting your research application to FCAT.\n\nReference Code: ${referenceCode}\nProject: ${projectTitle}\n\nThe FCAT Scientific Committee will review your application and notify you of their decision. You will receive an email when a decision has been made. Please keep your reference code for future correspondence.\n\nFinal Report Requirement: If your application is approved, you will be required to submit a final report within 3 months of your project's completion date. A link to the report submission form will be included in your approval email and reminder emails will be sent as your deadline approaches.\n\nIf you have any questions, please contact Luis Carrasco at luis.carrasco@fcat-ecuador.org.\n\nThis is an automated message from the FCAT Research Portal.\n\n\u2014 FCAT (Fundaci\u00f3n para la Conservaci\u00f3n de los Andes Tropicales)`;
 
   try {
     const { error } = await resend.emails.send({
@@ -129,7 +131,9 @@ export async function sendDecisionNotification(
   referenceCode: string,
   projectTitle: string,
   decision: "accepted" | "rejected" | "revisions_requested",
-  notes: string | null
+  notes: string | null,
+  reportLink?: string | null,
+  reportDueDate?: string | null
 ) {
   const resend = getResend();
   const from = getFromEmail();
@@ -140,23 +144,40 @@ export async function sendDecisionNotification(
     revisions_requested: "Revisions Requested",
   };
 
+  const reportSection =
+    decision === "accepted" && reportLink
+      ? `
+    <h3>Final Report Requirement</h3>
+    <p>As part of your approval, you are required to submit a final report within 3 months of your project's completion date${reportDueDate ? ` (due by ${escapeHtml(reportDueDate)})` : ""}. Your report should summarize your methods, results, and conclusions in a format accessible to a general audience. When possible, please provide copies in both English and Spanish.</p>
+    <p>You can submit your final report using this link:</p>
+    <p><a href="${escapeHtml(reportLink)}">Submit Final Report</a></p>
+    <p>You will also receive reminder emails as your deadline approaches.</p>`
+      : "";
+
+  const reportTextSection =
+    decision === "accepted" && reportLink
+      ? `\n\nFinal Report Requirement\nAs part of your approval, you are required to submit a final report within 3 months of your project's completion date${reportDueDate ? ` (due by ${reportDueDate})` : ""}. Your report should summarize your methods, results, and conclusions in a format accessible to a general audience. When possible, please provide copies in both English and Spanish.\n\nSubmit your final report: ${reportLink}\n\nYou will also receive reminder emails as your deadline approaches.`
+      : "";
+
   const html = `
-    <h2>Application Decision — ${escapeHtml(decisionText[decision])}</h2>
+    <h2>Application Decision \u2014 ${escapeHtml(decisionText[decision])}</h2>
     <p><strong>Reference:</strong> ${escapeHtml(referenceCode)}</p>
     <p><strong>Project:</strong> ${escapeHtml(projectTitle)}</p>
     <p><strong>Decision:</strong> ${escapeHtml(decisionText[decision])}</p>
     ${notes ? `<p><strong>Notes:</strong> ${escapeHtml(notes)}</p>` : ""}
-    <p>If you have questions about the report requirements, please contact Luis Carrasco at <a href="mailto:luis.carrasco@fcat-ecuador.org">luis.carrasco@fcat-ecuador.org</a>.</p>
-    <p>— FCAT (Fundación para la Conservación de los Andes Tropicales)</p>
+    ${reportSection}
+    <p>If you have any questions, please contact Luis Carrasco at <a href="mailto:luis.carrasco@fcat-ecuador.org">luis.carrasco@fcat-ecuador.org</a>.</p>
+    <p style="color: #666; font-size: 12px;">This is an automated message from the FCAT Research Portal.</p>
+    <p>\u2014 FCAT (Fundaci\u00f3n para la Conservaci\u00f3n de los Andes Tropicales)</p>
   `;
 
-  const text = `Application Decision — ${decisionText[decision]}\n\nReference: ${referenceCode}\nProject: ${projectTitle}\nDecision: ${decisionText[decision]}${notes ? `\nNotes: ${notes}` : ""}\n\nIf you have questions about the report requirements, please contact Luis Carrasco at luis.carrasco@fcat-ecuador.org.\n\n— FCAT (Fundación para la Conservación de los Andes Tropicales)`;
+  const text = `Application Decision \u2014 ${decisionText[decision]}\n\nReference: ${referenceCode}\nProject: ${projectTitle}\nDecision: ${decisionText[decision]}${notes ? `\nNotes: ${notes}` : ""}${reportTextSection}\n\nIf you have any questions, please contact Luis Carrasco at luis.carrasco@fcat-ecuador.org.\n\nThis is an automated message from the FCAT Research Portal.\n\n\u2014 FCAT (Fundaci\u00f3n para la Conservaci\u00f3n de los Andes Tropicales)`;
 
   try {
     const { error } = await resend.emails.send({
       from,
       to: [toEmail],
-      subject: `FCAT Application Decision — ${referenceCode}`,
+      subject: `FCAT Application Decision \u2014 ${referenceCode}`,
       html,
       text,
     });
@@ -192,10 +213,11 @@ export async function sendReportReminder(
     <p>Please submit your final report using the link below:</p>
     <p><a href="${escapeHtml(reportLink)}">Submit Final Report</a></p>
     <p>If you have questions about the report requirements, please contact Luis Carrasco at <a href="mailto:luis.carrasco@fcat-ecuador.org">luis.carrasco@fcat-ecuador.org</a>.</p>
-    <p>— FCAT (Fundación para la Conservación de los Andes Tropicales)</p>
+    <p style="color: #666; font-size: 12px;">This is an automated message from the FCAT Research Portal.</p>
+    <p>\u2014 FCAT (Fundaci\u00f3n para la Conservaci\u00f3n de los Andes Tropicales)</p>
   `;
 
-  const text = `Final Report Reminder\n\n${urgency}\n\nProject: ${projectTitle} (${referenceCode})\n\nSubmit your final report: ${reportLink}\n\nIf you have questions about the report requirements, please contact Luis Carrasco at luis.carrasco@fcat-ecuador.org.\n\n— FCAT (Fundación para la Conservación de los Andes Tropicales)`;
+  const text = `Final Report Reminder\n\n${urgency}\n\nProject: ${projectTitle} (${referenceCode})\n\nSubmit your final report: ${reportLink}\n\nIf you have questions about the report requirements, please contact Luis Carrasco at luis.carrasco@fcat-ecuador.org.\n\nThis is an automated message from the FCAT Research Portal.\n\n\u2014 FCAT (Fundaci\u00f3n para la Conservaci\u00f3n de los Andes Tropicales)`;
 
   try {
     const { error } = await resend.emails.send({

@@ -91,12 +91,33 @@ export async function updateApplicationStatus(
     autoReportDueDate = endDate.toISOString().split("T")[0];
   }
 
+  // Auto-generate report token on acceptance
+  let reportToken: string | undefined;
+  let reportTokenExpiresAt: string | undefined;
+  if (newStatus === "accepted") {
+    reportToken = crypto.randomBytes(32).toString("base64url");
+    const dueMs = autoReportDueDate
+      ? new Date(autoReportDueDate).getTime()
+      : app.finalReportDueDate
+        ? new Date(app.finalReportDueDate).getTime()
+        : Date.now();
+    reportTokenExpiresAt = new Date(
+      dueMs + 60 * 24 * 60 * 60 * 1000
+    ).toISOString(); // due + 60 days
+  }
+
   db.update(researchApplications)
     .set({
       status: newStatus,
       decisionNotes: notes ?? app.status,
       ...(isTerminal ? { decidedAt: new Date() } : {}),
       ...(autoReportDueDate ? { finalReportDueDate: autoReportDueDate } : {}),
+      ...(reportToken
+        ? {
+            reportSubmitToken: reportToken,
+            reportSubmitTokenExpiresAt: reportTokenExpiresAt,
+          }
+        : {}),
       updatedAt: new Date(),
       // Clear reminder timestamps when moving back to under_review
       ...(newStatus === "under_review"
@@ -104,11 +125,41 @@ export async function updateApplicationStatus(
             reminder30SentAt: null,
             reminder0SentAt: null,
             reminderOverdueSentAt: null,
+            reportSubmitToken: null,
+            reportSubmitTokenExpiresAt: null,
           }
         : {}),
     })
     .where(eq(researchApplications.id, id))
     .run();
+
+  // Send decision email (best-effort, non-blocking)
+  if (["accepted", "rejected", "revisions_requested"].includes(newStatus)) {
+    const siteUrl =
+      process.env.NEXT_PUBLIC_SITE_URL ?? "https://portal.fcat-ecuador.org";
+    const reportLink =
+      newStatus === "accepted" && reportToken
+        ? `${siteUrl}/public/report/${reportToken}`
+        : null;
+    const reportDueDate = autoReportDueDate ?? app.finalReportDueDate ?? null;
+
+    try {
+      const { sendDecisionNotification } = await import(
+        "@/lib/research-applications/emails"
+      );
+      await sendDecisionNotification(
+        app.piEmail,
+        app.referenceCode ?? `#${id}`,
+        app.projectTitle,
+        newStatus as "accepted" | "rejected" | "revisions_requested",
+        notes,
+        reportLink,
+        reportDueDate
+      );
+    } catch (err) {
+      log.error({ err }, "[ResearchApp] Decision email failed");
+    }
+  }
 
   revalidatePath(`/research-applications/${id}`);
   revalidatePath("/research-applications");

@@ -382,8 +382,9 @@ export function ApplyForm() {
                 <p className="text-sm text-muted-foreground">
                   If your application is approved, you will be required to submit
                   a final report within 3 months of your project&apos;s completion
-                  date. A link to the report submission form will be sent to you
-                  by email as your deadline approaches.
+                  date. A link to the report submission form will be included in
+                  your approval email, and reminder emails will be sent as your
+                  deadline approaches.
                 </p>
               </div>
             </>

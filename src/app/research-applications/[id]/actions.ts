@@ -133,14 +133,13 @@ export async function updateApplicationStatus(
     .where(eq(researchApplications.id, id))
     .run();
 
-  // Send decision email (best-effort, non-blocking)
-  if (["accepted", "rejected", "revisions_requested"].includes(newStatus)) {
+  // Send decision email only for accepted applications
+  if (newStatus === "accepted") {
     const siteUrl =
       process.env.NEXT_PUBLIC_SITE_URL ?? "https://portal.fcat-ecuador.org";
-    const reportLink =
-      newStatus === "accepted" && reportToken
-        ? `${siteUrl}/public/report/${reportToken}`
-        : null;
+    const reportLink = reportToken
+      ? `${siteUrl}/public/report/${reportToken}`
+      : null;
     const reportDueDate = autoReportDueDate ?? app.finalReportDueDate ?? null;
 
     try {
@@ -151,8 +150,8 @@ export async function updateApplicationStatus(
         app.piEmail,
         app.referenceCode ?? `#${id}`,
         app.projectTitle,
-        newStatus as "accepted" | "rejected" | "revisions_requested",
-        notes,
+        "accepted",
+        null,
         reportLink,
         reportDueDate
       );

@@ -97,8 +97,12 @@ export function DetailClient({ app, isEditor }: DetailClientProps) {
     setError(null);
     startTransition(async () => {
       const result = await updateApplicationStatus(app.id, newStatus, statusNotes || null);
-      if (!result.success) setError(result.error);
-      else setStatusNotes("");
+      if (!result.success) {
+        setError(result.error);
+      } else {
+        setStatusNotes("");
+        router.refresh();
+      }
     });
   }
 
@@ -368,18 +372,18 @@ export function DetailClient({ app, isEditor }: DetailClientProps) {
                         placeholder="Notas de decisión (opcional)..."
                         rows={2}
                       />
-                      <p className="text-xs text-muted-foreground">
-                        {["accepted", "rejected", "revisions_requested"].includes(selectedStatus)
-                          ? "Se enviará un email de notificación al investigador."
-                          : ""}
-                      </p>
+                      {selectedStatus === "accepted" && (
+                        <p className="text-xs text-muted-foreground">
+                          Se enviará un email de aprobación al investigador con el enlace para su informe final.
+                        </p>
+                      )}
                       <Button
                         size="sm"
                         className="w-full"
                         onClick={() => {
                           const label = STATUS_LABELS[selectedStatus];
-                          const emailWarning = ["accepted", "rejected", "revisions_requested"].includes(selectedStatus)
-                            ? "\n\nSe enviará un email de notificación al investigador."
+                          const emailWarning = selectedStatus === "accepted"
+                            ? "\n\nSe enviará un email de aprobación al investigador."
                             : "";
                           if (
                             confirm(

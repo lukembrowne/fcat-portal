@@ -6,3 +6,9 @@
 # Container TZ is America/New_York (EDT=UTC-4, EST=UTC-5). Ecuador is always UTC-5.
 # 1 AM Eastern = midnight Ecuador during EDT; 11 PM Ecuador during EST.
 0 1 * * * root . /etc/cron.d/portal-env && /usr/bin/curl -sf -X POST -H "Authorization: Bearer $CRON_SECRET" --max-time 600 --retry 3 --retry-delay 10 --retry-connrefused http://localhost:3000/api/cron/nightly-refresh >> /app/data/nightly-refresh.log 2>&1
+
+# Daily research application report reminders (8 AM Eastern)
+0 8 * * * root . /etc/cron.d/portal-env && /usr/bin/curl -fsS -X POST -H "Authorization: Bearer $CRON_SECRET" --max-time 120 http://localhost:3000/api/cron/research-reminders >> /app/data/backups/cron.log 2>&1
+
+# Monthly committee digest — 1st of each month at 9 AM Eastern
+0 9 1 * * root . /etc/cron.d/portal-env && /usr/bin/curl -fsS -X POST -H "Authorization: Bearer $CRON_SECRET" --max-time 120 http://localhost:3000/api/cron/committee-monthly-digest >> /app/data/backups/cron.log 2>&1

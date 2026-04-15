@@ -14,11 +14,13 @@ import {
   fetchClimateChartData,
   fetchAvailableYears,
   fetchClimateReadingCount,
+  fetchCumulativePrecipitation,
 } from "./actions";
 import type {
   ChartDataPoint,
   ClimateFilters,
   AggregationLevel,
+  CumulativePrecipRow,
 } from "./actions";
 
 interface DashboardShellProps {
@@ -37,6 +39,8 @@ export function DashboardShell({ hasData, canEdit = false }: DashboardShellProps
   const [activeTab, setActiveTab] = useState<ChartTab>("temperatura");
   const [error, setError] = useState<string | null>(null);
   const [rawWarning, setRawWarning] = useState<{ count: number } | null>(null);
+  const [cumulative, setCumulative] = useState<{ rows: CumulativePrecipRow[]; years: number[] } | null>(null);
+  const [cumulativeLoading, setCumulativeLoading] = useState(false);
 
   // Load available years when resolution changes
   useEffect(() => {
@@ -114,6 +118,21 @@ export function DashboardShell({ hasData, canEdit = false }: DashboardShellProps
       setLoading(false);
     }
   }, [hasData, loadData]);
+
+  const handleTabChange = useCallback(
+    (tab: ChartTab) => {
+      setActiveTab(tab);
+      if (tab === "acumulado" && cumulative === null && !cumulativeLoading) {
+        setCumulativeLoading(true);
+        fetchCumulativePrecipitation(2022)
+          .then((result) => {
+            if (result.success) setCumulative(result.data);
+          })
+          .finally(() => setCumulativeLoading(false));
+      }
+    },
+    [cumulative, cumulativeLoading]
+  );
 
   if (!hasData) {
     return (
@@ -212,7 +231,9 @@ export function DashboardShell({ hasData, canEdit = false }: DashboardShellProps
             data={chartData}
             aggregation={activeAggregation}
             activeTab={activeTab}
-            onTabChange={setActiveTab}
+            onTabChange={handleTabChange}
+            cumulative={cumulative}
+            cumulativeLoading={cumulativeLoading}
           />
           <Separator />
           <AboutContent />

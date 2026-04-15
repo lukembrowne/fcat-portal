@@ -15,21 +15,32 @@ import {
 } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import type { ChartDataPoint } from "./actions";
+import type { ChartDataPoint, CumulativePrecipRow } from "./actions";
+import { CumulativePrecipChart } from "./cumulative-precip-chart";
 
-export type ChartTab = "temperatura" | "humedad" | "precipitacion" | "solar" | "viento" | "presion";
+export type ChartTab =
+  | "temperatura"
+  | "humedad"
+  | "precipitacion"
+  | "acumulado"
+  | "solar"
+  | "viento"
+  | "presion";
 
 interface ClimateChartsProps {
   data: ChartDataPoint[];
   aggregation: string;
   activeTab: ChartTab;
   onTabChange: (tab: ChartTab) => void;
+  cumulative: { rows: CumulativePrecipRow[]; years: number[] } | null;
+  cumulativeLoading: boolean;
 }
 
 const VARIABLE_DESCRIPTIONS: Record<ChartTab, string> = {
   temperatura: "Temperatura del aire medida por el sensor Campbell Scientific CR300. Promedio, máximo y mínimo por período de muestreo.",
   humedad: "Humedad relativa del aire (0–100%). Promedio, máximo y mínimo.",
   precipitacion: "Precipitación total acumulada por período (mm). Medida por pluviómetro.",
+  acumulado: "",
   solar: "Radiación solar global (W/m²). Medida por piranómetro.",
   viento: "Velocidad (m/s) y dirección (grados, 0°=Norte) del viento. La dirección no se agrega por ser dato circular.",
   presion: "Presión atmosférica a nivel de la estación (hPa).",
@@ -75,8 +86,10 @@ function ChartCard({
   );
 }
 
-export function ClimateCharts({ data, aggregation, activeTab, onTabChange }: ClimateChartsProps) {
-  if (data.length === 0) {
+export function ClimateCharts({ data, aggregation, activeTab, onTabChange, cumulative, cumulativeLoading }: ClimateChartsProps) {
+  const isCumulativeTab = activeTab === "acumulado";
+
+  if (data.length === 0 && !isCumulativeTab) {
     return (
       <div className="flex items-center justify-center rounded-lg border border-dashed p-12 text-muted-foreground">
         No hay datos para el período seleccionado
@@ -97,17 +110,22 @@ export function ClimateCharts({ data, aggregation, activeTab, onTabChange }: Cli
         <TabsTrigger value="temperatura">Temperatura</TabsTrigger>
         <TabsTrigger value="humedad">Humedad</TabsTrigger>
         <TabsTrigger value="precipitacion">Precipitación</TabsTrigger>
+        <TabsTrigger value="acumulado">Precip. Acumulada</TabsTrigger>
         <TabsTrigger value="solar">Radiación Solar</TabsTrigger>
         <TabsTrigger value="viento">Viento</TabsTrigger>
         <TabsTrigger value="presion">Presión</TabsTrigger>
       </TabsList>
 
-      <p className="text-xs text-muted-foreground mb-1">
-        {VARIABLE_DESCRIPTIONS[activeTab]}
-      </p>
-      <p className="text-xs text-muted-foreground mb-4">
-        Arrastre el selector inferior del gráfico para acercar un rango de fechas.
-      </p>
+      {!isCumulativeTab && (
+        <>
+          <p className="text-xs text-muted-foreground mb-1">
+            {VARIABLE_DESCRIPTIONS[activeTab]}
+          </p>
+          <p className="text-xs text-muted-foreground mb-4">
+            Arrastre el selector inferior del gráfico para acercar un rango de fechas.
+          </p>
+        </>
+      )}
 
       <TabsContent value="temperatura">
         <ChartCard title="Temperatura (°C)">
@@ -152,6 +170,20 @@ export function ClimateCharts({ data, aggregation, activeTab, onTabChange }: Cli
             <Brush dataKey="label" height={24} stroke="#94a3b8" travellerWidth={8} />
           </BarChart>
         </ChartCard>
+      </TabsContent>
+
+      <TabsContent value="acumulado">
+        {cumulativeLoading ? (
+          <div className="flex items-center justify-center rounded-lg border border-dashed p-12 text-muted-foreground">
+            Cargando datos acumulados...
+          </div>
+        ) : cumulative ? (
+          <CumulativePrecipChart rows={cumulative.rows} years={cumulative.years} />
+        ) : (
+          <div className="flex items-center justify-center rounded-lg border border-dashed p-12 text-muted-foreground">
+            No se pudieron cargar los datos acumulados
+          </div>
+        )}
       </TabsContent>
 
       <TabsContent value="solar">

@@ -184,6 +184,73 @@ export async function fetchClimateSummary(
   }
 }
 
+export interface CumulativePrecipRow {
+  mmdd: string; // "MM-DD" — calendar key that aligns years (leap day only present in leap years)
+  doy: number; // 1–366 day of year for the first occurrence across years
+  label: string; // localized short label, e.g. "14 Abr"
+  values: Record<string, number | null>; // year (as string) → cumulative mm
+}
+
+export async function fetchCumulativePrecipitation(
+  minYear = 2022
+): Promise<ActionResult<{ rows: CumulativePrecipRow[]; years: number[] }>> {
+  await requirePermission("climate", "viewer");
+
+  try {
+    // Daily rain totals for each (year, mm-dd). Cumulative sum computed in JS.
+    const daily = db
+      .select({
+        year: sql<number>`CAST(strftime('%Y', timestamp) AS INTEGER)`,
+        mmdd: sql<string>`strftime('%m-%d', timestamp)`,
+        doy: sql<number>`CAST(strftime('%j', timestamp) AS INTEGER)`,
+        dailyMm: sql<number | null>`SUM(rain_mm)`,
+      })
+      .from(climateReadings)
+      .where(
+        sql`resolution = 'hourly' AND CAST(strftime('%Y', timestamp) AS INTEGER) >= ${minYear}`
+      )
+      .groupBy(sql`strftime('%Y', timestamp), strftime('%m-%d', timestamp)`)
+      .orderBy(sql`strftime('%Y', timestamp) ASC, strftime('%m-%d', timestamp) ASC`)
+      .all();
+
+    const months = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
+    const yearSet = new Set<number>();
+    const byMmdd = new Map<string, CumulativePrecipRow>();
+    const runningTotals = new Map<number, number>();
+
+    for (const d of daily) {
+      yearSet.add(d.year);
+      const prior = runningTotals.get(d.year) ?? 0;
+      const cumulative = prior + (d.dailyMm ?? 0);
+      runningTotals.set(d.year, cumulative);
+
+      let row = byMmdd.get(d.mmdd);
+      if (!row) {
+        const m = parseInt(d.mmdd.slice(0, 2), 10) - 1;
+        const day = d.mmdd.slice(3, 5);
+        row = {
+          mmdd: d.mmdd,
+          doy: d.doy,
+          label: `${day} ${months[m]}`,
+          values: {},
+        };
+        byMmdd.set(d.mmdd, row);
+      }
+      row.values[String(d.year)] = Math.round(cumulative * 10) / 10;
+    }
+
+    const sortedRows = Array.from(byMmdd.values()).sort((a, b) => a.mmdd.localeCompare(b.mmdd));
+    const years = Array.from(yearSet).sort((a, b) => a - b);
+
+    return { success: true, data: { rows: sortedRows, years } };
+  } catch (e) {
+    return {
+      success: false,
+      error: `Error: ${e instanceof Error ? e.message : String(e)}`,
+    };
+  }
+}
+
 export async function fetchClimateChartData(
   filters: ClimateFilters,
   requestedAggregation?: AggregationLevel

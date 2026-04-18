@@ -19,7 +19,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
+import { SortIcon } from "@/components/sort-icon";
 import type {
   AnnualSummaryRow,
   MonthlyByYear,
@@ -33,13 +33,6 @@ const MONTH_NAMES = [
 
 function formatCurrency(val: number) {
   return "$" + val.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
-function SortIcon({ column }: { column: { getIsSorted: () => false | "asc" | "desc" } }) {
-  const sorted = column.getIsSorted();
-  if (sorted === "asc") return <ArrowUp className="h-3.5 w-3.5" />;
-  if (sorted === "desc") return <ArrowDown className="h-3.5 w-3.5" />;
-  return <ArrowUpDown className="h-3.5 w-3.5 text-muted-foreground" />;
 }
 
 // ---------------------------------------------------------------------------
@@ -84,7 +77,7 @@ function DataTable<T>({
                     >
                       <div className="flex items-center gap-1">
                         {flexRender(h.column.columnDef.header, h.getContext())}
-                        <SortIcon column={h.column} />
+                        <SortIcon direction={h.column.getIsSorted()} />
                       </div>
                     </TableHead>
                   ))}

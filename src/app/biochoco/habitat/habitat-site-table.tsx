@@ -22,11 +22,9 @@ import {
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SortIcon } from "@/components/sort-icon";
 import {
   Camera,
-  ArrowUpDown,
-  ArrowUp,
-  ArrowDown,
   ChevronLeft,
   ChevronRight,
   ChevronsLeft,
@@ -263,13 +261,9 @@ export function HabitatSiteTable({
                             header.column.columnDef.header,
                             header.getContext()
                           )}
-                      {header.column.getCanSort() &&
-                        ({
-                          asc: <ArrowUp className="h-3.5 w-3.5" />,
-                          desc: <ArrowDown className="h-3.5 w-3.5" />,
-                        }[header.column.getIsSorted() as string] ?? (
-                          <ArrowUpDown className="h-3.5 w-3.5 opacity-30" />
-                        ))}
+                      {header.column.getCanSort() && (
+                        <SortIcon direction={header.column.getIsSorted()} />
+                      )}
                     </span>
                   </TableHead>
                 ))}

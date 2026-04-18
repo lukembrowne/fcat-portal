@@ -24,10 +24,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { StatusBadge } from "@/components/status-badge";
+import { SortIcon } from "@/components/sort-icon";
 import {
-  ArrowUpDown,
-  ArrowUp,
-  ArrowDown,
   Search,
   RefreshCw,
   Loader2,
@@ -835,13 +833,9 @@ export function DeploymentsTable({
                             header.getContext()
                           )}
                       {header.column.getCanSort() &&
-                        header.column.id !== "select" &&
-                        ({
-                          asc: <ArrowUp className="h-3.5 w-3.5" />,
-                          desc: <ArrowDown className="h-3.5 w-3.5" />,
-                        }[header.column.getIsSorted() as string] ?? (
-                          <ArrowUpDown className="h-3.5 w-3.5 opacity-30" />
-                        ))}
+                        header.column.id !== "select" && (
+                          <SortIcon direction={header.column.getIsSorted()} />
+                        )}
                     </span>
                   </TableHead>
                 ))}

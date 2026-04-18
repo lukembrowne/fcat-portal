@@ -14,7 +14,8 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ArrowUpDown, RefreshCw, Flag, AlertTriangle } from "lucide-react";
+import { RefreshCw, Flag, AlertTriangle } from "lucide-react";
+import { SortIcon } from "@/components/sort-icon";
 import { getHabitatName } from "@/app/biochoco/overview/types";
 import { reprocessDeployment } from "./actions";
 import { formatDuration } from "./coverage";
@@ -114,13 +115,14 @@ export function DeploymentsTable({
     label: string;
     sortKeyName: SortKey;
   }) {
+    const active = sortKey === sortKeyName;
     return (
       <button
         className="flex items-center gap-1 hover:text-foreground"
         onClick={() => toggleSort(sortKeyName)}
       >
         {label}
-        <ArrowUpDown className="h-3 w-3" />
+        <SortIcon direction={active ? (sortAsc ? "asc" : "desc") : false} />
       </button>
     );
   }

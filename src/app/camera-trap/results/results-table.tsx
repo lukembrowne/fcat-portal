@@ -14,6 +14,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { SortIcon } from "@/components/sort-icon";
 import { DeleteJobDialog } from "../delete-job-dialog";
 import { BatchDeleteJobsDialog } from "../batch-delete-jobs-dialog";
 
@@ -104,12 +105,16 @@ export function ResultsTable({ jobs, canDelete }: Props) {
   }
 
   function SortHeader({ label, col }: { label: string; col: SortKey }) {
+    const active = sortKey === col;
     return (
       <TableHead
         className="cursor-pointer select-none hover:bg-muted/50"
         onClick={() => toggleSort(col)}
       >
-        {label} {sortKey === col ? (sortDir === "asc" ? "↑" : "↓") : ""}
+        <span className="inline-flex items-center gap-1">
+          {label}
+          <SortIcon direction={active ? sortDir : false} />
+        </span>
       </TableHead>
     );
   }

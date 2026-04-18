@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/table";
 import { STATUS_LABELS } from "@/lib/research-applications/transitions";
 import { WorkflowGuide } from "./workflow-guide";
-import { ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
+import { SortIcon } from "@/components/sort-icon";
 
 const STATUS_COLORS: Record<string, string> = {
   submitted: "bg-blue-100 text-blue-800",
@@ -50,15 +50,7 @@ function SortableHeader({
         className="inline-flex items-center gap-1 hover:text-foreground transition-colors"
       >
         {label}
-        {isActive ? (
-          currentDir === "asc" ? (
-            <ArrowUp className="h-3.5 w-3.5" />
-          ) : (
-            <ArrowDown className="h-3.5 w-3.5" />
-          )
-        ) : (
-          <ArrowUpDown className="h-3.5 w-3.5 opacity-30" />
-        )}
+        <SortIcon direction={isActive ? currentDir : false} />
       </Link>
     </TableHead>
   );

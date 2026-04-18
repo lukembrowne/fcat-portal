@@ -4,7 +4,8 @@ import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import type { SiteWithReadiness, ReadinessStatus } from "./types";
 import { getHabitatName } from "../overview/types";
-import { CheckCircle2, Clock, Minus, ArrowUpDown } from "lucide-react";
+import { CheckCircle2, Clock, Minus } from "lucide-react";
+import { SortIcon } from "@/components/sort-icon";
 import {
   Table,
   TableBody,
@@ -84,7 +85,7 @@ export function SiteTable({ sites }: SiteTableProps) {
                 onClick={() => toggleSort("siteId")}
               >
                 Sitio
-                <ArrowUpDown className="h-3 w-3" />
+                <SortIcon direction={sortKey === "siteId" ? sortDir : false} />
               </button>
             </TableHead>
             <TableHead>
@@ -93,7 +94,7 @@ export function SiteTable({ sites }: SiteTableProps) {
                 onClick={() => toggleSort("habitatType")}
               >
                 Hábitat
-                <ArrowUpDown className="h-3 w-3" />
+                <SortIcon direction={sortKey === "habitatType" ? sortDir : false} />
               </button>
             </TableHead>
             <TableHead className="text-center">
@@ -102,7 +103,7 @@ export function SiteTable({ sites }: SiteTableProps) {
                 onClick={() => toggleSort("deploymentCount")}
               >
                 Visitas
-                <ArrowUpDown className="h-3 w-3" />
+                <SortIcon direction={sortKey === "deploymentCount" ? sortDir : false} />
               </button>
             </TableHead>
             <TableHead className="text-center">Cámaras</TableHead>

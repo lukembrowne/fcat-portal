@@ -23,10 +23,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
+import { SortIcon } from "@/components/sort-icon";
 import {
-  ArrowUpDown,
-  ArrowUp,
-  ArrowDown,
   ChevronLeft,
   ChevronRight,
   ChevronsLeft,
@@ -198,13 +196,7 @@ export function BudgetTable({ rows }: { rows: BudgetRow[] }) {
                           h.column.columnDef.header,
                           h.getContext()
                         )}
-                        {h.column.getIsSorted() === "asc" ? (
-                          <ArrowUp className="h-3.5 w-3.5" />
-                        ) : h.column.getIsSorted() === "desc" ? (
-                          <ArrowDown className="h-3.5 w-3.5" />
-                        ) : (
-                          <ArrowUpDown className="h-3.5 w-3.5 text-muted-foreground" />
-                        )}
+                        <SortIcon direction={h.column.getIsSorted()} />
                       </div>
                     </TableHead>
                   ))}

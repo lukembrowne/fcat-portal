@@ -17,10 +17,8 @@ import {
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { SortIcon } from "@/components/sort-icon";
 import {
-  ArrowUpDown,
-  ArrowUp,
-  ArrowDown,
   ChevronLeft,
   ChevronRight,
   ChevronsLeft,
@@ -309,14 +307,9 @@ export function ClimateTable({ filters, canEdit = false }: ClimateTableProps) {
   // Get current sort state for a column
   function getSortIcon(accessorKey: string) {
     const serverCol = SORT_MAP[accessorKey];
-    if (!serverCol || sortColumn !== serverCol) {
-      return <ArrowUpDown className="h-3.5 w-3.5 text-muted-foreground" />;
-    }
-    return sortDir === "asc" ? (
-      <ArrowUp className="h-3.5 w-3.5" />
-    ) : (
-      <ArrowDown className="h-3.5 w-3.5" />
-    );
+    const direction =
+      serverCol && sortColumn === serverCol ? sortDir : false;
+    return <SortIcon direction={direction} />;
   }
 
   return (

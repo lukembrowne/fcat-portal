@@ -35,6 +35,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { SortIcon } from "@/components/sort-icon";
 import {
   createSpecies,
   updateSpecies,
@@ -503,9 +504,7 @@ function SortableHead({
             onClick={() => onSort(column)}
           >
             {label}
-            <span className="text-xs">
-              {active ? (dir === "asc" ? "\u2191" : "\u2193") : "\u2195"}
-            </span>
+            <SortIcon direction={active ? dir : false} />
           </button>
         </TooltipTrigger>
         <TooltipContent>

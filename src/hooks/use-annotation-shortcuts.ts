@@ -81,13 +81,17 @@ export function useAnnotationShortcuts(opts: AnnotationShortcutOptions) {
       }
 
       // Skip most shortcuts in editable fields (except the popover search).
+      // The search input is a cmdk combobox, so it also matches the
+      // role="combobox" check below — exempt it explicitly so the
+      // isSearchFocused branch can run.
       const target = e.target as HTMLElement;
       const isInEditableField =
-        (target instanceof HTMLInputElement && target !== searchInput) ||
-        target instanceof HTMLTextAreaElement ||
-        target instanceof HTMLSelectElement ||
-        target.isContentEditable ||
-        target.getAttribute("role") === "combobox";
+        target !== searchInput &&
+        ((target instanceof HTMLInputElement) ||
+          target instanceof HTMLTextAreaElement ||
+          target instanceof HTMLSelectElement ||
+          target.isContentEditable ||
+          target.getAttribute("role") === "combobox");
 
       if (isInEditableField) return;
 

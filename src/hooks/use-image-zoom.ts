@@ -21,9 +21,23 @@ export function useImageZoom(opts?: UseImageZoomOptions) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const [zoom, setZoom] = useState<ZoomState>({ scale: 1, translateX: 0, translateY: 0 });
   const [isPanning, setIsPanning] = useState(false);
+  // Transforms don't trigger ResizeObserver, so anything anchored to the
+  // zoomed wrapper (popovers, overlays) can't reposition live during a wheel
+  // gesture. Expose a debounced "is zooming" flag so callers can hide those
+  // affordances during the gesture and restore them on settle.
+  const [isZooming, setIsZooming] = useState(false);
+  const zoomSettleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const panRef = useRef<{ startX: number; startY: number; startTx: number; startTy: number } | null>(null);
   const zoomRef = useRef(zoom);
-  zoomRef.current = zoom;
+  useEffect(() => {
+    zoomRef.current = zoom;
+  }, [zoom]);
+
+  useEffect(() => {
+    return () => {
+      if (zoomSettleRef.current) clearTimeout(zoomSettleRef.current);
+    };
+  }, []);
 
   const disabled = opts?.disabled ?? false;
 
@@ -89,6 +103,12 @@ export function useImageZoom(opts?: UseImageZoomOptions) {
 
       const clamped = clampTranslate(newTx, newTy, newScale);
       setZoom({ scale: newScale, translateX: clamped.tx, translateY: clamped.ty });
+      setIsZooming(true);
+      if (zoomSettleRef.current) clearTimeout(zoomSettleRef.current);
+      zoomSettleRef.current = setTimeout(() => {
+        setIsZooming(false);
+        zoomSettleRef.current = null;
+      }, 150);
     }
 
     container.addEventListener("wheel", handleWheel, { passive: false });
@@ -194,6 +214,7 @@ export function useImageZoom(opts?: UseImageZoomOptions) {
     panHandlers,
     scale: zoom.scale,
     isPanning,
+    isZooming,
     resetZoom,
   };
 }

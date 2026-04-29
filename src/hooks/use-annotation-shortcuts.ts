@@ -4,12 +4,10 @@ import { useEffect, useRef } from "react";
 
 export const SHORTCUTS = [
   { key: "←/→", description: "Imagen anterior/siguiente", category: "navigation" },
-  { key: "1-9", description: "Seleccionar detección / asignar especie", category: "navigation" },
-  { key: "0", description: "Asignar especie #10", category: "annotation" },
+  { key: "1-9", description: "Seleccionar detección / asignar especie frecuente", category: "navigation" },
+  { key: "0", description: "Asignar especie frecuente (slot 10)", category: "annotation" },
   { key: "Esc", description: "Deseleccionar / volver a cuadrícula", category: "navigation" },
   { key: "Enter", description: "Verificar todo y avanzar", category: "annotation" },
-  { key: "v", description: "Verificar detección", category: "annotation" },
-  { key: "r", description: "Rechazar detección", category: "annotation" },
   { key: "d / ⌫ / Supr", description: "Eliminar detección", category: "annotation" },
   { key: "b", description: "Confirmar/desconfirmar imagen vacía", category: "annotation" },
   { key: "s", description: "Destacar/quitar destacado", category: "annotation" },
@@ -21,8 +19,6 @@ export const SHORTCUTS = [
 
 interface AnnotationShortcutOptions {
   enabled?: boolean;
-  onVerify?: () => void;
-  onReject?: () => void;
   onQuickVerifyAll?: () => void;
   onNext?: () => void;
   onPrev?: () => void;
@@ -40,6 +36,12 @@ interface AnnotationShortcutOptions {
   isDialogOpen?: boolean;
   detectionCount?: number;
   selectedDetectionId?: number | null;
+  /**
+   * When the popover's typeahead is focused, the popover owns digit keys
+   * (frequent-species hotkeys) via its own onKeyDown. We still need this ref
+   * to skip the global "in editable field" guard so left/right image
+   * navigation keeps working.
+   */
   searchInputRef?: React.RefObject<HTMLInputElement | null>;
   isDrawing?: boolean;
 }
@@ -60,27 +62,25 @@ export function useAnnotationShortcuts(opts: AnnotationShortcutOptions) {
       // Suppress all shortcuts while drawing a bbox
       if (o.isDrawing) return;
 
-      // Check if the search input is focused
+      // Check if the popover's typeahead is focused. When it is, we still
+      // want number-key species assignment and left/right image navigation
+      // to work — but everything else (text editing, Esc, Enter, Delete) is
+      // owned by the typeahead / popover and flows through naturally.
       const searchInput = o.searchInputRef?.current;
       const isSearchFocused = searchInput && document.activeElement === searchInput;
 
-      // Escape: three-level behavior
+      // Escape (outside the popover): deselect if selection, else navigate
+      // back to the grid. Radix's Popover handles its own Esc internally.
       if (e.key === "Escape") {
-        if (isSearchFocused && searchInput.value) {
-          searchInput.value = "";
-          searchInput.dispatchEvent(new Event("input", { bubbles: true }));
-          return;
-        }
         if (o.selectedDetectionId != null) {
           o.onDeselect?.();
           return;
         }
-        // Nothing selected — navigate back to grid
         o.onEscapeBack?.();
         return;
       }
 
-      // Skip most shortcuts in editable fields (except search input for number keys)
+      // Skip most shortcuts in editable fields (except the popover search).
       const target = e.target as HTMLElement;
       const isInEditableField =
         (target instanceof HTMLInputElement && target !== searchInput) ||
@@ -91,28 +91,10 @@ export function useAnnotationShortcuts(opts: AnnotationShortcutOptions) {
 
       if (isInEditableField) return;
 
-      // If search input is focused, allow number keys (for species assignment),
-      // delete keys, and arrow keys — let everything else pass through to the input
       if (isSearchFocused) {
+        // Digits are handled by the popover's own onKeyDown. Only image
+        // navigation passes through here while the typeahead is focused.
         const hasModifier = e.metaKey || e.ctrlKey || e.altKey;
-        if (!hasModifier && o.selectedDetectionId != null && /^[0-9]$/.test(e.key)) {
-          e.preventDefault();
-          const index = e.key === "0" ? 9 : parseInt(e.key, 10) - 1;
-          o.onAssignSpeciesByIndex?.(index);
-          return;
-        }
-        // Only hijack Delete/Backspace when the search input is empty.
-        // If the user has typed anything, let the key edit the text normally.
-        if (
-          !hasModifier &&
-          (e.key === "Delete" || e.key === "Backspace") &&
-          !o.isDialogOpen &&
-          searchInput.value === ""
-        ) {
-          e.preventDefault();
-          o.onDeleteSelected?.();
-          return;
-        }
         if (!hasModifier && e.key === "ArrowLeft") {
           e.preventDefault();
           o.onPrev?.();
@@ -123,7 +105,6 @@ export function useAnnotationShortcuts(opts: AnnotationShortcutOptions) {
           o.onNext?.();
           return;
         }
-        // Let other keys pass through to the input
         return;
       }
 
@@ -142,18 +123,6 @@ export function useAnnotationShortcuts(opts: AnnotationShortcutOptions) {
           if (!hasModifier && !o.isDialogOpen) {
             e.preventDefault();
             o.onQuickVerifyAll?.();
-          }
-          break;
-        case "v":
-          if (!hasModifier) {
-            e.preventDefault();
-            o.onVerify?.();
-          }
-          break;
-        case "r":
-          if (!hasModifier) {
-            e.preventDefault();
-            o.onReject?.();
           }
           break;
         case "b":

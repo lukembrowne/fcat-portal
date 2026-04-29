@@ -30,6 +30,7 @@ interface DetectionCardStripProps {
   onToggleConfirmedBlank?: () => void;
   nameDisplay?: NameDisplay;
   speciesList?: Species[];
+  orientation?: "horizontal" | "vertical";
 }
 
 export function DetectionCardStrip({
@@ -41,7 +42,9 @@ export function DetectionCardStrip({
   onToggleConfirmedBlank,
   nameDisplay = "scientific",
   speciesList = [],
+  orientation = "horizontal",
 }: DetectionCardStripProps) {
+  const isVertical = orientation === "vertical";
   const cardRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
 
   // Build species lookup for display name resolution
@@ -111,7 +114,14 @@ export function DetectionCardStrip({
           Imagen confirmada como vacía — detecciones rechazadas como falsos positivos
         </div>
       )}
-      <div className="flex gap-2 overflow-x-auto p-1 min-w-0">
+      <div
+        className={cn(
+          "p-1 min-w-0",
+          isVertical
+            ? "flex flex-col gap-1.5 overflow-y-auto"
+            : "flex gap-2 overflow-x-auto"
+        )}
+      >
       {detections.map((det, index) => {
         const ident = det.identification;
         const isSelected = det.id === selectedDetectionId;
@@ -158,7 +168,8 @@ export function DetectionCardStrip({
             }}
             onClick={() => onSelectDetection(det.id)}
             className={cn(
-              "relative flex-shrink-0 w-40 pl-3 pr-2 py-2 border rounded-lg text-left transition-all group overflow-hidden",
+              "relative pl-3 pr-2 py-2 border rounded-lg text-left transition-all group overflow-hidden",
+              isVertical ? "w-full" : "flex-shrink-0 w-40",
               isSelected
                 ? "border-primary bg-primary/10 shadow-md"
                 : "hover:bg-accent/30"

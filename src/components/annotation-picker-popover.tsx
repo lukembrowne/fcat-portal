@@ -1,0 +1,267 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import { PopoverContent } from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Check, Trash2 } from "lucide-react";
+import type { Species } from "@/db/schema";
+import type { NameDisplay } from "@/components/species-sidebar";
+import type { DetectionWithIdentification } from "@/components/annotation-toolbar";
+
+const TYPE_LABELS: Record<string, string> = {
+  mammal: "Mamíferos",
+  bird: "Aves",
+  system: "Sistema",
+  reptile: "Reptiles",
+  amphibian: "Anfibios",
+  insect: "Insectos",
+};
+
+const TYPE_ORDER = ["mammal", "bird", "reptile", "amphibian", "insect", "system"];
+
+function groupByType(speciesList: Species[]): [string, Species[]][] {
+  const groups = new Map<string, Species[]>();
+  for (const sp of speciesList) {
+    const list = groups.get(sp.type) || [];
+    list.push(sp);
+    groups.set(sp.type, list);
+  }
+  return TYPE_ORDER.filter((t) => groups.has(t)).map((t) => [t, groups.get(t)!]);
+}
+
+function displayName(sp: Species, mode: NameDisplay): string {
+  if (mode === "spanish") return sp.spanishName || sp.commonName || sp.scientificName;
+  if (mode === "scientific") return sp.scientificName;
+  return sp.commonName || sp.scientificName;
+}
+
+interface AnnotationPickerPopoverProps {
+  open: boolean;
+  selectedDetection: DetectionWithIdentification | null;
+  /** 1-based index of the selected detection in the image's detection list */
+  detectionNumber: number;
+  currentSpecies: string | null;
+  hotkeySlots: Species[];
+  speciesList: Species[];
+  nameDisplay: NameDisplay;
+  canEdit: boolean;
+  containerRef: React.RefObject<HTMLDivElement | null>;
+  searchInputRef: React.RefObject<HTMLInputElement | null>;
+  onAssignSpecies: (scientificName: string) => void;
+  onAssignSpeciesByIndex: (index: number) => void;
+  onAddSpecies?: () => void;
+  onDelete: () => void;
+}
+
+export function AnnotationPickerPopover({
+  open,
+  selectedDetection,
+  detectionNumber,
+  currentSpecies,
+  hotkeySlots,
+  speciesList,
+  nameDisplay,
+  canEdit,
+  containerRef,
+  searchInputRef,
+  onAssignSpecies,
+  onAssignSpeciesByIndex,
+  onAddSpecies,
+  onDelete,
+}: AnnotationPickerPopoverProps) {
+  const grouped = groupByType(speciesList);
+  const verificationStatus =
+    selectedDetection?.identification?.verificationStatus ?? "unclassified";
+
+  // Focus the search input when the popover opens so typing a letter lands
+  // in the typeahead immediately.
+  const wasOpenRef = useRef(false);
+  useEffect(() => {
+    if (open && !wasOpenRef.current) {
+      // Defer to the next frame so Radix has finished mounting the content.
+      requestAnimationFrame(() => searchInputRef.current?.focus());
+    }
+    wasOpenRef.current = open;
+  }, [open, searchInputRef]);
+
+  // Mirror the container ref into state so Radix's `collisionBoundary` gets
+  // an Element value, not a ref-access-during-render.
+  const [collisionBoundary, setCollisionBoundary] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    setCollisionBoundary(containerRef.current);
+  }, [open, containerRef]);
+
+  if (!open || !selectedDetection) return null;
+
+  return (
+    <PopoverContent
+      side="right"
+      align="start"
+      sideOffset={8}
+      collisionPadding={8}
+      collisionBoundary={collisionBoundary}
+      sticky="partial"
+      hideWhenDetached
+      avoidCollisions
+      onOpenAutoFocus={(e) => {
+        // Let our own effect handle focus once Radix is done mounting.
+        e.preventDefault();
+      }}
+      className="w-80 p-0"
+    >
+      <div className="px-3 py-2 border-b flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-sm font-medium">Detección #{detectionNumber}</span>
+          <VerificationBadge status={verificationStatus} />
+        </div>
+        {canEdit && (
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-7 w-7 shrink-0"
+            onClick={onDelete}
+            title="Eliminar (d)"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </Button>
+        )}
+      </div>
+
+      {hotkeySlots.length > 0 && (
+        <div className="px-2 py-2 border-b">
+          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-1 pb-1">
+            Frecuentes
+          </p>
+          <div className="grid grid-cols-2 gap-0.5">
+            {hotkeySlots.map((sp, idx) => {
+              const keyLabel = idx === 9 ? "0" : String(idx + 1);
+              const active = currentSpecies === sp.scientificName;
+              return (
+                <button
+                  key={sp.id}
+                  type="button"
+                  disabled={!canEdit}
+                  onClick={() => onAssignSpecies(sp.scientificName)}
+                  title={`${sp.scientificName}${sp.commonName ? ` — ${sp.commonName}` : ""}`}
+                  className={`w-full text-left px-1.5 py-1 rounded text-xs flex items-center gap-1.5 min-w-0 transition-colors ${
+                    active
+                      ? "bg-primary/10 text-primary"
+                      : !canEdit
+                        ? "opacity-60 cursor-not-allowed"
+                        : "hover:bg-accent cursor-pointer"
+                  }`}
+                >
+                  <Badge
+                    variant="outline"
+                    className="text-[10px] font-mono w-4 h-4 p-0 flex items-center justify-center shrink-0"
+                  >
+                    {keyLabel}
+                  </Badge>
+                  {active && <Check className="h-3 w-3 shrink-0 text-primary" />}
+                  <span className="truncate">{displayName(sp, nameDisplay)}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <Command
+        loop
+        shouldFilter={true}
+        className="border-0"
+        onKeyDown={(e) => {
+          // Digits assign frequent species by hotkey slot. Handled here so the
+          // event is intercepted before it reaches the input's default action,
+          // which avoids a window-level keydown race with cmdk's own handlers.
+          if (
+            canEdit &&
+            !e.metaKey &&
+            !e.ctrlKey &&
+            !e.altKey &&
+            /^[0-9]$/.test(e.key)
+          ) {
+            const index = e.key === "0" ? 9 : parseInt(e.key, 10) - 1;
+            if (index < hotkeySlots.length) {
+              e.preventDefault();
+              e.stopPropagation();
+              onAssignSpeciesByIndex(index);
+            }
+          }
+        }}
+      >
+        <CommandInput
+          ref={searchInputRef}
+          placeholder="Buscar otra especie..."
+          className="h-9"
+        />
+        <CommandList className="max-h-64">
+          <CommandEmpty>
+            <div className="flex flex-col items-center gap-2 py-2 text-xs">
+              <span className="text-muted-foreground">No se encontraron especies.</span>
+              {canEdit && onAddSpecies && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 px-2 text-xs"
+                  onClick={onAddSpecies}
+                >
+                  Agregar nueva especie
+                </Button>
+              )}
+            </div>
+          </CommandEmpty>
+          {grouped.map(([type, items]) => (
+            <CommandGroup key={type} heading={TYPE_LABELS[type] || type}>
+              {items.map((sp) => (
+                <CommandItem
+                  key={sp.id}
+                  value={sp.scientificName}
+                  keywords={[sp.commonName, sp.spanishName ?? ""]}
+                  onSelect={() => canEdit && onAssignSpecies(sp.scientificName)}
+                  disabled={!canEdit}
+                  className="text-xs"
+                >
+                  {currentSpecies === sp.scientificName && (
+                    <Check className="h-3 w-3 mr-1 shrink-0 text-primary" />
+                  )}
+                  <span className={nameDisplay === "scientific" ? "italic" : ""}>
+                    {displayName(sp, nameDisplay)}
+                  </span>
+                  <span className="ml-auto text-muted-foreground text-[10px] italic">
+                    {sp.scientificName}
+                  </span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          ))}
+        </CommandList>
+      </Command>
+    </PopoverContent>
+  );
+}
+
+function VerificationBadge({ status }: { status: string }) {
+  const map: Record<string, { label: string; className: string }> = {
+    verified: { label: "Verificada", className: "bg-emerald-100 text-emerald-800 border-emerald-200" },
+    corrected: { label: "Corregida", className: "bg-blue-100 text-blue-800 border-blue-200" },
+    rejected: { label: "Rechazada", className: "bg-red-100 text-red-800 border-red-200" },
+    unverified: { label: "Sin verificar", className: "bg-amber-100 text-amber-800 border-amber-200" },
+    unclassified: { label: "Sin clasificar", className: "bg-slate-100 text-slate-700 border-slate-200" },
+  };
+  const entry = map[status] ?? map.unverified;
+  return (
+    <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${entry.className}`}>
+      {entry.label}
+    </Badge>
+  );
+}

@@ -306,7 +306,7 @@ export function DeploymentGalleryClient({
               boxes={displayedPayload!.boxes}
               detections={displayedPayload!.detections}
               speciesList={sessionContext!.speciesList}
-              frequentSpecies={sessionContext!.frequentSpecies}
+              hotkeySlots={sessionContext!.hotkeySlots}
               jobId={jobId}
               // imageId stays in sync with the rendered payload so any
               // action (verify/reject/delete) targets the visible image.

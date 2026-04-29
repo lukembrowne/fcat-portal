@@ -91,7 +91,9 @@ export async function createProcessingJob(
       .where(
         and(
           eq(processingJobs.deploymentId, deploymentId),
-          inArray(processingJobs.status, ["pending", "processing"])
+          inArray(processingJobs.status, ["pending", "processing"]),
+          // Only block on camera trap job types, not BirdNET
+          inArray(processingJobs.jobType, ["ml", "ml_incremental", "compression", "revert_compression"])
         )
       )
       .limit(1);
@@ -3675,15 +3677,15 @@ export async function getImageAnnotationData(
   // model of "how much of THIS deployment have I reviewed?", not "how much of
   // the latest ML job". An incremental run would otherwise show "0/2" instead
   // of the deployment-wide progress.
-  const [fullJobImageIds, speciesList, verificationStats, frequentSpeciesResult] = await Promise.all([
+  const [fullJobImageIds, speciesList, verificationStats, hotkeySlotsResult] = await Promise.all([
     useFilter ? Promise.resolve([] as number[]) : getJobImageIds(jobId),
     getSpeciesList(),
     getDeploymentVerificationStats(image.deploymentId),
-    getFrequentSpecies(image.deploymentId),
+    getFrequentSpecies(null, 10),
   ]);
 
   const imageIds = useFilter ? navigationIds! : fullJobImageIds;
-  const frequentSpecies = frequentSpeciesResult.success ? frequentSpeciesResult.data : [];
+  const hotkeySlots = hotkeySlotsResult.success ? hotkeySlotsResult.data : [];
 
   const currentIndex = imageIds.indexOf(imageId);
   const prevImageId = currentIndex > 0 ? imageIds[currentIndex - 1] : null;
@@ -3760,7 +3762,7 @@ export async function getImageAnnotationData(
     boxes,
     detections: annotationDetections,
     speciesList,
-    frequentSpecies,
+    hotkeySlots,
     prevImageId,
     nextImageId,
     currentIndex,
@@ -3789,10 +3791,10 @@ export async function getAnnotationSessionContext(
 
   const useFilter = navigationIds !== undefined && navigationIds.length > 0;
 
-  const [speciesList, freqResult, verificationStats, fullJobImageIds, deploymentRow] =
+  const [speciesList, hotkeySlotsResult, verificationStats, fullJobImageIds, deploymentRow] =
     await Promise.all([
       getSpeciesList(),
-      getFrequentSpecies(deploymentId),
+      getFrequentSpecies(null, 10),
       getDeploymentVerificationStats(deploymentId),
       useFilter ? Promise.resolve([] as number[]) : getJobImageIds(jobId),
       db
@@ -3803,7 +3805,7 @@ export async function getAnnotationSessionContext(
 
   return {
     speciesList,
-    frequentSpecies: freqResult.success ? freqResult.data : [],
+    hotkeySlots: hotkeySlotsResult.success ? hotkeySlotsResult.data : [],
     deploymentName: deploymentRow[0]?.name ?? null,
     imageIds: useFilter ? navigationIds! : fullJobImageIds,
     verificationStats,
@@ -4574,13 +4576,22 @@ export async function getSpeciesUsageCount(
   return { success: true, data: usage?.cnt ?? 0 };
 }
 
+const FREQUENT_SPECIES_TYPE_ORDER = ["mammal", "bird", "reptile", "amphibian", "insect", "system"];
+
 export async function getFrequentSpecies(
-  deploymentId: number,
-  limit = 8
+  deploymentId: number | null,
+  limit = 10
 ): Promise<ActionResult<Species[]>> {
   await requirePermission("camera-trap", "viewer");
 
-  const rows = await db
+  // COALESCE with NULLIF(TRIM(...), '') ensures empty / whitespace values from
+  // messy imports become NULL and get dropped by the inner join below.
+  const coalesced = sql`COALESCE(
+    NULLIF(TRIM(${identifications.correctedSpecies}), ''),
+    NULLIF(TRIM(${identifications.species}), '')
+  )`;
+
+  const top = await db
     .select({
       id: species.id,
       scientificName: species.scientificName,
@@ -4592,18 +4603,44 @@ export async function getFrequentSpecies(
     .from(identifications)
     .innerJoin(detections, eq(detections.id, identifications.detectionId))
     .innerJoin(images, eq(images.id, detections.imageId))
-    .innerJoin(species, eq(species.scientificName, identifications.correctedSpecies))
+    .innerJoin(species, sql`${species.scientificName} = ${coalesced}`)
     .where(
       and(
-        eq(images.deploymentId, deploymentId),
-        isNotNull(identifications.correctedSpecies)
+        inArray(identifications.verificationStatus, ["verified", "corrected"]),
+        deploymentId !== null ? eq(images.deploymentId, deploymentId) : undefined
       )
     )
-    .groupBy(identifications.correctedSpecies)
+    .groupBy(coalesced)
     .orderBy(desc(sql`count(*)`))
     .limit(limit);
 
-  return { success: true, data: rows as Species[] };
+  // Pad with fallback species (taxonomic type → alphabetical) so the hotkey
+  // slots are always filled, even on projects with no annotations yet.
+  if (top.length < limit) {
+    const seen = new Set(top.map((s) => s.scientificName));
+    const allSpecies = await db
+      .select({
+        id: species.id,
+        scientificName: species.scientificName,
+        commonName: species.commonName,
+        spanishName: species.spanishName,
+        type: species.type,
+        taxonomicRank: species.taxonomicRank,
+      })
+      .from(species);
+    const typeRank = new Map(FREQUENT_SPECIES_TYPE_ORDER.map((t, i) => [t, i]));
+    const fallback = allSpecies
+      .filter((s) => !seen.has(s.scientificName))
+      .sort((a, b) => {
+        const ra = typeRank.get(a.type) ?? 999;
+        const rb = typeRank.get(b.type) ?? 999;
+        return ra !== rb ? ra - rb : a.scientificName.localeCompare(b.scientificName);
+      })
+      .slice(0, limit - top.length);
+    top.push(...fallback);
+  }
+
+  return { success: true, data: top as Species[] };
 }
 
 export async function deleteDetection(
@@ -4659,19 +4696,27 @@ export async function deleteDetection(
 }
 
 export async function assignSpecies(
-  identificationId: number,
+  detectionId: number,
   newSpecies: string
 ): Promise<ActionResult> {
   const user = await requirePermission("camera-trap", "editor");
 
   try {
-    const depId = await getDeploymentIdForIdentification(identificationId);
+    const depId = await getDeploymentIdForDetection(detectionId);
     if (!depId) {
-      return { success: false, error: "Identificación no encontrada" };
+      return { success: false, error: "Detección no encontrada" };
     }
     await requireDeploymentAccess(user, depId);
 
-    // Fetch the identification to compare against original ML prediction
+    const [det] = await db
+      .select({ id: detections.id, detectionClass: detections.detectionClass })
+      .from(detections)
+      .where(eq(detections.id, detectionId));
+
+    if (!det) {
+      return { success: false, error: "Detección no encontrada" };
+    }
+
     const [ident] = await db
       .select({
         id: identifications.id,
@@ -4679,25 +4724,42 @@ export async function assignSpecies(
         verificationStatus: identifications.verificationStatus,
       })
       .from(identifications)
-      .where(eq(identifications.id, identificationId));
+      .where(eq(identifications.detectionId, detectionId));
 
-    if (!ident) {
-      return { success: false, error: "Identificación no encontrada" };
-    }
-
-    // If species matches original ML prediction → verify; otherwise → correct
-    // Also allow re-assigning species to rejected detections (un-rejects them)
-    const isMatch = newSpecies === ident.species;
-
-    await db
-      .update(identifications)
-      .set({
-        verificationStatus: isMatch ? "verified" : "corrected",
-        correctedSpecies: isMatch ? null : newSpecies,
+    if (ident) {
+      // If species matches original ML prediction → verify; otherwise → correct
+      // Also allow re-assigning species to rejected detections (un-rejects them)
+      const isMatch = newSpecies === ident.species;
+      await db
+        .update(identifications)
+        .set({
+          verificationStatus: isMatch ? "verified" : "corrected",
+          correctedSpecies: isMatch ? null : newSpecies,
+          verifiedBy: user.email,
+          verifiedAt: new Date(),
+        })
+        .where(eq(identifications.id, ident.id));
+    } else {
+      // Person/vehicle promotion: ML did not classify this detection. Insert a
+      // new identification recording the human correction and flip the
+      // detection class to Animal so the bbox color/label reflects reality.
+      await db.insert(identifications).values({
+        detectionId,
+        species: newSpecies,
+        confidence: 1,
+        modelVersion: "manual",
+        verificationStatus: "corrected",
+        correctedSpecies: null,
         verifiedBy: user.email,
         verifiedAt: new Date(),
-      })
-      .where(eq(identifications.id, identificationId));
+      });
+      if (det.detectionClass !== 0) {
+        await db
+          .update(detections)
+          .set({ detectionClass: 0 })
+          .where(eq(detections.id, detectionId));
+      }
+    }
 
     await maybeAutoCompleteDeployment(depId);
     revalidatePath(CAMERA_TRAP_PATH);

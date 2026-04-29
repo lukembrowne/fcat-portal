@@ -24,6 +24,9 @@ interface BBoxOverlayProps {
   onBoxClick?: (box: BBoxData) => void;
   editable?: boolean;
   onDrawComplete?: (bbox: { x: number; y: number; width: number; height: number }) => void;
+  /** Fires whenever the rendered image's pixel dimensions change. Lets
+   *  parents position absolute overlays against the same coordinate space. */
+  onResize?: (size: { width: number; height: number }) => void;
 }
 
 const SPECIES_COLORS: Record<string, string> = {};
@@ -80,6 +83,7 @@ export function BBoxOverlay({
   onBoxClick,
   editable = false,
   onDrawComplete,
+  onResize,
 }: BBoxOverlayProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
@@ -88,14 +92,20 @@ export function BBoxOverlay({
   const [hoveredId, setHoveredId] = useState<number | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const [preview, setPreview] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+  const onResizeRef = useRef(onResize);
+  useEffect(() => {
+    onResizeRef.current = onResize;
+  }, [onResize]);
 
   useEffect(() => {
     function updateSize() {
       if (imgRef.current) {
-        setImgSize({
+        const next = {
           width: imgRef.current.clientWidth,
           height: imgRef.current.clientHeight,
-        });
+        };
+        setImgSize(next);
+        onResizeRef.current?.(next);
       }
     }
 

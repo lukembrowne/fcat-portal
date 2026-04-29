@@ -3,13 +3,11 @@
 import { useRouter } from "next/navigation";
 import { BBoxOverlay, type BBoxData } from "@/components/bbox-overlay";
 import type { DetectionWithIdentification } from "@/components/annotation-toolbar";
-import {
-  SpeciesSidebar,
-  getVisibleSpecies,
-} from "@/components/species-sidebar";
+import { AnnotationPickerPopover } from "@/components/annotation-picker-popover";
+import { AnnotationToolsSidebar } from "@/components/annotation-tools-sidebar";
+import { Popover, PopoverAnchor } from "@/components/ui/popover";
+import { useAnnotationPicker } from "@/hooks/use-annotation-picker";
 import { useNameDisplay } from "@/lib/species-display";
-import { DetectionCardStrip } from "@/components/detection-card-strip";
-import { AnnotationHelpPanel } from "@/components/annotation-help-panel";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -20,7 +18,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useState, useCallback, useRef, useTransition, useMemo, useOptimistic, useEffect } from "react";
-import Link from "next/link";
 import { toast } from "sonner";
 import { useAnnotationShortcuts } from "@/hooks/use-annotation-shortcuts";
 import { useImageZoom } from "@/hooks/use-image-zoom";
@@ -35,8 +32,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  verifyIdentification,
-  rejectIdentification,
   verifyAndAdvance,
   createManualDetection,
   deleteDetection,
@@ -47,7 +42,7 @@ import {
   toggleSetupTag,
   applySetupTagDate,
 } from "@/app/camera-trap/actions";
-import { Camera, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import type { Species } from "@/db/schema";
 import type { TaxonomicRank } from "@/lib/types";
 
@@ -57,7 +52,12 @@ interface ImageAnnotationClientProps {
   boxes: BBoxData[];
   detections: DetectionWithIdentification[];
   speciesList: Species[];
-  frequentSpecies: Species[];
+  /**
+   * 10 species mapped to hotkey slots 1-9 and 0. Computed project-wide
+   * once per page load (see `getFrequentSpecies(null, 10)`); stays stable
+   * for the whole session so muscle memory survives between images.
+   */
+  hotkeySlots: Species[];
   jobId: number;
   imageId: number;
   prevImageId: number | null;
@@ -100,7 +100,7 @@ export function ImageAnnotationClient({
   boxes,
   detections,
   speciesList,
-  frequentSpecies,
+  hotkeySlots,
   jobId,
   imageId,
   prevImageId,
@@ -125,8 +125,12 @@ export function ImageAnnotationClient({
   const [selectedBoxId, setSelectedBoxId] = useState<number | null>(null);
   const [bboxesHidden, setBboxesHidden] = useState(false);
   const [deleteDialogDetectionId, setDeleteDialogDetectionId] = useState<number | null>(null);
-  const [searchQuery, setSearchQuery] = useState("");
-  const searchInputRef = useRef<HTMLInputElement>(null);
+  // Pixel dimensions of the currently rendered image, reported by BBoxOverlay.
+  // Used to absolutely position the popover anchor against the bbox's
+  // normalized coordinates.
+  const [imgSize, setImgSize] = useState({ width: 0, height: 0 });
+  const popoverSearchInputRef = useRef<HTMLInputElement>(null);
+  const anchorRef = useRef<HTMLDivElement>(null);
   const deleteButtonRef = useRef<HTMLButtonElement>(null);
   const [, startTransition] = useTransition();
   const isVerifyingRef = useRef(false);
@@ -183,24 +187,24 @@ export function ImageAnnotationClient({
   const [addSpeciesError, setAddSpeciesError] = useState<string | null>(null);
 
   const isDialogOpen = deleteDialogDetectionId !== null || addSpeciesOpen;
-  const { containerRef: zoomContainerRef, wrapperRef: zoomWrapperRef, style: zoomStyle, panHandlers, scale: zoomScale, isPanning, resetZoom } = useImageZoom({ disabled: isDialogOpen });
+  const { containerRef: zoomContainerRef, wrapperRef: zoomWrapperRef, style: zoomStyle, panHandlers, scale: zoomScale, isPanning, isZooming, resetZoom } = useImageZoom({ disabled: isDialogOpen });
 
-  const selectedDetection = detections.find((d) => d.id === selectedBoxId) ?? null;
+  const picker = useAnnotationPicker({
+    selectedBoxId,
+    detections,
+    isPanning,
+    isZooming,
+    bboxesHidden,
+    isDialogOpen,
+  });
+  const { selectedDetection } = picker;
 
-  // Current species for the selected detection (for highlighting in sidebar)
-  const currentSpecies = useMemo(() => {
-    if (!selectedDetection?.identification) return null;
-    return selectedDetection.identification.correctedSpecies || selectedDetection.identification.species;
-  }, [selectedDetection]);
-
-  // Auto-focus species search when a detection is selected
-  useEffect(() => {
-    if (selectedBoxId !== null) {
-      searchInputRef.current?.focus();
-    } else {
-      searchInputRef.current?.blur();
-    }
-  }, [selectedBoxId]);
+  // 1-based index of the selected detection, used in the popover header.
+  const selectedDetectionNumber = useMemo(() => {
+    if (selectedBoxId == null) return 0;
+    const idx = detections.findIndex((d) => d.id === selectedBoxId);
+    return idx < 0 ? 0 : idx + 1;
+  }, [detections, selectedBoxId]);
 
   // Standalone-page prefetch: when this component is rendered as the
   // top-level annotation page (no `onNavigate` callback), warm the next /
@@ -224,11 +228,10 @@ export function ImageAnnotationClient({
     };
   }, [router, onNavigate, jobId, nextImageId, prevImageId]);
 
-  // Visible species list for hotkey assignment
-  const visibleSpecies = useMemo(
-    () => getVisibleSpecies(speciesList, frequentSpecies, searchQuery),
-    [speciesList, frequentSpecies, searchQuery]
-  );
+  // Stable hotkey slots — memoized so the shortcut hook's useEffect doesn't
+  // re-register on every parent re-render (server returns a fresh array
+  // identity each render; only changes on page navigation).
+  const stableHotkeySlots = useMemo(() => hotkeySlots, [hotkeySlots]);
 
   // Detection pending deletion (for dialog)
   const deletingDetection = useMemo(
@@ -276,30 +279,11 @@ export function ImageAnnotationClient({
     });
   }, [detections, jobId, imageId, navigationIds, router, onNavigate, refresh]);
 
-  const handleVerifySelected = useCallback(() => {
-    if (!selectedDetection?.identification) return;
-    if (selectedDetection.identification.verificationStatus !== "unverified") return;
-    startTransition(async () => {
-      await verifyIdentification(selectedDetection.identification!.id);
-      refresh();
-    });
-  }, [selectedDetection, refresh]);
-
-  const handleRejectSelected = useCallback(() => {
-    if (!selectedDetection?.identification) return;
-    if (selectedDetection.identification.verificationStatus !== "unverified") return;
-    startTransition(async () => {
-      await rejectIdentification(selectedDetection.identification!.id);
-      refresh();
-    });
-  }, [selectedDetection, refresh]);
-
   const handleDrawComplete = useCallback(
     (bbox: { x: number; y: number; width: number; height: number }) => {
       startTransition(async () => {
         const result = await createManualDetection(imageId, bbox);
         if (result.success) {
-          setSearchQuery("");
           setSelectedBoxId(result.data.detectionId);
           refresh();
         }
@@ -310,10 +294,10 @@ export function ImageAnnotationClient({
 
   const handleSelectSpecies = useCallback(
     (scientificName: string) => {
-      if (!selectedDetection?.identification) return;
+      if (!selectedDetection) return;
       startTransition(async () => {
         const result = await assignSpecies(
-          selectedDetection.identification!.id,
+          selectedDetection.id,
           scientificName
         );
         if (result.success) {
@@ -437,8 +421,6 @@ export function ImageAnnotationClient({
 
   useAnnotationShortcuts({
     enabled: true,
-    onVerify: canEdit ? handleVerifySelected : undefined,
-    onReject: canEdit ? handleRejectSelected : undefined,
     onQuickVerifyAll: canEdit ? handleQuickVerifyAll : undefined,
     onDeleteSelected: canEdit ? handleDeleteSelected : undefined,
     onToggleConfirmedBlank: canEdit ? handleToggleConfirmedBlank : undefined,
@@ -475,7 +457,6 @@ export function ImageAnnotationClient({
     },
     onDeselect: () => {
       setSelectedBoxId(null);
-      setSearchQuery("");
     },
     onEscapeBack: () => {
       if (onBack) {
@@ -485,13 +466,13 @@ export function ImageAnnotationClient({
       }
     },
     onAssignSpeciesByIndex: canEdit ? (index) => {
-      if (index < visibleSpecies.length) {
-        handleSelectSpecies(visibleSpecies[index].scientificName);
+      if (index < stableHotkeySlots.length) {
+        handleSelectSpecies(stableHotkeySlots[index].scientificName);
       }
     } : undefined,
     detectionCount: detections.length,
     selectedDetectionId: selectedBoxId,
-    searchInputRef,
+    searchInputRef: popoverSearchInputRef,
   });
 
   // --- Deletion dialog info ---
@@ -502,30 +483,25 @@ export function ImageAnnotationClient({
     ? detections.findIndex((d) => d.id === deletingDetection.id) + 1
     : 0;
 
-  return (
-    <>
-      <div className={`flex gap-4 ${containerClassName ?? "h-[calc(100vh-10rem)]"}`}>
-        {/* Left sidebar — Species list */}
-        <aside className="w-56 shrink-0 flex flex-col min-w-0 overflow-hidden border rounded-lg bg-background">
-          <SpeciesSidebar
-            speciesList={speciesList}
-            frequentSpecies={frequentSpecies}
-            selectedDetectionId={selectedBoxId}
-            currentSpecies={currentSpecies}
-            searchQuery={searchQuery}
-            onSearchChange={setSearchQuery}
-            onSelectSpecies={canEdit ? handleSelectSpecies : undefined}
-            onAddSpecies={canEdit ? handleAddSpecies : undefined}
-            searchInputRef={searchInputRef}
-            nameDisplay={nameDisplay}
-            onCycleDisplay={cycleDisplay}
-          />
-        </aside>
+  const selectedBox = selectedBoxId != null
+    ? displayBoxes.find((b) => b.id === selectedBoxId) ?? null
+    : null;
 
-        {/* Main content */}
-        <div className="flex-1 flex flex-col min-w-0 gap-2">
-          {/* Detection cards strip */}
-          <DetectionCardStrip
+  return (
+    <Popover
+      open={picker.open}
+      onOpenChange={(next) => {
+        // Esc and outside-clicks land here — deselect the bbox so the
+        // picker.open gate flips closed on its own.
+        if (!next) {
+          setSelectedBoxId(null);
+        }
+      }}
+    >
+      <div className={`flex gap-4 ${containerClassName ?? "h-[calc(100vh-10rem)]"}`}>
+        {/* Left sidebar — annotation tools */}
+        <aside className="w-56 shrink-0 flex flex-col min-w-0 overflow-hidden border rounded-lg bg-background">
+          <AnnotationToolsSidebar
             detections={detections}
             selectedDetectionId={selectedBoxId}
             onSelectDetection={(id) =>
@@ -534,49 +510,41 @@ export function ImageAnnotationClient({
             onDeleteDetection={canEdit ? handleDeleteDetection : undefined}
             confirmedBlank={isConfirmedBlank}
             onToggleConfirmedBlank={canEdit ? handleToggleConfirmedBlank : undefined}
-            nameDisplay={nameDisplay}
             speciesList={speciesList}
+            nameDisplay={nameDisplay}
+            onCycleDisplay={cycleDisplay}
+            canEdit={canEdit}
+            setupTag={currentSetupTag}
+            onToggleSetupDeployment={canEdit ? () => handleToggleSetupTag("deployment") : undefined}
+            onToggleSetupRetrieval={canEdit ? () => handleToggleSetupTag("retrieval") : undefined}
+            isStarred={isStarred}
+            starredBy={starredBy}
+            onToggleStarred={canEdit ? handleToggleStarred : undefined}
+            dateSuggestion={
+              dateSuggestion && !suggestionDismissed
+                ? { field: dateSuggestion.field, value: dateSuggestion.value }
+                : null
+            }
+            onApplyDateSuggestion={canEdit ? handleApplyDate : undefined}
+            onDismissDateSuggestion={() => setSuggestionDismissed(true)}
+            jobId={jobId}
+            onBack={onBack}
           />
+        </aside>
 
-          {/* Date suggestion banner */}
-          {dateSuggestion && !suggestionDismissed && (
-            <div className="flex items-center gap-3 px-3 py-2 rounded-md border bg-blue-50 border-blue-200 text-sm">
-              <div className="flex-1">
-                <span className="text-blue-800">
-                  Timestamp: {dateSuggestion.value.replace("T", " ")}
-                  {" — "}
-                  ¿Usar como{" "}
-                  {dateSuggestion.field === "validStart"
-                    ? "fecha de inicio válida"
-                    : "fecha de fin válida"}
-                  ?
-                </span>
-              </div>
-              <Button
-                variant="default"
-                size="sm"
-                className="h-7 text-xs bg-blue-600 hover:bg-blue-700"
-                onClick={handleApplyDate}
-              >
-                Aplicar
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 text-xs"
-                onClick={() => setSuggestionDismissed(true)}
-              >
-                Cerrar
-              </Button>
-            </div>
-          )}
-
+        {/* Main content */}
+        <div className="flex-1 flex flex-col min-w-0 gap-2">
           {/* Image with bbox overlay */}
           <div
             ref={zoomContainerRef}
             className={`flex-1 min-h-0 rounded-lg overflow-hidden border bg-black flex items-center justify-center relative ${isPanning ? "cursor-grab" : ""}`}
           >
-            <div ref={zoomWrapperRef} className="max-h-full" style={zoomStyle} {...panHandlers}>
+            <div
+              ref={zoomWrapperRef}
+              className="max-h-full relative inline-block"
+              style={zoomStyle}
+              {...panHandlers}
+            >
               <BBoxOverlay
                 src={src}
                 alt={alt}
@@ -587,7 +555,25 @@ export function ImageAnnotationClient({
                 }
                 editable={!isPanning && canEdit}
                 onDrawComplete={canEdit ? handleDrawComplete : undefined}
+                onResize={setImgSize}
               />
+              {/* Invisible anchor sized/positioned to the selected bbox.
+                  Radix attaches the popover to this element; sideOffset>0
+                  guarantees the popover never overlaps the bbox itself. */}
+              {selectedBox && imgSize.width > 0 && (
+                <PopoverAnchor asChild>
+                  <div
+                    ref={anchorRef}
+                    className="absolute pointer-events-none"
+                    style={{
+                      left: selectedBox.x * imgSize.width,
+                      top: selectedBox.y * imgSize.height,
+                      width: selectedBox.width * imgSize.width,
+                      height: selectedBox.height * imgSize.height,
+                    }}
+                  />
+                </PopoverAnchor>
+              )}
             </div>
             {zoomScale > 1 && (
               <span className="absolute top-2 right-2 px-1.5 py-0.5 text-xs font-mono bg-black/60 text-white rounded">
@@ -602,68 +588,32 @@ export function ImageAnnotationClient({
               </div>
             )}
           </div>
-
-          {/* Help panel + setup tags + star + back link */}
-          <div className="flex items-start gap-2">
-            <div className="flex-1 min-w-0">
-              <AnnotationHelpPanel />
-            </div>
-            {canEdit && (
-              <>
-                <Button
-                  variant={currentSetupTag === "deployment" ? "default" : "outline"}
-                  size="sm"
-                  className={`shrink-0 gap-1.5 ${currentSetupTag === "deployment" ? "bg-blue-600 hover:bg-blue-700 text-white" : ""}`}
-                  onClick={() => handleToggleSetupTag("deployment")}
-                  title="Marcar como instalación (i)"
-                >
-                  <Camera className="size-4" />
-                  Instalación
-                </Button>
-                <Button
-                  variant={currentSetupTag === "retrieval" ? "default" : "outline"}
-                  size="sm"
-                  className={`shrink-0 gap-1.5 ${currentSetupTag === "retrieval" ? "bg-orange-600 hover:bg-orange-700 text-white" : ""}`}
-                  onClick={() => handleToggleSetupTag("retrieval")}
-                  title="Marcar como recogida (t)"
-                >
-                  <Camera className="size-4" />
-                  Recogida
-                </Button>
-                <Button
-                  variant={isStarred ? "default" : "outline"}
-                  size="sm"
-                  className={`shrink-0 gap-1.5 ${isStarred ? "bg-amber-500 hover:bg-amber-600 text-white" : ""}`}
-                  onClick={handleToggleStarred}
-                  title={isStarred && starredBy ? `Destacada por ${starredBy}` : "Destacar imagen (s)"}
-                >
-                  <svg
-                    className="size-4"
-                    fill={isStarred ? "currentColor" : "none"}
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth={1.5}
-                  >
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M11.48 3.499a.562.562 0 0 1 1.04 0l2.125 5.111a.563.563 0 0 0 .475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 0 0-.182.557l1.285 5.385a.562.562 0 0 1-.84.61l-4.725-2.885a.562.562 0 0 0-.586 0L6.982 20.54a.562.562 0 0 1-.84-.61l1.285-5.386a.562.562 0 0 0-.182-.557l-4.204-3.602a.562.562 0 0 1 .321-.988l5.518-.442a.563.563 0 0 0 .475-.345L11.48 3.5Z" />
-                  </svg>
-                  {isStarred ? "Destacada" : "Destacar"}
-                </Button>
-              </>
-            )}
-            {onBack ? (
-              <Button variant="outline" size="sm" className="shrink-0" onClick={onBack}>
-                Volver a Cuadrícula
-              </Button>
-            ) : (
-              <Button asChild variant="outline" size="sm" className="shrink-0">
-                <Link href={`/camera-trap/results/${jobId}`} scroll={false}>
-                  Volver a Cuadrícula
-                </Link>
-              </Button>
-            )}
-          </div>
         </div>
       </div>
+
+      {/* Contextual picker anchored to the selected bbox. Rendered inside
+          the Popover root so PopoverAnchor in the zoom wrapper governs
+          its position. */}
+      <AnnotationPickerPopover
+        open={picker.open}
+        selectedDetection={picker.selectedDetection}
+        detectionNumber={selectedDetectionNumber}
+        currentSpecies={picker.currentSpecies}
+        hotkeySlots={stableHotkeySlots}
+        speciesList={speciesList}
+        nameDisplay={nameDisplay}
+        canEdit={canEdit}
+        containerRef={zoomContainerRef}
+        searchInputRef={popoverSearchInputRef}
+        onAssignSpecies={handleSelectSpecies}
+        onAssignSpeciesByIndex={(index) => {
+          if (canEdit && index < stableHotkeySlots.length) {
+            handleSelectSpecies(stableHotkeySlots[index].scientificName);
+          }
+        }}
+        onAddSpecies={canEdit ? handleAddSpecies : undefined}
+        onDelete={handleDeleteSelected}
+      />
 
       {/* Delete confirmation dialog — editors only */}
       {canEdit && <Dialog
@@ -820,6 +770,6 @@ export function ImageAnnotationClient({
           </DialogFooter>
         </DialogContent>
       </Dialog>}
-    </>
+    </Popover>
   );
 }

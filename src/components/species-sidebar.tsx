@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo, useRef } from "react";
+import { useMemo } from "react";
 import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
 import { Check, Search } from "lucide-react";
 import type { Species } from "@/db/schema";
 
@@ -34,12 +35,14 @@ const TYPE_ORDER = ["mammal", "bird", "reptile", "amphibian", "insect", "system"
 
 interface SpeciesSidebarProps {
   speciesList: Species[];
+  frequentSpecies: Species[];
   selectedDetectionId: number | null;
   currentSpecies: string | null;
   searchQuery: string;
   onSearchChange: (query: string) => void;
   onSelectSpecies?: (scientificName: string) => void;
   onAddSpecies?: () => void;
+  searchInputRef: React.RefObject<HTMLInputElement | null>;
   nameDisplay: NameDisplay;
   onCycleDisplay: () => void;
 }
@@ -58,16 +61,17 @@ function groupByType(speciesList: Species[]): [string, Species[]][] {
 
 export function SpeciesSidebar({
   speciesList,
+  frequentSpecies,
   selectedDetectionId,
   currentSpecies,
   searchQuery,
   onSearchChange,
   onSelectSpecies,
   onAddSpecies,
+  searchInputRef,
   nameDisplay,
   onCycleDisplay,
 }: SpeciesSidebarProps) {
-  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const filteredSpecies = useMemo(() => {
     if (!searchQuery.trim()) return speciesList;
     const q = searchQuery.toLowerCase();
@@ -81,7 +85,35 @@ export function SpeciesSidebar({
 
   const grouped = useMemo(() => groupByType(filteredSpecies), [filteredSpecies]);
 
+  const showFrequent = frequentSpecies.length > 0 && !searchQuery.trim();
   const isDisabled = selectedDetectionId === null;
+
+  // Build flat visible list for hotkey numbering
+  const flatVisible = useMemo(() => {
+    const result: Species[] = [];
+    if (showFrequent) {
+      result.push(...frequentSpecies);
+    }
+    for (const [, items] of grouped) {
+      result.push(...items);
+    }
+    // Deduplicate (recent species may also appear in grouped)
+    const seen = new Set<string>();
+    return result.filter((sp) => {
+      if (seen.has(sp.scientificName)) return false;
+      seen.add(sp.scientificName);
+      return true;
+    });
+  }, [showFrequent, frequentSpecies, grouped]);
+
+  // Hotkey index map: scientificName → 1-based hotkey number (1-10)
+  const hotkeyMap = useMemo(() => {
+    const map = new Map<string, number>();
+    for (let i = 0; i < Math.min(10, flatVisible.length); i++) {
+      map.set(flatVisible[i].scientificName, i + 1);
+    }
+    return map;
+  }, [flatVisible]);
 
   return (
     <div className="flex flex-col h-full">
@@ -116,8 +148,27 @@ export function SpeciesSidebar({
           </p>
         )}
 
+        {showFrequent && (
+          <div className="mb-1">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-2 py-1">
+              Frecuentes
+            </p>
+            {frequentSpecies.map((sp) => (
+              <SpeciesRow
+                key={`recent-${sp.id}`}
+                species={sp}
+                hotkeyNum={hotkeyMap.get(sp.scientificName) ?? null}
+                isActive={currentSpecies === sp.scientificName}
+                isDisabled={isDisabled}
+                onSelect={onSelectSpecies}
+                nameDisplay={nameDisplay}
+              />
+            ))}
+          </div>
+        )}
+
         {grouped.map(([type, items], index) => (
-          <div key={type} className={`mb-1${index > 0 ? " border-t border-border mt-2 pt-2" : ""}`}>
+          <div key={type} className={`mb-1${index > 0 || showFrequent ? " border-t border-border mt-2 pt-2" : ""}`}>
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-2 py-1">
               {TYPE_LABELS[type] || type}
             </p>
@@ -125,6 +176,7 @@ export function SpeciesSidebar({
               <SpeciesRow
                 key={sp.id}
                 species={sp}
+                hotkeyNum={hotkeyMap.get(sp.scientificName) ?? null}
                 isActive={currentSpecies === sp.scientificName}
                 isDisabled={isDisabled}
                 onSelect={onSelectSpecies}
@@ -158,12 +210,14 @@ export function SpeciesSidebar({
 
 function SpeciesRow({
   species: sp,
+  hotkeyNum,
   isActive,
   isDisabled,
   onSelect,
   nameDisplay,
 }: {
   species: Species;
+  hotkeyNum: number | null;
   isActive: boolean;
   isDisabled: boolean;
   onSelect?: (scientificName: string) => void;
@@ -186,6 +240,14 @@ function SpeciesRow({
             : "hover:bg-accent cursor-pointer"
       }`}
     >
+      {hotkeyNum !== null && (
+        <Badge
+          variant="outline"
+          className="text-[10px] font-mono w-4 h-4 p-0 flex items-center justify-center flex-shrink-0"
+        >
+          {hotkeyNum === 10 ? "0" : hotkeyNum}
+        </Badge>
+      )}
       {isActive && <Check className="h-3 w-3 flex-shrink-0 text-primary" />}
       {nameDisplay === "common" && (
         <span className="truncate text-xs">{sp.commonName || sp.scientificName}</span>
@@ -198,4 +260,40 @@ function SpeciesRow({
       )}
     </button>
   );
+}
+
+/** Returns the flat visible species list for hotkey mapping from outside the component */
+export function getVisibleSpecies(
+  speciesList: Species[],
+  frequentSpecies: Species[],
+  searchQuery: string
+): Species[] {
+  const filtered = searchQuery.trim()
+    ? speciesList.filter((sp) => {
+        const q = searchQuery.toLowerCase();
+        return (
+          sp.scientificName.toLowerCase().includes(q) ||
+          sp.commonName.toLowerCase().includes(q) ||
+          (sp.spanishName && sp.spanishName.toLowerCase().includes(q))
+        );
+      })
+    : speciesList;
+
+  const grouped = groupByType(filtered);
+  const showFrequent = frequentSpecies.length > 0 && !searchQuery.trim();
+
+  const result: Species[] = [];
+  if (showFrequent) {
+    result.push(...frequentSpecies);
+  }
+  for (const [, items] of grouped) {
+    result.push(...items);
+  }
+
+  const seen = new Set<string>();
+  return result.filter((sp) => {
+    if (seen.has(sp.scientificName)) return false;
+    seen.add(sp.scientificName);
+    return true;
+  });
 }

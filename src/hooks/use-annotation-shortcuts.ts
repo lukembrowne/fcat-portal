@@ -5,8 +5,8 @@ import { useEffect, useRef } from "react";
 export const SHORTCUTS = [
   { key: "←/→", description: "Imagen anterior/siguiente", category: "navigation" },
   { key: "1-9", description: "Seleccionar detección / asignar especie frecuente", category: "navigation" },
-  { key: "0", description: "Asignar especie frecuente (slot 10)", category: "annotation" },
-  { key: "Esc", description: "Deseleccionar / volver a cuadrícula", category: "navigation" },
+  { key: "0", description: "Repetir última especie asignada", category: "annotation" },
+  { key: "Esc", description: "Cerrar selector / deseleccionar", category: "navigation" },
   { key: "Enter", description: "Verificar todo y avanzar", category: "annotation" },
   { key: "d / ⌫ / Supr", description: "Eliminar detección", category: "annotation" },
   { key: "b", description: "Confirmar/desconfirmar imagen vacía", category: "annotation" },
@@ -24,7 +24,6 @@ interface AnnotationShortcutOptions {
   onPrev?: () => void;
   onSelectDetection?: (index: number) => void;
   onDeselect?: () => void;
-  onEscapeBack?: () => void;
   onDeleteSelected?: () => void;
   onToggleConfirmedBlank?: () => void;
   onToggleStarred?: () => void;
@@ -33,7 +32,13 @@ interface AnnotationShortcutOptions {
   onToggleBboxes?: () => void;
   onResetZoom?: () => void;
   onAssignSpeciesByIndex?: (index: number) => void;
+  onAssignLastSpecies?: () => void;
   isDialogOpen?: boolean;
+  /** True when the contextual species picker popover is open. While open,
+   *  Radix owns Esc — the global handler must early-return so it does not
+   *  also fire onDeselect on the same keystroke (and onEscapeBack on the
+   *  next, which used to navigate back to the gallery). */
+  isPickerOpen?: boolean;
   detectionCount?: number;
   selectedDetectionId?: number | null;
   /**
@@ -69,14 +74,14 @@ export function useAnnotationShortcuts(opts: AnnotationShortcutOptions) {
       const searchInput = o.searchInputRef?.current;
       const isSearchFocused = searchInput && document.activeElement === searchInput;
 
-      // Escape (outside the popover): deselect if selection, else navigate
-      // back to the grid. Radix's Popover handles its own Esc internally.
+      // Escape: when the picker is open, Radix owns it — early-return so the
+      // global handler does not also fire on the same keystroke. When closed,
+      // Esc only deselects an outstanding selection. Never navigates away.
       if (e.key === "Escape") {
+        if (o.isPickerOpen) return;
         if (o.selectedDetectionId != null) {
           o.onDeselect?.();
-          return;
         }
-        o.onEscapeBack?.();
         return;
       }
 
@@ -124,7 +129,10 @@ export function useAnnotationShortcuts(opts: AnnotationShortcutOptions) {
           o.onNext?.();
           break;
         case "Enter":
-          if (!hasModifier && !o.isDialogOpen) {
+          // Skip key-repeat: a held Enter inside the delete-confirm dialog
+          // would otherwise leak through after the dialog unmounts and trigger
+          // verify-and-advance.
+          if (!hasModifier && !o.isDialogOpen && !e.repeat) {
             e.preventDefault();
             o.onQuickVerifyAll?.();
           }
@@ -176,10 +184,16 @@ export function useAnnotationShortcuts(opts: AnnotationShortcutOptions) {
         default:
           if (!hasModifier && /^[0-9]$/.test(e.key)) {
             if (o.selectedDetectionId != null) {
-              // Detection selected → assign species by index
+              // Detection selected:
+              //   1-9 → assign species by frecuente slot
+              //   0   → repeat last assigned species
               e.preventDefault();
-              const index = e.key === "0" ? 9 : parseInt(e.key, 10) - 1;
-              o.onAssignSpeciesByIndex?.(index);
+              if (e.key === "0") {
+                o.onAssignLastSpecies?.();
+              } else {
+                const index = parseInt(e.key, 10) - 1;
+                o.onAssignSpeciesByIndex?.(index);
+              }
             } else if (/^[1-9]$/.test(e.key)) {
               // No detection selected → select detection by number
               const index = parseInt(e.key, 10) - 1;

@@ -52,13 +52,14 @@ export default async function ImageDetailPage({ params }: PageProps) {
   // Verification stats are deployment-scoped, not per-job — the "X/Y revisadas"
   // header reflects review progress on the entire deployment so an incremental
   // ML run doesn't shrink the count to "0/2 revisadas".
-  // Pass `null` for project-wide top-10 aggregated across all camera-trap
-  // annotations. These drive the stable hotkey slots (1-0) for this page
-  // load; they do not reshuffle as the user annotates.
+  // Pass `null` for project-wide top-9 aggregated across all camera-trap
+  // annotations. These drive the stable frecuentes hotkey slots (1-9) for
+  // this page load; they do not reshuffle as the user annotates. Slot 0 is
+  // reserved for "repeat last assigned species" (session-local).
   const [imageIds, speciesList, hotkeySlotsResult, verificationStats] = await Promise.all([
     getJobImageIds(jobId),
     getSpeciesList(),
-    getFrequentSpecies(null, 10),
+    getFrequentSpecies(null, 9),
     getDeploymentVerificationStats(image.deploymentId),
   ]);
   const hotkeySlots = hotkeySlotsResult.success ? hotkeySlotsResult.data : [];

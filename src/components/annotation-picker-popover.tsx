@@ -51,6 +51,10 @@ interface AnnotationPickerPopoverProps {
   detectionNumber: number;
   currentSpecies: string | null;
   hotkeySlots: Species[];
+  /** Most recently assigned species in this session (any image, same job).
+   *  Drives the "Última" row + the `0` hotkey for repeating across a 3-photo
+   *  burst. Null when nothing has been assigned yet this session. */
+  lastSpecies: Species | null;
   speciesList: Species[];
   nameDisplay: NameDisplay;
   canEdit: boolean;
@@ -58,6 +62,7 @@ interface AnnotationPickerPopoverProps {
   searchInputRef: React.RefObject<HTMLInputElement | null>;
   onAssignSpecies: (scientificName: string) => void;
   onAssignSpeciesByIndex: (index: number) => void;
+  onAssignLastSpecies: () => void;
   onAddSpecies?: () => void;
   onDelete: () => void;
 }
@@ -68,6 +73,7 @@ export function AnnotationPickerPopover({
   detectionNumber,
   currentSpecies,
   hotkeySlots,
+  lastSpecies,
   speciesList,
   nameDisplay,
   canEdit,
@@ -75,6 +81,7 @@ export function AnnotationPickerPopover({
   searchInputRef,
   onAssignSpecies,
   onAssignSpeciesByIndex,
+  onAssignLastSpecies,
   onAddSpecies,
   onDelete,
 }: AnnotationPickerPopoverProps) {
@@ -136,6 +143,41 @@ export function AnnotationPickerPopover({
         )}
       </div>
 
+      {lastSpecies && (
+        <div className="px-2 py-2 border-b">
+          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-1 pb-1">
+            Última
+          </p>
+          {(() => {
+            const active = currentSpecies === lastSpecies.scientificName;
+            return (
+              <button
+                type="button"
+                disabled={!canEdit || active}
+                onClick={onAssignLastSpecies}
+                title={`${lastSpecies.scientificName} — Repetir (0)`}
+                className={`w-full text-left px-1.5 py-1 rounded text-xs flex items-center gap-1.5 min-w-0 transition-colors ${
+                  active
+                    ? "bg-primary/10 text-primary cursor-default"
+                    : !canEdit
+                      ? "opacity-60 cursor-not-allowed"
+                      : "hover:bg-accent cursor-pointer"
+                }`}
+              >
+                <Badge
+                  variant="outline"
+                  className="text-[10px] font-mono w-4 h-4 p-0 flex items-center justify-center shrink-0"
+                >
+                  0
+                </Badge>
+                {active && <Check className="h-3 w-3 shrink-0 text-primary" />}
+                <span className="truncate">{displayName(lastSpecies, nameDisplay)}</span>
+              </button>
+            );
+          })()}
+        </div>
+      )}
+
       {hotkeySlots.length > 0 && (
         <div className="px-2 py-2 border-b">
           <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-1 pb-1">
@@ -143,7 +185,7 @@ export function AnnotationPickerPopover({
           </p>
           <div className="grid grid-cols-2 gap-0.5">
             {hotkeySlots.map((sp, idx) => {
-              const keyLabel = idx === 9 ? "0" : String(idx + 1);
+              const keyLabel = String(idx + 1);
               const active = currentSpecies === sp.scientificName;
               return (
                 <button
@@ -180,9 +222,10 @@ export function AnnotationPickerPopover({
         shouldFilter={true}
         className="border-0"
         onKeyDown={(e) => {
-          // Digits assign frequent species by hotkey slot. Handled here so the
-          // event is intercepted before it reaches the input's default action,
-          // which avoids a window-level keydown race with cmdk's own handlers.
+          // Digits are intercepted here (before cmdk's typeahead) so the user
+          // can press 0-9 even while the search input has focus.
+          //   1-9 → assign frecuente by slot
+          //   0   → repeat last assigned species
           if (
             canEdit &&
             !e.metaKey &&
@@ -190,7 +233,13 @@ export function AnnotationPickerPopover({
             !e.altKey &&
             /^[0-9]$/.test(e.key)
           ) {
-            const index = e.key === "0" ? 9 : parseInt(e.key, 10) - 1;
+            if (e.key === "0") {
+              e.preventDefault();
+              e.stopPropagation();
+              onAssignLastSpecies();
+              return;
+            }
+            const index = parseInt(e.key, 10) - 1;
             if (index < hotkeySlots.length) {
               e.preventDefault();
               e.stopPropagation();

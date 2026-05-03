@@ -3681,7 +3681,7 @@ export async function getImageAnnotationData(
     useFilter ? Promise.resolve([] as number[]) : getJobImageIds(jobId),
     getSpeciesList(),
     getDeploymentVerificationStats(image.deploymentId),
-    getFrequentSpecies(null, 10),
+    getFrequentSpecies(null, 9),
   ]);
 
   const imageIds = useFilter ? navigationIds! : fullJobImageIds;
@@ -3794,7 +3794,7 @@ export async function getAnnotationSessionContext(
   const [speciesList, hotkeySlotsResult, verificationStats, fullJobImageIds, deploymentRow] =
     await Promise.all([
       getSpeciesList(),
-      getFrequentSpecies(null, 10),
+      getFrequentSpecies(null, 9),
       getDeploymentVerificationStats(deploymentId),
       useFilter ? Promise.resolve([] as number[]) : getJobImageIds(jobId),
       db

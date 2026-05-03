@@ -53,9 +53,10 @@ interface ImageAnnotationClientProps {
   detections: DetectionWithIdentification[];
   speciesList: Species[];
   /**
-   * 10 species mapped to hotkey slots 1-9 and 0. Computed project-wide
-   * once per page load (see `getFrequentSpecies(null, 10)`); stays stable
-   * for the whole session so muscle memory survives between images.
+   * 9 species mapped to frecuentes hotkey slots 1-9. Computed project-wide
+   * once per page load (see `getFrequentSpecies(null, 9)`); stays stable
+   * for the whole session so muscle memory survives between images. Slot 0
+   * is reserved for "repeat last assigned species" (session-local).
    */
   hotkeySlots: Species[];
   jobId: number;
@@ -125,6 +126,19 @@ export function ImageAnnotationClient({
   const [selectedBoxId, setSelectedBoxId] = useState<number | null>(null);
   const [bboxesHidden, setBboxesHidden] = useState(false);
   const [deleteDialogDetectionId, setDeleteDialogDetectionId] = useState<number | null>(null);
+  // Most recently assigned species, scoped per job in sessionStorage. Drives
+  // the "Última" popover row + the `0` hotkey for repeating the previous
+  // species across a 3-photo burst. Survives arrow-key navigation; resets
+  // on tab close or job switch.
+  const lastSpeciesStorageKey = `fcat:lastSpecies:${jobId}`;
+  const [lastSpeciesName, setLastSpeciesName] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      return window.sessionStorage.getItem(lastSpeciesStorageKey);
+    } catch {
+      return null;
+    }
+  });
   // Pixel dimensions of the currently rendered image, reported by BBoxOverlay.
   // Used to absolutely position the popover anchor against the bbox's
   // normalized coordinates.
@@ -153,6 +167,13 @@ export function ImageAnnotationClient({
     }
     return map;
   }, [speciesList]);
+
+  // Resolve the last-assigned scientific name back to a Species record. If
+  // the species was deleted from the catalog, the row is silently dropped.
+  const lastSpecies = useMemo(
+    () => (lastSpeciesName ? speciesMap.get(lastSpeciesName) ?? null : null),
+    [lastSpeciesName, speciesMap]
+  );
 
   // Compute display labels for bbox overlay based on name display mode
   const displayBoxes = useMemo(() => {
@@ -301,6 +322,13 @@ export function ImageAnnotationClient({
           scientificName
         );
         if (result.success) {
+          setLastSpeciesName(scientificName);
+          try {
+            window.sessionStorage.setItem(lastSpeciesStorageKey, scientificName);
+          } catch {
+            // Private browsing may block sessionStorage; fall through to
+            // the in-memory state, which still drives the popover row.
+          }
           refresh();
         } else {
           console.error("assignSpecies failed:", result.error);
@@ -308,8 +336,18 @@ export function ImageAnnotationClient({
         }
       });
     },
-    [selectedDetection, refresh]
+    [selectedDetection, refresh, lastSpeciesStorageKey]
   );
+
+  const handleAssignLastSpecies = useCallback(() => {
+    if (!lastSpecies || !selectedDetection) return;
+    const current =
+      selectedDetection.identification?.correctedSpecies ||
+      selectedDetection.identification?.species ||
+      null;
+    if (current === lastSpecies.scientificName) return;
+    handleSelectSpecies(lastSpecies.scientificName);
+  }, [lastSpecies, selectedDetection, handleSelectSpecies]);
 
   const handleDeleteDetection = useCallback((detectionId: number) => {
     setDeleteDialogDetectionId(detectionId);
@@ -458,20 +496,15 @@ export function ImageAnnotationClient({
     onDeselect: () => {
       setSelectedBoxId(null);
     },
-    onEscapeBack: () => {
-      if (onBack) {
-        onBack();
-      } else {
-        router.push(`/camera-trap/results/${jobId}`, { scroll: false });
-      }
-    },
     onAssignSpeciesByIndex: canEdit ? (index) => {
       if (index < stableHotkeySlots.length) {
         handleSelectSpecies(stableHotkeySlots[index].scientificName);
       }
     } : undefined,
+    onAssignLastSpecies: canEdit ? handleAssignLastSpecies : undefined,
     detectionCount: detections.length,
     selectedDetectionId: selectedBoxId,
+    isPickerOpen: picker.open,
     searchInputRef: popoverSearchInputRef,
   });
 
@@ -600,6 +633,7 @@ export function ImageAnnotationClient({
         detectionNumber={selectedDetectionNumber}
         currentSpecies={picker.currentSpecies}
         hotkeySlots={stableHotkeySlots}
+        lastSpecies={lastSpecies}
         speciesList={speciesList}
         nameDisplay={nameDisplay}
         canEdit={canEdit}
@@ -611,6 +645,7 @@ export function ImageAnnotationClient({
             handleSelectSpecies(stableHotkeySlots[index].scientificName);
           }
         }}
+        onAssignLastSpecies={handleAssignLastSpecies}
         onAddSpecies={canEdit ? handleAddSpecies : undefined}
         onDelete={handleDeleteSelected}
       />
@@ -638,6 +673,11 @@ export function ImageAnnotationClient({
               e.key === "Enter"
             ) {
               e.preventDefault();
+              // Stop the event from reaching the window-level keydown listener
+              // in useAnnotationShortcuts, where Enter would otherwise trigger
+              // verify-and-advance once the dialog closes.
+              e.stopPropagation();
+              e.nativeEvent.stopImmediatePropagation();
               handleConfirmDelete();
             }
           }}

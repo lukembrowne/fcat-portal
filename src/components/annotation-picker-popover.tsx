@@ -136,7 +136,7 @@ export function AnnotationPickerPopover({
             variant="ghost"
             className="h-7 w-7 shrink-0"
             onClick={onDelete}
-            title="Eliminar (d)"
+            title="Eliminar (⌫ o Supr)"
           >
             <Trash2 className="h-3.5 w-3.5" />
           </Button>
@@ -222,6 +222,25 @@ export function AnnotationPickerPopover({
         shouldFilter={true}
         className="border-0"
         onKeyDown={(e) => {
+          // Backspace/Delete on an empty typeahead deletes the selected bbox.
+          // Once the user has typed anything, those keys edit text normally.
+          // Mirrors editor norms (e.g. Gmail) and gives a keyboard escape hatch
+          // for deletion now that the popover auto-focuses the search input.
+          if (
+            canEdit &&
+            !e.metaKey &&
+            !e.ctrlKey &&
+            !e.altKey &&
+            !e.shiftKey &&
+            (e.key === "Backspace" || e.key === "Delete") &&
+            (searchInputRef.current?.value ?? "") === ""
+          ) {
+            e.preventDefault();
+            e.stopPropagation();
+            onDelete();
+            return;
+          }
+
           // Digits are intercepted here (before cmdk's typeahead) so the user
           // can press 0-9 even while the search input has focus.
           //   1-9 → assign frecuente by slot

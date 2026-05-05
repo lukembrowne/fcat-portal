@@ -38,6 +38,7 @@
     "sharp": "^0.34.5",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.4.0",
+    "wavesurfer.js": "^7.12.6",
     "xlsx": "^0.18.5",
     "zod": "^4.3.6"
   },

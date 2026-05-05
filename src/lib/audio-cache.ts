@@ -1,8 +1,7 @@
 /**
- * Audio Cache — Downloads audio files from Drive and generates spectrograms.
+ * Audio Cache — Downloads audio files from Drive with persistent caching.
  *
  * Downloads to data/cache/audio/{deploymentId}/{filename} with persistent caching.
- * Spectrograms generated via Python/librosa, cached alongside audio files.
  * LRU eviction at the deployment level keeps total cache under AUDIO_CACHE_MAX_GB.
  *
  * Server-only module — never import in Client Components.
@@ -12,28 +11,18 @@ import "server-only";
 
 import { promises as fs } from "fs";
 import path from "path";
-import { execFile } from "child_process";
-import { promisify } from "util";
 import { db } from "@/db";
 import { audioFiles } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { downloadFile } from "./drive-client";
 import { log } from "@/lib/log";
 
-const execFileAsync = promisify(execFile);
-
 const CACHE_BASE = path.join(process.cwd(), "data", "cache", "audio");
 const AUDIO_CACHE_MAX_BYTES =
   parseInt(process.env.AUDIO_CACHE_MAX_GB || "50", 10) * 1024 * 1024 * 1024;
 
-const SPECTROGRAM_SCRIPT = path.join(
-  process.cwd(),
-  "scripts",
-  "generate-spectrogram.py"
-);
-
 // Inflight deduplication — prevents concurrent calls for the same file
-// from spawning duplicate downloads/Python processes.
+// from spawning duplicate downloads.
 const inflight = new Map<string, Promise<unknown>>();
 
 function dedupe<T>(key: string, fn: () => Promise<T>): Promise<T> {
@@ -43,27 +32,6 @@ function dedupe<T>(key: string, fn: () => Promise<T>): Promise<T> {
   const promise = fn().finally(() => inflight.delete(key));
   inflight.set(key, promise);
   return promise;
-}
-
-function getMlPython(): string {
-  return (
-    process.env.ML_PYTHON_PATH ||
-    path.join(process.cwd(), "data", "ml-venv", "bin", "python3")
-  );
-}
-
-export interface SpectrogramMetadata {
-  duration: number;
-  sampleRate: number;
-  width: number;
-  height: number;
-  pixelsPerSecond: number;
-  hzPerPixel: number;
-  fmin: number;
-  fmax: number;
-  nFft: number;
-  hopLength: number;
-  nMels: number;
 }
 
 /**
@@ -127,127 +95,9 @@ async function doEnsureAudioCached(
 }
 
 /**
- * Ensure spectrogram PNG is generated for an audio file.
- * Requires audio to be cached first. Returns metadata + path.
- */
-export function ensureSpectrogramGenerated(
-  audioFileId: number
-): Promise<{ spectrogramPath: string; metadata: SpectrogramMetadata }> {
-  return dedupe(`spec:${audioFileId}`, () => doEnsureSpectrogramGenerated(audioFileId));
-}
-
-async function doEnsureSpectrogramGenerated(
-  audioFileId: number
-): Promise<{ spectrogramPath: string; metadata: SpectrogramMetadata }> {
-  const [file] = await db
-    .select()
-    .from(audioFiles)
-    .where(eq(audioFiles.id, audioFileId));
-
-  if (!file) throw new Error(`Audio file ${audioFileId} not found`);
-
-  // Already generated?
-  if (file.spectrogramPath) {
-    try {
-      await fs.access(file.spectrogramPath);
-      // Return cached metadata from DB
-      return {
-        spectrogramPath: file.spectrogramPath,
-        metadata: buildMetadataFromDb(file),
-      };
-    } catch {
-      // Spectrogram was evicted — regenerate
-    }
-  }
-
-  if (!file.cachePath) {
-    throw new Error(
-      `Audio file ${audioFileId} is not cached — call ensureAudioCached first`
-    );
-  }
-
-  // Verify the cached audio file exists
-  await fs.access(file.cachePath);
-
-  const spectrogramPath = file.cachePath.replace(
-    /\.[^.]+$/,
-    ".spec.webp"
-  );
-
-  const pythonPath = getMlPython();
-
-  // Verify Python is available
-  try {
-    await fs.access(pythonPath);
-  } catch {
-    throw new Error(
-      "ML Python venv not available. Run scripts/ensure-ml-venv.sh first."
-    );
-  }
-
-  const { stdout } = await execFileAsync(pythonPath, [
-    SPECTROGRAM_SCRIPT,
-    file.cachePath,
-    spectrogramPath,
-  ]);
-
-  const metadata: SpectrogramMetadata = JSON.parse(stdout.trim());
-
-  // Update DB with spectrogram path and audio metadata
-  await db
-    .update(audioFiles)
-    .set({
-      spectrogramPath,
-      duration: metadata.duration,
-      sampleRate: metadata.sampleRate,
-    })
-    .where(eq(audioFiles.id, audioFileId));
-
-  return { spectrogramPath, metadata };
-}
-
-/**
- * Build spectrogram metadata from DB-stored values.
- * Used when spectrogram already exists and we don't need to re-run Python.
- */
-function buildMetadataFromDb(file: {
-  duration: number | null;
-  sampleRate: number | null;
-  spectrogramPath: string | null;
-}): SpectrogramMetadata {
-  const duration = file.duration ?? 0;
-  const sampleRate = file.sampleRate ?? 48000;
-  const fmin = 200;
-  const fmax = 12000;
-  const height = 256;
-  // Reconstruct width from stored metadata
-  const nMels = 128;
-  const hop = 512;
-  const nFrames = Math.ceil((duration * sampleRate) / hop);
-  const rawW = nFrames;
-  const rawH = nMels;
-  const aspect = rawH > 0 ? rawW / rawH : 1;
-  const width = Math.round(height * aspect);
-
-  return {
-    duration,
-    sampleRate,
-    width,
-    height,
-    pixelsPerSecond: duration > 0 ? width / duration : 0,
-    hzPerPixel: (fmax - fmin) / height,
-    fmin,
-    fmax,
-    nFft: 2048,
-    hopLength: hop,
-    nMels,
-  };
-}
-
-/**
  * Evict oldest cached audio deployment directories when total cache exceeds the limit.
  * Skips the deployment currently being processed.
- * Nulls cachePath and spectrogramPath on evicted files.
+ * Nulls cachePath on evicted files.
  */
 async function evictIfOverLimit(currentDeploymentId: number): Promise<void> {
   try {
@@ -303,7 +153,7 @@ async function evictIfOverLimit(currentDeploymentId: number): Promise<void> {
         if (f.cachePath && f.cachePath.includes("/cache/audio/")) {
           await db
             .update(audioFiles)
-            .set({ cachePath: null, spectrogramPath: null })
+            .set({ cachePath: null })
             .where(eq(audioFiles.id, f.id));
         }
       }

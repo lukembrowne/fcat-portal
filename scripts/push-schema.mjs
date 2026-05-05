@@ -674,6 +674,8 @@ const migrations = [
   `ALTER TABLE biochoco_identifications ADD COLUMN classifier_model_id INTEGER REFERENCES camera_trap_models(id) ON DELETE SET NULL`,
   // Video timestamp method — how to derive capture time for extracted frames (2026-04-12)
   `ALTER TABLE biochoco_processing_jobs ADD COLUMN video_timestamp_method TEXT DEFAULT 'metadata'`,
+  // BirdNET integration — add job_id to audio_detections (2026-04-13)
+  `ALTER TABLE audio_detections ADD COLUMN job_id INTEGER REFERENCES biochoco_processing_jobs(id) ON DELETE SET NULL`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }
@@ -682,6 +684,7 @@ for (const m of migrations) {
 // --- Post-migration indexes (depend on columns added by migrations) ---
 const postMigrationIndexes = [
   `CREATE INDEX IF NOT EXISTS idx_biochoco_images_starred ON biochoco_images(starred) WHERE starred = 1`,
+  `CREATE INDEX IF NOT EXISTS idx_audio_detections_job ON audio_detections(job_id)`,
 ];
 for (const idx of postMigrationIndexes) {
   db.exec(idx);

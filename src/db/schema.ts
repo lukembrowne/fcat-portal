@@ -791,6 +791,7 @@ export const audioDetections = sqliteTable(
     maxFreq: real("max_freq").notNull(),
     confidence: real("confidence"),
     modelVersion: text("model_version"),
+    jobId: integer("job_id").references(() => processingJobs.id, { onDelete: "set null" }),
     createdBy: text("created_by"),
     createdAt: integer("created_at", { mode: "timestamp" })
       .notNull()
@@ -798,6 +799,7 @@ export const audioDetections = sqliteTable(
   },
   (table) => [
     index("idx_audio_detections_file").on(table.audioFileId),
+    index("idx_audio_detections_job").on(table.jobId),
   ]
 );
 

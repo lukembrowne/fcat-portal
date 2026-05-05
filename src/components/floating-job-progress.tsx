@@ -5,7 +5,8 @@ import Link from "next/link";
 import { X, Minus, ChevronUp, ChevronDown, Clock, Loader2, CheckCircle2, XCircle, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatDuration } from "@/lib/format-duration";
-import { cancelJob, cancelQueue } from "@/app/camera-trap/actions";
+import { cancelQueue } from "@/app/camera-trap/actions";
+import { cancelProcessingJob } from "@/app/audio/actions";
 import { useActiveJobs } from "@/hooks/use-active-jobs";
 
 interface SSEData {
@@ -162,7 +163,9 @@ export function FloatingJobProgress() {
   const jobType = sseData?.jobType ?? activeJob?.jobType ?? "ml";
   const isCompression = jobType === "compression";
   const isRevert = jobType === "revert_compression";
+  const isBirdnet = jobType === "birdnet";
   const isCompressionLike = isCompression || isRevert;
+  const hasResultsPage = !isCompressionLike && !isBirdnet;
   const dlTotal = sseData?.downloadTotal ?? activeJob?.downloadTotal ?? 0;
   const dlDone = sseData?.downloadedImages ?? activeJob?.downloadedImages ?? 0;
   const isDownloading = status === "processing" && dlTotal > 0 && dlDone < dlTotal;
@@ -222,7 +225,7 @@ export function FloatingJobProgress() {
         setCancelling(false);
       }
     } else {
-      const result = await cancelJob(jobId);
+      const result = await cancelProcessingJob(jobId);
       if (!result.success) {
         alert(`Error al cancelar: ${result.error}`);
         setCancelling(false);
@@ -263,7 +266,9 @@ export function FloatingJobProgress() {
                 ? "Comprimiendo..."
                 : isRevert
                   ? "Revirtiendo..."
-                  : `Trabajo #${jobId}`}
+                  : isBirdnet
+                    ? "Análisis BirdNET..."
+                    : `Trabajo #${jobId}`}
           </span>
           <ChevronUp className="h-3 w-3" />
         </button>
@@ -284,7 +289,9 @@ export function FloatingJobProgress() {
                 ? "Compresión de imágenes"
                 : isRevert
                   ? "Revirtiendo compresión"
-                  : `Trabajo #${jobId}`}
+                  : isBirdnet
+                    ? "Análisis BirdNET"
+                    : `Trabajo #${jobId}`}
           </p>
         </div>
         <div className="flex items-center gap-1 ml-2 shrink-0">
@@ -364,7 +371,7 @@ export function FloatingJobProgress() {
               <span className="tabular-nums truncate">
                 {isDownloading
                   ? <>{dlDone} de {dlTotal} archivos</>
-                  : <>{processed} de {total} imágenes</>
+                  : <>{processed} de {total} {isBirdnet ? "archivos" : "imágenes"}</>
                 }
               </span>
               {(elapsed || etaStr) && (
@@ -419,7 +426,7 @@ export function FloatingJobProgress() {
         <div className="flex items-center gap-1 pt-1">
           {!isTerminal && (
             <>
-              {!isCompressionLike && (
+              {hasResultsPage && (
                 <Link
                   href={`/camera-trap/process?jobId=${jobId}`}
                   className="inline-flex h-7 items-center rounded px-2 text-xs font-medium text-primary hover:bg-accent transition-colors"
@@ -440,7 +447,7 @@ export function FloatingJobProgress() {
               </button>
             </>
           )}
-          {status === "completed" && !isCompressionLike && (
+          {status === "completed" && hasResultsPage && (
             <Link
               href={`/camera-trap/results/${jobId}`}
               className="inline-flex h-7 items-center rounded px-2 text-xs font-medium text-green-600 hover:bg-green-50 dark:hover:bg-green-950/30 transition-colors"
@@ -458,7 +465,12 @@ export function FloatingJobProgress() {
               Reversión completada
             </span>
           )}
-          {(status === "failed" || status === "cancelled") && !isCompressionLike && (
+          {status === "completed" && isBirdnet && (
+            <span className="text-xs font-medium text-green-600">
+              Análisis completado
+            </span>
+          )}
+          {(status === "failed" || status === "cancelled") && hasResultsPage && (
             <Link
               href={`/camera-trap/process?jobId=${jobId}`}
               className="inline-flex h-7 items-center rounded px-2 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"

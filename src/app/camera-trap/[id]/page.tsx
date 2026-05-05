@@ -6,7 +6,7 @@ import { requirePermission } from "@/lib/auth";
 import { getDeployment, getDeploymentShareLinks, getDistinctProjects, getDeploymentResultsData } from "../actions";
 import { ProcessButton } from "./process-button";
 import { ShareLinksSection } from "./share-links-section";
-import { CollapsibleSection } from "./collapsible-section";
+import { CollapsibleSection } from "@/components/collapsible-section";
 import { MetadataSection } from "./metadata-section";
 import { QaSection } from "./qa-section";
 import { DeploymentDetailActions } from "./deployment-detail-actions";

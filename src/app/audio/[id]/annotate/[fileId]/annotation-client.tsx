@@ -5,11 +5,40 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   SpeciesSidebar,
-  getVisibleSpecies,
   getStoredDisplay,
   DISPLAY_KEY,
   type NameDisplay,
 } from "@/components/species-sidebar";
+
+// Audio annotation still uses the legacy "flat visible list" for hotkey 1-9/0
+// assignment. Camera-trap now uses stable project-wide hotkey slots; audio
+// will get the same treatment in a follow-up.
+function getVisibleSpecies(
+  speciesList: Species[],
+  frequentSpecies: Species[],
+  searchQuery: string
+): Species[] {
+  const filtered = searchQuery.trim()
+    ? speciesList.filter((sp) => {
+        const q = searchQuery.toLowerCase();
+        return (
+          sp.scientificName.toLowerCase().includes(q) ||
+          sp.commonName.toLowerCase().includes(q) ||
+          (sp.spanishName && sp.spanishName.toLowerCase().includes(q))
+        );
+      })
+    : speciesList;
+  const showFrequent = frequentSpecies.length > 0 && !searchQuery.trim();
+  const result: Species[] = [];
+  if (showFrequent) result.push(...frequentSpecies);
+  result.push(...filtered);
+  const seen = new Set<string>();
+  return result.filter((sp) => {
+    if (seen.has(sp.scientificName)) return false;
+    seen.add(sp.scientificName);
+    return true;
+  });
+}
 import { Button } from "@/components/ui/button";
 import { Calendar, ChevronLeft, ChevronRight, Loader2, Trash2, Play, Pause, SkipBack, SkipForward } from "lucide-react";
 import type { Species } from "@/db/schema";
@@ -445,13 +474,11 @@ export function AudioAnnotationClient({
       <aside className="w-56 shrink-0 flex flex-col min-w-0 overflow-hidden border-r bg-background">
         <SpeciesSidebar
           speciesList={speciesList}
-          frequentSpecies={frequentSpecies}
           selectedDetectionId={selectedDetectionId}
           currentSpecies={currentSpecies}
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
           onSelectSpecies={handleSelectSpecies}
-          searchInputRef={searchInputRef}
           nameDisplay={nameDisplay}
           onCycleDisplay={cycleDisplay}
         />

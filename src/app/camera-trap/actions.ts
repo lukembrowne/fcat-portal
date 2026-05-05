@@ -774,8 +774,17 @@ async function processJobInternal(
       return { success: false, error: mlCheck.message };
     }
 
+    // On resumed jobs, some images may already be `processed` from the prior
+    // run. Send only the still-pending ones to ML to avoid duplicate detection
+    // rows and overwriting verified data.
+    const pendingImages = jobImages.filter((img) => img.status === "pending");
+
     log.info(
-      { total: jobImages.length, withPaths: jobImages.filter((i) => i.path).length },
+      {
+        total: jobImages.length,
+        pending: pendingImages.length,
+        withPaths: pendingImages.filter((i) => i.path).length,
+      },
       "[processJob] Starting ML predictions"
     );
     await db
@@ -784,7 +793,7 @@ async function processJobInternal(
       .where(eq(processingJobs.id, jobId));
 
     const mlResult = await runMLPredictions(jobId, {
-      imagePaths: jobImages
+      imagePaths: pendingImages
         .map((img) => img.path)
         .filter((p): p is string => p !== null),
       detectorModel: job.detectorModel || ML_DEFAULTS.detectorModel,
@@ -2851,7 +2860,7 @@ export async function queueIncrementalProcessing(
 }
 
 /** Called at end of processJob to auto-advance the queue. */
-async function processNextInQueue(): Promise<void> {
+export async function processNextInQueue(): Promise<void> {
   const [nextJob] = await db
     .select()
     .from(processingJobs)

@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -35,6 +36,12 @@ export interface ResultsSpeciesEntry extends SpeciesNameInfo {
 interface ResultsClientProps {
   images: ImageGridItem[];
   jobId: number;
+  /**
+   * Job status from the server. When `pending` or `processing`, the client
+   * subscribes to /api/progress and refreshes the page as new detections land.
+   * Optional — callers showing a snapshot of a completed job can omit it.
+   */
+  jobStatus?: string;
   speciesList: ResultsSpeciesEntry[];
   onImageClick?: (imageId: number) => void;
   /**
@@ -45,6 +52,8 @@ interface ResultsClientProps {
    */
   onFilteredIdsChange?: (ids: number[]) => void;
 }
+
+const LIVE_REFRESH_THROTTLE_MS = 2500;
 
 const VERIFICATION_STATUSES = [
   { value: "all", label: "Todos" },
@@ -84,11 +93,71 @@ export function ResultsClient(props: ResultsClientProps) {
 function ResultsClientInner({
   images,
   jobId,
+  jobStatus,
   speciesList,
   onImageClick,
   onFilteredIdsChange,
 }: ResultsClientProps) {
+  const router = useRouter();
   const display = useSpeciesDisplay();
+
+  // Live updates while the job is still running. We subscribe to the per-job
+  // SSE progress stream that already powers the floating widget and call
+  // router.refresh() whenever the processed count climbs — throttled so a fast
+  // job doesn't spam SSR re-fetches. router.refresh() preserves filter,
+  // scroll, and dialog state, so a verifying user is never interrupted.
+  const isLive = jobStatus === "processing" || jobStatus === "pending";
+  const lastProcessedRef = useRef(0);
+  const lastRefreshAtRef = useRef(0);
+
+  useEffect(() => {
+    if (!isLive) return;
+
+    lastProcessedRef.current = 0;
+    lastRefreshAtRef.current = 0;
+
+    const source = new EventSource(`/api/progress?jobId=${jobId}`);
+
+    source.onmessage = (event) => {
+      let data: {
+        processed?: number;
+        status?: string;
+      };
+      try {
+        data = JSON.parse(event.data);
+      } catch {
+        return;
+      }
+
+      if (
+        data.status &&
+        ["completed", "failed", "cancelled"].includes(data.status)
+      ) {
+        source.close();
+        // Final refresh to surface terminal state + any last detections.
+        router.refresh();
+        return;
+      }
+
+      if (
+        typeof data.processed === "number" &&
+        data.processed > lastProcessedRef.current
+      ) {
+        lastProcessedRef.current = data.processed;
+        const now = Date.now();
+        if (now - lastRefreshAtRef.current >= LIVE_REFRESH_THROTTLE_MS) {
+          lastRefreshAtRef.current = now;
+          router.refresh();
+        }
+      }
+    };
+
+    return () => {
+      source.close();
+    };
+  }, [isLive, jobId, router]);
+
+
   const [gridColumns, setGridColumns] = useState(4);
   useEffect(() => {
     const saved = localStorage.getItem("grid-columns");
@@ -240,7 +309,14 @@ function ResultsClientInner({
   }, [canResume, handleResume]);
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[210px_1fr]">
+    <div className="space-y-3">
+      {isLive && (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span className="inline-flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+          <span>En vivo · esta página se actualiza automáticamente mientras se procesa</span>
+        </div>
+      )}
+      <div className="grid gap-4 lg:grid-cols-[210px_1fr]">
       {/* Filter Sidebar */}
       <div className="space-y-3">
         <Card className="gap-0 py-0">
@@ -495,6 +571,7 @@ function ResultsClientInner({
         />
       </div>
 
+      </div>
     </div>
   );
 }

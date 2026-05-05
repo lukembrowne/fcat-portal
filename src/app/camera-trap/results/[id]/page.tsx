@@ -123,6 +123,7 @@ export default async function JobResultsPage({ params }: PageProps) {
       <ResultsClient
         images={gridImages}
         jobId={jobId}
+        jobStatus={job.status}
         speciesList={speciesList}
       />
     </div>

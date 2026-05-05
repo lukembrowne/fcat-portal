@@ -71,16 +71,9 @@ export function getDb(): BetterSQLite3Database<typeof schema> {
 
   _db = drizzle(sqlite, { schema });
 
-  // Recover stuck jobs on startup — only once per process.
-  // globalThis survives hot reload; module-level _db does not.
-  // Without this guard, hot reload re-runs recoverStuckJobs, which marks
-  // actively-running jobs as "failed" while their Promises keep going (zombie jobs).
-  const RECOVERY_KEY = "__portal_jobs_recovered";
-  const g = globalThis as unknown as Record<string, boolean>;
-  if (!g[RECOVERY_KEY]) {
-    recoverStuckJobs(_db);
-    g[RECOVERY_KEY] = true;
-  }
+  // Stuck-job recovery is invoked from instrumentation.ts at server start —
+  // it runs exactly once per process there, so no globalThis guard is needed
+  // here, and lazy hot-reload re-init can no longer create zombie jobs.
 
   return _db;
 }
@@ -154,7 +147,17 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
   });
 }
 
-function recoverStuckJobs(database: BetterSQLite3Database<typeof schema>) {
+/**
+ * Reset jobs left in `processing` from a previous server lifecycle so they
+ * resume on the next queue tick instead of being marked failed.
+ *
+ * Per-image writes in ml-runner mean partially-finished jobs already have
+ * detections + identifications persisted for completed images. Resetting the
+ * job to `pending` and re-running it through `processJobInternal` (which
+ * filters to images with `status = pending`) picks up only the leftover work.
+ */
+export function recoverStuckJobs() {
+  const database = getDb();
   try {
     const stuckJobs = database
       .select()
@@ -171,26 +174,26 @@ function recoverStuckJobs(database: BetterSQLite3Database<typeof schema>) {
           phase: job.statusMessage,
           startedAt: job.startedAt,
         },
-        "[db] Recovering stuck job"
+        "[db] Resuming interrupted job"
       );
 
       database
         .update(schema.processingJobs)
         .set({
-          status: "failed",
-          errorMessage: `Job interrupted by server restart (phase: ${job.statusMessage || "unknown"})`,
+          status: "pending",
+          startedAt: null,
+          statusMessage: "Reanudando trabajo interrumpido...",
+          errorMessage: null,
+          pid: null,
         })
         .where(eq(schema.processingJobs.id, job.id))
         .run();
 
-      // Also reset the deployment status
-      database
-        .update(schema.deployments)
-        .set({ status: "scanned", updatedAt: new Date() })
-        .where(eq(schema.deployments.id, job.deploymentId))
-        .run();
+      // Leave deployment.status alone — the deployment is still mid-processing
+      // semantically; only the runner died.
 
-      // Clear temp paths from images belonging to failed jobs
+      // Reset images that didn't finish back to `pending` so they re-enter the
+      // ML run. Already-processed images keep their detections/identifications.
       const jobImages = database
         .select()
         .from(schema.images)
@@ -198,18 +201,22 @@ function recoverStuckJobs(database: BetterSQLite3Database<typeof schema>) {
         .all();
 
       for (const img of jobImages) {
+        if (img.status === "processed") continue;
+
+        const update: { status: "pending"; path?: null } = { status: "pending" };
         if (img.path && img.path.includes("/tmp/ct-job-")) {
-          database
-            .update(schema.images)
-            .set({ path: null })
-            .where(eq(schema.images.id, img.id))
-            .run();
+          update.path = null;
         }
+        database
+          .update(schema.images)
+          .set(update)
+          .where(eq(schema.images.id, img.id))
+          .run();
       }
     }
 
     if (stuckJobs.length > 0) {
-      log.info({ count: stuckJobs.length }, "[db] Recovered stuck processing jobs");
+      log.info({ count: stuckJobs.length }, "[db] Resumed interrupted jobs");
     }
 
     // Clean up orphaned temp directories

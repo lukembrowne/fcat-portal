@@ -27,6 +27,10 @@ interface BBoxOverlayProps {
   /** Fires whenever the rendered image's pixel dimensions change. Lets
    *  parents position absolute overlays against the same coordinate space. */
   onResize?: (size: { width: number; height: number }) => void;
+  /** Optional CSS filter applied only to the underlying <img>. The SVG
+   *  overlay (boxes, labels) is intentionally unfiltered so selection
+   *  colors stay readable when the user dims the image. */
+  imageFilter?: string;
 }
 
 const SPECIES_COLORS: Record<string, string> = {};
@@ -84,6 +88,7 @@ export function BBoxOverlay({
   editable = false,
   onDrawComplete,
   onResize,
+  imageFilter,
 }: BBoxOverlayProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
@@ -226,6 +231,7 @@ export function BBoxOverlay({
         alt={alt}
         className="max-w-full max-h-full h-auto w-auto block"
         draggable={false}
+        style={imageFilter ? { filter: imageFilter } : undefined}
       />
 
       {imgSize.width > 0 && (

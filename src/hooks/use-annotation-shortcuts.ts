@@ -15,6 +15,7 @@ export const SHORTCUTS = [
   { key: "t", description: "Marcar como recogida (retiro)", category: "annotation" },
   { key: "h", description: "Ocultar/mostrar cajas", category: "annotation" },
   { key: "z", description: "Restablecer zoom", category: "navigation" },
+  { key: "\\", description: "Reducir brillo (100% → 70% → 50%)", category: "navigation" },
 ] as const;
 
 interface AnnotationShortcutOptions {
@@ -31,6 +32,7 @@ interface AnnotationShortcutOptions {
   onToggleSetupRetrieval?: () => void;
   onToggleBboxes?: () => void;
   onResetZoom?: () => void;
+  onCycleBrightness?: () => void;
   onAssignSpeciesByIndex?: (index: number) => void;
   onAssignLastSpecies?: () => void;
   isDialogOpen?: boolean;
@@ -171,6 +173,12 @@ export function useAnnotationShortcuts(opts: AnnotationShortcutOptions) {
           if (!hasModifier && !o.isDialogOpen) {
             e.preventDefault();
             o.onResetZoom?.();
+          }
+          break;
+        case "\\":
+          if (!hasModifier && !o.isDialogOpen) {
+            e.preventDefault();
+            o.onCycleBrightness?.();
           }
           break;
         case "d":

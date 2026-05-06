@@ -76,6 +76,7 @@ export function AnnotationHelpPanel() {
                 <ShortcutRow keys="t" desc="Marcar como recogida" />
                 <ShortcutRow keys="h" desc="Ocultar/mostrar cajas" />
                 <ShortcutRow keys="z" desc="Restablecer zoom" />
+                <ShortcutRow keys="\" desc="Reducir brillo (cicla 100/70/50%)" />
                 <ShortcutRow keys="Esc" desc="Cerrar selector / deseleccionar" />
               </div>
             </section>

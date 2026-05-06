@@ -241,11 +241,15 @@ export async function checkDeploymentUploads(
 
     // Verify the folder still exists and isn't trashed
     try {
-      const folderMeta = await drive.files.get({
-        fileId: folderId,
-        fields: "id, trashed",
-        supportsAllDrives: true,
-      });
+      const folderMeta = await withRetry(
+        () =>
+          drive.files.get({
+            fileId: folderId,
+            fields: "id, trashed",
+            supportsAllDrives: true,
+          }),
+        `files.get(${folderId})`,
+      );
       if (folderMeta.data.trashed) {
         return { success: false, error: "Carpeta en la papelera de Drive" };
       }
@@ -255,13 +259,17 @@ export async function checkDeploymentUploads(
 
     // Step 1: List subfolders of the deployment folder
     log.info({ folderId }, "[Drive] Checking folder");
-    const foldersRes = await drive.files.list({
-      q: `'${folderId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
-      fields: "files(id, name)",
-      pageSize: 20,
-      supportsAllDrives: true,
-      includeItemsFromAllDrives: true,
-    });
+    const foldersRes = await withRetry(
+      () =>
+        drive.files.list({
+          q: `'${folderId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+          fields: "files(id, name)",
+          pageSize: 20,
+          supportsAllDrives: true,
+          includeItemsFromAllDrives: true,
+        }),
+      `files.list(subfolders ${folderId})`,
+    );
 
     const subfolders = foldersRes.data.files ?? [];
     log.info({ count: subfolders.length, names: subfolders.map((f) => f.name) }, "[Drive] Found subfolders");
@@ -965,27 +973,48 @@ export async function uploadFramesToDrive(
 // Retry Helper (shared by update, revision, and trash operations)
 // ---------------------------------------------------------------------------
 
-const RATE_LIMIT_DELAYS = [1000, 2000, 4000];
+const MAX_RETRIES = 4;
+const BASE_DELAY_MS = 500;
+const MAX_DELAY_MS = 16_000;
+
+interface DriveError {
+  code?: number;
+  response?: { status?: number };
+  errors?: Array<{ reason?: string }>;
+}
+
+function isRetriableDriveError(err: unknown): boolean {
+  const e = err as DriveError;
+  const status = e?.code ?? e?.response?.status;
+  if (status === 429) return true;
+  if (status != null && status >= 500 && status < 600) return true;
+  if (status === 403) {
+    const reason = e?.errors?.[0]?.reason;
+    return reason === "userRateLimitExceeded" || reason === "rateLimitExceeded";
+  }
+  return false;
+}
 
 async function withRetry<T>(
   fn: () => Promise<T>,
   label: string,
 ): Promise<T> {
-  for (let attempt = 0; attempt <= RATE_LIMIT_DELAYS.length; attempt++) {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
       return await fn();
-    } catch (err: unknown) {
-      const status = (err as { code?: number })?.code;
-      if ((status === 429 || status === 403) && attempt < RATE_LIMIT_DELAYS.length) {
-        const delay = RATE_LIMIT_DELAYS[attempt];
-        log.warn({ label, delay, attempt: attempt + 1 }, "[Drive] Rate limited, retrying");
-        await new Promise((r) => setTimeout(r, delay));
-        continue;
+    } catch (err) {
+      lastErr = err;
+      if (!isRetriableDriveError(err) || attempt === MAX_RETRIES) {
+        throw err;
       }
-      throw err;
+      const exp = Math.min(BASE_DELAY_MS * 2 ** attempt, MAX_DELAY_MS);
+      const delay = Math.floor(exp / 2 + Math.random() * (exp / 2));
+      log.warn({ label, delay, attempt: attempt + 1 }, "[Drive] Retrying transient error");
+      await new Promise((r) => setTimeout(r, delay));
     }
   }
-  throw new Error("Unreachable");
+  throw lastErr;
 }
 
 // ---------------------------------------------------------------------------

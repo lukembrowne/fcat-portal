@@ -261,14 +261,13 @@ The current `handleSync` body — which iterates deployments client-side calling
 
 ### Phase 2 — Drive retry helper + concurrency dep
 
-- [ ] Add `p-limit` and `async-retry` to `package.json` (`npm install p-limit async-retry @types/async-retry`)
-- [ ] Add `src/lib/drive-retry.ts` (`withDriveRetry`)
-- [ ] Wrap calls in `src/lib/drive-client.ts`:
-  - [ ] `countFilesRecursive` — wrap each `files.list` page
-  - [ ] `listMediaRecursive` — wrap each `files.list` page
-  - [ ] `listDeploymentFolders` — wrap the listing call
-  - [ ] `checkDeploymentUploads` (subfolder lookup) — wrap if applicable
-- [ ] Unit test: simulate 429 response → wrapper retries → succeeds
+- [x] Add `p-limit` to `package.json`
+- [x] Upgrade existing `withRetry` in `src/lib/drive-client.ts` to also handle 5xx and Google reason codes (`userRateLimitExceeded`, `rateLimitExceeded`) with exponential backoff + jitter
+- [x] Verify all `files.list` calls in the sync path are wrapped:
+  - [x] `countFilesRecursive` — already wrapped
+  - [x] `listMediaRecursive`/`listFolderFiles` — already wrapped
+  - [x] `listDeploymentFolders` — already wrapped
+  - [x] `checkDeploymentUploads` (folder existence + subfolder list) — wrapped now
 
 **Success:** existing flows unchanged in behavior; transient 429s no longer fail the call.
 

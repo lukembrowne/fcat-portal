@@ -283,13 +283,14 @@ The current `handleSync` body — which iterates deployments client-side calling
 
 ### Phase 4 — Cron route rewrite
 
-- [ ] `src/app/api/cron/nightly-refresh/route.ts`:
-  - [ ] Replace per-deployment loop with `enqueueDriveSyncJob()` call
-  - [ ] Add `awaitJobTerminal(jobId, { intervalMs: 5_000, timeoutMs: 540_000 })` helper
-  - [ ] After terminal: read final per-deployment data needed for the email; call `computeSnapshot` + email send (existing logic intact)
-  - [ ] Preserve current JSON return shape for the cron log
-- [ ] No changes to `scripts/crontab` or `cron-auth.ts`
-- [ ] Manual dry-run on dev: `curl -X POST -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/cron/nightly-refresh`
+- [x] `src/app/api/cron/nightly-refresh/route.ts`:
+  - [x] Snapshot prior upload counts before sync (for delta email)
+  - [x] Insert + run `drive_sync` worker; reuse any in-flight job, kick pending ones
+  - [x] `awaitJobTerminal(jobId, { intervalMs: 5_000, timeoutMs: 540_000 })` to block until done
+  - [x] Promote `previous_*` columns post-sync from the snapshot
+  - [x] Read post-sync deployments and build `DeploymentResult[]` for `computeSnapshot` + email
+  - [x] JSON return shape now includes `jobId` + `jobStatus`
+- [x] No changes to `scripts/crontab` or `cron-auth.ts`
 
 **Success:** cron log entries continue with the same shape (`ok:true, deployments:N, errors:0, totalSize:..., elapsed:Ns`) plus a `jobId` field; email arrives unchanged.
 

@@ -9,14 +9,21 @@
  */
 
 import { db } from "@/db";
-import { deployments, uploadCountSnapshots } from "@/db/schema";
-import { checkDeploymentUploads, type UploadStatus } from "@/lib/drive-client";
+import { deployments, processingJobs, uploadCountSnapshots } from "@/db/schema";
+import type { UploadStatus } from "@/lib/drive-client";
 import { verifyCronSecret } from "@/lib/cron-auth";
-import { isNotNull, eq, sql } from "drizzle-orm";
+import { and, inArray, isNotNull, eq, sql } from "drizzle-orm";
 import { Resend } from "resend";
 import { log } from "@/lib/log";
+import {
+  awaitJobTerminal,
+  runDriveSyncWorker,
+} from "@/lib/camera-trap-sync-worker";
 
 export const dynamic = "force-dynamic";
+
+const NIGHTLY_TIMEOUT_MS = 540_000; // leaves headroom under cron --max-time 600
+const POLL_INTERVAL_MS = 5_000;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -81,16 +88,11 @@ export async function POST(request: Request) {
     const today = new Date().toISOString().slice(0, 10);
     log.info({ today }, "[nightly] Starting BioChoco data refresh");
 
-    // Step 1: Query all deployments with a Drive folder.
-    // We pull current upload_* counts here too — these are the "previous"
-    // values for tonight's email delta (the UPDATE below promotes them into
-    // the previous_* columns atomically).
-    const allDeployments = db
+    // Step 1: snapshot prior upload counts per deployment. These become the
+    // "previous_*" values for tonight's email delta after the worker runs.
+    const priorRows = db
       .select({
         id: deployments.id,
-        name: deployments.name,
-        siteName: deployments.siteName,
-        driveFolderId: deployments.driveFolderId,
         priorCameraCount: deployments.uploadCameraCount,
         priorAudioCount: deployments.uploadAudioCount,
         priorIbuttonCount: deployments.uploadIbuttonCount,
@@ -99,87 +101,169 @@ export async function POST(request: Request) {
       .from(deployments)
       .where(isNotNull(deployments.driveFolderId))
       .all();
+    const priorMap = new Map(priorRows.map((r) => [r.id, r]));
+    log.info(
+      { count: priorRows.length },
+      "[nightly] Snapshot of prior counts captured"
+    );
 
-    log.info({ count: allDeployments.length }, "[nightly] Found deployments with Drive folders");
+    // Step 2: run the same drive_sync worker the manual button uses.
+    // The cron does NOT use enqueueDriveSyncJob (which schedules via after())
+    // because we need to block here until completion to compute the email.
+    // Single-flight is enforced by reusing any in-flight job we find.
+    const [inflight] = db
+      .select({ id: processingJobs.id, status: processingJobs.status })
+      .from(processingJobs)
+      .where(
+        and(
+          eq(processingJobs.jobType, "drive_sync"),
+          inArray(processingJobs.status, ["pending", "processing"]),
+        ),
+      )
+      .all();
 
-    // Step 2: Check each deployment sequentially
-    const results: DeploymentResult[] = [];
-
-    for (const dep of allDeployments) {
-      log.info({ name: dep.name, folderId: dep.driveFolderId }, "[nightly] Checking deployment");
-
-      const result = await checkDeploymentUploads(dep.driveFolderId!);
-
-      if (!result.success) {
-        log.error({ name: dep.name, err: result.error }, "[nightly] FAILED");
-        results.push({
-          id: dep.id,
-          name: dep.name,
-          siteName: dep.siteName,
-          uploads: null,
-          previousCameraCount: dep.priorCameraCount,
-          previousAudioCount: dep.priorAudioCount,
-          previousIbuttonCount: dep.priorIbuttonCount,
-          previousCheckedAt: dep.priorCheckedAt,
-          error: result.error,
-        });
-        continue;
-      }
-
-      const uploads = result.data;
+    let jobId: number;
+    if (inflight) {
+      jobId = inflight.id;
       log.info(
-        {
-          name: dep.name,
-          cameras: uploads.camarasTrampas,
-          audio: uploads.grabadoresDeAudio,
-          ibutton: uploads.ibutton,
-        },
-        "[nightly] deployment counts"
+        { jobId, status: inflight.status },
+        "[nightly] Reusing in-flight drive_sync job",
       );
-
-      // Persist counts, sizes, newest dates to DB.
-      // SQLite evaluates SET RHS against the pre-update row, so referencing
-      // upload_camera_count on the right copies the OLD value into
-      // previous_camera_count before the new value is written. Same applies
-      // to previous_counts_checked_at ← upload_counts_checked_at.
-      db.update(deployments)
-        .set({
-          previousCameraCount: sql`${deployments.uploadCameraCount}`,
-          previousAudioCount: sql`${deployments.uploadAudioCount}`,
-          previousIbuttonCount: sql`${deployments.uploadIbuttonCount}`,
-          previousCountsCheckedAt: sql`${deployments.uploadCountsCheckedAt}`,
-          uploadCameraCount: uploads.camarasTrampas,
-          uploadAudioCount: uploads.grabadoresDeAudio,
-          uploadIbuttonCount: uploads.ibutton,
-          uploadCameraSizeBytes: uploads.camarasTrampasSizeBytes,
-          uploadAudioSizeBytes: uploads.grabadoresDeAudioSizeBytes,
-          uploadIbuttonSizeBytes: uploads.ibuttonSizeBytes,
-          uploadNewestCameraDate: uploads.camarasTrampasNewestDate,
-          uploadNewestAudioDate: uploads.grabadoresDeAudioNewestDate,
-          uploadNewestIbuttonDate: uploads.ibuttonNewestDate,
-          uploadCameraFolderId: uploads.subfolderIds.camarasTrampas,
-          uploadAudioFolderId: uploads.subfolderIds.grabadoresDeAudio,
-          uploadIbuttonFolderId: uploads.subfolderIds.ibutton,
-          uploadCountsCheckedAt: sql`(unixepoch())`,
+      // If it's pending (queued but worker never started, e.g. after a crash),
+      // kick the worker now. If it's already processing, just wait.
+      if (inflight.status === "pending") {
+        runDriveSyncWorker(jobId).catch((err) =>
+          log.error({ err, jobId }, "[nightly] worker rejected"),
+        );
+      }
+    } else {
+      const [job] = db
+        .insert(processingJobs)
+        .values({
+          jobType: "drive_sync",
+          deploymentId: null,
+          cameraTrapProjectId: null,
+          status: "pending",
+          totalImages: 0,
+          processedImages: 0,
+          failedImages: 0,
+          statusMessage: "En cola (nightly)...",
+          createdBy: "cron@nightly",
         })
-        .where(eq(deployments.id, dep.id))
-        .run();
-
-      results.push({
-        id: dep.id,
-        name: dep.name,
-        siteName: dep.siteName,
-        uploads,
-        previousCameraCount: dep.priorCameraCount,
-        previousAudioCount: dep.priorAudioCount,
-        previousIbuttonCount: dep.priorIbuttonCount,
-        previousCheckedAt: dep.priorCheckedAt,
-        error: null,
-      });
+        .returning()
+        .all();
+      jobId = job.id;
+      log.info({ jobId }, "[nightly] Enqueued drive_sync job");
+      runDriveSyncWorker(jobId).catch((err) =>
+        log.error({ err, jobId }, "[nightly] worker rejected"),
+      );
     }
 
-    // Step 3: Save daily snapshot
-    const snapshot = computeSnapshot(results, allDeployments.length);
+    const terminal = await awaitJobTerminal(jobId, {
+      intervalMs: POLL_INTERVAL_MS,
+      timeoutMs: NIGHTLY_TIMEOUT_MS,
+    });
+
+    if (!terminal) {
+      log.error({ jobId }, "[nightly] Worker did not finish within timeout");
+      return Response.json(
+        {
+          error: "drive_sync timeout",
+          jobId,
+          elapsed: `${((Date.now() - startTime) / 1000).toFixed(1)}s`,
+        },
+        { status: 504 },
+      );
+    }
+    log.info(
+      {
+        jobId,
+        status: terminal.status,
+        processed: terminal.processedImages,
+        failed: terminal.failedImages,
+      },
+      "[nightly] drive_sync terminal",
+    );
+
+    // Step 3: promote previous_* columns from the prior snapshot for any row
+    // we observed before the worker ran. New rows created during sync are
+    // skipped (they have no prior to promote).
+    for (const [depId, prior] of priorMap) {
+      db.update(deployments)
+        .set({
+          previousCameraCount: prior.priorCameraCount,
+          previousAudioCount: prior.priorAudioCount,
+          previousIbuttonCount: prior.priorIbuttonCount,
+          previousCountsCheckedAt: prior.priorCheckedAt,
+        })
+        .where(eq(deployments.id, depId))
+        .run();
+    }
+
+    // Step 4: read the post-sync state. Includes any newly-discovered rows
+    // since the worker may have inserted deployments.
+    const postSyncRows = db
+      .select({
+        id: deployments.id,
+        name: deployments.name,
+        siteName: deployments.siteName,
+        uploadCameraCount: deployments.uploadCameraCount,
+        uploadAudioCount: deployments.uploadAudioCount,
+        uploadIbuttonCount: deployments.uploadIbuttonCount,
+        uploadCameraSizeBytes: deployments.uploadCameraSizeBytes,
+        uploadAudioSizeBytes: deployments.uploadAudioSizeBytes,
+        uploadIbuttonSizeBytes: deployments.uploadIbuttonSizeBytes,
+        uploadNewestCameraDate: deployments.uploadNewestCameraDate,
+        uploadNewestAudioDate: deployments.uploadNewestAudioDate,
+        uploadNewestIbuttonDate: deployments.uploadNewestIbuttonDate,
+        subfolderCamera: deployments.uploadCameraFolderId,
+        subfolderAudio: deployments.uploadAudioFolderId,
+        subfolderIbutton: deployments.uploadIbuttonFolderId,
+      })
+      .from(deployments)
+      .where(isNotNull(deployments.driveFolderId))
+      .all();
+
+    const results: DeploymentResult[] = postSyncRows.map((r) => {
+      const prior = priorMap.get(r.id);
+      const uploads: UploadStatus = {
+        camarasTrampas: r.uploadCameraCount,
+        grabadoresDeAudio: r.uploadAudioCount,
+        ibutton: r.uploadIbuttonCount,
+        camarasTrampasSizeBytes: r.uploadCameraSizeBytes,
+        grabadoresDeAudioSizeBytes: r.uploadAudioSizeBytes,
+        ibuttonSizeBytes: r.uploadIbuttonSizeBytes,
+        camarasTrampasNewestDate: r.uploadNewestCameraDate,
+        grabadoresDeAudioNewestDate: r.uploadNewestAudioDate,
+        ibuttonNewestDate: r.uploadNewestIbuttonDate,
+        subfolderIds: {
+          camarasTrampas: r.subfolderCamera,
+          grabadoresDeAudio: r.subfolderAudio,
+          ibutton: r.subfolderIbutton,
+        },
+      };
+      return {
+        id: r.id,
+        name: r.name,
+        siteName: r.siteName,
+        uploads,
+        previousCameraCount: prior?.priorCameraCount ?? null,
+        previousAudioCount: prior?.priorAudioCount ?? null,
+        previousIbuttonCount: prior?.priorIbuttonCount ?? null,
+        previousCheckedAt: prior?.priorCheckedAt ?? null,
+        error: null,
+      };
+    });
+
+    if (terminal.status !== "completed") {
+      log.warn(
+        { jobId, status: terminal.status, errorMessage: terminal.errorMessage },
+        "[nightly] drive_sync did not complete cleanly — email will still send",
+      );
+    }
+
+    // Step 5: Save daily snapshot
+    const snapshot = computeSnapshot(results, results.length);
 
     db.insert(uploadCountSnapshots)
       .values({
@@ -242,16 +326,24 @@ export async function POST(request: Request) {
       log.warn("[nightly] Email skipped — RESEND_API_KEY or NIGHTLY_REPORT_EMAILS not set");
     }
 
-    const errorCount = results.filter((r) => r.error).length;
+    const errorCount = terminal.failedImages;
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     const totalSize = snapshot.totalCameraSizeBytes + snapshot.totalAudioSizeBytes + snapshot.totalIbuttonSizeBytes;
     log.info(
-      { elapsedSec: elapsed, deployments: results.length, errors: errorCount, totalSize: formatBytes(totalSize) },
-      "[nightly] Done"
+      {
+        jobId,
+        elapsedSec: elapsed,
+        deployments: results.length,
+        errors: errorCount,
+        totalSize: formatBytes(totalSize),
+      },
+      "[nightly] Done",
     );
 
     return Response.json({
-      ok: true,
+      ok: terminal.status === "completed",
+      jobId,
+      jobStatus: terminal.status,
       deployments: results.length,
       errors: errorCount,
       totalSize: formatBytes(totalSize),

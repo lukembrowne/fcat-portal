@@ -6,10 +6,9 @@ import type { DetectionWithIdentification } from "@/components/annotation-toolba
 import { AnnotationPickerPopover } from "@/components/annotation-picker-popover";
 import { AnnotationToolsSidebar } from "@/components/annotation-tools-sidebar";
 import {
-  BrightnessControl,
   brightnessFilter,
   DEFAULT_BRIGHTNESS,
-} from "@/components/brightness-control";
+} from "@/lib/brightness-filter";
 import { Popover, PopoverAnchor } from "@/components/ui/popover";
 import { useAnnotationPicker } from "@/hooks/use-annotation-picker";
 import { useNameDisplay } from "@/lib/species-display";
@@ -583,6 +582,8 @@ export function ImageAnnotationClient({
             }
             onApplyDateSuggestion={canEdit ? handleApplyDate : undefined}
             onDismissDateSuggestion={() => setSuggestionDismissed(true)}
+            brightness={brightness}
+            onBrightnessChange={setBrightness}
             jobId={jobId}
             onBack={onBack}
           />
@@ -632,11 +633,6 @@ export function ImageAnnotationClient({
                 </PopoverAnchor>
               )}
             </div>
-            <BrightnessControl
-              value={brightness}
-              onChange={setBrightness}
-              className="absolute top-2 left-2"
-            />
             {zoomScale > 1 && (
               <span className="absolute top-2 right-2 px-1.5 py-0.5 text-xs font-mono bg-black/60 text-white rounded">
                 {zoomScale.toFixed(1)}x

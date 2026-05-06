@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { DetectionCardStrip } from "@/components/detection-card-strip";
 import { AnnotationHelpPanel } from "@/components/annotation-help-panel";
+import { BrightnessControl } from "@/components/brightness-control";
 import type { DetectionWithIdentification } from "@/components/annotation-toolbar";
 import type { Species } from "@/db/schema";
 import type { NameDisplay } from "@/components/species-sidebar";
@@ -39,6 +40,8 @@ interface AnnotationToolsSidebarProps {
   } | null;
   onApplyDateSuggestion?: () => void;
   onDismissDateSuggestion?: () => void;
+  brightness: number;
+  onBrightnessChange: (value: number) => void;
   jobId: number;
   onBack?: () => void;
 }
@@ -63,6 +66,8 @@ export function AnnotationToolsSidebar({
   dateSuggestion,
   onApplyDateSuggestion,
   onDismissDateSuggestion,
+  brightness,
+  onBrightnessChange,
   jobId,
   onBack,
 }: AnnotationToolsSidebarProps) {
@@ -160,6 +165,17 @@ export function AnnotationToolsSidebar({
           )}
         </div>
       )}
+
+      {/* Vista — view-only settings, available to viewers and editors */}
+      <div className="px-2 py-2 border-t flex flex-col gap-1.5">
+        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-1">
+          Vista
+        </p>
+        <BrightnessControl
+          value={brightness}
+          onChange={onBrightnessChange}
+        />
+      </div>
 
       {/* Ayuda */}
       <div className="px-2 py-2 border-t">

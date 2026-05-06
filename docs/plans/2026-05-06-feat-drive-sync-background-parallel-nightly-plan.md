@@ -273,18 +273,11 @@ The current `handleSync` body — which iterates deployments client-side calling
 
 ### Phase 3 — Worker + enqueue server action
 
-- [ ] `src/app/camera-trap/drive-sync-worker.ts` — new file
-  - [ ] `runDriveSyncWorker(jobId: number)` — orchestrator (discovery → fan-out → ODK → snapshot)
-  - [ ] `isJobCancelled(jobId)` — DB poll helper
-  - [ ] `incrementProgress(jobId, processed, total, message)` — single update + emit Docker log
-- [ ] `src/app/camera-trap/drive-actions.ts`:
-  - [ ] Add `enqueueDriveSyncJob({ cameraTrapProjectId? })` server action
-    - `requirePermission("camera-trap", "editor")`
-    - Single-flight precheck (reject if any `drive_sync` in flight)
-    - Insert job row, call worker via `after(() => runDriveSyncWorker(id).catch(...))`
-    - Return `ActionResult<{ jobId }>`
-  - [ ] Refactor existing `syncWithDrive` body into pure helpers callable from worker (no `requirePermission` inside helpers; the job carries its own auth)
-- [ ] Move `appState[CAMERA_TRAP_DRIVE_LAST_SYNC_KEY]` write into worker terminal-state path
+- [x] `src/lib/camera-trap-sync-internals.ts` — new file with auth-free helpers (`scanDeploymentImagesInternal`, `refreshUploadCountsInternal`, `matchOdkDeploymentsInternal`)
+- [x] `src/lib/camera-trap-sync-worker.ts` — new file with `runDriveSyncWorker(jobId)`, `awaitJobTerminal`, p-limit fan-out, isJobCancelled, progress emission
+- [x] Refactor `scanDeploymentImages` and `matchOdkDeployments` to delegate to the internals (auth + path revalidate are kept in the wrappers)
+- [x] Add `enqueueDriveSyncJob({ cameraTrapProjectId? })` server action with single-flight precheck, scope auth, and `after()`-based worker scheduling
+- [x] `tsc --noEmit` clean; lint clean on changed files
 
 **Success:** clicking the (still-old) button enqueues a job that runs to completion in the background; floating progress shows live `X de Y`.
 

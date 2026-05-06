@@ -1,11 +1,10 @@
 "use server";
 
 import { db } from "@/db";
-import { deployments, images, videos, cameraTrapProjects, activityLog, processingJobs } from "@/db/schema";
-import { eq, and, inArray, sql, count, sum } from "drizzle-orm";
+import { deployments, images, cameraTrapProjects, activityLog, processingJobs } from "@/db/schema";
+import { eq, and, inArray, sql, count } from "drizzle-orm";
 import {
   listDeploymentFolders,
-  listMediaRecursive,
   isValidFolderId,
   checkDeploymentUploads,
   downloadFileToBuffer,
@@ -14,6 +13,10 @@ import {
   downloadFileRevision,
 } from "@/lib/drive-client";
 import { matchOdkDeployments } from "./odk-actions";
+import {
+  scanDeploymentImagesInternal,
+} from "@/lib/camera-trap-sync-internals";
+import { runDriveSyncWorker } from "@/lib/camera-trap-sync-worker";
 import { requirePermission } from "@/lib/auth";
 import { getUserCameraTrapProjects, requireDeploymentAccess } from "@/lib/camera-trap-auth";
 import { touchAppState } from "@/lib/app-state";
@@ -21,11 +24,88 @@ import { CAMERA_TRAP_DRIVE_LAST_SYNC_KEY } from "@/lib/app-state-keys";
 import { revalidatePath } from "next/cache";
 import path from "path";
 import { promises as fs } from "fs";
+import { after } from "next/server";
 import type { ActionResult } from "@/lib/types";
 import type { Deployment } from "@/db/schema";
 import { log } from "@/lib/log";
 
 const CAMERA_TRAP_PATH = "/camera-trap";
+
+// ---------------------------------------------------------------------------
+// Enqueue a background Drive sync job (manual button + cron use this)
+// ---------------------------------------------------------------------------
+
+/**
+ * Enqueue a `drive_sync` background job. Runs the full sync workflow
+ * (folder discovery + image scan + count refresh + ODK match) in a
+ * worker process via `after()`. Single-flight: at most one drive_sync
+ * job pending or processing at a time, regardless of scope.
+ */
+export async function enqueueDriveSyncJob(
+  cameraTrapProjectId?: number
+): Promise<ActionResult<{ jobId: number }>> {
+  const user = await requirePermission("camera-trap", "editor");
+  const ctProjects = await getUserCameraTrapProjects(user);
+
+  // Verify access to the requested CT project (if any)
+  if (cameraTrapProjectId != null) {
+    if (ctProjects !== "all" && !ctProjects.includes(cameraTrapProjectId)) {
+      return { success: false, error: "No tienes acceso a este proyecto" };
+    }
+    const [proj] = await db
+      .select({ id: cameraTrapProjects.id, driveFolderId: cameraTrapProjects.driveFolderId })
+      .from(cameraTrapProjects)
+      .where(eq(cameraTrapProjects.id, cameraTrapProjectId));
+    if (!proj?.driveFolderId) {
+      return {
+        success: false,
+        error:
+          "Este proyecto no tiene una carpeta de Drive configurada. Contacta al administrador.",
+      };
+    }
+  }
+
+  // Single-flight: reject if any drive_sync job is in flight
+  const [inflight] = await db
+    .select({ id: processingJobs.id })
+    .from(processingJobs)
+    .where(
+      and(
+        eq(processingJobs.jobType, "drive_sync"),
+        inArray(processingJobs.status, ["pending", "processing"]),
+      ),
+    );
+
+  if (inflight) {
+    return { success: false, error: "Ya hay una sincronización en curso" };
+  }
+
+  const [job] = await db
+    .insert(processingJobs)
+    .values({
+      jobType: "drive_sync",
+      deploymentId: null,
+      cameraTrapProjectId: cameraTrapProjectId ?? null,
+      status: "pending",
+      totalImages: 0,
+      processedImages: 0,
+      failedImages: 0,
+      statusMessage: "En cola...",
+      createdBy: user.email,
+    })
+    .returning();
+
+  // Schedule the worker to run after the response is sent. `after()` is
+  // Next.js 16's officially supported primitive for fire-and-forget on
+  // self-hosted Node and survives the response lifecycle.
+  after(() =>
+    runDriveSyncWorker(job.id).catch((err) =>
+      log.error({ err, jobId: job.id }, "[drive-sync] worker rejected"),
+    ),
+  );
+
+  return { success: true, data: { jobId: job.id } };
+}
 
 // ---------------------------------------------------------------------------
 // Sync with Google Drive — auto-create deployment rows for new folders
@@ -219,81 +299,9 @@ export async function scanDeploymentImages(
       };
     }
 
-    const media = await listMediaRecursive(deployment.driveFolderId);
-
-    // Batch insert images (groups of 100) with onConflictDoNothing
-    const IMG_INSERT_BATCH = 100;
-    for (let i = 0; i < media.images.length; i += IMG_INSERT_BATCH) {
-      const batch = media.images.slice(i, i + IMG_INSERT_BATCH);
-      try {
-        await db
-          .insert(images)
-          .values(
-            batch.map((img) => ({
-              deploymentId,
-              filename: img.name,
-              driveFileId: img.id,
-              fileSize: img.size,
-              fileModified: img.modifiedTime
-                ? new Date(img.modifiedTime)
-                : undefined,
-              status: "pending" as const,
-            }))
-          )
-          .onConflictDoNothing();
-      } catch {
-        // Skip duplicates or other insert errors
-      }
-    }
-
-    // Batch insert videos (groups of 100) with onConflictDoNothing
-    const VID_INSERT_BATCH = 100;
-    for (let i = 0; i < media.videos.length; i += VID_INSERT_BATCH) {
-      const batch = media.videos.slice(i, i + VID_INSERT_BATCH);
-      try {
-        await db
-          .insert(videos)
-          .values(
-            batch.map((vid) => ({
-              deploymentId,
-              filename: vid.name,
-              driveFileId: vid.id,
-              fileSize: vid.size,
-              fileModified: vid.modifiedTime
-                ? new Date(vid.modifiedTime)
-                : undefined,
-              status: "pending" as const,
-            }))
-          )
-          .onConflictDoNothing();
-      } catch {
-        // Skip duplicates or other insert errors
-      }
-    }
-
-    // Update deployment totals and status
-    const totalImageRows = await db
-      .select({ id: images.id })
-      .from(images)
-      .where(eq(images.deploymentId, deploymentId));
-
-    const totalVideoRows = await db
-      .select({ id: videos.id })
-      .from(videos)
-      .where(eq(videos.deploymentId, deploymentId));
-
-    await db
-      .update(deployments)
-      .set({
-        totalImages: totalImageRows.length,
-        totalVideos: totalVideoRows.length,
-        ...(deployment.status === "unscanned" ? { status: "scanned" as const } : {}),
-        updatedAt: new Date(),
-      })
-      .where(eq(deployments.id, deploymentId));
-
+    const { imageCount } = await scanDeploymentImagesInternal(deployment);
     revalidatePath(CAMERA_TRAP_PATH);
-    return { success: true, data: { imageCount: totalImageRows.length } };
+    return { success: true, data: { imageCount } };
   } catch (err) {
     log.error({ err }, "[Drive] Scan failed");
     return {

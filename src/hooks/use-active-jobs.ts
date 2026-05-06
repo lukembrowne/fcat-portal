@@ -15,6 +15,7 @@ export interface ActiveJob {
   downloadedImages: number;
   downloadTotal: number;
   cachedImages: number;
+  canCancel: boolean;
 }
 
 const POLL_INTERVAL = 3000;

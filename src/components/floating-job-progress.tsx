@@ -163,6 +163,7 @@ export function FloatingJobProgress() {
   const isCompression = jobType === "compression";
   const isRevert = jobType === "revert_compression";
   const isCompressionLike = isCompression || isRevert;
+  const canCancel = activeJob?.canCancel ?? false;
   const dlTotal = sseData?.downloadTotal ?? activeJob?.downloadTotal ?? 0;
   const dlDone = sseData?.downloadedImages ?? activeJob?.downloadedImages ?? 0;
   const isDownloading = status === "processing" && dlTotal > 0 && dlDone < dlTotal;
@@ -427,17 +428,19 @@ export function FloatingJobProgress() {
                   Ver detalles
                 </Link>
               )}
-              <button
-                onClick={handleCancel}
-                disabled={cancelling}
-                className="inline-flex h-7 items-center rounded px-2 text-xs font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors disabled:opacity-50"
-              >
-                {cancelling
-                  ? "Cancelando..."
-                  : hasQueue
-                    ? "Cancelar cola"
-                    : "Cancelar"}
-              </button>
+              {canCancel && (
+                <button
+                  onClick={handleCancel}
+                  disabled={cancelling}
+                  className="inline-flex h-7 items-center rounded px-2 text-xs font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors disabled:opacity-50"
+                >
+                  {cancelling
+                    ? "Cancelando..."
+                    : hasQueue
+                      ? "Cancelar cola"
+                      : "Cancelar"}
+                </button>
+              )}
             </>
           )}
           {status === "completed" && !isCompressionLike && (

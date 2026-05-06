@@ -2248,7 +2248,7 @@ export async function bulkDeleteBlankImages(
   jobId: number,
   scope: { confirmedBlank: boolean; noDetections: boolean; unverifiedDetections: boolean }
 ): Promise<ActionResult<{ deleted: number; failed: number; skipped: number }>> {
-  const user = await requirePermission("camera-trap", "editor");
+  const user = await requirePermission("camera-trap", "admin");
 
   try {
     const sets = await computeEligibilitySets(jobId);

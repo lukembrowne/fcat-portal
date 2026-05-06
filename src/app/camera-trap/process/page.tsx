@@ -18,6 +18,10 @@ function ProcessingContent() {
   const [cancelled, setCancelled] = useState(false);
 
   const { allJobs, pendingJobs } = useActiveJobs();
+  const jobIdNumForLookup = jobId ? parseInt(jobId, 10) : null;
+  const canCancel =
+    jobIdNumForLookup != null &&
+    (allJobs.find((j) => j.jobId === jobIdNumForLookup)?.canCancel ?? false);
 
   const handleComplete = useCallback(() => {
     // If there are pending jobs in the queue, navigate to the next one
@@ -83,7 +87,7 @@ function ProcessingContent() {
       <ProgressTracker
         jobId={jobIdNum}
         onComplete={handleComplete}
-        onCancel={handleCancel}
+        onCancel={canCancel ? handleCancel : undefined}
       />
 
       {cancelled && (

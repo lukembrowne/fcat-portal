@@ -49,6 +49,10 @@ import { matchOdkDeployments, matchAllUnmatched } from "./odk-actions";
 import { ProcessConfirmDialog } from "./process-confirm-dialog";
 import type { ProjectGroup } from "./page";
 
+/** localStorage key for remembering which project groups the user has collapsed
+ * on the Instalaciones page. Per-device, non-sensitive UI preference. */
+const COLLAPSED_GROUPS_STORAGE_KEY = "fcat.cameratrap.collapsedProjects.v1";
+
 /** Deployment statuses that are excluded from global Drive re-scan because a
  * human has already signed off on the contents. Operators can still scan these
  * manually via the per-row "Buscar imágenes" action. */
@@ -103,6 +107,33 @@ export function DeploymentsTable({
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
     () => new Set()
   );
+  // Hydrate collapsed-groups state from localStorage on mount. We can't read
+  // localStorage during the initial render because this component is rendered
+  // on the server first; doing so would cause a hydration mismatch. The brief
+  // flash on first paint is the accepted tradeoff for keeping SSR.
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(COLLAPSED_GROUPS_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        setCollapsedGroups(new Set(parsed.filter((x): x is string => typeof x === "string")));
+      }
+    } catch {
+      // Private mode, quota errors, or malformed JSON — fall back to default.
+    }
+  }, []);
+  // Persist on every change. Cheap: it's a small array of project labels.
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        COLLAPSED_GROUPS_STORAGE_KEY,
+        JSON.stringify(Array.from(collapsedGroups))
+      );
+    } catch {
+      // Ignore quota / private-mode errors.
+    }
+  }, [collapsedGroups]);
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(lastDriveSyncAt);
   const [syncErrors, setSyncErrors] = useState<string[]>([]);
   const [errorsExpanded, setErrorsExpanded] = useState(false);

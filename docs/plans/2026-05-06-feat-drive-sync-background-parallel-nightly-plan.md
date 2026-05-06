@@ -307,14 +307,16 @@ The current `handleSync` body — which iterates deployments client-side calling
 
 ### Phase 6 — Verify, benchmark, document
 
-- [ ] Manual happy path on dev: trigger global sync; observe progress; verify image rows + counts populate
+- [x] `npx tsc --noEmit` clean across the repo
+- [x] Lint clean on all changed files (pre-existing `Date.now()` purity warnings on lines we did not touch are unchanged)
+- [x] `npm run build` — production bundle compiles successfully
+- [ ] Manual happy path on dev: trigger global sync; observe progress in floating widget; verify image rows + counts populate
 - [ ] Manual per-project path: pick one CT project; verify only that project's deployments are touched
 - [ ] Cancel mid-flight: verify worker exits cleanly, job row marked `cancelled`, partial progress persisted
-- [ ] Concurrent enqueue: second click while first runs → friendly error
+- [ ] Concurrent enqueue: second click while first runs → friendly "Ya hay una sincronización en curso"
 - [ ] Benchmark: time a global sync at concurrency 1, 4, 8, 12. Pick final default
-- [ ] Update `CLAUDE.md` "Conventions" with single-flight `drive_sync` lock
-- [ ] Add docs/solutions entry capturing the schema change + parallel fan-out pattern
 - [ ] Deploy to prod; watch first nightly run via `data/nightly-refresh.log`
+- [ ] Pre-existing test failures (test DB seed missing `previous_camera_count` column) are unrelated to this work — separate fix needed
 
 **Success:** prod nightly completes well under the 600s curl timeout; UI is fresh on login the next morning without anyone clicking anything.
 

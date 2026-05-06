@@ -674,6 +674,11 @@ const migrations = [
   `ALTER TABLE biochoco_identifications ADD COLUMN classifier_model_id INTEGER REFERENCES camera_trap_models(id) ON DELETE SET NULL`,
   // Video timestamp method — how to derive capture time for extracted frames (2026-04-12)
   `ALTER TABLE biochoco_processing_jobs ADD COLUMN video_timestamp_method TEXT DEFAULT 'metadata'`,
+  // Per-deployment previous upload counts — for nightly email deltas (2026-05-06)
+  `ALTER TABLE biochoco_deployments ADD COLUMN previous_camera_count INTEGER`,
+  `ALTER TABLE biochoco_deployments ADD COLUMN previous_audio_count INTEGER`,
+  `ALTER TABLE biochoco_deployments ADD COLUMN previous_ibutton_count INTEGER`,
+  `ALTER TABLE biochoco_deployments ADD COLUMN previous_counts_checked_at INTEGER`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }

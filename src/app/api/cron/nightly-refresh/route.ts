@@ -27,6 +27,10 @@ interface DeploymentResult {
   name: string;
   siteName: string | null;
   uploads: UploadStatus | null;
+  previousCameraCount: number | null;
+  previousAudioCount: number | null;
+  previousIbuttonCount: number | null;
+  previousCheckedAt: Date | null;
   error: string | null;
 }
 
@@ -77,13 +81,20 @@ export async function POST(request: Request) {
     const today = new Date().toISOString().slice(0, 10);
     log.info({ today }, "[nightly] Starting BioChoco data refresh");
 
-    // Step 1: Query all deployments with a Drive folder
+    // Step 1: Query all deployments with a Drive folder.
+    // We pull current upload_* counts here too — these are the "previous"
+    // values for tonight's email delta (the UPDATE below promotes them into
+    // the previous_* columns atomically).
     const allDeployments = db
       .select({
         id: deployments.id,
         name: deployments.name,
         siteName: deployments.siteName,
         driveFolderId: deployments.driveFolderId,
+        priorCameraCount: deployments.uploadCameraCount,
+        priorAudioCount: deployments.uploadAudioCount,
+        priorIbuttonCount: deployments.uploadIbuttonCount,
+        priorCheckedAt: deployments.uploadCountsCheckedAt,
       })
       .from(deployments)
       .where(isNotNull(deployments.driveFolderId))
@@ -106,6 +117,10 @@ export async function POST(request: Request) {
           name: dep.name,
           siteName: dep.siteName,
           uploads: null,
+          previousCameraCount: dep.priorCameraCount,
+          previousAudioCount: dep.priorAudioCount,
+          previousIbuttonCount: dep.priorIbuttonCount,
+          previousCheckedAt: dep.priorCheckedAt,
           error: result.error,
         });
         continue;
@@ -122,9 +137,17 @@ export async function POST(request: Request) {
         "[nightly] deployment counts"
       );
 
-      // Persist counts, sizes, newest dates to DB
+      // Persist counts, sizes, newest dates to DB.
+      // SQLite evaluates SET RHS against the pre-update row, so referencing
+      // upload_camera_count on the right copies the OLD value into
+      // previous_camera_count before the new value is written. Same applies
+      // to previous_counts_checked_at ← upload_counts_checked_at.
       db.update(deployments)
         .set({
+          previousCameraCount: sql`${deployments.uploadCameraCount}`,
+          previousAudioCount: sql`${deployments.uploadAudioCount}`,
+          previousIbuttonCount: sql`${deployments.uploadIbuttonCount}`,
+          previousCountsCheckedAt: sql`${deployments.uploadCountsCheckedAt}`,
           uploadCameraCount: uploads.camarasTrampas,
           uploadAudioCount: uploads.grabadoresDeAudio,
           uploadIbuttonCount: uploads.ibutton,
@@ -147,6 +170,10 @@ export async function POST(request: Request) {
         name: dep.name,
         siteName: dep.siteName,
         uploads,
+        previousCameraCount: dep.priorCameraCount,
+        previousAudioCount: dep.priorAudioCount,
+        previousIbuttonCount: dep.priorIbuttonCount,
+        previousCheckedAt: dep.priorCheckedAt,
         error: null,
       });
     }
@@ -325,6 +352,22 @@ async function sendReport(
 // HTML Email Builder
 // ---------------------------------------------------------------------------
 
+/**
+ * Render a count cell with an inline delta vs the previous run.
+ * - previous === null: first run, show count only.
+ * - delta === 0: show count only (avoid noise on stable deployments).
+ * - delta !== 0: show "<count> <span>(+N)</span>" with color.
+ */
+function formatCountCell(current: number | null | undefined, previous: number | null): string {
+  const cur = current ?? 0;
+  if (previous === null) return cur.toLocaleString();
+  const d = cur - previous;
+  if (d === 0) return cur.toLocaleString();
+  const color = d > 0 ? "#16a34a" : "#dc2626";
+  const sign = d > 0 ? "+" : "";
+  return `${cur.toLocaleString()} <span style="color:${color};font-weight:600;font-size:11px">(${sign}${d})</span>`;
+}
+
 function formatDeltaHtml(
   countDelta: number | null,
   sizeDelta: number | null,
@@ -373,12 +416,56 @@ function buildEmailHtml(
       return `<tr>
         <td style="padding:6px 12px;border:1px solid #e5e7eb">${r.name}</td>
         <td style="padding:6px 12px;border:1px solid #e5e7eb">${r.siteName ?? "—"}</td>
-        <td style="padding:6px 12px;border:1px solid #e5e7eb;text-align:right">${u.camarasTrampas ?? 0}</td>
-        <td style="padding:6px 12px;border:1px solid #e5e7eb;text-align:right">${u.grabadoresDeAudio ?? 0}</td>
-        <td style="padding:6px 12px;border:1px solid #e5e7eb;text-align:right">${u.ibutton ?? 0}</td>
+        <td style="padding:6px 12px;border:1px solid #e5e7eb;text-align:right">${formatCountCell(u.camarasTrampas, r.previousCameraCount)}</td>
+        <td style="padding:6px 12px;border:1px solid #e5e7eb;text-align:right">${formatCountCell(u.grabadoresDeAudio, r.previousAudioCount)}</td>
+        <td style="padding:6px 12px;border:1px solid #e5e7eb;text-align:right">${formatCountCell(u.ibutton, r.previousIbuttonCount)}</td>
       </tr>`;
     })
     .join("\n");
+
+  // "Nuevas instalaciones" — first time this deployment has any uploads.
+  // Treats null prior (never seen) and 0 prior (seen but empty) the same.
+  const newDeployments = results
+    .filter((r) => {
+      if (!r.uploads) return false;
+      const prevTotal =
+        (r.previousCameraCount ?? 0) +
+        (r.previousAudioCount ?? 0) +
+        (r.previousIbuttonCount ?? 0);
+      const curTotal =
+        (r.uploads.camarasTrampas ?? 0) +
+        (r.uploads.grabadoresDeAudio ?? 0) +
+        (r.uploads.ibutton ?? 0);
+      return prevTotal === 0 && curTotal > 0;
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  const newDeploymentsSection =
+    newDeployments.length > 0
+      ? `
+  <h3 style="margin-top:24px;color:#16a34a">Nuevas instalaciones con datos (${newDeployments.length})</h3>
+  <table style="border-collapse:collapse;width:100%;margin-top:8px">
+    <tr style="background:#f0fdf4">
+      <th style="padding:8px 12px;border:1px solid #bbf7d0;text-align:left">Instalación</th>
+      <th style="padding:8px 12px;border:1px solid #bbf7d0;text-align:left">Sitio</th>
+      <th style="padding:8px 12px;border:1px solid #bbf7d0;text-align:right">Cámaras</th>
+      <th style="padding:8px 12px;border:1px solid #bbf7d0;text-align:right">Audio</th>
+      <th style="padding:8px 12px;border:1px solid #bbf7d0;text-align:right">iButton</th>
+    </tr>
+    ${newDeployments
+      .map((r) => {
+        const u = r.uploads!;
+        return `<tr>
+        <td style="padding:6px 12px;border:1px solid #bbf7d0">${r.name}</td>
+        <td style="padding:6px 12px;border:1px solid #bbf7d0">${r.siteName ?? "—"}</td>
+        <td style="padding:6px 12px;border:1px solid #bbf7d0;text-align:right">${(u.camarasTrampas ?? 0).toLocaleString()}</td>
+        <td style="padding:6px 12px;border:1px solid #bbf7d0;text-align:right">${(u.grabadoresDeAudio ?? 0).toLocaleString()}</td>
+        <td style="padding:6px 12px;border:1px solid #bbf7d0;text-align:right">${(u.ibutton ?? 0).toLocaleString()}</td>
+      </tr>`;
+      })
+      .join("\n")}
+  </table>`
+      : "";
 
   const errorSection =
     errors.length > 0
@@ -430,6 +517,8 @@ function buildEmailHtml(
       <td style="padding:6px 0">${delta.deploymentsWithUploads} de ${delta.totalDeployments}</td>
     </tr>
   </table>
+
+  ${newDeploymentsSection}
 
   <h3 style="margin-top:24px">Por instalación</h3>
   <table style="border-collapse:collapse;width:100%;margin-top:8px">

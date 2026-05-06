@@ -185,6 +185,11 @@ export const deployments = sqliteTable(
     uploadNewestCameraDate: text("upload_newest_camera_date"),
     uploadNewestAudioDate: text("upload_newest_audio_date"),
     uploadNewestIbuttonDate: text("upload_newest_ibutton_date"),
+    // Previous-run upload counts (for per-deployment deltas in nightly email)
+    previousCameraCount: integer("previous_camera_count"),
+    previousAudioCount: integer("previous_audio_count"),
+    previousIbuttonCount: integer("previous_ibutton_count"),
+    previousCountsCheckedAt: integer("previous_counts_checked_at", { mode: "timestamp" }),
     // Training split assignment for custom classifier (write-once, set by exporter)
     trainingSplit: text("training_split", { enum: ["train", "val", "test"] }),
   },

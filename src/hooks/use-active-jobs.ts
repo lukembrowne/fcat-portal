@@ -4,8 +4,11 @@ import { useEffect, useState, useRef, useCallback } from "react";
 
 export interface ActiveJob {
   jobId: number;
-  deploymentId: number;
+  deploymentId: number | null;
   deploymentName: string;
+  cameraTrapProjectId: number | null;
+  cameraTrapProjectName: string | null;
+  displayName: string;
   status: string;
   jobType: string;
   totalImages: number;

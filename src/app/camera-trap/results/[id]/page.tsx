@@ -31,6 +31,7 @@ export default async function JobResultsPage({ params }: PageProps) {
   const { job, deployment, gridImages, speciesList, detectionCount, verified, unverified, totalIdentifications } = data;
 
   // Verify CT project access (return 404 to avoid leaking existence)
+  if (job.deploymentId == null) notFound();
   try {
     await requireDeploymentAccess(user, job.deploymentId);
   } catch {

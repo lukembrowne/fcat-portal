@@ -316,7 +316,7 @@ async function processJobInternal(
     const [deployment] = await db
       .select()
       .from(deployments)
-      .where(eq(deployments.id, job.deploymentId));
+      .where(eq(deployments.id, job.deploymentId!));
 
     if (!deployment) {
       return { success: false, error: "Instalación no encontrada" };
@@ -413,7 +413,7 @@ async function processJobInternal(
         await db
           .update(deployments)
           .set({ status: "scanned", updatedAt: new Date() })
-          .where(eq(deployments.id, job.deploymentId));
+          .where(eq(deployments.id, job.deploymentId!));
 
         safeRevalidate();
         return {
@@ -723,7 +723,7 @@ async function processJobInternal(
       await db
         .update(deployments)
         .set({ status: "processed", updatedAt: new Date() })
-        .where(eq(deployments.id, job.deploymentId));
+        .where(eq(deployments.id, job.deploymentId!));
 
       safeRevalidate();
       processNextInQueue();
@@ -766,7 +766,7 @@ async function processJobInternal(
         await db
           .update(deployments)
           .set({ status: "scanned", updatedAt: new Date() })
-          .where(eq(deployments.id, job.deploymentId));
+          .where(eq(deployments.id, job.deploymentId!));
       }
 
       safeRevalidate();
@@ -839,7 +839,7 @@ async function processJobInternal(
           status: finalStatus === "completed" ? "processed" : "scanned",
           updatedAt: new Date(),
         })
-        .where(eq(deployments.id, job.deploymentId));
+        .where(eq(deployments.id, job.deploymentId!));
     }
 
     safeRevalidate();
@@ -887,7 +887,7 @@ async function processJobInternal(
       await db
         .update(deployments)
         .set({ status: "scanned", updatedAt: new Date() })
-        .where(eq(deployments.id, failedJob.deploymentId));
+        .where(eq(deployments.id, failedJob.deploymentId!));
     }
 
     safeRevalidate();
@@ -930,7 +930,7 @@ export async function processJob(
   if (!job) return { success: false, error: "Trabajo no encontrado" };
 
   try {
-    await requireDeploymentAccess(user, job.deploymentId);
+    await requireDeploymentAccess(user, job.deploymentId!);
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : "Sin acceso" };
   }
@@ -962,7 +962,7 @@ export async function cancelJob(
       return { success: false, error: "Trabajo no encontrado" };
     }
 
-    await requireDeploymentAccess(user, job.deploymentId);
+    await requireDeploymentAccess(user, job.deploymentId!);
 
     // Cancel any running frame extraction
     cancelFrameExtraction();
@@ -1007,7 +1007,7 @@ export async function cancelJob(
       .from(processingJobs)
       .where(
         and(
-          eq(processingJobs.deploymentId, job.deploymentId),
+          eq(processingJobs.deploymentId, job.deploymentId!),
           eq(processingJobs.status, "completed")
         )
       );
@@ -1016,7 +1016,7 @@ export async function cancelJob(
     await db
       .update(deployments)
       .set({ status: newStatus, updatedAt: new Date() })
-      .where(eq(deployments.id, job.deploymentId));
+      .where(eq(deployments.id, job.deploymentId!));
 
     // If restoring to a previous job, reassign images back to that job
     if (previousCompleted.length > 0) {
@@ -1026,7 +1026,7 @@ export async function cancelJob(
         .set({ jobId: prevJobId, status: "processed" })
         .where(
           and(
-            eq(images.deploymentId, job.deploymentId),
+            eq(images.deploymentId, job.deploymentId!),
             sql`${images.jobId} IS NULL`
           )
         );
@@ -1061,7 +1061,7 @@ export async function deleteJob(
       return { success: false, error: "Trabajo no encontrado" };
     }
 
-    await requireDeploymentAccess(user, job.deploymentId);
+    await requireDeploymentAccess(user, job.deploymentId!);
 
     // Auto-cancel if active (graceful cancel + kill subprocess, clean up temp dir)
     if (job.status === "processing" || job.status === "pending") {
@@ -1098,7 +1098,7 @@ export async function deleteJob(
       .from(processingJobs)
       .where(
         and(
-          eq(processingJobs.deploymentId, job.deploymentId),
+          eq(processingJobs.deploymentId, job.deploymentId!),
           eq(processingJobs.status, "completed")
         )
       );
@@ -1111,7 +1111,7 @@ export async function deleteJob(
         .set({ jobId: prevJobId, status: "processed" })
         .where(
           and(
-            eq(images.deploymentId, job.deploymentId),
+            eq(images.deploymentId, job.deploymentId!),
             sql`${images.jobId} IS NULL`
           )
         );
@@ -1119,12 +1119,12 @@ export async function deleteJob(
       await db
         .update(deployments)
         .set({ status: "processed", updatedAt: new Date() })
-        .where(eq(deployments.id, job.deploymentId));
+        .where(eq(deployments.id, job.deploymentId!));
     } else {
       await db
         .update(deployments)
         .set({ status: "scanned", updatedAt: new Date() })
-        .where(eq(deployments.id, job.deploymentId));
+        .where(eq(deployments.id, job.deploymentId!));
     }
 
     await db.insert(activityLog).values({
@@ -1160,7 +1160,7 @@ export async function getJobDeleteStats(
   if (!job) return { detectionsCount: 0, verifiedCount: 0 };
 
   try {
-    await requireDeploymentAccess(user, job.deploymentId);
+    await requireDeploymentAccess(user, job.deploymentId!);
   } catch {
     return { detectionsCount: 0, verifiedCount: 0 };
   }
@@ -1208,7 +1208,7 @@ export async function getJobsDeleteStats(
     .where(inArray(processingJobs.id, jobIds));
   for (const j of jobRows) {
     try {
-      await requireDeploymentAccess(user, j.deploymentId);
+      await requireDeploymentAccess(user, j.deploymentId!);
     } catch {
       return { totalDetections: 0, totalVerified: 0 };
     }
@@ -1265,7 +1265,7 @@ export async function deleteJobs(
 
       if (!job) continue;
 
-      await requireDeploymentAccess(user, job.deploymentId);
+      await requireDeploymentAccess(user, job.deploymentId!);
 
       // Auto-cancel if active
       if (job.status === "processing" || job.status === "pending") {
@@ -1302,7 +1302,7 @@ export async function deleteJobs(
         .from(processingJobs)
         .where(
           and(
-            eq(processingJobs.deploymentId, job.deploymentId),
+            eq(processingJobs.deploymentId, job.deploymentId!),
             eq(processingJobs.status, "completed")
           )
         );
@@ -1311,7 +1311,7 @@ export async function deleteJobs(
         await db
           .update(deployments)
           .set({ status: "scanned", updatedAt: new Date() })
-          .where(eq(deployments.id, job.deploymentId));
+          .where(eq(deployments.id, job.deploymentId!));
       }
     }
 
@@ -1416,6 +1416,7 @@ export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
 
   const latestStatusMap = new Map<number, { status: string; completedAt: Date | null }>();
   for (const row of latestJobStatuses) {
+    if (row.deploymentId == null) continue;
     if (!latestStatusMap.has(row.deploymentId)) {
       latestStatusMap.set(row.deploymentId, {
         status: row.status,
@@ -1441,6 +1442,7 @@ export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
 
   const completedJobMap = new Map<number, number>();
   for (const row of completedJobs) {
+    if (row.deploymentId == null) continue;
     if (!completedJobMap.has(row.deploymentId)) {
       completedJobMap.set(row.deploymentId, row.id);
     }
@@ -2902,12 +2904,18 @@ export async function cancelQueue(): Promise<ActionResult<{ cancelled: number }>
         .set({ status: "cancelled", completedAt: new Date(), statusMessage: null })
         .where(inArray(processingJobs.id, pendingJobs.map((j) => j.id)));
 
-      // Revert deployment statuses
-      const depIds = [...new Set(pendingJobs.map((j) => j.deploymentId))];
-      await db
-        .update(deployments)
-        .set({ status: "scanned", updatedAt: new Date() })
-        .where(inArray(deployments.id, depIds));
+      // Revert deployment statuses (drive_sync jobs have no deployment — skip)
+      const depIds = [
+        ...new Set(
+          pendingJobs.map((j) => j.deploymentId).filter((id): id is number => id != null)
+        ),
+      ];
+      if (depIds.length > 0) {
+        await db
+          .update(deployments)
+          .set({ status: "scanned", updatedAt: new Date() })
+          .where(inArray(deployments.id, depIds));
+      }
     }
 
     revalidatePath(CAMERA_TRAP_PATH);
@@ -3093,7 +3101,7 @@ export async function getJobResultsData(jobId: number) {
   const [deployment] = await db
     .select()
     .from(deployments)
-    .where(eq(deployments.id, job.deploymentId));
+    .where(eq(deployments.id, job.deploymentId!));
 
   const jobImages = await db
     .select()
@@ -3447,12 +3455,14 @@ export async function getRecentJobs(limit: number = 50) {
 
   const jobIds = jobs.map((j) => j.id);
 
-  // Batch: deployments
-  const deploymentIds = [...new Set(jobs.map((j) => j.deploymentId))];
-  const deploymentRows = await db
-    .select()
-    .from(deployments)
-    .where(inArray(deployments.id, deploymentIds));
+  // Batch: deployments (drive_sync jobs have no deployment — exclude)
+  const deploymentIds = [
+    ...new Set(jobs.map((j) => j.deploymentId).filter((id): id is number => id != null)),
+  ];
+  const deploymentRows =
+    deploymentIds.length > 0
+      ? await db.select().from(deployments).where(inArray(deployments.id, deploymentIds))
+      : [];
   const deploymentMap = new Map(deploymentRows.map((d) => [d.id, d]));
 
   // Batch: detection counts per job (join through images to include manual detections)
@@ -3494,7 +3504,7 @@ export async function getRecentJobs(limit: number = 50) {
 
   return jobs.map((job) => ({
     ...job,
-    deployment: deploymentMap.get(job.deploymentId) || null,
+    deployment: job.deploymentId != null ? deploymentMap.get(job.deploymentId) ?? null : null,
     detectionsCount: detCountMap.get(job.id) || 0,
     speciesCount: specCountMap.get(job.id) || 0,
     verifiedCount: verCountMap.get(job.id) || 0,
@@ -3562,7 +3572,7 @@ export async function getJobWithDetails(jobId: number) {
   if (!job) return null;
 
   try {
-    await requireDeploymentAccess(user, job.deploymentId);
+    await requireDeploymentAccess(user, job.deploymentId!);
   } catch {
     return null;
   }
@@ -3570,7 +3580,7 @@ export async function getJobWithDetails(jobId: number) {
   const [deployment] = await db
     .select()
     .from(deployments)
-    .where(eq(deployments.id, job.deploymentId));
+    .where(eq(deployments.id, job.deploymentId!));
 
   const jobImages = await db
     .select()
@@ -3645,7 +3655,7 @@ export async function getJobImageIds(jobId: number): Promise<number[]> {
   if (!job) return [];
 
   try {
-    await requireDeploymentAccess(user, job.deploymentId);
+    await requireDeploymentAccess(user, job.deploymentId!);
   } catch {
     return [];
   }
@@ -4085,7 +4095,7 @@ export async function bulkVerifyByThreshold(
       .where(eq(processingJobs.id, jobId));
     if (!job) return { success: true, data: { count: 0 } };
 
-    await requireDeploymentAccess(user, job.deploymentId);
+    await requireDeploymentAccess(user, job.deploymentId!);
 
     const jobImages = await db
       .select({ id: images.id })
@@ -4134,7 +4144,7 @@ export async function bulkVerifyByThreshold(
       })
       .where(inArray(identifications.id, ids));
 
-    await maybeAutoCompleteDeployment(job.deploymentId);
+    await maybeAutoCompleteDeployment(job.deploymentId!);
     revalidatePath(CAMERA_TRAP_PATH);
     return { success: true, data: { count: ids.length } };
   } catch (error) {
@@ -4164,7 +4174,7 @@ export async function getJobSpecies(jobId: number): Promise<string[]> {
   if (!job) return [];
 
   try {
-    await requireDeploymentAccess(user, job.deploymentId);
+    await requireDeploymentAccess(user, job.deploymentId!);
   } catch {
     return [];
   }
@@ -4209,7 +4219,7 @@ export async function getNextUnverifiedImageId(
   if (!job) return null;
 
   try {
-    await requireDeploymentAccess(user, job.deploymentId);
+    await requireDeploymentAccess(user, job.deploymentId!);
   } catch {
     return null;
   }
@@ -4248,7 +4258,7 @@ export async function getJobVerificationStats(
   if (!job) return emptyStats;
 
   try {
-    await requireDeploymentAccess(user, job.deploymentId);
+    await requireDeploymentAccess(user, job.deploymentId!);
   } catch {
     return emptyStats;
   }
@@ -4887,7 +4897,7 @@ export async function verifyAndAdvance(
       .where(eq(processingJobs.id, jobId));
     if (!job) return { success: false, error: "Trabajo no encontrado" };
 
-    await requireDeploymentAccess(user, job.deploymentId);
+    await requireDeploymentAccess(user, job.deploymentId!);
 
     if (identificationIds.length > 0) {
       await db
@@ -4982,7 +4992,7 @@ export async function verifyAndAdvance(
     // deployment.
     let deploymentCompleted = false;
     if (nextId === null && !filtered) {
-      deploymentCompleted = await maybeAutoCompleteDeployment(job.deploymentId);
+      deploymentCompleted = await maybeAutoCompleteDeployment(job.deploymentId!);
     }
 
     revalidatePath(CAMERA_TRAP_PATH);

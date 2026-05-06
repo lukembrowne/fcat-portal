@@ -211,9 +211,13 @@ export const deployments = sqliteTable(
 
 export const processingJobs = sqliteTable("biochoco_processing_jobs", {
   id: integer("id").primaryKey({ autoIncrement: true }),
-  deploymentId: integer("deployment_id")
-    .notNull()
-    .references(() => deployments.id, { onDelete: "cascade" }),
+  deploymentId: integer("deployment_id").references(() => deployments.id, {
+    onDelete: "cascade",
+  }),
+  cameraTrapProjectId: integer("camera_trap_project_id").references(
+    () => cameraTrapProjects.id,
+    { onDelete: "set null" }
+  ),
   detectorModel: text("detector_model"),
   classifierModel: text("classifier_model"),
   confidenceThreshold: real("confidence_threshold").default(0.1),

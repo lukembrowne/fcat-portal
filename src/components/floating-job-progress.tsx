@@ -157,12 +157,15 @@ export function FloatingJobProgress() {
   if (!hasJob || dismissed) return null;
 
   const jobId = sseData?.jobId || activeJob?.jobId;
-  const deploymentName = activeJob?.deploymentName || "Instalación";
+  const displayName = activeJob?.displayName || "Trabajo";
   const isTerminal = isTerminalStatus;
   const jobType = sseData?.jobType ?? activeJob?.jobType ?? "ml";
   const isCompression = jobType === "compression";
   const isRevert = jobType === "revert_compression";
   const isCompressionLike = isCompression || isRevert;
+  const isDriveSync = jobType === "drive_sync";
+  const isLinkable = !isCompressionLike && !isDriveSync;
+  const unitLabel = isDriveSync ? "instalaciones" : "imágenes";
   const canCancel = activeJob?.canCancel ?? false;
   const dlTotal = sseData?.downloadTotal ?? activeJob?.downloadTotal ?? 0;
   const dlDone = sseData?.downloadedImages ?? activeJob?.downloadedImages ?? 0;
@@ -264,7 +267,9 @@ export function FloatingJobProgress() {
                 ? "Comprimiendo..."
                 : isRevert
                   ? "Revirtiendo..."
-                  : `Trabajo #${jobId}`}
+                  : isDriveSync
+                    ? "Sincronizando..."
+                    : `Trabajo #${jobId}`}
           </span>
           <ChevronUp className="h-3 w-3" />
         </button>
@@ -277,7 +282,7 @@ export function FloatingJobProgress() {
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b">
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-medium truncate">{deploymentName}</p>
+          <p className="text-sm font-medium truncate">{displayName}</p>
           <p className="text-xs text-muted-foreground">
             {hasQueue
               ? `Procesando ${currentQueuePosition} de ${totalQueueSize}`
@@ -285,7 +290,9 @@ export function FloatingJobProgress() {
                 ? "Compresión de imágenes"
                 : isRevert
                   ? "Revirtiendo compresión"
-                  : `Trabajo #${jobId}`}
+                  : isDriveSync
+                    ? "Sincronización con Drive"
+                    : `Trabajo #${jobId}`}
           </p>
         </div>
         <div className="flex items-center gap-1 ml-2 shrink-0">
@@ -365,7 +372,7 @@ export function FloatingJobProgress() {
               <span className="tabular-nums truncate">
                 {isDownloading
                   ? <>{dlDone} de {dlTotal} archivos</>
-                  : <>{processed} de {total} imágenes</>
+                  : <>{processed} de {total} {unitLabel}</>
                 }
               </span>
               {(elapsed || etaStr) && (
@@ -408,7 +415,7 @@ export function FloatingJobProgress() {
                     className="text-xs text-muted-foreground flex items-center gap-1.5 pl-4"
                   >
                     <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40" />
-                    {job.deploymentName}
+                    {job.displayName}
                   </div>
                 ))}
               </div>
@@ -420,7 +427,7 @@ export function FloatingJobProgress() {
         <div className="flex items-center gap-1 pt-1">
           {!isTerminal && (
             <>
-              {!isCompressionLike && (
+              {isLinkable && (
                 <Link
                   href={`/camera-trap/process?jobId=${jobId}`}
                   className="inline-flex h-7 items-center rounded px-2 text-xs font-medium text-primary hover:bg-accent transition-colors"
@@ -443,13 +450,18 @@ export function FloatingJobProgress() {
               )}
             </>
           )}
-          {status === "completed" && !isCompressionLike && (
+          {status === "completed" && isLinkable && (
             <Link
               href={`/camera-trap/results/${jobId}`}
               className="inline-flex h-7 items-center rounded px-2 text-xs font-medium text-green-600 hover:bg-green-50 dark:hover:bg-green-950/30 transition-colors"
             >
               Ver resultados
             </Link>
+          )}
+          {status === "completed" && isDriveSync && (
+            <span className="text-xs font-medium text-green-600">
+              Sincronización completada
+            </span>
           )}
           {status === "completed" && isCompression && (
             <span className="text-xs font-medium text-green-600">
@@ -461,13 +473,18 @@ export function FloatingJobProgress() {
               Reversión completada
             </span>
           )}
-          {(status === "failed" || status === "cancelled") && !isCompressionLike && (
+          {(status === "failed" || status === "cancelled") && isLinkable && (
             <Link
               href={`/camera-trap/process?jobId=${jobId}`}
               className="inline-flex h-7 items-center rounded px-2 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
             >
               Ver detalles
             </Link>
+          )}
+          {(status === "failed" || status === "cancelled") && isDriveSync && (
+            <span className="text-xs text-muted-foreground">
+              {status === "failed" ? "Sincronización fallida" : "Sincronización cancelada"}
+            </span>
           )}
           {(status === "failed" || status === "cancelled") && isCompression && (
             <span className="text-xs text-muted-foreground">

@@ -296,12 +296,12 @@ The current `handleSync` body — which iterates deployments client-side calling
 
 ### Phase 5 — UI split-button
 
-- [ ] `src/app/camera-trap/deployments-table.tsx`:
-  - [ ] Replace `handleSync` with thin `triggerSync(cameraTrapProjectId?)` that calls `enqueueDriveSyncJob`
-  - [ ] Render split-button (main + dropdown of `distinctProjects`)
-  - [ ] Dispatch `window.dispatchEvent(new Event("job-started"))`
-  - [ ] Remove the old client-side per-deployment scan loop (lines 518-540)
-- [ ] Adjust the "Última sincronización ${formatRelativeEs(lastSyncAt)}" tooltip to reflect job completion timestamp (read from terminal `processingJobs.completedAt` for the most recent `drive_sync` job)
+- [x] `src/app/camera-trap/deployments-table.tsx`:
+  - [x] Replace `handleSync` with thin `triggerSync(cameraTrapProjectId?)` that calls `enqueueDriveSyncJob`
+  - [x] Render split-button (main + dropdown of `distinctProjects`)
+  - [x] Dispatch `window.dispatchEvent(new Event("job-started"))`
+  - [x] Remove the old client-side per-deployment scan loop and the foreground progress + errors UI
+- [x] Worker preserves the verified/verified_empty skip-image-scan behavior (count refresh still runs for those)
 
 **Success:** clicking either button or dropdown item starts a background job; navigating away keeps it running; floating widget shows progress + ETA + cancel.
 

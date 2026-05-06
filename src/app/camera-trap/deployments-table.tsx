@@ -32,7 +32,7 @@ import {
   Info,
   Download,
   ChevronRight,
-  AlertCircle,
+  ChevronDown,
 } from "lucide-react";
 import {
   Tooltip,
@@ -40,23 +40,25 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import type { DeploymentRow } from "./actions";
 import { DeploymentRowActions } from "./deployment-row-actions";
 import { BatchEditDialog } from "./batch-edit-dialog";
 import { BatchDeleteDialog } from "./batch-delete-dialog";
-import { syncWithDrive, scanDeploymentImages } from "./drive-actions";
-import { matchOdkDeployments, matchAllUnmatched } from "./odk-actions";
+import { enqueueDriveSyncJob } from "./drive-actions";
 import { ProcessConfirmDialog } from "./process-confirm-dialog";
 import type { ProjectGroup } from "./page";
 
 /** localStorage key for remembering which project groups the user has collapsed
  * on the Instalaciones page. Per-device, non-sensitive UI preference. */
 const COLLAPSED_GROUPS_STORAGE_KEY = "fcat.cameratrap.collapsedProjects.v1";
-
-/** Deployment statuses that are excluded from global Drive re-scan because a
- * human has already signed off on the contents. Operators can still scan these
- * manually via the per-row "Buscar imágenes" action. */
-const SKIP_RESCAN_STATUSES = new Set(["verified", "verified_empty"]);
 
 /** Statuses where the deployment looks "done" but pending images may have
  * arrived after a re-scan. Drives the "+N pendientes" badge. */
@@ -95,11 +97,6 @@ export function DeploymentsTable({
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [syncing, startSync] = useTransition();
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
-  const [syncProgress, setSyncProgress] = useState<{
-    current: number;
-    total: number;
-    label: string;
-  } | null>(null);
   const [batchEditOpen, setBatchEditOpen] = useState(false);
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
   const [processDialogIds, setProcessDialogIds] = useState<number[] | null>(null);
@@ -135,8 +132,6 @@ export function DeploymentsTable({
     }
   }, [collapsedGroups]);
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(lastDriveSyncAt);
-  const [syncErrors, setSyncErrors] = useState<string[]>([]);
-  const [errorsExpanded, setErrorsExpanded] = useState(false);
   // Tick every 30s so the relative "hace X" label stays fresh without a refresh.
   const [, setNowTick] = useState(0);
   useEffect(() => {
@@ -449,123 +444,27 @@ export function DeploymentsTable({
     }));
   }, [filteredGroups, sortedRowOrder]);
 
-  const handleSync = () => {
+  /**
+   * Enqueue a background drive_sync job. The actual work (folder discovery,
+   * image scan, ODK match, count refresh) runs server-side; the floating
+   * progress widget shows live progress and survives navigation.
+   */
+  const triggerSync = (cameraTrapProjectId?: number) => {
     startSync(async () => {
       setSyncMessage(null);
-      setSyncProgress(null);
-      setSyncErrors([]);
-      setErrorsExpanded(false);
-      const messages: string[] = [];
-      const collectedErrors: string[] = [];
-
-      // Step 1: Sync with Drive (discovers new folders, auto-scans them)
-      const result = await syncWithDrive();
+      const result = await enqueueDriveSyncJob(cameraTrapProjectId);
       if (!result.success) {
         setSyncMessage(`Error: ${result.error}`);
-        setSyncErrors([result.error]);
-        setErrorsExpanded(true);
         return;
       }
-
-      const { created, errors } = result.data;
-      collectedErrors.push(...errors);
-      if (created.length > 0) {
-        // Step 2: Auto-match new deployments with ODK
-        const odkResult = await matchOdkDeployments(
-          created.map((d) => d.id)
-        );
-        const matchCount = odkResult.success
-          ? odkResult.data.matched.length
-          : 0;
-        messages.push(
-          `${created.length} nueva(s) instalación(es). ${matchCount} vinculada(s) con ODK.`
-        );
-        if (errors.length > 0) {
-          messages.push(`${errors.length} error(es) de sincronización.`);
-        }
-      }
-
-      // Step 2b: Backfill ODK metadata for previously-matched deployments
-      // whose dateStart / dateEnd are still null. retrieve_sensors is
-      // submitted AFTER the install match runs, so without this pass the
-      // retrieval date would never flow into `biochoco_deployments.date_end`
-      // and the results page would show 0 camera days indefinitely.
-      const backfillResult = await matchAllUnmatched();
-      if (backfillResult.success) {
-        const filled = backfillResult.data.matched.length;
-        if (filled > 0) {
-          messages.push(`${filled} fecha(s) de ODK actualizada(s).`);
-        }
-      } else {
-        collectedErrors.push(
-          `Error al sincronizar fechas ODK: ${backfillResult.error}`
-        );
-      }
-
-      // Step 3: Re-scan all deployments except those a human has already verified.
-      // Verified statuses are excluded so adding new images doesn't muddy the
-      // human sign-off — operators can still trigger a manual scan per row.
-      const needsScan = initialDeployments.filter(
-        (d) => d.driveFolderId && !SKIP_RESCAN_STATUSES.has(d.status)
-      );
-
-      if (needsScan.length > 0) {
-        let scanned = 0;
-        let scanErrors = 0;
-        let depsWithNewMedia = 0;
-        let totalNewMedia = 0;
-
-        for (let i = 0; i < needsScan.length; i++) {
-          const dep = needsScan[i];
-          setSyncProgress({
-            current: i + 1,
-            total: needsScan.length,
-            label: dep.name,
-          });
-          const beforeImages = dep.totalImages ?? 0;
-          const scanResult = await scanDeploymentImages(dep.id);
-          if (scanResult.success) {
-            scanned++;
-            const delta = scanResult.data.imageCount - beforeImages;
-            if (delta > 0) {
-              depsWithNewMedia++;
-              totalNewMedia += delta;
-            }
-          } else {
-            scanErrors++;
-            collectedErrors.push(
-              `${dep.projectLabel ? `${dep.projectLabel} / ` : ""}${dep.name}: ${scanResult.error}`
-            );
-          }
-        }
-
-        const newMediaSuffix =
-          depsWithNewMedia > 0
-            ? ` ${depsWithNewMedia} con imágenes nuevas (+${totalNewMedia}).`
-            : "";
-        const errorSuffix = scanErrors > 0 ? ` ${scanErrors} error(es).` : "";
-        messages.push(
-          `${scanned} de ${needsScan.length} instalación(es) re-escaneada(s).${newMediaSuffix}${errorSuffix}`
-        );
-
-        // Mention skipped (verified) deployments so the count adds up to the table total.
-        const skippedVerified = initialDeployments.filter(
-          (d) => d.driveFolderId && SKIP_RESCAN_STATUSES.has(d.status)
-        ).length;
-        if (skippedVerified > 0) {
-          messages.push(`${skippedVerified} verificada(s) (omitida(s)).`);
-        }
-      }
-
-      setSyncProgress(null);
+      const scopeLabel = cameraTrapProjectId
+        ? distinctProjects.find((p) => p.id === cameraTrapProjectId)?.name ?? "proyecto"
+        : "todos los proyectos";
       setSyncMessage(
-        messages.length > 0
-          ? messages.join(" ")
-          : "Todo sincronizado. No hay cambios."
+        `Sincronización iniciada para ${scopeLabel}. Puedes seguir trabajando — el progreso se muestra en la esquina inferior derecha.`
       );
-      setSyncErrors(collectedErrors);
-      if (collectedErrors.length > 0) setErrorsExpanded(true);
       setLastSyncAt(new Date().toISOString());
+      window.dispatchEvent(new Event("job-started"));
     });
   };
 
@@ -641,25 +540,56 @@ export function DeploymentsTable({
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button
-                    variant="default"
-                    size="sm"
-                    onClick={handleSync}
-                    disabled={syncing}
-                  >
-                    {syncing ? (
-                      <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
-                    ) : (
-                      <RefreshCw className="h-4 w-4 mr-1.5" />
-                    )}
-                    Sincronizar con Drive
-                  </Button>
+                  <div className="inline-flex">
+                    <Button
+                      variant="default"
+                      size="sm"
+                      onClick={() => triggerSync()}
+                      disabled={syncing}
+                      className="rounded-r-none"
+                    >
+                      {syncing ? (
+                        <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+                      ) : (
+                        <RefreshCw className="h-4 w-4 mr-1.5" />
+                      )}
+                      Sincronizar con Drive
+                    </Button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          variant="default"
+                          size="sm"
+                          disabled={syncing || distinctProjects.length === 0}
+                          className="rounded-l-none border-l border-primary-foreground/20 px-2"
+                          aria-label="Sincronizar un proyecto específico"
+                        >
+                          <ChevronDown className="h-4 w-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuLabel className="text-xs">
+                          Sincronizar solo…
+                        </DropdownMenuLabel>
+                        <DropdownMenuSeparator />
+                        {distinctProjects.map((p) => (
+                          <DropdownMenuItem
+                            key={p.id}
+                            onSelect={() => triggerSync(p.id)}
+                          >
+                            {p.name}
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="max-w-xs">
                   <p className="text-xs leading-relaxed">
-                    Busca carpetas nuevas en Google Drive, las vincula con
-                    formularios de ODK y cuenta sus imágenes. Úsalo cuando hayas
-                    subido instalaciones nuevas o cambiado datos en ODK.
+                    Inicia una sincronización en segundo plano: busca carpetas
+                    nuevas en Google Drive, las vincula con formularios de ODK
+                    y cuenta sus imágenes. Puedes navegar a otras páginas
+                    mientras se ejecuta.
                   </p>
                 </TooltipContent>
               </Tooltip>
@@ -708,67 +638,11 @@ export function DeploymentsTable({
         </div>
       </div>
 
-      {/* Sync progress */}
-      {syncProgress && (
-        <div className="bg-muted/50 px-3 py-2.5 rounded-md space-y-1.5">
-          <div className="flex items-center justify-between gap-3 text-xs">
-            <span className="text-muted-foreground inline-flex items-center gap-1.5 min-w-0">
-              <Loader2 className="h-3 w-3 animate-spin shrink-0" />
-              <span className="truncate">
-                Buscando archivos en{" "}
-                <span className="font-medium text-foreground">
-                  {syncProgress.label}
-                </span>
-              </span>
-            </span>
-            <span className="tabular-nums text-muted-foreground shrink-0">
-              {syncProgress.current} / {syncProgress.total}
-            </span>
-          </div>
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-            <div
-              className="h-full bg-primary transition-all duration-200 ease-out"
-              style={{
-                width: `${Math.min(100, (syncProgress.current / syncProgress.total) * 100)}%`,
-              }}
-            />
-          </div>
-        </div>
-      )}
-
-      {/* Sync message */}
-      {syncMessage && !syncProgress && (
+      {/* Sync message — brief banner; live progress lives in the floating widget */}
+      {syncMessage && (
         <p className="text-sm text-muted-foreground bg-muted/50 px-3 py-2 rounded-md">
           {syncMessage}
         </p>
-      )}
-
-      {/* Sync errors detail */}
-      {syncErrors.length > 0 && (
-        <div className="rounded-md border border-destructive/30 bg-destructive/5">
-          <button
-            type="button"
-            onClick={() => setErrorsExpanded((v) => !v)}
-            className="flex w-full items-center gap-2 px-3 py-2 text-sm text-destructive hover:bg-destructive/10 rounded-md"
-          >
-            <AlertCircle className="h-4 w-4 shrink-0" />
-            <span className="font-medium">
-              {syncErrors.length} error{syncErrors.length === 1 ? "" : "es"} durante la sincronización
-            </span>
-            <ChevronRight
-              className={`h-4 w-4 ml-auto transition-transform ${errorsExpanded ? "rotate-90" : ""}`}
-            />
-          </button>
-          {errorsExpanded && (
-            <ul className="border-t border-destructive/20 px-3 py-2 space-y-1 text-xs text-destructive/90 max-h-64 overflow-y-auto font-mono">
-              {syncErrors.map((err, i) => (
-                <li key={i} className="break-words">
-                  • {err}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
       )}
 
       {/* Selection toolbar */}

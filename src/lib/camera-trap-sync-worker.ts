@@ -30,6 +30,14 @@ function readConcurrency(): number {
   return Number.isFinite(n) && n > 0 ? Math.min(n, 32) : DEFAULT_CONCURRENCY;
 }
 
+/**
+ * Statuses where a human has already signed off on the deployment's
+ * contents, so we skip the image re-scan to avoid muddying that sign-off.
+ * Count refresh still runs so the dashboard stays current. Operators can
+ * trigger a manual rescan from the per-row action menu when needed.
+ */
+const SKIP_RESCAN_STATUSES = new Set(["verified", "verified_empty"]);
+
 interface SyncSummary {
   total: number;
   processed: number;
@@ -243,7 +251,9 @@ export async function runDriveSyncWorker(jobId: number): Promise<void> {
           }
           const t0 = Date.now();
           try {
-            await scanDeploymentImagesInternal(dep);
+            if (!SKIP_RESCAN_STATUSES.has(dep.status)) {
+              await scanDeploymentImagesInternal(dep);
+            }
             const r = await refreshUploadCountsInternal(dep);
             if (!r.ok) {
               throw new Error(r.error ?? "refresh failed");

@@ -20,4 +20,14 @@ describe("brightnessFilter", () => {
     // contrast = 1 + (1 - 0.5) * 0.6 = 1.3
     expect(brightnessFilter(0.5)).toBe("brightness(0.5) contrast(1.3)");
   });
+
+  it("brightens with mild contrast bump at 1.3 (underexposed)", () => {
+    // contrast = 1 + |1 - 1.3| * 0.6 = 1.18
+    expect(brightnessFilter(1.3)).toBe("brightness(1.3) contrast(1.18)");
+  });
+
+  it("brightens with stronger contrast bump at 1.6 (underexposed)", () => {
+    // contrast = 1 + |1 - 1.6| * 0.6 = 1.36
+    expect(brightnessFilter(1.6)).toBe("brightness(1.6) contrast(1.36)");
+  });
 });

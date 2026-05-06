@@ -240,16 +240,18 @@ export async function runDriveSyncWorker(jobId: number): Promise<void> {
     const limit = pLimit(concurrency);
     let processed = 0;
     let failed = 0;
+    let skipped = 0;
     let lastProgressUpdate = 0;
     const PROGRESS_TICK_MS = 1500;
 
-    const results = await Promise.allSettled(
+    await Promise.allSettled(
       allDeps.map((dep) =>
         limit(async () => {
           if (await isJobCancelled(jobId)) {
-            return { skipped: true } as const;
+            skipped++;
+            return;
           }
-          const t0 = Date.now();
+          let succeeded = false;
           try {
             if (!SKIP_RESCAN_STATUSES.has(dep.status)) {
               await scanDeploymentImagesInternal(dep);
@@ -258,30 +260,31 @@ export async function runDriveSyncWorker(jobId: number): Promise<void> {
             if (!r.ok) {
               throw new Error(r.error ?? "refresh failed");
             }
-            return { ok: true, ms: Date.now() - t0 } as const;
+            succeeded = true;
           } catch (err) {
             log.warn(
               { err, deployment: dep.name, depId: dep.id },
               "[drive-sync] deployment task failed"
             );
-            throw err;
           } finally {
-            // settle counter (best-effort, racy but fine for a progress bar)
-            const completed = processed + failed + 1;
+            if (succeeded) processed++;
+            else failed++;
+            const completed = processed + failed;
             const now = Date.now();
             if (
               now - lastProgressUpdate > PROGRESS_TICK_MS ||
-              completed === total
+              completed + skipped === total
             ) {
               lastProgressUpdate = now;
               const elapsedSec = (now - startMs) / 1000;
               const rate = completed / Math.max(elapsedSec, 0.001);
-              const remaining = Math.max(total - completed, 0);
+              const remaining = Math.max(total - completed - skipped, 0);
               const etaSec = rate > 0 ? remaining / rate : 0;
               log.info(
                 {
                   jobId,
-                  processed: completed,
+                  processed,
+                  failed,
                   total,
                   totalElapsed: `${elapsedSec.toFixed(1)}s`,
                   etaSec: `${etaSec.toFixed(0)}s`,
@@ -291,6 +294,7 @@ export async function runDriveSyncWorker(jobId: number): Promise<void> {
               );
               await setJobStatus(jobId, {
                 processedImages: completed,
+                failedImages: failed,
                 statusMessage: `Sincronizando ${completed} de ${total} instalaciones`,
               });
             }
@@ -298,15 +302,6 @@ export async function runDriveSyncWorker(jobId: number): Promise<void> {
         })
       )
     );
-
-    for (const r of results) {
-      if (r.status === "fulfilled") {
-        if ((r.value as { skipped?: boolean }).skipped) continue;
-        processed++;
-      } else {
-        failed++;
-      }
-    }
 
     // ---- Phase 5: ODK match for newly-created deployments ----
     let matched = 0;

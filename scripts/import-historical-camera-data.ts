@@ -270,7 +270,7 @@ const SPECIES_NAME_MAP = new Map<string, string>([
   ["wedge-billed woodcreeper (Glyphorynchus spirurus)", "Glyphorynchus spirurus"],
   ["spotted antbird (Hylophylax naevioides)", "Hylophylax naevioides"],
   ["rufous-headed chachalaca (Ortalis erythroptera)", "Ortalis erythroptera"],
-  ["ecuadorian thrush (Turdus maculirostris)", "Turdus maculirostris"],
+  ["ecuadorian thrush (Turdus maculirostris)", "Turdus dagae"],
   ["plain-brown woodcreeper (Dendrocincla fuliginosa)", "Dendrocincla fuliginosa"],
   ["streak-chested antpitta (Hylopezus perspicillatus)", "Hylopezus perspicillatus"],
   ["great tinamou (Tinamus major)", "Tinamus major"],
@@ -288,7 +288,7 @@ const SPECIES_NAME_MAP = new Map<string, string>([
 
   // Parenthetical extraction (Title Case CSV variants)
   ["plain brown woodcreeper (Dendrocincla fuliginosa)", "Dendrocincla fuliginosa"],
-  ["Ecuadorian Thrush (Turdus maculirostris)", "Turdus maculirostris"],
+  ["Ecuadorian Thrush (Turdus maculirostris)", "Turdus dagae"],
   ["Rufous-headed Chachalaca (Ortalis erythroptera)", "Ortalis erythroptera"],
   ["Berlepsch's Tinamou (Crypturellus berlepschi)", "Crypturellus berlepschi"],
   ["Scaled Antpitta (Grallaria guatimalensis)", "Grallaria guatimalensis"],

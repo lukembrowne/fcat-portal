@@ -1,11 +1,11 @@
 "use client";
 
 import { useMemo } from "react";
-import type { DetectionWithIdentification } from "@/components/annotation-toolbar";
+import type { AnnotationDetection } from "@/types/annotation";
 
 interface UseAnnotationPickerArgs {
   selectedBoxId: number | null;
-  detections: DetectionWithIdentification[];
+  detections: AnnotationDetection[];
   isPanning: boolean;
   isZooming: boolean;
   bboxesHidden: boolean;

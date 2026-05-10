@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { DetectionCardStrip } from "@/components/detection-card-strip";
 import { AnnotationHelpPanel } from "@/components/annotation-help-panel";
-import type { DetectionWithIdentification } from "@/components/annotation-toolbar";
+import type { AnnotationDetection } from "@/types/annotation";
 import type { Species } from "@/db/schema";
 import type { NameDisplay } from "@/components/species-sidebar";
 
@@ -17,7 +17,7 @@ const DISPLAY_LABELS: Record<NameDisplay, string> = {
 };
 
 interface AnnotationToolsSidebarProps {
-  detections: DetectionWithIdentification[];
+  detections: AnnotationDetection[];
   selectedDetectionId: number | null;
   onSelectDetection: (id: number) => void;
   onDeleteDetection?: (id: number) => void;

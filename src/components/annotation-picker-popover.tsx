@@ -15,7 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { Check, Trash2 } from "lucide-react";
 import type { Species } from "@/db/schema";
 import type { NameDisplay } from "@/components/species-sidebar";
-import type { DetectionWithIdentification } from "@/components/annotation-toolbar";
+import type { AnnotationDetection } from "@/types/annotation";
 
 const TYPE_LABELS: Record<string, string> = {
   mammal: "Mamíferos",
@@ -46,7 +46,7 @@ function displayName(sp: Species, mode: NameDisplay): string {
 
 interface AnnotationPickerPopoverProps {
   open: boolean;
-  selectedDetection: DetectionWithIdentification | null;
+  selectedDetection: AnnotationDetection | null;
   /** 1-based index of the selected detection in the image's detection list */
   detectionNumber: number;
   currentSpecies: string | null;

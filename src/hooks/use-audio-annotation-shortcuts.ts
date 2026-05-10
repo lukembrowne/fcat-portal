@@ -4,8 +4,12 @@ import { useEffect, useRef } from "react";
 
 export const AUDIO_SHORTCUTS = [
   { key: "Espacio", description: "Reproducir/pausar", category: "playback" },
-  { key: "Q/E o [ / ]", description: "Retroceder/avanzar 5s", category: "playback" },
-  { key: "←/→", description: "Archivo anterior/siguiente", category: "navigation" },
+  { key: "←/→", description: "Retroceder/avanzar 5s", category: "playback" },
+  { key: "Q/E o [ / ]", description: "Retroceder/avanzar 5s (alternativo)", category: "playback" },
+  { key: "p", description: "Reproducir selección", category: "playback" },
+  { key: "l", description: "Reproducir selección en bucle", category: "playback" },
+  { key: "Shift + ←/→", description: "Archivo anterior/siguiente", category: "navigation" },
+  { key: "n", description: "Saltar a la siguiente sin verificar", category: "navigation" },
   { key: "1-9", description: "Seleccionar detección / asignar especie", category: "navigation" },
   { key: "0", description: "Asignar especie #10", category: "annotation" },
   { key: "Esc", description: "Deseleccionar / limpiar búsqueda", category: "navigation" },
@@ -13,7 +17,9 @@ export const AUDIO_SHORTCUTS = [
   { key: "v", description: "Verificar detección", category: "annotation" },
   { key: "r", description: "Rechazar detección", category: "annotation" },
   { key: "d / ⌫ / Supr", description: "Eliminar detección", category: "annotation" },
-  { key: "p", description: "Reproducir selección", category: "playback" },
+  { key: "f", description: "Cambiar frecuencia máx", category: "navigation" },
+  { key: "m", description: "Cambiar mapa de color", category: "navigation" },
+  { key: "+/-", description: "Ganancia ±5 dB", category: "navigation" },
 ] as const;
 
 interface AudioAnnotationShortcutOptions {
@@ -31,6 +37,11 @@ interface AudioAnnotationShortcutOptions {
   onDeselect?: () => void;
   onDeleteSelected?: () => void;
   onAssignSpeciesByIndex?: (index: number) => void;
+  onCycleYMax?: () => void;
+  onCycleColormap?: () => void;
+  onAdjustGain?: (deltaDB: number) => void;
+  onToggleLoop?: () => void;
+  onJumpToNextUnverified?: () => void;
   detectionCount?: number;
   selectedDetectionId?: number | null;
   searchInputRef?: React.RefObject<HTMLInputElement | null>;
@@ -117,14 +128,16 @@ export function useAudioAnnotationShortcuts(opts: AudioAnnotationShortcutOptions
           }
           break;
 
-        // Navigation
+        // Navigation: plain arrow → seek; shift+arrow → file nav
         case "ArrowLeft":
           e.preventDefault();
-          o.onPrev?.();
+          if (e.shiftKey) o.onPrev?.();
+          else o.onSeekBack?.();
           break;
         case "ArrowRight":
           e.preventDefault();
-          o.onNext?.();
+          if (e.shiftKey) o.onNext?.();
+          else o.onSeekForward?.();
           break;
 
         // Annotation
@@ -152,6 +165,44 @@ export function useAudioAnnotationShortcuts(opts: AudioAnnotationShortcutOptions
           if (!hasModifier) {
             e.preventDefault();
             o.onDeleteSelected?.();
+          }
+          break;
+        case "l":
+          if (!hasModifier) {
+            e.preventDefault();
+            o.onToggleLoop?.();
+          }
+          break;
+        case "n":
+          if (!hasModifier) {
+            e.preventDefault();
+            o.onJumpToNextUnverified?.();
+          }
+          break;
+        case "f":
+          if (!hasModifier) {
+            e.preventDefault();
+            o.onCycleYMax?.();
+          }
+          break;
+        case "m":
+          if (!hasModifier) {
+            e.preventDefault();
+            o.onCycleColormap?.();
+          }
+          break;
+        case "+":
+        case "=":
+          if (!hasModifier) {
+            e.preventDefault();
+            o.onAdjustGain?.(5);
+          }
+          break;
+        case "-":
+        case "_":
+          if (!hasModifier) {
+            e.preventDefault();
+            o.onAdjustGain?.(-5);
           }
           break;
 

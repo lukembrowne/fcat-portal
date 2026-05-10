@@ -135,6 +135,37 @@ export async function createAudioDetection(
   }
 }
 
+export async function updateAudioDetection(
+  detectionId: number,
+  box: { startTime: number; endTime: number; minFreq: number; maxFreq: number }
+): Promise<ActionResult> {
+  const user = await requirePermission("grabaciones", "editor");
+
+  try {
+    const depId = await getDeploymentIdForAudioDetection(detectionId);
+    if (depId) await requireDeploymentAccess(user, depId);
+
+    const { startTime, endTime, minFreq, maxFreq } = box;
+    if (startTime >= endTime || minFreq >= maxFreq) {
+      return { success: false, error: "Coordenadas de detección inválidas" };
+    }
+
+    await db
+      .update(audioDetections)
+      .set({ startTime, endTime, minFreq, maxFreq })
+      .where(eq(audioDetections.id, detectionId));
+
+    revalidatePath("/audio");
+    return { success: true, data: undefined };
+  } catch (error) {
+    return {
+      success: false,
+      error:
+        error instanceof Error ? error.message : "Error al actualizar detección",
+    };
+  }
+}
+
 export async function deleteAudioDetection(
   detectionId: number
 ): Promise<ActionResult> {

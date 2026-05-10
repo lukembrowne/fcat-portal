@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
+import { getSpeciesColor } from "@/lib/species-color";
 
 export interface BBoxData {
   id: number;
@@ -27,21 +28,6 @@ interface BBoxOverlayProps {
   /** Fires whenever the rendered image's pixel dimensions change. Lets
    *  parents position absolute overlays against the same coordinate space. */
   onResize?: (size: { width: number; height: number }) => void;
-}
-
-const SPECIES_COLORS: Record<string, string> = {};
-const COLOR_PALETTE = [
-  "#22c55e", "#3b82f6", "#f59e0b", "#ef4444", "#a855f7",
-  "#06b6d4", "#f97316", "#ec4899", "#14b8a6", "#8b5cf6",
-];
-
-function getSpeciesColor(species: string | null | undefined): string {
-  if (!species) return "#22c55e";
-  if (!SPECIES_COLORS[species]) {
-    const idx = Object.keys(SPECIES_COLORS).length % COLOR_PALETTE.length;
-    SPECIES_COLORS[species] = COLOR_PALETTE[idx];
-  }
-  return SPECIES_COLORS[species];
 }
 
 const CLASS_COLORS: Record<number, string> = {

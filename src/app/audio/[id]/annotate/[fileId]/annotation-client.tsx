@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { toast } from "sonner";
 import {
   SpeciesSidebar,
   getStoredDisplay,
@@ -40,13 +41,24 @@ function getVisibleSpecies(
   });
 }
 import { Button } from "@/components/ui/button";
-import { Calendar, ChevronLeft, ChevronRight, Loader2, Trash2, Play, Pause, SkipBack, SkipForward } from "lucide-react";
+import { Calendar, ChevronLeft, ChevronRight, Trash2, Play, Pause, SkipBack, SkipForward } from "lucide-react";
 import type { Species } from "@/db/schema";
-import type { SpectrogramMetadata } from "@/lib/audio-cache";
-import { SpectrogramOverlay, type AudioBoxData } from "./spectrogram-overlay";
+import {
+  FftSpectrogram,
+  type AudioBoxData,
+  type SpectrogramMethods,
+} from "./fft-spectrogram";
+import {
+  SpectrogramControls,
+  loadStoredSettings,
+  cycleYMax,
+  cycleColormap,
+  type SpectrogramSettings,
+} from "./spectrogram-controls";
 import { useAudioAnnotationShortcuts } from "@/hooks/use-audio-annotation-shortcuts";
 import {
   createAudioDetection,
+  updateAudioDetection,
   deleteAudioDetection,
   assignAudioSpecies,
   verifyAudioIdentification,
@@ -153,15 +165,12 @@ export function AudioAnnotationClient({
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [nameDisplay, setNameDisplay] = useState<NameDisplay>(getStoredDisplay);
   const [, startTransition] = useTransition();
-  const [spectrogramReady, setSpectrogramReady] = useState(false);
-  const [spectrogramError, setSpectrogramError] = useState<string | null>(null);
-  const [spectrogramStage, setSpectrogramStage] = useState<string | null>(null);
-  const [spectrogramFileSize, setSpectrogramFileSize] = useState<number | null>(null);
-  const [metadata, setMetadata] = useState<SpectrogramMetadata | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
-  const audioRef = useRef<HTMLAudioElement>(null);
-  const selectionEndRef = useRef<number | null>(null);
+  const [duration, setDuration] = useState<number | null>(null);
+  const [sampleRate, setSampleRate] = useState<number | null>(null);
+  const [settings, setSettings] = useState<SpectrogramSettings>(() => loadStoredSettings());
+  const spectrogramRef = useRef<SpectrogramMethods>(null);
 
   // Auto-focus species search when a detection is selected
   useEffect(() => {
@@ -172,71 +181,7 @@ export function AudioAnnotationClient({
     }
   }, [selectedDetectionId]);
 
-  const [retryCount, setRetryCount] = useState(0);
-  const spectrogramUrl = `/api/audio/spectrogram?fileId=${audioFileId}&t=${retryCount}`;
   const audioStreamUrl = driveFileId ? `/api/audio/stream?fileId=${driveFileId}` : null;
-
-  // Poll for spectrogram readiness (max ~3 minutes = 90 polls × 2s)
-  const MAX_POLLS = 90;
-  useEffect(() => {
-    let cancelled = false;
-    let pollCount = 0;
-
-    async function checkMeta() {
-      if (pollCount >= MAX_POLLS) {
-        setSpectrogramError(
-          "Tiempo de espera agotado generando espectrograma. Intente de nuevo."
-        );
-        return;
-      }
-      pollCount++;
-
-      try {
-        const res = await fetch(
-          `/api/audio/spectrogram/meta?fileId=${audioFileId}`
-        );
-        const data = await res.json();
-        if (cancelled) return;
-
-        if (data.ready) {
-          setMetadata(data as SpectrogramMetadata);
-          setSpectrogramReady(true);
-          setSpectrogramError(null);
-          setSpectrogramStage(null);
-        } else if (data.error && !data.stage) {
-          setSpectrogramError(data.error);
-        } else {
-          // Not ready yet — update stage and poll again
-          if (data.stage) setSpectrogramStage(data.stage);
-          if (data.fileSize) setSpectrogramFileSize(data.fileSize);
-          setTimeout(checkMeta, 2000);
-        }
-      } catch {
-        if (!cancelled) {
-          setSpectrogramError("Error de conexión");
-        }
-      }
-    }
-
-    checkMeta();
-    return () => {
-      cancelled = true;
-    };
-  }, [audioFileId, retryCount]);
-
-  // Handle broken spectrogram image — reset to loading and re-poll (max 3 retries)
-  const MAX_RETRIES = 3;
-  const handleImageError = useCallback(() => {
-    setRetryCount((c) => {
-      if (c >= MAX_RETRIES) {
-        setSpectrogramError("No se pudo cargar la imagen del espectrograma.");
-        return c;
-      }
-      setSpectrogramReady(false);
-      setMetadata(null);
-      return c + 1;
-    });
-  }, []);
 
   const cycleDisplay = useCallback(() => {
     setNameDisplay((prev) => {
@@ -312,83 +257,67 @@ export function AudioAnnotationClient({
     [selectedDetectionId, router]
   );
 
-  // Playback controls
+  // Playback controls — delegate to spectrogram component via imperative ref
   const handlePlayPause = useCallback(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    if (audio.paused) {
-      selectionEndRef.current = null;
-      audio.play();
-    } else {
-      audio.pause();
-    }
-  }, []);
-
-  const handleSeek = useCallback((time: number) => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    audio.currentTime = Math.max(0, Math.min(time, audio.duration || 0));
+    spectrogramRef.current?.playPause();
   }, []);
 
   const handlePlaySelection = useCallback(() => {
-    const audio = audioRef.current;
-    if (!audio || !selectedDetection) return;
-    audio.currentTime = selectedDetection.startTime;
-    selectionEndRef.current = selectedDetection.endTime;
-    audio.play();
+    if (!selectedDetection) return;
+    spectrogramRef.current?.playSelection(
+      selectedDetection.startTime,
+      selectedDetection.endTime
+    );
   }, [selectedDetection]);
 
-  // Smooth 60fps cursor updates via requestAnimationFrame
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
+  const handleToggleLoop = useCallback(() => {
+    if (!selectedDetection) return;
+    const spec = spectrogramRef.current;
+    if (!spec) return;
+    if (spec.isLooping()) {
+      spec.stopLoop();
+    } else {
+      spec.loopSelection(selectedDetection.startTime, selectedDetection.endTime);
+    }
+  }, [selectedDetection]);
 
-    let rafId: number | null = null;
-
-    function tick() {
-      const a = audioRef.current;
-      if (!a) return;
-      setCurrentTime(a.currentTime);
-      // Stop at selection end
-      if (selectionEndRef.current != null && a.currentTime >= selectionEndRef.current) {
-        a.pause();
-        selectionEndRef.current = null;
+  const handleJumpToNextUnverified = useCallback(() => {
+    if (detections.length === 0) return;
+    const sorted = [...detections].sort((a, b) => a.startTime - b.startTime);
+    const currentIdx = selectedDetectionId
+      ? sorted.findIndex((d) => d.id === selectedDetectionId)
+      : -1;
+    for (let offset = 1; offset <= sorted.length; offset++) {
+      const i = (currentIdx + offset + sorted.length) % sorted.length;
+      if (sorted[i].identification?.verificationStatus === "unverified") {
+        setSelectedDetectionId(sorted[i].id);
+        spectrogramRef.current?.seek(sorted[i].startTime);
+        return;
       }
-      rafId = requestAnimationFrame(tick);
     }
+    toast.success("Todas verificadas en este archivo");
+  }, [detections, selectedDetectionId]);
 
-    function onPlay() {
-      setIsPlaying(true);
-      rafId = requestAnimationFrame(tick);
-    }
-    function onPause() {
-      setIsPlaying(false);
-      if (rafId != null) { cancelAnimationFrame(rafId); rafId = null; }
-      // Sync final position
-      setCurrentTime(audioRef.current?.currentTime ?? 0);
-    }
-    function onEnded() {
-      setIsPlaying(false);
-      if (rafId != null) { cancelAnimationFrame(rafId); rafId = null; }
-      setCurrentTime(0);
-    }
-    function onSeeked() {
-      setCurrentTime(audioRef.current?.currentTime ?? 0);
-    }
+  const handleSpectrogramReady = useCallback(
+    (meta: { duration: number; sampleRate: number }) => {
+      setDuration(meta.duration);
+      setSampleRate(meta.sampleRate);
+    },
+    []
+  );
 
-    audio.addEventListener("play", onPlay);
-    audio.addEventListener("pause", onPause);
-    audio.addEventListener("ended", onEnded);
-    audio.addEventListener("seeked", onSeeked);
-
-    return () => {
-      if (rafId != null) cancelAnimationFrame(rafId);
-      audio.removeEventListener("play", onPlay);
-      audio.removeEventListener("pause", onPause);
-      audio.removeEventListener("ended", onEnded);
-      audio.removeEventListener("seeked", onSeeked);
-    };
-  }, []);
+  const handleBoxResized = useCallback(
+    (
+      boxId: number,
+      box: { startTime: number; endTime: number; minFreq: number; maxFreq: number }
+    ) => {
+      startTransition(async () => {
+        await updateAudioDetection(boxId, box);
+        router.refresh();
+      });
+    },
+    [router]
+  );
 
   // Verify/reject handlers
   const handleVerifySelected = useCallback(() => {
@@ -429,9 +358,20 @@ export function AudioAnnotationClient({
   useAudioAnnotationShortcuts({
     enabled: true,
     onPlayPause: handlePlayPause,
-    onSeekBack: () => handleSeek((audioRef.current?.currentTime ?? 0) - 5),
-    onSeekForward: () => handleSeek((audioRef.current?.currentTime ?? 0) + 5),
+    onSeekBack: () => spectrogramRef.current?.skip(-5),
+    onSeekForward: () => spectrogramRef.current?.skip(5),
     onPlaySelection: handlePlaySelection,
+    onToggleLoop: handleToggleLoop,
+    onJumpToNextUnverified: handleJumpToNextUnverified,
+    onCycleYMax: () =>
+      setSettings((s) => ({ ...s, displayMaxHz: cycleYMax(s.displayMaxHz, sampleRate) })),
+    onCycleColormap: () =>
+      setSettings((s) => ({ ...s, colormap: cycleColormap(s.colormap) })),
+    onAdjustGain: (delta) =>
+      setSettings((s) => ({
+        ...s,
+        gainDB: Math.max(-20, Math.min(60, s.gainDB + delta)),
+      })),
     onVerify: handleVerifySelected,
     onReject: handleRejectSelected,
     onQuickVerifyAll: handleQuickVerifyAll,
@@ -465,15 +405,11 @@ export function AudioAnnotationClient({
 
   return (
     <div className="flex flex-1 min-h-0">
-      {/* Hidden audio element */}
-      {audioStreamUrl && (
-        <audio ref={audioRef} src={audioStreamUrl} preload="auto" />
-      )}
-
       {/* Left sidebar — Species list */}
       <aside className="w-56 shrink-0 flex flex-col min-w-0 overflow-hidden border-r bg-background">
         <SpeciesSidebar
           speciesList={speciesList}
+          frequentSpecies={frequentSpecies}
           selectedDetectionId={selectedDetectionId}
           currentSpecies={currentSpecies}
           searchQuery={searchQuery}
@@ -481,6 +417,7 @@ export function AudioAnnotationClient({
           onSelectSpecies={handleSelectSpecies}
           nameDisplay={nameDisplay}
           onCycleDisplay={cycleDisplay}
+          searchInputRef={searchInputRef}
         />
       </aside>
 
@@ -542,62 +479,51 @@ export function AudioAnnotationClient({
             <span>
               {formatSpanishDate(recordingDate)}
               {recordingTime ? ` \u00b7 ${formatTimeShort(recordingTime)}` : ""}
-              {metadata ? ` (${formatTime(metadata.duration)})` : ""}
+              {duration != null ? ` (${formatTime(duration)})` : ""}
             </span>
           </div>
         )}
 
-        {/* Spectrogram display — natural height, no flex-1 stretching */}
+        {/* Spectrogram controls toolbar */}
+        {audioStreamUrl && (
+          <SpectrogramControls
+            settings={settings}
+            onChange={setSettings}
+            sampleRate={sampleRate}
+          />
+        )}
+
+        {/* Spectrogram display — client-side FFT renderer */}
         <div className="shrink-0 relative">
-          {!spectrogramReady && !spectrogramError && (
-            <div className="flex items-center justify-center py-24">
-              <div className="flex flex-col items-center gap-3 text-muted-foreground">
-                <Loader2 className="h-8 w-8 animate-spin" />
-                <p className="text-sm">
-                  {spectrogramStage === "downloading"
-                    ? `Descargando audio${spectrogramFileSize ? ` (${(spectrogramFileSize / 1024 / 1024).toFixed(1)} MB)` : ""}...`
-                    : "Generando espectrograma..."}
-                </p>
-              </div>
-            </div>
-          )}
-
-          {spectrogramError && (
-            <div className="flex items-center justify-center py-24">
-              <div className="flex flex-col items-center gap-3 text-muted-foreground max-w-md text-center">
-                <p className="text-sm text-red-400">{spectrogramError}</p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    setSpectrogramError(null);
-                    setSpectrogramReady(false);
-                    router.refresh();
-                  }}
-                >
-                  Reintentar
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {spectrogramReady && metadata && (
-            <SpectrogramOverlay
-              spectrogramUrl={spectrogramUrl}
-              metadata={metadata}
+          {audioStreamUrl ? (
+            <FftSpectrogram
+              ref={spectrogramRef}
+              audioUrl={audioStreamUrl}
               boxes={boxes}
               selectedBoxId={selectedDetectionId}
               editable={isEditor}
-              currentTime={currentTime}
+              displayMaxHz={settings.displayMaxHz}
+              gainDB={settings.gainDB}
+              rangeDB={settings.rangeDB}
+              fftSize={settings.fftSize}
+              colormap={settings.colormap}
               onBoxClick={(box) =>
                 setSelectedDetectionId((prev) =>
                   prev === box.id ? null : box.id
                 )
               }
               onDrawComplete={handleDrawComplete}
-              onSeekClick={handleSeek}
-              onImageError={handleImageError}
+              onBoxResized={handleBoxResized}
+              onReady={handleSpectrogramReady}
+              onTimeUpdate={setCurrentTime}
+              onPlayPause={setIsPlaying}
             />
+          ) : (
+            <div className="flex items-center justify-center py-24">
+              <p className="text-sm text-muted-foreground">
+                Archivo de audio no disponible
+              </p>
+            </div>
           )}
         </div>
 
@@ -610,7 +536,7 @@ export function AudioAnnotationClient({
                   variant="ghost"
                   size="icon"
                   className="h-7 w-7"
-                  onClick={() => handleSeek((audioRef.current?.currentTime ?? 0) - 5)}
+                  onClick={() => spectrogramRef.current?.skip(-5)}
                   title="Retroceder 5s ( [ )"
                 >
                   <SkipBack className="h-3.5 w-3.5" />
@@ -632,21 +558,16 @@ export function AudioAnnotationClient({
                   variant="ghost"
                   size="icon"
                   className="h-7 w-7"
-                  onClick={() => handleSeek((audioRef.current?.currentTime ?? 0) + 5)}
+                  onClick={() => spectrogramRef.current?.skip(5)}
                   title="Avanzar 5s ( ] )"
                 >
                   <SkipForward className="h-3.5 w-3.5" />
                 </Button>
                 <span className="text-xs text-muted-foreground tabular-nums min-w-[4rem]">
                   {formatTime(currentTime)}
-                  {metadata ? ` / ${formatTime(metadata.duration)}` : ""}
+                  {duration != null ? ` / ${formatTime(duration)}` : ""}
                 </span>
               </>
-            )}
-            {!audioStreamUrl && metadata && (
-              <span className="text-xs text-muted-foreground">
-                {metadata.duration.toFixed(1)}s · {metadata.sampleRate}Hz
-              </span>
             )}
           </div>
 

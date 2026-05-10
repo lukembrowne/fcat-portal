@@ -20,6 +20,7 @@
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "drizzle-orm": "^0.45.1",
+    "fft.js": "^4.0.4",
     "file-type": "^22.0.1",
     "googleapis": "^171.4.0",
     "leaflet": "^1.9.4",
@@ -38,7 +39,6 @@
     "sharp": "^0.34.5",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.4.0",
-    "wavesurfer.js": "^7.12.6",
     "xlsx": "^0.18.5",
     "zod": "^4.3.6"
   },

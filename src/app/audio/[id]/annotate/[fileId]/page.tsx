@@ -81,7 +81,7 @@ export default async function AudioAnnotatePage({ params }: PageProps) {
         endTime: det.endTime,
         minFreq: det.minFreq,
         maxFreq: det.maxFreq,
-        confidence: det.confidence,
+        detectionConfidence: det.confidence,
         modelVersion: det.modelVersion,
         identification: ident
           ? {

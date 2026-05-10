@@ -72,7 +72,10 @@ export interface AudioDetectionData {
   endTime: number;
   minFreq: number;
   maxFreq: number;
-  confidence: number | null;
+  /** Bbox-level ML confidence (renamed from `confidence` to align with the
+   *  shared `AnnotationDetection` shape consumed by `AnnotationToolsSidebar`
+   *  and the camera-trap `DetectionWithIdentification`). */
+  detectionConfidence: number | null;
   modelVersion: string | null;
   identification: {
     id: number;

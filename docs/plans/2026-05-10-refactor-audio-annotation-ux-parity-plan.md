@@ -80,10 +80,11 @@ Boundary stays at "detection selected / created / deleted" events. Above the lin
 
 **Goal:** audio detections nest `identification` like the DB schema and like camera-trap.
 
-- [ ] In `fft-spectrogram.tsx`, change `AudioBoxData` from flat `{species?, displayLabel?, verificationStatus?}` to `{ identification: { species, correctedSpecies, confidence, verificationStatus } | null }`. The spectrogram only needs `displayLabel` (computed from species + correctedSpecies) and `verificationStatus` for color/badge rendering — derive both from `identification` at the call site.
-- [ ] In `annotation-client.tsx`, when fetching `getAudioFileWithDetections` results, shape each detection into the new nested form (the DB schema already separates `audioDetections` and `audioIdentifications` — see `src/db/schema.ts:781-828`).
-- [ ] Update `assignAudioSpecies`, `verifyAudioIdentification`, etc. callers to read `detection.identification.id` for the `identificationId` argument (server action signature unchanged for now — see Phase 5 for adapter).
-- [ ] Confirm `getSpeciesColor()` still works (color is keyed by species name, unchanged).
+- [x] `AudioDetectionData` already has nested `identification` (`annotation-client.tsx:69-84`) — verified it satisfies `AnnotationDetection`.
+- [x] Renamed `AudioDetectionData.confidence` → `detectionConfidence` (page.tsx mapping updated) so the field name aligns with the shared `AnnotationDetection` contract.
+- [x] `AudioBoxData` in `fft-spectrogram.tsx` stays flat — it's a view-model for canvas rendering, not the annotation data contract. The page maps `AudioDetectionData → AudioBoxData` at the render boundary.
+- [x] All identification-id reads (assignAudioSpecies, verifyAudioIdentification, etc.) already go through `det.identification.id` — no change needed.
+- [x] `getSpeciesColor()` unchanged (keyed by species name).
 
 **Success criteria:** existing audio annotation flow works identically; type matches `AnnotationDetection`.
 

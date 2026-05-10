@@ -92,10 +92,10 @@ Boundary stays at "detection selected / created / deleted" events. Above the lin
 
 **Goal:** mount the popover anchored to the selected bbox on the spectrogram canvas.
 
-- [ ] In `fft-spectrogram.tsx`, render an absolutely-positioned 0×0 `<div ref={anchorRef}>` overlay inside the canvas container, positioned at the selected box's pixel `left+width/2, top+height/2` whenever a box is selected. Update on scroll, zoom, and freq-axis changes (the spectrogram already redraws on these — hook into the same redraw cycle).
-- [ ] Expose `anchorRef` via the `SpectrogramMethods` imperative handle (or via a callback prop `onAnchorReady(el)`), so the parent can attach `<PopoverAnchor asChild><div ref={anchorRef} /></PopoverAnchor>`.
-- [ ] In `annotation-client.tsx`, mount a `<Popover>` root around the spectrogram. Open state derived from `selectedDetectionId !== null && !isPickerSuppressedDuringPlayback`. Anchor: the spectrogram's exposed ref. Content: `<AnnotationPickerPopover ... />`.
-- [ ] Anchor positioning math: spectrogram already maps `(time, freq) → (px, py)` for its own draw cycle — reuse that transform.
+- [x] `FftSpectrogram` gained `onSpecSizeChange` prop — fires whenever spec area pixel size updates.
+- [x] Audio annotation-client tracks `specPx` in state and computes the anchor's pixel rect via the same linear transforms (`timeToNX = t/duration`, `hzToNY = 1 - hz/maxHz`) — offset by `FREQ_AXIS_WIDTH = 70` for the freq-axis gutter.
+- [x] `<Popover>` root wraps the layout. Open state = `selectedDetectionId !== null`. Anchor is an absolute 0-rect div under the spectrogram container; `<AnnotationPickerPopover>` renders as sibling of the layout div.
+- [x] Approach: render the anchor inside a `relative` wrapper around the spectrogram so it scrolls/resizes with the canvas.
 
 **Success criteria:** clicking a detection box on the spectrogram opens the species picker anchored over it. Popover follows the box during scroll/zoom/freq-axis changes. Closes on Esc, outside click, or deselect.
 
@@ -103,9 +103,9 @@ Boundary stays at "detection selected / created / deleted" events. Above the lin
 
 **Goal:** let the shared popover call a uniform `onAssignSpecies(detectionId, newSpecies)` callback without changing the server-action signature.
 
-- [ ] On the audio page, define `handleAssignSpecies(detectionId, newSpecies)` that looks up `identification.id` from the loaded detections, then calls `assignAudioSpecies(identificationId, newSpecies)`.
-- [ ] Same pattern for `handleAssignSpeciesByIndex(index)` (look up species from `speciesList[hotkeySlots[index]]`) and `handleAssignLastSpecies()`.
-- [ ] **Do not** change `assignAudioSpecies`'s signature in this PR — it currently takes `identificationId` and the camera-trap variant takes `detectionId`. Aligning them is its own decision (see Open Questions). The adapter callback hides the difference from the shared popover.
+- [x] `handleSelectSpecies(scientificName)` already does the lookup-and-call pattern (also updates `lastSpeciesName` sessionStorage). The popover's `onAssignSpecies` callback receives the scientific name only.
+- [x] `handleAssignSpeciesByIndex(index)` and `handleAssignLastSpecies()` added; both delegate through `handleSelectSpecies`.
+- [x] `assignAudioSpecies` signature unchanged. The adapter pattern hides the identificationId-vs-detectionId divergence from the shared popover.
 
 **Success criteria:** popover hotkey assignment, last-species (`0`), and add-species flow all work on audio.
 
@@ -113,18 +113,13 @@ Boundary stays at "detection selected / created / deleted" events. Above the lin
 
 **Goal:** swap `SpeciesSidebar` for `AnnotationToolsSidebar`; split shortcuts into shared chrome + audio-specific layer.
 
-- [ ] In `annotation-client.tsx`, replace the `<SpeciesSidebar>` block (lines ~409-422) with `<AnnotationToolsSidebar>`. Pass:
-  - `detections, selectedDetectionId, onSelectDetection, onDeleteDetection, speciesList, nameDisplay, onCycleDisplay, canEdit, jobId, onBack` — all wired.
-  - `confirmedBlank, onToggleConfirmedBlank, isStarred, starredBy, onToggleStarred, setupTag, onToggleSetupDeployment, onToggleSetupRetrieval, dateSuggestion, onApplyDateSuggestion, onDismissDateSuggestion` — all `undefined` (audio has no schema columns for these; sidebar already hides each when its `onToggle*` is undefined).
-- [ ] Remove the inline-search-on-detection-select effect at `annotation-client.tsx:176-182`.
-- [ ] Remove the `<SpeciesSidebar>` import and its dependency on `searchInputRef`/`searchQuery`. Keep `nameDisplay`/`onCycleDisplay`.
-- [ ] Create `src/hooks/use-audio-playback-shortcuts.ts`. Move audio-only keys out of `use-audio-annotation-shortcuts.ts`: Space, `[`, `]`, Q, E, P, L, F, M, +, -, V, R, plus per-detection verify/reject. Keep editable-field guard.
-- [ ] In `annotation-client.tsx`, replace `useAudioAnnotationShortcuts(...)` with two calls:
-  ```
-  useAnnotationShortcuts({...chromeOptions});  // shared
-  useAudioPlaybackShortcuts({...playbackOptions});  // new
-  ```
-- [ ] Delete `src/hooks/use-audio-annotation-shortcuts.ts` once both hooks above cover its surface (verify by grep that no other caller imports it).
+- [x] `<SpeciesSidebar>` replaced by `<AnnotationToolsSidebar>`. Camera-only callbacks (`onToggleConfirmedBlank`, `onToggleStarred`, `onToggleSetupDeployment`, `onToggleSetupRetrieval`, `onApplyDateSuggestion`) are omitted; sidebar hides them on undefined.
+- [x] Horizontal detection card strip on top of the spectrogram removed (sidebar replaces it).
+- [x] Inline-search-on-detection-select effect removed.
+- [x] `searchQuery` state + `getVisibleSpecies` helper removed; popover provides its own typeahead.
+- [x] `src/hooks/use-audio-playback-shortcuts.ts` created with audio-only keys (Space, [/], Q/E, P, L, N, V, R, F, M, +/-). Editable-field guard preserved. `isPickerOpen` early-return added so playback keys don't fire while picker is open.
+- [x] `useAudioAnnotationShortcuts` replaced by `useAnnotationShortcuts` (chrome) + `useAudioPlaybackShortcuts` (playback). Hooks bind disjoint key sets.
+- [x] Deletion of `use-audio-annotation-shortcuts.ts` deferred to Phase 7.
 
 **Behavior changes for audio users (document in PR):**
 - Plain ArrowLeft/Right now navigates files (was: seek). Use Q/E for fine seek and `[`/`]` for coarse seek.

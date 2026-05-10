@@ -1,47 +1,19 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo, useRef, useTransition } from "react";
+import { useState, useCallback, useMemo, useRef, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
 import {
-  SpeciesSidebar,
   getStoredDisplay,
   DISPLAY_KEY,
   type NameDisplay,
 } from "@/components/species-sidebar";
-
-// Audio annotation still uses the legacy "flat visible list" for hotkey 1-9/0
-// assignment. Camera-trap now uses stable project-wide hotkey slots; audio
-// will get the same treatment in a follow-up.
-function getVisibleSpecies(
-  speciesList: Species[],
-  frequentSpecies: Species[],
-  searchQuery: string
-): Species[] {
-  const filtered = searchQuery.trim()
-    ? speciesList.filter((sp) => {
-        const q = searchQuery.toLowerCase();
-        return (
-          sp.scientificName.toLowerCase().includes(q) ||
-          sp.commonName.toLowerCase().includes(q) ||
-          (sp.spanishName && sp.spanishName.toLowerCase().includes(q))
-        );
-      })
-    : speciesList;
-  const showFrequent = frequentSpecies.length > 0 && !searchQuery.trim();
-  const result: Species[] = [];
-  if (showFrequent) result.push(...frequentSpecies);
-  result.push(...filtered);
-  const seen = new Set<string>();
-  return result.filter((sp) => {
-    if (seen.has(sp.scientificName)) return false;
-    seen.add(sp.scientificName);
-    return true;
-  });
-}
+import { AnnotationToolsSidebar } from "@/components/annotation-tools-sidebar";
+import { AnnotationPickerPopover } from "@/components/annotation-picker-popover";
+import { Popover, PopoverAnchor } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
-import { Calendar, ChevronLeft, ChevronRight, Trash2, Play, Pause, SkipBack, SkipForward } from "lucide-react";
+import { Calendar, ChevronLeft, ChevronRight, Play, Pause, SkipBack, SkipForward } from "lucide-react";
 import type { Species } from "@/db/schema";
 import {
   FftSpectrogram,
@@ -55,7 +27,8 @@ import {
   cycleColormap,
   type SpectrogramSettings,
 } from "./spectrogram-controls";
-import { useAudioAnnotationShortcuts } from "@/hooks/use-audio-annotation-shortcuts";
+import { useAnnotationShortcuts } from "@/hooks/use-annotation-shortcuts";
+import { useAudioPlaybackShortcuts } from "@/hooks/use-audio-playback-shortcuts";
 import {
   createAudioDetection,
   updateAudioDetection,
@@ -164,8 +137,8 @@ export function AudioAnnotationClient({
   const [selectedDetectionId, setSelectedDetectionId] = useState<number | null>(
     null
   );
-  const [searchQuery, setSearchQuery] = useState("");
-  const searchInputRef = useRef<HTMLInputElement>(null);
+  const popoverSearchInputRef = useRef<HTMLInputElement>(null);
+  const spectrogramContainerRef = useRef<HTMLDivElement>(null);
   const [nameDisplay, setNameDisplay] = useState<NameDisplay>(getStoredDisplay);
   const [, startTransition] = useTransition();
   const [isPlaying, setIsPlaying] = useState(false);
@@ -173,7 +146,19 @@ export function AudioAnnotationClient({
   const [duration, setDuration] = useState<number | null>(null);
   const [sampleRate, setSampleRate] = useState<number | null>(null);
   const [settings, setSettings] = useState<SpectrogramSettings>(() => loadStoredSettings());
+  const [specPx, setSpecPx] = useState<{ width: number; height: number }>({
+    width: 0,
+    height: 0,
+  });
   const spectrogramRef = useRef<SpectrogramMethods>(null);
+
+  // Project-wide hotkey slots (1-9), locked at page load to match camera-trap
+  // semantics. The popover binds slot index → scientific name; the chrome
+  // shortcuts hook fans 1-9 keystrokes to `onAssignSpeciesByIndex(index)`.
+  const stableHotkeySlots = useMemo(
+    () => frequentSpecies.slice(0, 9),
+    [frequentSpecies]
+  );
 
   // Most recently assigned species, scoped per deployment in sessionStorage.
   // Drives the popover "Última" row + the `0` hotkey for repeating across
@@ -200,15 +185,6 @@ export function AudioAnnotationClient({
     [lastSpeciesName, speciesMap]
   );
 
-  // Auto-focus species search when a detection is selected
-  useEffect(() => {
-    if (selectedDetectionId !== null) {
-      searchInputRef.current?.focus();
-    } else {
-      searchInputRef.current?.blur();
-    }
-  }, [selectedDetectionId]);
-
   const audioStreamUrl = driveFileId ? `/api/audio/stream?fileId=${driveFileId}` : null;
 
   const cycleDisplay = useCallback(() => {
@@ -221,14 +197,9 @@ export function AudioAnnotationClient({
     });
   }, []);
 
-  // Current species for sidebar highlight
   const selectedDetection = detections.find(
     (d) => d.id === selectedDetectionId
   );
-  const currentSpecies =
-    selectedDetection?.identification?.correctedSpecies ??
-    selectedDetection?.identification?.species ??
-    null;
 
   // Build box data for the overlay
   const boxes: AudioBoxData[] = detections.map((det) => {
@@ -265,6 +236,21 @@ export function AudioAnnotationClient({
     },
     [selectedDetectionId, detections, router, lastSpeciesStorageKey]
   );
+
+  // Picker adapter callbacks. The shared popover doesn't know about audio's
+  // identificationId / detectionId distinction — it just calls these.
+  const handleAssignSpeciesByIndex = useCallback(
+    (index: number) => {
+      if (index < stableHotkeySlots.length) {
+        handleSelectSpecies(stableHotkeySlots[index].scientificName);
+      }
+    },
+    [stableHotkeySlots, handleSelectSpecies]
+  );
+
+  const handleAssignLastSpecies = useCallback(() => {
+    if (lastSpecies) handleSelectSpecies(lastSpecies.scientificName);
+  }, [lastSpecies, handleSelectSpecies]);
 
   const handleDrawComplete = useCallback(
     (box: { startTime: number; endTime: number; minFreq: number; maxFreq: number }) => {
@@ -386,33 +372,58 @@ export function AudioAnnotationClient({
     });
   }, [detections, deploymentId, audioFileId, router]);
 
-  // Visible species for number-key assignment
-  const visibleSpecies = getVisibleSpecies(speciesList, frequentSpecies, searchQuery);
+  // Derived picker state. The popover opens whenever a detection is selected
+  // (mirrors camera-trap's useAnnotationPicker gate without zoom/dialog state).
+  const pickerOpen = selectedDetectionId !== null;
+  const currentSpeciesForPicker =
+    selectedDetection?.identification?.correctedSpecies ??
+    selectedDetection?.identification?.species ??
+    null;
+  const selectedDetectionForPicker = selectedDetection
+    ? {
+        id: selectedDetection.id,
+        detectionConfidence: selectedDetection.detectionConfidence,
+        identification: selectedDetection.identification,
+      }
+    : null;
+  const selectedDetectionNumber = selectedDetectionId
+    ? detections.findIndex((d) => d.id === selectedDetectionId) + 1
+    : 0;
 
-  // Keyboard shortcuts
-  useAudioAnnotationShortcuts({
+  // Anchor pixel rect for the popover. The spec area starts after the
+  // freq-axis gutter (70px), so the anchor div offsets by that to land on
+  // the spec canvas. Time/freq → pixel uses the same linear transform the
+  // spectrogram itself uses (timeToNX = t/duration, hzToNY = 1 - hz/maxHz).
+  const FREQ_AXIS_WIDTH = 70;
+  const anchorStyle = useMemo(() => {
+    if (
+      !selectedDetection ||
+      !duration ||
+      duration <= 0 ||
+      specPx.width <= 0 ||
+      specPx.height <= 0
+    ) {
+      return null;
+    }
+    const maxHz = settings.displayMaxHz;
+    const x = (selectedDetection.startTime / duration) * specPx.width;
+    const w =
+      ((selectedDetection.endTime - selectedDetection.startTime) / duration) *
+      specPx.width;
+    const yTop = (1 - selectedDetection.maxFreq / maxHz) * specPx.height;
+    const yBot = (1 - selectedDetection.minFreq / maxHz) * specPx.height;
+    return {
+      left: FREQ_AXIS_WIDTH + x,
+      top: yTop,
+      width: Math.max(2, w),
+      height: Math.max(2, yBot - yTop),
+    };
+  }, [selectedDetection, duration, specPx, settings.displayMaxHz]);
+
+  // Keyboard shortcuts — split between shared chrome and audio playback.
+  useAnnotationShortcuts({
     enabled: true,
-    onPlayPause: handlePlayPause,
-    onSeekBack: () => spectrogramRef.current?.skip(-5),
-    onSeekForward: () => spectrogramRef.current?.skip(5),
-    onPlaySelection: handlePlaySelection,
-    onToggleLoop: handleToggleLoop,
-    onJumpToNextUnverified: handleJumpToNextUnverified,
-    onCycleYMax: () =>
-      setSettings((s) => ({ ...s, displayMaxHz: cycleYMax(s.displayMaxHz, sampleRate) })),
-    onCycleColormap: () =>
-      setSettings((s) => ({ ...s, colormap: cycleColormap(s.colormap) })),
-    onAdjustGain: (delta) =>
-      setSettings((s) => ({
-        ...s,
-        gainDB: Math.max(-20, Math.min(60, s.gainDB + delta)),
-      })),
-    onVerify: handleVerifySelected,
-    onReject: handleRejectSelected,
     onQuickVerifyAll: handleQuickVerifyAll,
-    onDeleteSelected: () => {
-      if (selectedDetectionId) handleDeleteDetection(selectedDetectionId);
-    },
     onNext: () => {
       if (nextFileId) router.push(`/audio/${deploymentId}/annotate/${nextFileId}`);
     },
@@ -424,89 +435,74 @@ export function AudioAnnotationClient({
         setSelectedDetectionId(detections[index].id);
       }
     },
-    onDeselect: () => {
-      setSelectedDetectionId(null);
-      setSearchQuery("");
+    onDeselect: () => setSelectedDetectionId(null),
+    onDeleteSelected: () => {
+      if (selectedDetectionId) handleDeleteDetection(selectedDetectionId);
     },
-    onAssignSpeciesByIndex: (index) => {
-      if (index < visibleSpecies.length) {
-        handleSelectSpecies(visibleSpecies[index].scientificName);
-      }
-    },
+    onAssignSpeciesByIndex: handleAssignSpeciesByIndex,
+    onAssignLastSpecies: handleAssignLastSpecies,
     detectionCount: detections.length,
     selectedDetectionId,
-    searchInputRef,
+    isPickerOpen: pickerOpen,
+    searchInputRef: popoverSearchInputRef,
+  });
+
+  useAudioPlaybackShortcuts({
+    enabled: true,
+    onPlayPause: handlePlayPause,
+    onSeekBack: () => spectrogramRef.current?.skip(-5),
+    onSeekForward: () => spectrogramRef.current?.skip(5),
+    onPlaySelection: handlePlaySelection,
+    onToggleLoop: handleToggleLoop,
+    onJumpToNextUnverified: handleJumpToNextUnverified,
+    onVerify: handleVerifySelected,
+    onReject: handleRejectSelected,
+    onCycleYMax: () =>
+      setSettings((s) => ({ ...s, displayMaxHz: cycleYMax(s.displayMaxHz, sampleRate) })),
+    onCycleColormap: () =>
+      setSettings((s) => ({ ...s, colormap: cycleColormap(s.colormap) })),
+    onAdjustGain: (delta) =>
+      setSettings((s) => ({
+        ...s,
+        gainDB: Math.max(-20, Math.min(60, s.gainDB + delta)),
+      })),
+    isPickerOpen: pickerOpen,
+    searchInputRef: popoverSearchInputRef,
   });
 
   return (
-    <div className="flex flex-1 min-h-0">
-      {/* Left sidebar — Species list */}
-      <aside className="w-56 shrink-0 flex flex-col min-w-0 overflow-hidden border-r bg-background">
-        <SpeciesSidebar
-          speciesList={speciesList}
-          frequentSpecies={frequentSpecies}
-          selectedDetectionId={selectedDetectionId}
-          currentSpecies={currentSpecies}
-          searchQuery={searchQuery}
-          onSearchChange={setSearchQuery}
-          onSelectSpecies={handleSelectSpecies}
-          nameDisplay={nameDisplay}
-          onCycleDisplay={cycleDisplay}
-          searchInputRef={searchInputRef}
-        />
-      </aside>
+    <Popover
+      open={pickerOpen}
+      onOpenChange={(next) => {
+        if (!next) setSelectedDetectionId(null);
+      }}
+    >
+      <div className="flex flex-1 min-h-0">
+        {/* Left sidebar — detections + tools (shared with camera-trap) */}
+        <aside className="w-56 shrink-0 flex flex-col min-w-0 overflow-hidden border-r bg-background">
+          <AnnotationToolsSidebar
+            detections={detections}
+            selectedDetectionId={selectedDetectionId}
+            onSelectDetection={(id) =>
+              setSelectedDetectionId((prev) => (prev === id ? null : id))
+            }
+            onDeleteDetection={isEditor ? handleDeleteDetection : undefined}
+            confirmedBlank={false}
+            speciesList={speciesList}
+            nameDisplay={nameDisplay}
+            onCycleDisplay={cycleDisplay}
+            canEdit={isEditor}
+            setupTag={null}
+            isStarred={false}
+            starredBy={null}
+            dateSuggestion={null}
+            jobId={deploymentId}
+            onBack={() => router.push(`/audio/${deploymentId}`)}
+          />
+        </aside>
 
-      {/* Main content */}
-      <div className="flex-1 flex flex-col min-w-0">
-        {/* Detection cards strip */}
-        {detections.length > 0 && (
-          <div className="px-4 py-2 border-b shrink-0">
-            <div className="flex gap-2 overflow-x-auto">
-              {detections.map((det) => (
-                <div
-                  key={det.id}
-                  className={`shrink-0 flex items-center gap-1 px-3 py-1.5 rounded border text-xs cursor-pointer group ${
-                    selectedDetectionId === det.id
-                      ? "border-primary bg-primary/10"
-                      : "border-border hover:bg-accent"
-                  }`}
-                  onClick={() =>
-                    setSelectedDetectionId((prev) =>
-                      prev === det.id ? null : det.id
-                    )
-                  }
-                >
-                  <span>
-                    {det.startTime.toFixed(1)}s – {det.endTime.toFixed(1)}s
-                    {" · "}
-                    {(det.minFreq / 1000).toFixed(1)}–{(det.maxFreq / 1000).toFixed(1)} kHz
-                  </span>
-                  {(() => {
-                    const sciName = det.identification?.correctedSpecies ?? det.identification?.species ?? null;
-                    const label = getSpeciesDisplayName(sciName, speciesList, nameDisplay);
-                    return label ? (
-                      <span className="text-muted-foreground">{label}</span>
-                    ) : null;
-                  })()}
-                  {isEditor && (
-                    <button
-                      type="button"
-                      className="ml-1 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleDeleteDetection(det.id);
-                      }}
-                      title="Eliminar detección"
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
+        {/* Main content */}
+        <div className="flex-1 flex flex-col min-w-0">
         {/* Recording context info */}
         {recordingDate && (
           <div className="px-4 py-1.5 border-b shrink-0 flex items-center gap-2 text-xs text-muted-foreground">
@@ -528,8 +524,10 @@ export function AudioAnnotationClient({
           />
         )}
 
-        {/* Spectrogram display — client-side FFT renderer */}
-        <div className="shrink-0 relative">
+        {/* Spectrogram display — client-side FFT renderer.
+            Wrapped in `relative` so the PopoverAnchor positions correctly
+            over the selected box. */}
+        <div ref={spectrogramContainerRef} className="shrink-0 relative">
           {audioStreamUrl ? (
             <FftSpectrogram
               ref={spectrogramRef}
@@ -552,6 +550,7 @@ export function AudioAnnotationClient({
               onReady={handleSpectrogramReady}
               onTimeUpdate={setCurrentTime}
               onPlayPause={setIsPlaying}
+              onSpecSizeChange={setSpecPx}
             />
           ) : (
             <div className="flex items-center justify-center py-24">
@@ -559,6 +558,18 @@ export function AudioAnnotationClient({
                 Archivo de audio no disponible
               </p>
             </div>
+          )}
+
+          {/* Invisible anchor sized/positioned to the selected box.
+              Radix attaches the popover to this element; AnnotationPickerPopover
+              uses sideOffset>0 so the popover never overlaps the box. */}
+          {anchorStyle && (
+            <PopoverAnchor asChild>
+              <div
+                className="absolute pointer-events-none"
+                style={anchorStyle}
+              />
+            </PopoverAnchor>
           )}
         </div>
 
@@ -655,6 +666,29 @@ export function AudioAnnotationClient({
           </div>
         </div>
       </div>
-    </div>
+      </div>
+
+      {/* Contextual picker — anchored to the selected box on the spectrogram.
+          Lives inside the Popover root so PopoverAnchor governs its position. */}
+      <AnnotationPickerPopover
+        open={pickerOpen}
+        selectedDetection={selectedDetectionForPicker}
+        detectionNumber={selectedDetectionNumber}
+        currentSpecies={currentSpeciesForPicker}
+        hotkeySlots={stableHotkeySlots}
+        lastSpecies={lastSpecies}
+        speciesList={speciesList}
+        nameDisplay={nameDisplay}
+        canEdit={isEditor}
+        containerRef={spectrogramContainerRef}
+        searchInputRef={popoverSearchInputRef}
+        onAssignSpecies={handleSelectSpecies}
+        onAssignSpeciesByIndex={handleAssignSpeciesByIndex}
+        onAssignLastSpecies={handleAssignLastSpecies}
+        onDelete={() => {
+          if (selectedDetectionId != null) handleDeleteDetection(selectedDetectionId);
+        }}
+      />
+    </Popover>
   );
 }

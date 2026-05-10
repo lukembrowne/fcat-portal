@@ -107,6 +107,10 @@ interface FftSpectrogramProps {
   onReady?: (meta: { duration: number; sampleRate: number }) => void;
   onTimeUpdate?: (currentTime: number) => void;
   onPlayPause?: (playing: boolean) => void;
+  /** Fires whenever the spec area is laid out or the container resizes.
+   *  The parent uses this with `displayMaxHz` and the selected box's
+   *  time/freq rect to position an absolute popover anchor over the box. */
+  onSpecSizeChange?: (size: { width: number; height: number }) => void;
 }
 
 interface BoxRect {
@@ -173,6 +177,7 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
       onReady,
       onTimeUpdate,
       onPlayPause,
+      onSpecSizeChange,
     } = props;
 
     const containerRef = useRef<HTMLDivElement>(null);
@@ -401,6 +406,11 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
       ro.observe(container);
       return () => ro.disconnect();
     }, []);
+
+    // Surface spec area pixel size to the parent for popover anchor positioning.
+    useEffect(() => {
+      onSpecSizeChange?.(specSize);
+    }, [specSize, onSpecSizeChange]);
 
     // ---- Audio playback rAF -------------------------------------------------
     useEffect(() => {

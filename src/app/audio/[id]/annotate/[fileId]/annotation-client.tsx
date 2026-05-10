@@ -202,6 +202,16 @@ export function AudioAnnotationClient({
     };
   });
 
+  // Attach a time/freq subtitle so the shared detection card shows the
+  // audio-specific context (e.g. "0.5s–2.3s · 1.2–8.0 kHz") in the
+  // header position camera-trap uses for the class label.
+  const detectionsForSidebar = detections.map((det) => ({
+    ...det,
+    subtitle:
+      `${det.startTime.toFixed(1)}s–${det.endTime.toFixed(1)}s · ` +
+      `${(det.minFreq / 1000).toFixed(1)}–${(det.maxFreq / 1000).toFixed(1)} kHz`,
+  }));
+
   const handleSelectSpecies = useCallback(
     (scientificName: string) => {
       if (!selectedDetectionId) return;
@@ -467,7 +477,7 @@ export function AudioAnnotationClient({
         {/* Left sidebar — detections + tools (shared with camera-trap) */}
         <aside className="w-56 shrink-0 flex flex-col min-w-0 overflow-hidden border-r bg-background">
           <AnnotationToolsSidebar
-            detections={detections}
+            detections={detectionsForSidebar}
             selectedDetectionId={selectedDetectionId}
             onSelectDetection={(id) =>
               setSelectedDetectionId((prev) => (prev === id ? null : id))

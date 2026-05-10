@@ -24,5 +24,9 @@ export interface AnnotationDetection {
   detectionClass?: number;
   /** ML bbox confidence 0-1. Null/undefined when manually created or unavailable. */
   detectionConfidence?: number | null;
+  /** Optional modality-specific header subtitle on the detection card.
+   *  Takes precedence over the camera-trap class label when present.
+   *  Audio uses this to show the time/freq range, e.g. `0.5s–2.3s · 1.2–8.0 kHz`. */
+  subtitle?: string | null;
   identification: AnnotationIdentification | null;
 }

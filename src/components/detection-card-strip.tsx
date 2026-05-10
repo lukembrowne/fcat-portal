@@ -163,6 +163,9 @@ export function DetectionCardStrip({
         const confidence = confidencePct != null ? (confidencePct * 100).toFixed(0) : null;
         const classLabel =
           det.detectionClass != null ? CLASS_LABELS[det.detectionClass] || "?" : null;
+        // Subtitle (e.g. audio's time/freq range) takes precedence over the
+        // camera-trap class label. Audio sets subtitle; camera-trap omits it.
+        const headerLabel = det.subtitle ?? classLabel;
 
         return (
           <button
@@ -198,9 +201,9 @@ export function DetectionCardStrip({
               >
                 {index + 1}
               </Badge>
-              {classLabel && (
+              {headerLabel && (
                 <span className="text-xs font-medium truncate">
-                  {classLabel}
+                  {headerLabel}
                 </span>
               )}
               {isHumanVerified ? (

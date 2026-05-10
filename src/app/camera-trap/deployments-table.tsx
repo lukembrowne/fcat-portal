@@ -91,7 +91,9 @@ export function DeploymentsTable({
   isAdmin,
   lastDriveSyncAt,
 }: DeploymentsTableProps) {
-  const [sorting, setSorting] = useState<SortingState>([]);
+  const [sorting, setSorting] = useState<SortingState>([
+    { id: "name", desc: false },
+  ]);
   const [globalFilter, setGlobalFilter] = useState("");
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
   // Refs back the shift+click range selection so the column cell renderer can

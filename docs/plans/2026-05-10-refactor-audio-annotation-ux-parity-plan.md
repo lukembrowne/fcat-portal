@@ -69,10 +69,10 @@ Boundary stays at "detection selected / created / deleted" events. Above the lin
 
 **Goal:** stand up the data the shared chrome needs (frequent species, last species).
 
-- [ ] Add `getFrequentAudioSpecies(deploymentId: number | null, limit = 9)` in `src/app/audio/annotation-actions.ts`. Mirror `getFrequentSpecies` (camera-trap/actions.ts:4581-4644) but join over audio tables. Filter to `verificationStatus IN ('verified','corrected')`. Pad with all-species fallback ordered by `FREQUENT_SPECIES_TYPE_ORDER` to guarantee 9 slots.
-- [ ] In `src/app/audio/[id]/annotate/[fileId]/page.tsx`, call `getFrequentAudioSpecies(deploymentId, 9)` and pass the result as `frequentSpecies` to `annotation-client.tsx` (currently hard-coded `[]`).
-- [ ] In `annotation-client.tsx`, add a `lastSpeciesName` state backed by `sessionStorage` keyed by `deploymentId` (`fcat:lastAudioSpecies:${deploymentId}`). Mirror the camera-trap pattern at `image-annotation-client.tsx:133-141`. Update on every successful species assignment.
-- [ ] Resolve `lastSpecies: Species | null` from `lastSpeciesName` via the `speciesList` lookup, same as camera-trap.
+- [x] Add `getFrequentAudioSpecies(deploymentId: number | null, limit = 9)` in `src/app/audio/annotation-actions.ts`. Mirrors `getFrequentSpecies` over audio tables; uses bird-first type order (more natural for audio).
+- [x] `src/app/audio/[id]/annotate/[fileId]/page.tsx` calls `getFrequentAudioSpecies(deploymentId, 9)` and passes through.
+- [x] `annotation-client.tsx` has `lastSpeciesName` sessionStorage state keyed by `fcat:lastAudioSpecies:${deploymentId}`, updated on every assignment.
+- [x] `lastSpecies: Species | null` resolved via `speciesMap`. Currently unused; consumed by the popover in Phase 6.
 
 **Success criteria:** audio page shows a populated frequent-species hotkey row when navigating to a deployment with verified audio identifications; `lastSpeciesName` persists across audio file navigation in the same browser session.
 

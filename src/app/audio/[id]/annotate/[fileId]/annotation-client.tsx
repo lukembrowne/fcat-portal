@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useTransition } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
@@ -172,6 +172,31 @@ export function AudioAnnotationClient({
   const [settings, setSettings] = useState<SpectrogramSettings>(() => loadStoredSettings());
   const spectrogramRef = useRef<SpectrogramMethods>(null);
 
+  // Most recently assigned species, scoped per deployment in sessionStorage.
+  // Drives the popover "Última" row + the `0` hotkey for repeating across
+  // adjacent audio files. Survives file navigation; resets on tab close or
+  // deployment switch. Mirrors `fcat:lastSpecies:${jobId}` on camera-trap.
+  const lastSpeciesStorageKey = `fcat:lastAudioSpecies:${deploymentId}`;
+  const [lastSpeciesName, setLastSpeciesName] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      return window.sessionStorage.getItem(lastSpeciesStorageKey);
+    } catch {
+      return null;
+    }
+  });
+
+  const speciesMap = useMemo(() => {
+    const map = new Map<string, Species>();
+    for (const sp of speciesList) map.set(sp.scientificName, sp);
+    return map;
+  }, [speciesList]);
+
+  const lastSpecies = useMemo(
+    () => (lastSpeciesName ? speciesMap.get(lastSpeciesName) ?? null : null),
+    [lastSpeciesName, speciesMap]
+  );
+
   // Auto-focus species search when a detection is selected
   useEffect(() => {
     if (selectedDetectionId !== null) {
@@ -223,12 +248,19 @@ export function AudioAnnotationClient({
       const det = detections.find((d) => d.id === selectedDetectionId);
       if (!det?.identification) return;
 
+      setLastSpeciesName(scientificName);
+      try {
+        window.sessionStorage.setItem(lastSpeciesStorageKey, scientificName);
+      } catch {
+        // sessionStorage unavailable (private mode / quota) — ignore.
+      }
+
       startTransition(async () => {
         await assignAudioSpecies(det.identification!.id, scientificName);
         router.refresh();
       });
     },
-    [selectedDetectionId, detections, router]
+    [selectedDetectionId, detections, router, lastSpeciesStorageKey]
   );
 
   const handleDrawComplete = useCallback(

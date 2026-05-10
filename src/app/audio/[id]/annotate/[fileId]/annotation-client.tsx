@@ -4,11 +4,7 @@ import { useState, useCallback, useMemo, useRef, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
-import {
-  getStoredDisplay,
-  DISPLAY_KEY,
-  type NameDisplay,
-} from "@/components/species-sidebar";
+import { useNameDisplay, type NameDisplay } from "@/lib/species-display";
 import { AnnotationToolsSidebar } from "@/components/annotation-tools-sidebar";
 import { AnnotationPickerPopover } from "@/components/annotation-picker-popover";
 import { Popover, PopoverAnchor } from "@/components/ui/popover";
@@ -139,7 +135,7 @@ export function AudioAnnotationClient({
   );
   const popoverSearchInputRef = useRef<HTMLInputElement>(null);
   const spectrogramContainerRef = useRef<HTMLDivElement>(null);
-  const [nameDisplay, setNameDisplay] = useState<NameDisplay>(getStoredDisplay);
+  const [nameDisplay, cycleDisplay] = useNameDisplay();
   const [, startTransition] = useTransition();
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -186,16 +182,6 @@ export function AudioAnnotationClient({
   );
 
   const audioStreamUrl = driveFileId ? `/api/audio/stream?fileId=${driveFileId}` : null;
-
-  const cycleDisplay = useCallback(() => {
-    setNameDisplay((prev) => {
-      const cycle: NameDisplay[] = ["common", "spanish", "scientific"];
-      const idx = cycle.indexOf(prev);
-      const next = cycle[(idx + 1) % cycle.length];
-      localStorage.setItem(DISPLAY_KEY, next);
-      return next;
-    });
-  }, []);
 
   const selectedDetection = detections.find(
     (d) => d.id === selectedDetectionId

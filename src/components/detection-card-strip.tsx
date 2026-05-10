@@ -6,7 +6,7 @@ import { Trash2, CheckCircle2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { AnnotationDetection } from "@/types/annotation";
 import type { Species } from "@/db/schema";
-import type { NameDisplay } from "@/components/species-sidebar";
+import type { NameDisplay } from "@/lib/species-display";
 
 const CLASS_LABELS: Record<number, string> = {
   0: "Animal",

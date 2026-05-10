@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Check, Trash2 } from "lucide-react";
 import type { Species } from "@/db/schema";
-import type { NameDisplay } from "@/components/species-sidebar";
+import type { NameDisplay } from "@/lib/species-display";
 import type { AnnotationDetection } from "@/types/annotation";
 
 const TYPE_LABELS: Record<string, string> = {

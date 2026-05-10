@@ -8,7 +8,7 @@ import { DetectionCardStrip } from "@/components/detection-card-strip";
 import { AnnotationHelpPanel } from "@/components/annotation-help-panel";
 import type { AnnotationDetection } from "@/types/annotation";
 import type { Species } from "@/db/schema";
-import type { NameDisplay } from "@/components/species-sidebar";
+import type { NameDisplay } from "@/lib/species-display";
 
 const DISPLAY_LABELS: Record<NameDisplay, string> = {
   common: "Inglés",

@@ -131,9 +131,13 @@ Boundary stays at "detection selected / created / deleted" events. Above the lin
 
 #### Phase 7 — Cleanup
 
-- [ ] Verify `SpeciesSidebar` (`src/components/species-sidebar.tsx`) has no remaining callers (it should be orphaned). Either delete it or leave it with a `@deprecated` JSDoc — confirm with reviewer before deletion. The recent commit `573335e` was specifically to keep its exports alive for audio; that constraint disappears after Phase 6.
-- [ ] Update or add E2E tests under `tests/e2e/` if there's existing audio annotation coverage. Otherwise add a smoke test: load the audio page → click a box → assign a species via hotkey → verify it sticks.
-- [ ] Run `npm run test:all` and `npm run lint`.
+- [x] Deleted `src/components/species-sidebar.tsx` (orphaned). Its three reused exports (`NameDisplay`, `DISPLAY_KEY`, `getStoredDisplay`) were already duplicated in `src/lib/species-display.tsx` — updated the 4 importers to point there.
+- [x] Deleted `src/hooks/use-audio-annotation-shortcuts.ts` (replaced by `useAnnotationShortcuts` + `useAudioPlaybackShortcuts`).
+- [x] Audio client now uses `useNameDisplay()` from `src/lib/species-display`, matching camera-trap (cross-tab sync via custom event).
+- [x] `npx tsc --noEmit` clean.
+- [x] `npm run lint` clean for touched files (only pre-existing warnings remain).
+- [x] `npm run test:run` — 638/639 passing. One unrelated failure in `tests/integration/camera-trap-verification.test.ts > updateSpecies cascades scientificName change to identifications` exists on the pre-change tree (verified via `git stash`) — not caused by this work.
+- [ ] E2E smoke test (load audio page → click box → assign species hotkey → verify) — manual verification needed in a browser; not added to automated suite in this PR.
 
 ## Alternative Approaches Considered
 

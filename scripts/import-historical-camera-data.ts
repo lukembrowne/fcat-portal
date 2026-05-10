@@ -308,6 +308,11 @@ const SPECIES_NAME_MAP = new Map<string, string>([
   ["chestnut-backed antbird (Myrmeciza exsul)", "Poliocrania exsul"],
   ["black headed antthrush (Formacarius nigricapillus)", "Formicarius nigricapillus"],
   ["immaculate antbird (Myrmeciza immaculata?)", "Myrmeciza immaculata"],
+
+  // Taxonomic updates since the 2014 CSV was created — map old names to current portal species
+  ["Dasypus novemcinctus", "Dasypus fenestratus"],
+  ["Proechimys decumanus", "Proechimys semispinosus"],
+  ["Turdus maculirostris", "Turdus dagae"],
 ]);
 
 /** Resolve a CSV species string to its canonical DB scientific_name */
@@ -321,8 +326,8 @@ function resolveSpecies(csvSpecies: string): string {
  * before "rat" to avoid partial matches.
  */
 const FILENAME_SPECIES_MAP: Array<[keyword: string, species: string]> = [
-  ["spiny-rat", "Proechimys decumanus"],
-  ["rat", "Proechimys decumanus"],
+  ["spiny-rat", "Proechimys semispinosus"],
+  ["rat", "Proechimys semispinosus"],
 ];
 
 /**

@@ -75,6 +75,39 @@ describe("buildCells", () => {
     expect(byId[1]).toBe(2);
   });
 
+  it("fills calendar gaps so dates span min..max inclusive", () => {
+    // Two recordings 5 days apart — the axis should include all 6 days, not just 2.
+    const result = buildCells(
+      [
+        makeFile({ id: 1, recordedDate: "2026-02-09", recordedTime: "00:00:00" }),
+        makeFile({ id: 2, recordedDate: "2026-02-14", recordedTime: "00:00:00" }),
+      ],
+      "detectionCount"
+    );
+    expect(result.dates).toEqual([
+      "2026-02-09",
+      "2026-02-10",
+      "2026-02-11",
+      "2026-02-12",
+      "2026-02-13",
+      "2026-02-14",
+    ]);
+    const byId = Object.fromEntries(result.cells.map((c) => [c.fileId, c.dayIndex]));
+    expect(byId[1]).toBe(0);
+    expect(byId[2]).toBe(5);   // 5 days after the start
+  });
+
+  it("crosses month boundaries correctly", () => {
+    const result = buildCells(
+      [
+        makeFile({ id: 1, recordedDate: "2026-01-31", recordedTime: "00:00:00" }),
+        makeFile({ id: 2, recordedDate: "2026-02-02", recordedTime: "00:00:00" }),
+      ],
+      "detectionCount"
+    );
+    expect(result.dates).toEqual(["2026-01-31", "2026-02-01", "2026-02-02"]);
+  });
+
   it("drops files without parsed timestamp and counts them in skippedCount", () => {
     const result = buildCells(
       [
@@ -156,12 +189,18 @@ describe("computeDomain", () => {
 });
 
 describe("metricToFill", () => {
-  it("returns var(--muted) for a null value", () => {
-    expect(metricToFill(null, [0, 10])).toBe("var(--muted)");
+  it("returns var(--raster-unscanned) for a null value", () => {
+    expect(metricToFill(null, [0, 10])).toBe("var(--raster-unscanned)");
   });
 
-  it("returns the lightest stop when hi === lo", () => {
-    expect(metricToFill(0, [0, 0])).toBe("var(--raster-scale-0)");
+  it("returns var(--raster-unscanned) when the domain has no signal (max === 0)", () => {
+    // Common case: BirdNET hasn't run yet — every detectionCount is 0, so the
+    // domain collapses to [0, 0]. Render as 'unscanned' rather than the lightest
+    // scale stop (which blends with the card background).
+    expect(metricToFill(0, [0, 0])).toBe("var(--raster-unscanned)");
+  });
+
+  it("returns the lightest stop for a flat non-zero domain (every file same value)", () => {
     expect(metricToFill(5, [5, 5])).toBe("var(--raster-scale-0)");
   });
 

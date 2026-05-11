@@ -259,10 +259,25 @@ function RasterLegend({
   metricKey: RasterMetricKey;
 }) {
   const [lo, hi] = domain;
-  const gradient = `linear-gradient(to right, ${metricToFill(lo, domain)}, ${metricToFill(hi * 0.5, domain)}, ${metricToFill(hi, domain)})`;
+  const noSignal = hi === 0;
   const format = metricKey === "detectionCount"
     ? (n: number) => n.toLocaleString()
     : (n: number) => n.toFixed(2);
+
+  if (noSignal) {
+    return (
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <span
+          className="inline-block h-3 w-3 rounded-sm border"
+          style={{ background: "var(--raster-unscanned)" }}
+          aria-hidden
+        />
+        <span>Sin valores para esta métrica</span>
+      </div>
+    );
+  }
+
+  const gradient = `linear-gradient(to right, ${metricToFill(lo, domain)}, ${metricToFill(hi * 0.5, domain)}, ${metricToFill(hi, domain)})`;
 
   return (
     <div className="flex items-center gap-2 text-xs">
@@ -276,7 +291,7 @@ function RasterLegend({
       <span className="ml-3 flex items-center gap-1">
         <span
           className="inline-block h-3 w-3 rounded-sm border"
-          style={{ background: "var(--muted)" }}
+          style={{ background: "var(--raster-unscanned)" }}
           aria-hidden
         />
         <span className="text-muted-foreground">Sin escanear</span>

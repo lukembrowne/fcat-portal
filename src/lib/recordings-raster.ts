@@ -61,15 +61,29 @@ function minutesFromTime(time: string): number {
   return Number(h) * 60 + Number(m);
 }
 
+/** Enumerate every calendar day from `start` to `end` inclusive (YYYY-MM-DD). */
+function enumerateDays(start: string, end: string): string[] {
+  const result: string[] = [];
+  const cursor = new Date(`${start}T00:00:00Z`);
+  const last = new Date(`${end}T00:00:00Z`);
+  while (cursor <= last) {
+    result.push(cursor.toISOString().slice(0, 10));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return result;
+}
+
 /**
  * Build cells and the deployment-wide date range.
+ *
+ * The date axis is **calendar-continuous** between the first and last recording
+ * day — gaps render as empty columns so the absence of recordings is visible.
  * Files without a parseable filename timestamp are dropped (skippedCount tracks them).
  */
 export function buildCells(
   files: AudioFileRow[],
   metricKey: RasterMetricKey
 ): RasterBuildResult {
-  const dateSet = new Set<string>();
   const placed: Array<{
     file: AudioFileRow;
     recordedDate: string;
@@ -79,7 +93,6 @@ export function buildCells(
 
   for (const file of files) {
     if (file.recordedDate && file.recordedTime) {
-      dateSet.add(file.recordedDate);
       placed.push({
         file,
         recordedDate: file.recordedDate,
@@ -90,7 +103,18 @@ export function buildCells(
     }
   }
 
-  const dates = Array.from(dateSet).sort();           // YYYY-MM-DD sorts lexically
+  if (placed.length === 0) {
+    return { cells: [], dates: [], skippedCount };
+  }
+
+  let minDate = placed[0].recordedDate;
+  let maxDate = placed[0].recordedDate;
+  for (const { recordedDate } of placed) {
+    if (recordedDate < minDate) minDate = recordedDate;
+    if (recordedDate > maxDate) maxDate = recordedDate;
+  }
+
+  const dates = enumerateDays(minDate, maxDate);
   const dayIndex = new Map(dates.map((d, i) => [d, i] as const));
 
   const cells: RasterCell[] = placed.map(({ file, recordedDate, recordedTime }) => ({
@@ -122,17 +146,30 @@ const SCALE_STOPS = 5;
 const SCALE_SEGMENTS = SCALE_STOPS - 1;
 
 /**
+ * True when a cell should render as "no signal" — either the file's metric
+ * is uncomputed (null), or the deployment as a whole has no positive values
+ * for the selected metric (domain max is 0, e.g. BirdNET not run yet).
+ */
+export function isCellUnscanned(
+  value: number | null,
+  [, hi]: ScaleDomain
+): boolean {
+  return value === null || hi === 0;
+}
+
+/**
  * Map a metric value to a CSS color string.
- * - null → `var(--muted)` (the file exists but the metric isn't computed).
- * - 0..hi → 5-stop oklch ramp interpolated with CSS color-mix.
+ * - Unscanned (null value or zero-spread domain) → `var(--raster-unscanned)`.
+ * - Otherwise: 5-stop oklch ramp interpolated with CSS color-mix.
  */
 export function metricToFill(
   value: number | null,
-  [lo, hi]: ScaleDomain
+  domain: ScaleDomain
 ): string {
-  if (value === null) return "var(--muted)";
+  if (isCellUnscanned(value, domain)) return "var(--raster-unscanned)";
+  const [lo, hi] = domain;
   if (hi === lo) return "var(--raster-scale-0)";
-  const t = Math.min(1, Math.max(0, (value - lo) / (hi - lo)));
+  const t = Math.min(1, Math.max(0, ((value as number) - lo) / (hi - lo)));
   const i = Math.min(SCALE_SEGMENTS - 1, Math.floor(t * SCALE_SEGMENTS));
   const localT = t * SCALE_SEGMENTS - i;
   const lower = `var(--raster-scale-${i})`;

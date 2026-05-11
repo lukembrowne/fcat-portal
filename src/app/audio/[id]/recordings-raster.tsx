@@ -1,7 +1,8 @@
 "use client";
 
-import { memo, useMemo, useState, type MouseEvent } from "react";
+import { memo, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import {
+  isCellUnscanned,
   metricToFill,
   RASTER_METRIC_LABELS,
   type RasterCell,
@@ -54,11 +55,19 @@ export function RecordingsRaster({
   onClickCell,
 }: Props) {
   const [hover, setHover] = useState<HoverState | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   const cellsById = useMemo(
     () => new Map(cells.map((c) => [c.fileId, c])),
     [cells]
   );
+
+  // Land the viewport on the newest day (right edge) on mount and whenever the
+  // deployment's date range changes.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollLeft = el.scrollWidth;
+  }, [dates.length]);
 
   function findCell(e: MouseEvent): RasterCell | null {
     const rect = (e.target as Element).closest("rect[data-id]");
@@ -87,7 +96,7 @@ export function RecordingsRaster({
 
   return (
     <div className="relative">
-      <div className="overflow-x-auto rounded-md border bg-card">
+      <div ref={scrollRef} className="overflow-x-auto rounded-md border bg-card">
         <svg
           width={width}
           height={height}
@@ -205,7 +214,7 @@ const CellLayer = memo(function CellLayer({
       {cells.map((cell) => {
         const x = PAD_LEFT + cell.dayIndex * DAY_COL_W;
         const y = PAD_TOP + (cell.minuteOfDay / 1440) * PLOT_H;
-        const unscanned = cell.metricValue === null;
+        const unscanned = isCellUnscanned(cell.metricValue, domain);
         return (
           <rect
             key={cell.fileId}

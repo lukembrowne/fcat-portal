@@ -9,14 +9,21 @@
  */
 
 import { db } from "@/db";
-import { deployments, uploadCountSnapshots } from "@/db/schema";
-import { checkDeploymentUploads, type UploadStatus } from "@/lib/drive-client";
+import { deployments, processingJobs, uploadCountSnapshots } from "@/db/schema";
+import type { UploadStatus } from "@/lib/drive-client";
 import { verifyCronSecret } from "@/lib/cron-auth";
-import { isNotNull, eq, sql } from "drizzle-orm";
+import { and, inArray, isNotNull, eq, sql } from "drizzle-orm";
 import { Resend } from "resend";
 import { log } from "@/lib/log";
+import {
+  awaitJobTerminal,
+  runDriveSyncWorker,
+} from "@/lib/camera-trap-sync-worker";
 
 export const dynamic = "force-dynamic";
+
+const NIGHTLY_TIMEOUT_MS = 540_000; // leaves headroom under cron --max-time 600
+const POLL_INTERVAL_MS = 5_000;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -27,6 +34,10 @@ interface DeploymentResult {
   name: string;
   siteName: string | null;
   uploads: UploadStatus | null;
+  previousCameraCount: number | null;
+  previousAudioCount: number | null;
+  previousIbuttonCount: number | null;
+  previousCheckedAt: Date | null;
   error: string | null;
 }
 
@@ -77,82 +88,182 @@ export async function POST(request: Request) {
     const today = new Date().toISOString().slice(0, 10);
     log.info({ today }, "[nightly] Starting BioChoco data refresh");
 
-    // Step 1: Query all deployments with a Drive folder
-    const allDeployments = db
+    // Step 1: snapshot prior upload counts per deployment. These become the
+    // "previous_*" values for tonight's email delta after the worker runs.
+    const priorRows = db
+      .select({
+        id: deployments.id,
+        priorCameraCount: deployments.uploadCameraCount,
+        priorAudioCount: deployments.uploadAudioCount,
+        priorIbuttonCount: deployments.uploadIbuttonCount,
+        priorCheckedAt: deployments.uploadCountsCheckedAt,
+      })
+      .from(deployments)
+      .where(isNotNull(deployments.driveFolderId))
+      .all();
+    const priorMap = new Map(priorRows.map((r) => [r.id, r]));
+    log.info(
+      { count: priorRows.length },
+      "[nightly] Snapshot of prior counts captured"
+    );
+
+    // Step 2: run the same drive_sync worker the manual button uses.
+    // The cron does NOT use enqueueDriveSyncJob (which schedules via after())
+    // because we need to block here until completion to compute the email.
+    // Single-flight is enforced by reusing any in-flight job we find.
+    const [inflight] = db
+      .select({ id: processingJobs.id, status: processingJobs.status })
+      .from(processingJobs)
+      .where(
+        and(
+          eq(processingJobs.jobType, "drive_sync"),
+          inArray(processingJobs.status, ["pending", "processing"]),
+        ),
+      )
+      .all();
+
+    let jobId: number;
+    if (inflight) {
+      jobId = inflight.id;
+      log.info(
+        { jobId, status: inflight.status },
+        "[nightly] Reusing in-flight drive_sync job",
+      );
+      // If it's pending (queued but worker never started, e.g. after a crash),
+      // kick the worker now. If it's already processing, just wait.
+      if (inflight.status === "pending") {
+        runDriveSyncWorker(jobId).catch((err) =>
+          log.error({ err, jobId }, "[nightly] worker rejected"),
+        );
+      }
+    } else {
+      const [job] = db
+        .insert(processingJobs)
+        .values({
+          jobType: "drive_sync",
+          deploymentId: null,
+          cameraTrapProjectId: null,
+          status: "pending",
+          totalImages: 0,
+          processedImages: 0,
+          failedImages: 0,
+          statusMessage: "En cola (nightly)...",
+          createdBy: "cron@nightly",
+        })
+        .returning()
+        .all();
+      jobId = job.id;
+      log.info({ jobId }, "[nightly] Enqueued drive_sync job");
+      runDriveSyncWorker(jobId).catch((err) =>
+        log.error({ err, jobId }, "[nightly] worker rejected"),
+      );
+    }
+
+    const terminal = await awaitJobTerminal(jobId, {
+      intervalMs: POLL_INTERVAL_MS,
+      timeoutMs: NIGHTLY_TIMEOUT_MS,
+    });
+
+    if (!terminal) {
+      log.error({ jobId }, "[nightly] Worker did not finish within timeout");
+      return Response.json(
+        {
+          error: "drive_sync timeout",
+          jobId,
+          elapsed: `${((Date.now() - startTime) / 1000).toFixed(1)}s`,
+        },
+        { status: 504 },
+      );
+    }
+    log.info(
+      {
+        jobId,
+        status: terminal.status,
+        processed: terminal.processedImages,
+        failed: terminal.failedImages,
+      },
+      "[nightly] drive_sync terminal",
+    );
+
+    // Step 3: promote previous_* columns from the prior snapshot for any row
+    // we observed before the worker ran. New rows created during sync are
+    // skipped (they have no prior to promote).
+    for (const [depId, prior] of priorMap) {
+      db.update(deployments)
+        .set({
+          previousCameraCount: prior.priorCameraCount,
+          previousAudioCount: prior.priorAudioCount,
+          previousIbuttonCount: prior.priorIbuttonCount,
+          previousCountsCheckedAt: prior.priorCheckedAt,
+        })
+        .where(eq(deployments.id, depId))
+        .run();
+    }
+
+    // Step 4: read the post-sync state. Includes any newly-discovered rows
+    // since the worker may have inserted deployments.
+    const postSyncRows = db
       .select({
         id: deployments.id,
         name: deployments.name,
         siteName: deployments.siteName,
-        driveFolderId: deployments.driveFolderId,
+        uploadCameraCount: deployments.uploadCameraCount,
+        uploadAudioCount: deployments.uploadAudioCount,
+        uploadIbuttonCount: deployments.uploadIbuttonCount,
+        uploadCameraSizeBytes: deployments.uploadCameraSizeBytes,
+        uploadAudioSizeBytes: deployments.uploadAudioSizeBytes,
+        uploadIbuttonSizeBytes: deployments.uploadIbuttonSizeBytes,
+        uploadNewestCameraDate: deployments.uploadNewestCameraDate,
+        uploadNewestAudioDate: deployments.uploadNewestAudioDate,
+        uploadNewestIbuttonDate: deployments.uploadNewestIbuttonDate,
+        subfolderCamera: deployments.uploadCameraFolderId,
+        subfolderAudio: deployments.uploadAudioFolderId,
+        subfolderIbutton: deployments.uploadIbuttonFolderId,
       })
       .from(deployments)
       .where(isNotNull(deployments.driveFolderId))
       .all();
 
-    log.info({ count: allDeployments.length }, "[nightly] Found deployments with Drive folders");
-
-    // Step 2: Check each deployment sequentially
-    const results: DeploymentResult[] = [];
-
-    for (const dep of allDeployments) {
-      log.info({ name: dep.name, folderId: dep.driveFolderId }, "[nightly] Checking deployment");
-
-      const result = await checkDeploymentUploads(dep.driveFolderId!);
-
-      if (!result.success) {
-        log.error({ name: dep.name, err: result.error }, "[nightly] FAILED");
-        results.push({
-          id: dep.id,
-          name: dep.name,
-          siteName: dep.siteName,
-          uploads: null,
-          error: result.error,
-        });
-        continue;
-      }
-
-      const uploads = result.data;
-      log.info(
-        {
-          name: dep.name,
-          cameras: uploads.camarasTrampas,
-          audio: uploads.grabadoresDeAudio,
-          ibutton: uploads.ibutton,
+    const results: DeploymentResult[] = postSyncRows.map((r) => {
+      const prior = priorMap.get(r.id);
+      const uploads: UploadStatus = {
+        camarasTrampas: r.uploadCameraCount,
+        grabadoresDeAudio: r.uploadAudioCount,
+        ibutton: r.uploadIbuttonCount,
+        camarasTrampasSizeBytes: r.uploadCameraSizeBytes,
+        grabadoresDeAudioSizeBytes: r.uploadAudioSizeBytes,
+        ibuttonSizeBytes: r.uploadIbuttonSizeBytes,
+        camarasTrampasNewestDate: r.uploadNewestCameraDate,
+        grabadoresDeAudioNewestDate: r.uploadNewestAudioDate,
+        ibuttonNewestDate: r.uploadNewestIbuttonDate,
+        subfolderIds: {
+          camarasTrampas: r.subfolderCamera,
+          grabadoresDeAudio: r.subfolderAudio,
+          ibutton: r.subfolderIbutton,
         },
-        "[nightly] deployment counts"
-      );
-
-      // Persist counts, sizes, newest dates to DB
-      db.update(deployments)
-        .set({
-          uploadCameraCount: uploads.camarasTrampas,
-          uploadAudioCount: uploads.grabadoresDeAudio,
-          uploadIbuttonCount: uploads.ibutton,
-          uploadCameraSizeBytes: uploads.camarasTrampasSizeBytes,
-          uploadAudioSizeBytes: uploads.grabadoresDeAudioSizeBytes,
-          uploadIbuttonSizeBytes: uploads.ibuttonSizeBytes,
-          uploadNewestCameraDate: uploads.camarasTrampasNewestDate,
-          uploadNewestAudioDate: uploads.grabadoresDeAudioNewestDate,
-          uploadNewestIbuttonDate: uploads.ibuttonNewestDate,
-          uploadCameraFolderId: uploads.subfolderIds.camarasTrampas,
-          uploadAudioFolderId: uploads.subfolderIds.grabadoresDeAudio,
-          uploadIbuttonFolderId: uploads.subfolderIds.ibutton,
-          uploadCountsCheckedAt: sql`(unixepoch())`,
-        })
-        .where(eq(deployments.id, dep.id))
-        .run();
-
-      results.push({
-        id: dep.id,
-        name: dep.name,
-        siteName: dep.siteName,
+      };
+      return {
+        id: r.id,
+        name: r.name,
+        siteName: r.siteName,
         uploads,
+        previousCameraCount: prior?.priorCameraCount ?? null,
+        previousAudioCount: prior?.priorAudioCount ?? null,
+        previousIbuttonCount: prior?.priorIbuttonCount ?? null,
+        previousCheckedAt: prior?.priorCheckedAt ?? null,
         error: null,
-      });
+      };
+    });
+
+    if (terminal.status !== "completed") {
+      log.warn(
+        { jobId, status: terminal.status, errorMessage: terminal.errorMessage },
+        "[nightly] drive_sync did not complete cleanly — email will still send",
+      );
     }
 
-    // Step 3: Save daily snapshot
-    const snapshot = computeSnapshot(results, allDeployments.length);
+    // Step 5: Save daily snapshot
+    const snapshot = computeSnapshot(results, results.length);
 
     db.insert(uploadCountSnapshots)
       .values({
@@ -215,16 +326,24 @@ export async function POST(request: Request) {
       log.warn("[nightly] Email skipped — RESEND_API_KEY or NIGHTLY_REPORT_EMAILS not set");
     }
 
-    const errorCount = results.filter((r) => r.error).length;
+    const errorCount = terminal.failedImages;
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     const totalSize = snapshot.totalCameraSizeBytes + snapshot.totalAudioSizeBytes + snapshot.totalIbuttonSizeBytes;
     log.info(
-      { elapsedSec: elapsed, deployments: results.length, errors: errorCount, totalSize: formatBytes(totalSize) },
-      "[nightly] Done"
+      {
+        jobId,
+        elapsedSec: elapsed,
+        deployments: results.length,
+        errors: errorCount,
+        totalSize: formatBytes(totalSize),
+      },
+      "[nightly] Done",
     );
 
     return Response.json({
-      ok: true,
+      ok: terminal.status === "completed",
+      jobId,
+      jobStatus: terminal.status,
       deployments: results.length,
       errors: errorCount,
       totalSize: formatBytes(totalSize),
@@ -325,6 +444,22 @@ async function sendReport(
 // HTML Email Builder
 // ---------------------------------------------------------------------------
 
+/**
+ * Render a count cell with an inline delta vs the previous run.
+ * - previous === null: first run, show count only.
+ * - delta === 0: show count only (avoid noise on stable deployments).
+ * - delta !== 0: show "<count> <span>(+N)</span>" with color.
+ */
+function formatCountCell(current: number | null | undefined, previous: number | null): string {
+  const cur = current ?? 0;
+  if (previous === null) return cur.toLocaleString();
+  const d = cur - previous;
+  if (d === 0) return cur.toLocaleString();
+  const color = d > 0 ? "#16a34a" : "#dc2626";
+  const sign = d > 0 ? "+" : "";
+  return `${cur.toLocaleString()} <span style="color:${color};font-weight:600;font-size:11px">(${sign}${d})</span>`;
+}
+
 function formatDeltaHtml(
   countDelta: number | null,
   sizeDelta: number | null,
@@ -373,12 +508,56 @@ function buildEmailHtml(
       return `<tr>
         <td style="padding:6px 12px;border:1px solid #e5e7eb">${r.name}</td>
         <td style="padding:6px 12px;border:1px solid #e5e7eb">${r.siteName ?? "—"}</td>
-        <td style="padding:6px 12px;border:1px solid #e5e7eb;text-align:right">${u.camarasTrampas ?? 0}</td>
-        <td style="padding:6px 12px;border:1px solid #e5e7eb;text-align:right">${u.grabadoresDeAudio ?? 0}</td>
-        <td style="padding:6px 12px;border:1px solid #e5e7eb;text-align:right">${u.ibutton ?? 0}</td>
+        <td style="padding:6px 12px;border:1px solid #e5e7eb;text-align:right">${formatCountCell(u.camarasTrampas, r.previousCameraCount)}</td>
+        <td style="padding:6px 12px;border:1px solid #e5e7eb;text-align:right">${formatCountCell(u.grabadoresDeAudio, r.previousAudioCount)}</td>
+        <td style="padding:6px 12px;border:1px solid #e5e7eb;text-align:right">${formatCountCell(u.ibutton, r.previousIbuttonCount)}</td>
       </tr>`;
     })
     .join("\n");
+
+  // "Nuevas instalaciones" — first time this deployment has any uploads.
+  // Treats null prior (never seen) and 0 prior (seen but empty) the same.
+  const newDeployments = results
+    .filter((r) => {
+      if (!r.uploads) return false;
+      const prevTotal =
+        (r.previousCameraCount ?? 0) +
+        (r.previousAudioCount ?? 0) +
+        (r.previousIbuttonCount ?? 0);
+      const curTotal =
+        (r.uploads.camarasTrampas ?? 0) +
+        (r.uploads.grabadoresDeAudio ?? 0) +
+        (r.uploads.ibutton ?? 0);
+      return prevTotal === 0 && curTotal > 0;
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  const newDeploymentsSection =
+    newDeployments.length > 0
+      ? `
+  <h3 style="margin-top:24px;color:#16a34a">Nuevas instalaciones con datos (${newDeployments.length})</h3>
+  <table style="border-collapse:collapse;width:100%;margin-top:8px">
+    <tr style="background:#f0fdf4">
+      <th style="padding:8px 12px;border:1px solid #bbf7d0;text-align:left">Instalación</th>
+      <th style="padding:8px 12px;border:1px solid #bbf7d0;text-align:left">Sitio</th>
+      <th style="padding:8px 12px;border:1px solid #bbf7d0;text-align:right">Cámaras</th>
+      <th style="padding:8px 12px;border:1px solid #bbf7d0;text-align:right">Audio</th>
+      <th style="padding:8px 12px;border:1px solid #bbf7d0;text-align:right">iButton</th>
+    </tr>
+    ${newDeployments
+      .map((r) => {
+        const u = r.uploads!;
+        return `<tr>
+        <td style="padding:6px 12px;border:1px solid #bbf7d0">${r.name}</td>
+        <td style="padding:6px 12px;border:1px solid #bbf7d0">${r.siteName ?? "—"}</td>
+        <td style="padding:6px 12px;border:1px solid #bbf7d0;text-align:right">${(u.camarasTrampas ?? 0).toLocaleString()}</td>
+        <td style="padding:6px 12px;border:1px solid #bbf7d0;text-align:right">${(u.grabadoresDeAudio ?? 0).toLocaleString()}</td>
+        <td style="padding:6px 12px;border:1px solid #bbf7d0;text-align:right">${(u.ibutton ?? 0).toLocaleString()}</td>
+      </tr>`;
+      })
+      .join("\n")}
+  </table>`
+      : "";
 
   const errorSection =
     errors.length > 0
@@ -430,6 +609,8 @@ function buildEmailHtml(
       <td style="padding:6px 0">${delta.deploymentsWithUploads} de ${delta.totalDeployments}</td>
     </tr>
   </table>
+
+  ${newDeploymentsSection}
 
   <h3 style="margin-top:24px">Por instalación</h3>
   <table style="border-collapse:collapse;width:100%;margin-top:8px">

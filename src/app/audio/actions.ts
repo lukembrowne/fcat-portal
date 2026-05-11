@@ -517,6 +517,13 @@ async function processBirdNETJob(jobId: number): Promise<void> {
       .where(eq(processingJobs.id, jobId));
 
     if (!job) throw new Error(`Job ${jobId} not found`);
+    // `processingJobs.deploymentId` became nullable for drive_sync jobs (main
+    // commit 4b6cd23). BirdNET jobs always target a single deployment, so a
+    // null here is a programmer error — fail loud rather than coerce.
+    if (job.deploymentId === null) {
+      throw new Error(`BirdNET job ${jobId} has null deploymentId`);
+    }
+    const deploymentId = job.deploymentId;
 
     const [deployment] = await db
       .select({
@@ -526,9 +533,9 @@ async function processBirdNETJob(jobId: number): Promise<void> {
         dateStart: deployments.dateStart,
       })
       .from(deployments)
-      .where(eq(deployments.id, job.deploymentId));
+      .where(eq(deployments.id, deploymentId));
 
-    if (!deployment) throw new Error(`Deployment ${job.deploymentId} not found`);
+    if (!deployment) throw new Error(`Deployment ${deploymentId} not found`);
 
     // Lat/lon with fallback
     const lat = deployment.latitude ?? -0.3;
@@ -557,7 +564,7 @@ async function processBirdNETJob(jobId: number): Promise<void> {
         driveFileId: audioFiles.driveFileId,
       })
       .from(audioFiles)
-      .where(eq(audioFiles.deploymentId, job.deploymentId));
+      .where(eq(audioFiles.deploymentId, deploymentId));
 
     const filesWithDrive = files.filter((f) => f.driveFileId !== null);
     const downloadTotal = filesWithDrive.length;
@@ -660,7 +667,7 @@ async function processBirdNETJob(jobId: number): Promise<void> {
       throw new Error(result.error);
     }
 
-    revalidatePath(`/audio/${job.deploymentId}`);
+    revalidatePath(`/audio/${deploymentId}`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     log.error({ err, jobId }, "[birdnet] Job failed");
@@ -690,7 +697,14 @@ export async function cancelBirdNETJob(
     return { success: false, error: "Trabajo no encontrado" };
   }
 
-  await requireDeploymentAccess(user, job.deploymentId);
+  // BirdNET jobs always target a single deployment; null indicates a non-BirdNET
+  // job was passed in or data corruption.
+  if (job.deploymentId === null) {
+    return { success: false, error: "Trabajo sin instalación asociada" };
+  }
+  const deploymentId = job.deploymentId;
+
+  await requireDeploymentAccess(user, deploymentId);
 
   if (!["pending", "processing"].includes(job.status)) {
     return { success: false, error: "El trabajo ya finalizó" };
@@ -717,7 +731,7 @@ export async function cancelBirdNETJob(
     })
     .where(eq(processingJobs.id, jobId));
 
-  revalidatePath(`/audio/${job.deploymentId}`);
+  revalidatePath(`/audio/${deploymentId}`);
   return { success: true, data: undefined };
 }
 

@@ -270,7 +270,7 @@ const SPECIES_NAME_MAP = new Map<string, string>([
   ["wedge-billed woodcreeper (Glyphorynchus spirurus)", "Glyphorynchus spirurus"],
   ["spotted antbird (Hylophylax naevioides)", "Hylophylax naevioides"],
   ["rufous-headed chachalaca (Ortalis erythroptera)", "Ortalis erythroptera"],
-  ["ecuadorian thrush (Turdus maculirostris)", "Turdus maculirostris"],
+  ["ecuadorian thrush (Turdus maculirostris)", "Turdus dagae"],
   ["plain-brown woodcreeper (Dendrocincla fuliginosa)", "Dendrocincla fuliginosa"],
   ["streak-chested antpitta (Hylopezus perspicillatus)", "Hylopezus perspicillatus"],
   ["great tinamou (Tinamus major)", "Tinamus major"],
@@ -288,7 +288,7 @@ const SPECIES_NAME_MAP = new Map<string, string>([
 
   // Parenthetical extraction (Title Case CSV variants)
   ["plain brown woodcreeper (Dendrocincla fuliginosa)", "Dendrocincla fuliginosa"],
-  ["Ecuadorian Thrush (Turdus maculirostris)", "Turdus maculirostris"],
+  ["Ecuadorian Thrush (Turdus maculirostris)", "Turdus dagae"],
   ["Rufous-headed Chachalaca (Ortalis erythroptera)", "Ortalis erythroptera"],
   ["Berlepsch's Tinamou (Crypturellus berlepschi)", "Crypturellus berlepschi"],
   ["Scaled Antpitta (Grallaria guatimalensis)", "Grallaria guatimalensis"],
@@ -308,6 +308,11 @@ const SPECIES_NAME_MAP = new Map<string, string>([
   ["chestnut-backed antbird (Myrmeciza exsul)", "Poliocrania exsul"],
   ["black headed antthrush (Formacarius nigricapillus)", "Formicarius nigricapillus"],
   ["immaculate antbird (Myrmeciza immaculata?)", "Myrmeciza immaculata"],
+
+  // Taxonomic updates since the 2014 CSV was created — map old names to current portal species
+  ["Dasypus novemcinctus", "Dasypus fenestratus"],
+  ["Proechimys decumanus", "Proechimys semispinosus"],
+  ["Turdus maculirostris", "Turdus dagae"],
 ]);
 
 /** Resolve a CSV species string to its canonical DB scientific_name */
@@ -321,8 +326,8 @@ function resolveSpecies(csvSpecies: string): string {
  * before "rat" to avoid partial matches.
  */
 const FILENAME_SPECIES_MAP: Array<[keyword: string, species: string]> = [
-  ["spiny-rat", "Proechimys decumanus"],
-  ["rat", "Proechimys decumanus"],
+  ["spiny-rat", "Proechimys semispinosus"],
+  ["rat", "Proechimys semispinosus"],
 ];
 
 /**

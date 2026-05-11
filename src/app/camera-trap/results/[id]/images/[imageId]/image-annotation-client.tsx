@@ -5,6 +5,10 @@ import { BBoxOverlay, type BBoxData } from "@/components/bbox-overlay";
 import type { DetectionWithIdentification } from "@/components/annotation-toolbar";
 import { AnnotationPickerPopover } from "@/components/annotation-picker-popover";
 import { AnnotationToolsSidebar } from "@/components/annotation-tools-sidebar";
+import {
+  brightnessFilter,
+  DEFAULT_BRIGHTNESS,
+} from "@/lib/brightness-filter";
 import { Popover, PopoverAnchor } from "@/components/ui/popover";
 import { useAnnotationPicker } from "@/hooks/use-annotation-picker";
 import { useNameDisplay } from "@/lib/species-display";
@@ -125,6 +129,7 @@ export function ImageAnnotationClient({
   }, [onMutate, router]);
   const [selectedBoxId, setSelectedBoxId] = useState<number | null>(null);
   const [bboxesHidden, setBboxesHidden] = useState(false);
+  const [brightness, setBrightness] = useState(DEFAULT_BRIGHTNESS);
   const [deleteDialogDetectionId, setDeleteDialogDetectionId] = useState<number | null>(null);
   // Most recently assigned species, scoped per job in sessionStorage. Drives
   // the "Última" popover row + the `0` hotkey for repeating the previous
@@ -209,6 +214,22 @@ export function ImageAnnotationClient({
 
   const isDialogOpen = deleteDialogDetectionId !== null || addSpeciesOpen;
   const { containerRef: zoomContainerRef, wrapperRef: zoomWrapperRef, style: zoomStyle, panHandlers, scale: zoomScale, isPanning, isZooming, resetZoom } = useImageZoom({ disabled: isDialogOpen });
+
+  // Reset brightness when navigating to a different image. Adjusting the
+  // overblown image is a per-image action — auto-persisting would silently
+  // dim every subsequent image.
+  useEffect(() => {
+    setBrightness(DEFAULT_BRIGHTNESS);
+  }, [imageId]);
+
+  const imageFilter = useMemo(
+    () => brightnessFilter(brightness) || undefined,
+    [brightness],
+  );
+
+  const cycleBrightness = useCallback(() => {
+    setBrightness((b) => (b === 1.0 ? 0.7 : b === 0.7 ? 0.5 : 1.0));
+  }, []);
 
   const picker = useAnnotationPicker({
     selectedBoxId,
@@ -467,6 +488,7 @@ export function ImageAnnotationClient({
     onToggleSetupRetrieval: canEdit ? () => handleToggleSetupTag("retrieval") : undefined,
     onToggleBboxes: () => setBboxesHidden((prev) => !prev),
     onResetZoom: resetZoom,
+    onCycleBrightness: cycleBrightness,
     isDialogOpen,
     onNext: () => {
       if (nextImageId) {
@@ -560,6 +582,8 @@ export function ImageAnnotationClient({
             }
             onApplyDateSuggestion={canEdit ? handleApplyDate : undefined}
             onDismissDateSuggestion={() => setSuggestionDismissed(true)}
+            brightness={brightness}
+            onBrightnessChange={setBrightness}
             jobId={jobId}
             onBack={onBack}
           />
@@ -589,6 +613,7 @@ export function ImageAnnotationClient({
                 editable={!isPanning && canEdit}
                 onDrawComplete={canEdit ? handleDrawComplete : undefined}
                 onResize={setImgSize}
+                imageFilter={imageFilter}
               />
               {/* Invisible anchor sized/positioned to the selected bbox.
                   Radix attaches the popover to this element; sideOffset>0

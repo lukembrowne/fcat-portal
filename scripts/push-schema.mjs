@@ -676,6 +676,13 @@ const migrations = [
   `ALTER TABLE biochoco_processing_jobs ADD COLUMN video_timestamp_method TEXT DEFAULT 'metadata'`,
   // BirdNET integration — add job_id to audio_detections (2026-04-13)
   `ALTER TABLE audio_detections ADD COLUMN job_id INTEGER REFERENCES biochoco_processing_jobs(id) ON DELETE SET NULL`,
+  // Per-deployment previous upload counts — for nightly email deltas (2026-05-06)
+  `ALTER TABLE biochoco_deployments ADD COLUMN previous_camera_count INTEGER`,
+  `ALTER TABLE biochoco_deployments ADD COLUMN previous_audio_count INTEGER`,
+  `ALTER TABLE biochoco_deployments ADD COLUMN previous_ibutton_count INTEGER`,
+  `ALTER TABLE biochoco_deployments ADD COLUMN previous_counts_checked_at INTEGER`,
+  // Drive sync background job: scope to a CT project (nullable) (2026-05-06)
+  `ALTER TABLE biochoco_processing_jobs ADD COLUMN camera_trap_project_id INTEGER REFERENCES ct_projects(id) ON DELETE SET NULL`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }
@@ -843,6 +850,74 @@ try {
 } catch (err) {
   try { db.exec(`ROLLBACK`); } catch { /* no active tx */ }
   console.error("Failed to migrate biochoco_deployments status constraint:", err.message);
+}
+
+// --- Table recreation: make biochoco_processing_jobs.deployment_id nullable (2026-05-06) ---
+// drive_sync jobs span many deployments and have no single deploymentId.
+try {
+  const depIdInfo = db
+    .prepare(`SELECT "notnull" FROM pragma_table_info('biochoco_processing_jobs') WHERE name = 'deployment_id'`)
+    .get();
+  if (depIdInfo && depIdInfo.notnull === 1) {
+    console.log("Migrating biochoco_processing_jobs table: making deployment_id nullable...");
+    db.exec(`BEGIN TRANSACTION`);
+    db.exec(`CREATE TABLE biochoco_processing_jobs_new (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      deployment_id INTEGER REFERENCES biochoco_deployments(id) ON DELETE CASCADE,
+      camera_trap_project_id INTEGER REFERENCES ct_projects(id) ON DELETE SET NULL,
+      detector_model TEXT,
+      classifier_model TEXT,
+      confidence_threshold REAL DEFAULT 0.1,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'processing', 'completed', 'failed', 'cancelled')),
+      status_message TEXT,
+      job_type TEXT NOT NULL DEFAULT 'ml',
+      pid INTEGER,
+      total_images INTEGER NOT NULL DEFAULT 0,
+      processed_images INTEGER NOT NULL DEFAULT 0,
+      failed_images INTEGER NOT NULL DEFAULT 0,
+      error_message TEXT,
+      started_at INTEGER,
+      completed_at INTEGER,
+      frame_extraction_rate REAL DEFAULT 1.0,
+      total_videos INTEGER DEFAULT 0,
+      extracted_frames INTEGER DEFAULT 0,
+      compress_first INTEGER DEFAULT 0,
+      video_timestamp_method TEXT DEFAULT 'metadata',
+      downloaded_images INTEGER DEFAULT 0,
+      download_total INTEGER DEFAULT 0,
+      cached_images INTEGER DEFAULT 0,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      created_by TEXT
+    )`);
+    // Copy all rows preserving every value; new column camera_trap_project_id
+    // already existed before this migration (see ALTER above) so it's in the
+    // source table too.
+    db.exec(`
+      INSERT INTO biochoco_processing_jobs_new (
+        id, deployment_id, camera_trap_project_id, detector_model, classifier_model,
+        confidence_threshold, status, status_message, job_type, pid,
+        total_images, processed_images, failed_images, error_message,
+        started_at, completed_at, frame_extraction_rate, total_videos,
+        extracted_frames, compress_first, video_timestamp_method,
+        downloaded_images, download_total, cached_images, created_at, created_by
+      )
+      SELECT
+        id, deployment_id, camera_trap_project_id, detector_model, classifier_model,
+        confidence_threshold, status, status_message, job_type, pid,
+        total_images, processed_images, failed_images, error_message,
+        started_at, completed_at, frame_extraction_rate, total_videos,
+        extracted_frames, compress_first, video_timestamp_method,
+        downloaded_images, download_total, cached_images, created_at, created_by
+      FROM biochoco_processing_jobs
+    `);
+    db.exec(`DROP TABLE biochoco_processing_jobs`);
+    db.exec(`ALTER TABLE biochoco_processing_jobs_new RENAME TO biochoco_processing_jobs`);
+    db.exec(`COMMIT`);
+    console.log("  biochoco_processing_jobs.deployment_id is now nullable");
+  }
+} catch (err) {
+  try { db.exec(`ROLLBACK`); } catch { /* no active tx */ }
+  console.error("Failed to migrate biochoco_processing_jobs.deployment_id:", err.message);
 }
 
 // Re-enable foreign keys after table recreations

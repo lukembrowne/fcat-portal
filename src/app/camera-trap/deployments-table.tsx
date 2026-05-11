@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useCallback, useRef, useTransition, useEffect, Fragment } from "react";
+import { useState, useMemo, useCallback, useTransition, useEffect, Fragment } from "react";
 import { useRouter } from "next/navigation";
 import {
   useReactTable,
@@ -55,6 +55,7 @@ import { BatchDeleteDialog } from "./batch-delete-dialog";
 import { enqueueDriveSyncJob } from "./drive-actions";
 import { ProcessConfirmDialog } from "./process-confirm-dialog";
 import type { ProjectGroup } from "./page";
+import { useRowRangeSelection } from "@/hooks/use-row-range-selection";
 
 /** localStorage key for remembering which project groups the user has collapsed
  * on the Instalaciones page. Per-device, non-sensitive UI preference. */
@@ -96,14 +97,10 @@ export function DeploymentsTable({
   ]);
   const [globalFilter, setGlobalFilter] = useState("");
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
-  // Refs back the shift+click range selection so the column cell renderer can
-  // read the latest values without forcing the columns useMemo to rebuild on
-  // every selection change. lastSelectedIdRef is the "anchor" for the next
-  // shift+click; visibleOrderedIdsRef is the in-order list of currently
-  // visible row IDs (across groups, respecting filters and collapsed groups).
-  const lastSelectedIdRef = useRef<number | null>(null);
-  const shiftClickRef = useRef(false);
-  const visibleOrderedIdsRef = useRef<number[]>([]);
+  // Shift+click range selection across the (filter-, group-, and collapse-aware)
+  // visible row order. The hook keeps its own refs internally so the cell
+  // renderer doesn't re-memo on every selection change.
+  const rangeSelection = useRowRangeSelection<DeploymentRow>(setRowSelection);
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [syncing, startSync] = useTransition();
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
@@ -227,44 +224,10 @@ export function DeploymentsTable({
         cell: ({ row }) => (
           <Checkbox
             checked={row.getIsSelected()}
-            onClick={(e) => {
-              e.stopPropagation();
-              // onClick fires before onCheckedChange on Radix Checkbox, so we
-              // stash the modifier key for the change handler to consume.
-              shiftClickRef.current = e.shiftKey;
-            }}
-            onCheckedChange={(value) => {
-              const isChecked = !!value;
-              const anchorId = lastSelectedIdRef.current;
-              const ids = visibleOrderedIdsRef.current;
-              if (
-                shiftClickRef.current &&
-                anchorId !== null &&
-                anchorId !== row.original.id
-              ) {
-                const fromIdx = ids.indexOf(anchorId);
-                const toIdx = ids.indexOf(row.original.id);
-                if (fromIdx !== -1 && toIdx !== -1) {
-                  const [start, end] =
-                    fromIdx < toIdx ? [fromIdx, toIdx] : [toIdx, fromIdx];
-                  const rangeIds = ids.slice(start, end + 1);
-                  setRowSelection((prev) => {
-                    const next = { ...prev };
-                    for (const id of rangeIds) {
-                      if (isChecked) next[String(id)] = true;
-                      else delete next[String(id)];
-                    }
-                    return next;
-                  });
-                } else {
-                  row.toggleSelected(isChecked);
-                }
-              } else {
-                row.toggleSelected(isChecked);
-              }
-              lastSelectedIdRef.current = row.original.id;
-              shiftClickRef.current = false;
-            }}
+            onClick={rangeSelection.onCheckboxClick}
+            onCheckedChange={(value) =>
+              rangeSelection.handleCheckedChange(row, !!value)
+            }
             aria-label="Seleccionar fila (mantén Shift para seleccionar un rango)"
           />
         ),
@@ -449,7 +412,7 @@ export function DeploymentsTable({
     );
 
     return cols;
-  }, [canEdit, isAdmin]);
+  }, [canEdit, isAdmin, rangeSelection]);
 
   const table = useReactTable({
     data: filteredData,
@@ -509,7 +472,7 @@ export function DeploymentsTable({
     }
     return ids;
   }, [sortedGroups, collapsedGroups, filteredRowIds]);
-  visibleOrderedIdsRef.current = visibleOrderedIds;
+  rangeSelection.setVisibleOrderedIds(visibleOrderedIds);
 
   /**
    * Enqueue a background drive_sync job. The actual work (folder discovery,

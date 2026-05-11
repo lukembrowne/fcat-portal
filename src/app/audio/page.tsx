@@ -1,4 +1,6 @@
 import { requirePermission } from "@/lib/auth";
+import { getAppStateTimestamp } from "@/lib/app-state";
+import { AUDIO_DRIVE_LAST_SYNC_KEY } from "@/lib/app-state-keys";
 import {
   fetchAudioDeployments,
   fetchDistinctAudioProjects,
@@ -79,9 +81,10 @@ export default async function AudioPage() {
         (p.role === "editor" || p.role === "admin")
     );
 
-  const [deploymentsResult, distinctProjects] = await Promise.all([
+  const [deploymentsResult, distinctProjects, lastSyncAt] = await Promise.all([
     fetchAudioDeployments(),
     fetchDistinctAudioProjects(),
+    getAppStateTimestamp(AUDIO_DRIVE_LAST_SYNC_KEY),
   ]);
 
   const allDeployments = deploymentsResult.success ? deploymentsResult.data : [];
@@ -95,6 +98,7 @@ export default async function AudioPage() {
       counts={counts}
       distinctProjects={distinctProjects}
       isEditor={isEditor}
+      lastSyncAt={lastSyncAt ? lastSyncAt.toISOString() : null}
     />
   );
 }

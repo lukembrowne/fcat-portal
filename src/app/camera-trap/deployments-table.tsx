@@ -51,6 +51,7 @@ import {
 import type { DeploymentRow } from "./actions";
 import { DeploymentRowActions } from "./deployment-row-actions";
 import { BatchEditDialog } from "@/components/deployments/batch-edit-dialog";
+import { GroupSelectAllCheckbox } from "@/components/deployments/group-select-all-checkbox";
 import { BatchDeleteDialog } from "./batch-delete-dialog";
 import { bulkUpdateMetadata } from "./actions";
 import { enqueueDriveSyncJob } from "./drive-actions";
@@ -791,20 +792,9 @@ export function DeploymentsTable({
                 const actionable = group.deployments.filter((d) =>
                   ["unscanned", "scanned", "processing", "processed"].includes(d.status)
                 ).length;
-                // Group selection state. We compute against deployments that
-                // pass the active global filter so the checkbox semantics
-                // match what the user can actually see.
-                const selectableDeps = group.deployments.filter((d) =>
-                  filteredRowIds.has(String(d.id))
-                );
-                const selectedInGroup = selectableDeps.filter(
-                  (d) => rowSelection[String(d.id)]
-                ).length;
-                const allGroupSelected =
-                  selectableDeps.length > 0 &&
-                  selectedInGroup === selectableDeps.length;
-                const someGroupSelected =
-                  selectedInGroup > 0 && !allGroupSelected;
+                const selectableDepIds = group.deployments
+                  .filter((d) => filteredRowIds.has(String(d.id)))
+                  .map((d) => d.id);
 
                 return (
                   <Fragment key={group.projectLabel}>
@@ -815,25 +805,11 @@ export function DeploymentsTable({
                     >
                       <TableCell colSpan={columns.length} className="py-2.5 px-3">
                         <div className="flex items-center gap-2">
-                          <Checkbox
-                            checked={
-                              allGroupSelected ||
-                              (someGroupSelected && "indeterminate")
-                            }
-                            disabled={selectableDeps.length === 0}
-                            onClick={(e) => e.stopPropagation()}
-                            onCheckedChange={(value) => {
-                              const isChecked = !!value;
-                              setRowSelection((prev) => {
-                                const next = { ...prev };
-                                for (const d of selectableDeps) {
-                                  if (isChecked) next[String(d.id)] = true;
-                                  else delete next[String(d.id)];
-                                }
-                                return next;
-                              });
-                            }}
-                            aria-label={`Seleccionar todas las instalaciones de ${group.projectLabel}`}
+                          <GroupSelectAllCheckbox
+                            groupDeploymentIds={selectableDepIds}
+                            rowSelection={rowSelection}
+                            setRowSelection={setRowSelection}
+                            groupLabel={group.projectLabel}
                           />
                           <ChevronRight
                             className={`h-4 w-4 transition-transform shrink-0 ${!isCollapsed ? "rotate-90" : ""}`}

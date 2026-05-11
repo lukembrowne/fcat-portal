@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useCallback, useTransition, Fragment } from "react";
+import { useState, useMemo, useCallback, useTransition, useEffect, Fragment } from "react";
 import { useRouter } from "next/navigation";
 import {
   useReactTable,
@@ -10,6 +10,7 @@ import {
   flexRender,
   type ColumnDef,
   type SortingState,
+  type RowSelectionState,
 } from "@tanstack/react-table";
 import {
   Table,
@@ -21,15 +22,33 @@ import {
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { StatusBadge } from "@/components/status-badge";
 import { SortIcon } from "@/components/sort-icon";
 import {
   Search,
-  FolderSync,
+  RefreshCw,
   Loader2,
   AudioLines,
   ChevronRight,
+  ChevronDown,
 } from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { useRowRangeSelection } from "@/hooks/use-row-range-selection";
+import { GroupSelectAllCheckbox } from "@/components/deployments/group-select-all-checkbox";
 import { enqueueAudioSyncJob } from "./drive-actions";
 import type { AudioDeploymentRow, AudioProject } from "./actions";
 import type { AudioProjectGroup } from "./page";
@@ -47,6 +66,8 @@ interface AudioDeploymentsShellProps {
   };
   distinctProjects: AudioProject[];
   isEditor: boolean;
+  /** ISO string of the last successful audio Drive sync, or null. */
+  lastSyncAt: string | null;
 }
 
 export function AudioDeploymentsShell({
@@ -55,16 +76,31 @@ export function AudioDeploymentsShell({
   counts,
   distinctProjects,
   isEditor,
+  lastSyncAt: initialLastSyncAt,
 }: AudioDeploymentsShellProps) {
   const router = useRouter();
-  const [sorting, setSorting] = useState<SortingState>([]);
+  const [sorting, setSorting] = useState<SortingState>([
+    { id: "name", desc: false },
+  ]);
   const [globalFilter, setGlobalFilter] = useState("");
   const [projectFilter, setProjectFilter] = useState("");
+  const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
+  // Shift+click range selection across the (filter-, group-, and collapse-aware)
+  // visible row order. Shared hook keeps refs internally so the cell renderer
+  // doesn't re-memo on every selection change.
+  const rangeSelection = useRowRangeSelection<AudioDeploymentRow>(setRowSelection);
   const [syncing, startSync] = useTransition();
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
     () => new Set()
   );
+  const [lastSyncAt, setLastSyncAt] = useState<string | null>(initialLastSyncAt);
+  // Tick every 30s so the relative "hace X" label stays fresh without a refresh.
+  const [, setNowTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setNowTick((n) => n + 1), 30_000);
+    return () => clearInterval(id);
+  }, []);
 
   const toggleGroup = useCallback((label: string) => {
     setCollapsedGroups((prev) => {
@@ -80,6 +116,33 @@ export function AudioDeploymentsShell({
 
   const columns = useMemo<ColumnDef<AudioDeploymentRow>[]>(
     () => [
+      {
+        id: "select",
+        header: ({ table }) => (
+          <Checkbox
+            checked={
+              table.getIsAllPageRowsSelected() ||
+              (table.getIsSomePageRowsSelected() && "indeterminate")
+            }
+            onCheckedChange={(value) =>
+              table.toggleAllPageRowsSelected(!!value)
+            }
+            aria-label="Seleccionar todo"
+          />
+        ),
+        cell: ({ row }) => (
+          <Checkbox
+            checked={row.getIsSelected()}
+            onClick={rangeSelection.onCheckboxClick}
+            onCheckedChange={(value) =>
+              rangeSelection.handleCheckedChange(row, !!value)
+            }
+            aria-label="Seleccionar fila (mantén Shift para seleccionar un rango)"
+          />
+        ),
+        enableSorting: false,
+        enableGlobalFilter: false,
+      },
       {
         accessorKey: "name",
         header: "Nombre",
@@ -183,7 +246,7 @@ export function AudioDeploymentsShell({
         enableGlobalFilter: false,
       },
     ],
-    [isEditor]
+    [isEditor, rangeSelection]
   );
 
   const filteredData = useMemo(() => {
@@ -196,45 +259,81 @@ export function AudioDeploymentsShell({
   const table = useReactTable({
     data: filteredData,
     columns,
-    state: { sorting, globalFilter },
+    state: { sorting, globalFilter, rowSelection },
     onSortingChange: setSorting,
     onGlobalFilterChange: setGlobalFilter,
+    onRowSelectionChange: setRowSelection,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
+    enableRowSelection: true,
     getRowId: (row) => String(row.id),
   });
+
+  const selectedRows = table.getFilteredSelectedRowModel().rows;
 
   const filteredRowIds = useMemo(() => {
     return new Set(table.getFilteredRowModel().rows.map((r) => r.id));
   }, [table, globalFilter, sorting]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Re-group based on project filter
-  const sortedGroups = useMemo(() => {
-    if (!projectFilter) return groups;
-    return groups.filter((g) => g.projectLabel === projectFilter);
-  }, [groups, projectFilter]);
+  // Map of deployment id → index in TanStack's sorted row model so we can
+  // respect column-sort order within each project group.
+  const sortedRows = table.getRowModel().rows;
+  const sortedRowOrder = useMemo(() => {
+    const map = new Map<number, number>();
+    sortedRows.forEach((r, i) => map.set(r.original.id, i));
+    return map;
+  }, [sortedRows]);
 
-  const handleScanAll = () => {
+  const sortedGroups = useMemo(() => {
+    const filtered = projectFilter
+      ? groups.filter((g) => g.projectLabel === projectFilter)
+      : groups;
+    return filtered.map((g) => ({
+      ...g,
+      deployments: [...g.deployments].sort(
+        (a, b) =>
+          (sortedRowOrder.get(a.id) ?? 0) - (sortedRowOrder.get(b.id) ?? 0)
+      ),
+    }));
+  }, [groups, projectFilter, sortedRowOrder]);
+
+  // Flat ordered list of currently visible deployment IDs, in the same order
+  // they render: across groups, skipping collapsed ones, respecting filters.
+  // Drives the shift+click range selection.
+  const visibleOrderedIds = useMemo(() => {
+    const ids: number[] = [];
+    for (const group of sortedGroups) {
+      if (collapsedGroups.has(group.projectLabel)) continue;
+      for (const dep of group.deployments) {
+        if (filteredRowIds.has(String(dep.id))) ids.push(dep.id);
+      }
+    }
+    return ids;
+  }, [sortedGroups, collapsedGroups, filteredRowIds]);
+  rangeSelection.setVisibleOrderedIds(visibleOrderedIds);
+
+  /**
+   * Enqueue a background audio_sync job. The actual work (Drive listing +
+   * audio_files reconciliation) runs server-side; the floating progress
+   * widget shows live progress and survives navigation.
+   */
+  const triggerSync = (cameraTrapProjectId?: number) => {
     startSync(async () => {
       setSyncMessage(null);
-      try {
-        const result = await enqueueAudioSyncJob();
-        if (!result.success) {
-          setSyncMessage(`Error: ${result.error}`);
-          return;
-        }
-        setSyncMessage(
-          "Sincronización iniciada. Puedes seguir trabajando — el progreso se muestra en la esquina inferior derecha."
-        );
-        // Wake FloatingJobProgress immediately instead of waiting up to 3s
-        // for the next mount-time poll tick.
-        window.dispatchEvent(new Event("job-started"));
-      } catch (err) {
-        setSyncMessage(
-          err instanceof Error ? err.message : "Error inesperado"
-        );
+      const result = await enqueueAudioSyncJob(cameraTrapProjectId);
+      if (!result.success) {
+        setSyncMessage(`Error: ${result.error}`);
+        return;
       }
+      const scopeLabel = cameraTrapProjectId
+        ? distinctProjects.find((p) => p.id === cameraTrapProjectId)?.name ?? "proyecto"
+        : "todos los proyectos";
+      setSyncMessage(
+        `Sincronización iniciada para ${scopeLabel}. Puedes seguir trabajando — el progreso se muestra en la esquina inferior derecha.`
+      );
+      setLastSyncAt(new Date().toISOString());
+      window.dispatchEvent(new Event("job-started"));
     });
   };
 
@@ -271,51 +370,121 @@ export function AudioDeploymentsShell({
 
       {/* Toolbar */}
       <div className="mb-4 flex flex-wrap items-center gap-3">
-        <div className="relative flex-1 min-w-[200px] max-w-sm">
-          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Buscar por nombre o sitio..."
-            value={globalFilter}
-            onChange={(e) => setGlobalFilter(e.target.value)}
-            className="pl-9"
-          />
-        </div>
-
-        <select
-          value={projectFilter}
-          onChange={(e) => setProjectFilter(e.target.value)}
-          className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-        >
-          <option value="">Todos los proyectos</option>
-          {distinctProjects.map((p) => (
-            <option key={p.id} value={p.name}>
-              {p.name}
-            </option>
-          ))}
-        </select>
-
         {isEditor && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleScanAll}
-            disabled={syncing}
-          >
-            {syncing ? (
-              <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
-            ) : (
-              <FolderSync className="h-4 w-4 mr-1.5" />
-            )}
-            Escanear Todo
-          </Button>
+          <div className="flex items-center gap-2">
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div className="inline-flex">
+                    <Button
+                      variant="default"
+                      size="sm"
+                      onClick={() => triggerSync()}
+                      disabled={syncing}
+                      className="rounded-r-none"
+                    >
+                      {syncing ? (
+                        <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+                      ) : (
+                        <RefreshCw className="h-4 w-4 mr-1.5" />
+                      )}
+                      Sincronizar audio
+                    </Button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          variant="default"
+                          size="sm"
+                          disabled={syncing || distinctProjects.length === 0}
+                          className="rounded-l-none border-l border-primary-foreground/20 px-2"
+                          aria-label="Sincronizar audio de un proyecto específico"
+                        >
+                          <ChevronDown className="h-4 w-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuLabel className="text-xs">
+                          Sincronizar solo…
+                        </DropdownMenuLabel>
+                        <DropdownMenuSeparator />
+                        {distinctProjects.map((p) => (
+                          <DropdownMenuItem
+                            key={p.id}
+                            onSelect={() => triggerSync(p.id)}
+                          >
+                            {p.name}
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="max-w-xs">
+                  <p className="text-xs leading-relaxed">
+                    Inicia una sincronización en segundo plano: lista los
+                    archivos de audio de cada instalación en Google Drive
+                    y los reconcilia con el índice local. Puedes navegar a
+                    otras páginas mientras se ejecuta.
+                  </p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+            <span className="text-xs text-muted-foreground tabular-nums">
+              {lastSyncAt
+                ? `Última sincronización ${formatRelativeEs(lastSyncAt)}`
+                : "Nunca sincronizado"}
+            </span>
+          </div>
         )}
+
+        <div className="ml-auto flex flex-wrap items-center gap-3">
+          <select
+            value={projectFilter}
+            onChange={(e) => setProjectFilter(e.target.value)}
+            className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+          >
+            <option value="">Todos los proyectos</option>
+            {distinctProjects.map((p) => (
+              <option key={p.id} value={p.name}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+
+          <div className="relative w-[260px]">
+            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Buscar por nombre o sitio..."
+              value={globalFilter}
+              onChange={(e) => setGlobalFilter(e.target.value)}
+              className="pl-9"
+            />
+          </div>
+        </div>
       </div>
 
-      {/* Sync message */}
+      {/* Sync message — brief banner; live progress lives in the floating widget */}
       {syncMessage && (
         <p className="mb-3 text-sm text-muted-foreground bg-muted/50 px-3 py-2 rounded-md">
           {syncMessage}
         </p>
+      )}
+
+      {/* Selection toolbar — actions wired up in Phase 5 */}
+      {selectedRows.length > 0 && (
+        <div className="mb-3 flex items-center gap-3 px-3 py-2 bg-muted/50 rounded-md">
+          <span className="text-sm font-medium">
+            {selectedRows.length} seleccionado(s)
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setRowSelection({})}
+            className="ml-auto"
+          >
+            Deseleccionar
+          </Button>
+        </div>
       )}
 
       {/* Table */}
@@ -332,7 +501,11 @@ export function AudioDeploymentsShell({
                         ? "cursor-pointer select-none"
                         : ""
                     }
-                    onClick={header.column.getToggleSortingHandler()}
+                    onClick={
+                      header.column.id !== "select"
+                        ? header.column.getToggleSortingHandler()
+                        : undefined
+                    }
                   >
                     <span className="flex items-center gap-1">
                       {header.isPlaceholder
@@ -341,9 +514,10 @@ export function AudioDeploymentsShell({
                             header.column.columnDef.header,
                             header.getContext()
                           )}
-                      {header.column.getCanSort() && (
-                        <SortIcon direction={header.column.getIsSorted()} />
-                      )}
+                      {header.column.getCanSort() &&
+                        header.column.id !== "select" && (
+                          <SortIcon direction={header.column.getIsSorted()} />
+                        )}
                     </span>
                   </TableHead>
                 ))}
@@ -358,12 +532,15 @@ export function AudioDeploymentsShell({
                   className="text-center text-muted-foreground py-8"
                 >
                   No hay instalaciones con audio.
-                  {isEditor && ' Usa "Escanear Todo" para buscar archivos.'}
+                  {isEditor && ' Usa "Sincronizar audio" para buscar archivos.'}
                 </TableCell>
               </TableRow>
             ) : (
               sortedGroups.map((group) => {
                 const isCollapsed = collapsedGroups.has(group.projectLabel);
+                const selectableDepIds = group.deployments
+                  .filter((d) => filteredRowIds.has(String(d.id)))
+                  .map((d) => d.id);
                 return (
                   <Fragment key={group.projectLabel}>
                     {/* Group header */}
@@ -373,6 +550,12 @@ export function AudioDeploymentsShell({
                     >
                       <TableCell colSpan={columns.length} className="py-2.5 px-3">
                         <div className="flex items-center gap-2">
+                          <GroupSelectAllCheckbox
+                            groupDeploymentIds={selectableDepIds}
+                            rowSelection={rowSelection}
+                            setRowSelection={setRowSelection}
+                            groupLabel={group.projectLabel}
+                          />
                           <ChevronRight
                             className={`h-4 w-4 transition-transform shrink-0 ${!isCollapsed ? "rotate-90" : ""}`}
                           />
@@ -399,7 +582,8 @@ export function AudioDeploymentsShell({
                         return (
                           <TableRow
                             key={row.id}
-                            className={`cursor-pointer hover:bg-muted/50 ${dep.excluded ? "opacity-50" : ""}`}
+                            className={`group/row cursor-pointer hover:bg-muted/50 ${dep.excluded ? "opacity-50" : ""}`}
+                            data-state={row.getIsSelected() ? "selected" : undefined}
                             onClick={() => router.push(`/audio/${dep.id}`)}
                           >
                             {row.getVisibleCells().map((cell) => (
@@ -448,4 +632,22 @@ function SummaryStat({
       <span className={`font-semibold tabular-nums ${valueClass}`}>{value}</span>
     </span>
   );
+}
+
+/** Compact Spanish relative time, e.g. "hace 5 min", "hace 2 h", "hace 3 d". */
+function formatRelativeEs(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "";
+  const diffSec = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  if (diffSec < 60) return "hace unos segundos";
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `hace ${diffMin} min`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `hace ${diffHr} h`;
+  const diffDay = Math.floor(diffHr / 24);
+  if (diffDay < 30) return `hace ${diffDay} d`;
+  const diffMo = Math.floor(diffDay / 30);
+  if (diffMo < 12) return `hace ${diffMo} mes${diffMo === 1 ? "" : "es"}`;
+  const diffYr = Math.floor(diffDay / 365);
+  return `hace ${diffYr} año${diffYr === 1 ? "" : "s"}`;
 }

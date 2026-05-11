@@ -4,14 +4,12 @@ import { requirePermission } from "@/lib/auth";
 import { db } from "@/db";
 import { deployments, ibuttonUploads, ibuttonReadings } from "@/db/schema";
 import { eq, sql, and, isNotNull, gt } from "drizzle-orm";
-import { fetchEntities } from "@/lib/odk-client";
-import {
-  BIOCHOCO_PROJECT_ID,
-  BIOCHOCO_DATASET_SITES,
-} from "@/lib/odk-constants";
 import { loadOdkDateTimes } from "@/lib/odk-deployment-window";
-import type { OdkSiteEntity } from "@/lib/odk-types";
 import { listFolderFiles, downloadFileToBuffer } from "@/lib/drive-client";
+import {
+  loadSiteHabitatMap,
+  extractSiteIdFromDeploymentName,
+} from "@/lib/habitat-lookup";
 import { parseIbuttonXlsx } from "./parser";
 import { revalidatePath } from "next/cache";
 import type { ActionResult } from "@/lib/types";
@@ -28,36 +26,9 @@ import { computeCoverage, computeMaxGapSeconds } from "./coverage";
 
 const XLSX_EXTENSIONS = new Set([".xlsx"]);
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/** Build site_id → habitat_type map from ODK entities. */
-async function loadSiteHabitatMap(): Promise<Map<string, string>> {
-  const sites = await fetchEntities<OdkSiteEntity>(
-    BIOCHOCO_PROJECT_ID,
-    BIOCHOCO_DATASET_SITES
-  );
-  const map = new Map<string, string>();
-  for (const site of sites) {
-    if (site.habitat_type) {
-      // Key by site_id (e.g., "SEC-006") for robust matching
-      if (site.site_id) map.set(site.site_id, site.habitat_type);
-      // Also key by site_name and label as fallbacks
-      if (site.site_name) map.set(site.site_name, site.habitat_type);
-      if (site.label && site.label !== site.site_name) {
-        map.set(site.label, site.habitat_type);
-      }
-    }
-  }
-  return map;
-}
-
-/** Extract site_id from deployment name, e.g., "SEC-006_V1" → "SEC-006". */
-function extractSiteId(deploymentName: string): string | null {
-  const match = deploymentName.match(/^(.+?)_V\d+$/i);
-  return match ? match[1] : null;
-}
+// Habitat lookup helpers live in `@/lib/habitat-lookup` (shared with
+// audio + dashboard sections so all modalities bucket deployments the same way).
+const extractSiteId = extractSiteIdFromDeploymentName;
 
 // ---------------------------------------------------------------------------
 // Public actions

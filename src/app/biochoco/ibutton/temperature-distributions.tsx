@@ -3,35 +3,63 @@
 import { useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { HABITAT_COLORS } from "@/app/biochoco/habitat/types";
-import {
-  BoxPlotChart,
-  TEMP_STAT_LABEL,
-  TEMP_STAT_DESCRIPTION,
-  type BoxPlotGroup,
-  type TempStat,
-} from "./box-plot-chart";
+import { BoxPlot, type BoxPlotGroup, type BoxPlotPoint } from "@/components/box-plot";
 import type { DeploymentStatPoint } from "./types";
+
+type TempStat = "tempMin" | "tempMean" | "tempMax";
+
+const TEMP_STAT_LABEL: Record<TempStat, string> = {
+  tempMin: "Mínima",
+  tempMean: "Promedio",
+  tempMax: "Máxima",
+};
+
+const TEMP_STAT_DESCRIPTION: Record<TempStat, string> = {
+  tempMin: "La temperatura más fría registrada en cada despliegue.",
+  tempMean: "La temperatura promedio de cada despliegue.",
+  tempMax: "La temperatura más caliente registrada en cada despliegue.",
+};
 
 const STATS: TempStat[] = ["tempMin", "tempMean", "tempMax"];
 
-function groupByHabitat(points: DeploymentStatPoint[]): BoxPlotGroup[] {
-  const by = new Map<string, BoxPlotGroup>();
+function buildGroups(
+  points: DeploymentStatPoint[],
+  stat: TempStat,
+): BoxPlotGroup[] {
+  const by = new Map<string, { label: string; color?: string; points: BoxPlotPoint[] }>();
   for (const p of points) {
-    const existing = by.get(p.habitatType);
-    if (existing) {
-      existing.points.push(p);
-    } else {
-      by.set(p.habitatType, {
-        key: p.habitatType,
-        label: p.habitatLabel,
-        color: HABITAT_COLORS[p.habitatType],
-        points: [p],
-      });
-    }
+    const value = p[stat];
+    if (value == null || !Number.isFinite(value)) continue;
+    const entry = by.get(p.habitatType) ?? {
+      label: p.habitatLabel,
+      color: HABITAT_COLORS[p.habitatType],
+      points: [],
+    };
+    entry.points.push({
+      id: p.deploymentId,
+      value,
+      primaryLabel: p.deploymentName,
+      secondaryLabel: p.siteName ?? undefined,
+      footnote: `${TEMP_STAT_LABEL[stat]}: ${value.toFixed(1)}°C`,
+    });
+    by.set(p.habitatType, entry);
   }
-  return Array.from(by.values()).sort((a, b) =>
-    a.label.localeCompare(b.label),
-  );
+  return Array.from(by.entries())
+    .map(([key, entry]) => ({
+      key,
+      label: entry.label,
+      color: entry.color,
+      points: entry.points,
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function formatTempValue(v: number): string {
+  return `${v.toFixed(1)}°C`;
+}
+
+function formatTempTick(v: number): string {
+  return v.toFixed(1);
 }
 
 export function TemperatureDistributions({
@@ -39,7 +67,15 @@ export function TemperatureDistributions({
 }: {
   points: DeploymentStatPoint[];
 }) {
-  const groups = useMemo(() => groupByHabitat(points), [points]);
+  const groupsByStat = useMemo(() => {
+    return STATS.reduce<Record<TempStat, BoxPlotGroup[]>>(
+      (acc, stat) => {
+        acc[stat] = buildGroups(points, stat);
+        return acc;
+      },
+      { tempMin: [], tempMean: [], tempMax: [] },
+    );
+  }, [points]);
 
   if (points.length === 0) {
     return (
@@ -68,12 +104,16 @@ export function TemperatureDistributions({
       <CardContent>
         <div className="space-y-4">
           {STATS.map((stat) => (
-            <BoxPlotChart
+            <BoxPlot
               key={stat}
-              stat={stat}
+              groups={groupsByStat[stat]}
               title={TEMP_STAT_LABEL[stat]}
               description={TEMP_STAT_DESCRIPTION[stat]}
-              groups={groups}
+              valueLabel={TEMP_STAT_LABEL[stat]}
+              unitLabel="°C"
+              formatValue={formatTempValue}
+              formatTickLabel={formatTempTick}
+              emptyMessage="No hay datos."
             />
           ))}
         </div>

@@ -246,6 +246,9 @@ const CAMERA_TRAP_DDL = `
     sample_rate INTEGER,
     cache_path TEXT,
     spectrogram_path TEXT,
+    compressed INTEGER NOT NULL DEFAULT 0,
+    original_file_size INTEGER,
+    original_drive_revision_id TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
   CREATE UNIQUE INDEX idx_audio_files_deployment_drive_file

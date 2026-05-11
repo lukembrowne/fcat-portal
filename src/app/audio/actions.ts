@@ -67,6 +67,14 @@ export interface AudioDeploymentRow {
   isBirdnetProcessing: boolean;
   excluded: boolean;
   displayStatus: string;
+  /** Number of audio_files where compressed=true AND filename LIKE %.flac (truly compressed). */
+  compressedFileCount: number;
+  /** Number of audio_files where compressed=false (still WAV). */
+  uncompressedFileCount: number;
+  /** Number of compressed files revertible via in-portal action (priorRev anchor present). */
+  revertibleFileCount: number;
+  /** True if any audio_compression / revert_audio_compression job is pending or processing for this deployment. */
+  isAudioCompressionProcessing: boolean;
 }
 
 export interface AudioProject {
@@ -160,6 +168,32 @@ export async function fetchAudioDeployments(): Promise<
         AND job_type IN ('birdnet', 'acoustic_indices', 'audio_analysis')
         AND status IN ('pending', 'processing')
       )`,
+      compressedFileCount: sql<number>`(
+        SELECT COUNT(*) FROM audio_files
+        WHERE audio_files.deployment_id = ${deployments.id}
+        AND audio_files.compressed = 1
+        AND lower(audio_files.filename) LIKE '%.flac'
+      )`,
+      uncompressedFileCount: sql<number>`(
+        SELECT COUNT(*) FROM audio_files
+        WHERE audio_files.deployment_id = ${deployments.id}
+        AND audio_files.compressed = 0
+        AND lower(audio_files.filename) LIKE '%.wav'
+        AND audio_files.drive_file_id IS NOT NULL
+      )`,
+      revertibleFileCount: sql<number>`(
+        SELECT COUNT(*) FROM audio_files
+        WHERE audio_files.deployment_id = ${deployments.id}
+        AND audio_files.compressed = 1
+        AND audio_files.original_drive_revision_id IS NOT NULL
+        AND audio_files.drive_file_id IS NOT NULL
+      )`,
+      isAudioCompressionProcessingRaw: sql<number>`(
+        SELECT COUNT(*) FROM biochoco_processing_jobs
+        WHERE deployment_id = ${deployments.id}
+        AND job_type IN ('audio_compression', 'revert_audio_compression')
+        AND status IN ('pending', 'processing')
+      )`,
     })
     .from(deployments)
     .leftJoin(
@@ -187,9 +221,11 @@ export async function fetchAudioDeployments(): Promise<
       displayStatus = "scanned";
     }
 
+    const { isAudioCompressionProcessingRaw, ...rest } = row;
     return {
-      ...row,
+      ...rest,
       isBirdnetProcessing: row.isBirdnetProcessing > 0,
+      isAudioCompressionProcessing: isAudioCompressionProcessingRaw > 0,
       displayStatus,
     };
   });

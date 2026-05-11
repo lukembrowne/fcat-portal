@@ -37,6 +37,26 @@ export async function compressDeploymentAudio(
   return result;
 }
 
+/**
+ * Dry-run: encode + verify into /tmp, never touch Drive or DB beyond the
+ * `processingJobs` row (and an `audio_compression_dry_run` activity log entry).
+ * Used during Phase 4.5 to measure empirical compression ratio + verify-fail
+ * rate across the corpus before any irreversible mutation.
+ */
+export async function compressDeploymentAudioDryRun(
+  deploymentId: number,
+): Promise<ActionResult<{ jobId: number }>> {
+  const user = await requirePermission("grabaciones", "admin");
+  await requireDeploymentAccess(user, deploymentId);
+  const result = await enqueueAudioCompressionJob({
+    deploymentId,
+    actorEmail: user.email,
+    dryRun: true,
+  });
+  if (result.success) revalidatePath(AUDIO_PATH);
+  return result;
+}
+
 export async function batchCompressDeploymentAudio(
   deploymentIds: number[],
   options?: { dryRun?: boolean },

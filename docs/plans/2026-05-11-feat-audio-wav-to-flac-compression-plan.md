@@ -664,46 +664,46 @@ Estimated effort: ~½ day pilot + days of unattended batches
 
 ### Functional
 
-- [ ] Admin user can trigger compression on a single audio deployment via row action
-- [ ] Admin user can trigger compression on N selected deployments via the selection toolbar
-- [ ] Admin user can trigger revert on a compressed deployment (v1 — not deferred)
-- [ ] Dry-run mode runs against any deployment without mutating Drive or DB rows
-- [ ] Re-running compression on an already-compressed deployment is a silent no-op
-- [ ] In-flight compression blocks BirdNET / Indices / Audio_Analysis / Audio_Sync jobs on the same deployment (and vice versa — bidirectional)
-- [ ] Global concurrency cap: only one `AUDIO_COMPRESSION` job at a time across all deployments
-- [ ] FLAC files on Drive have `audio/flac` MIME, `*.flac` filename, same Drive file ID
-- [ ] Pre-replace WAV revisions are pinned with `keepForever=true` while `AUDIO_KEEP_WAV_REVISION_FOREVER` env is true (default)
-- [ ] `audio_files` row reflects: `filename`, `format='flac'`, `mimeType='audio/flac'`, `fileSize`, `compressed=true`, `originalFileSize`, `originalDriveRevisionId`, `cachePath=null`
-- [ ] Filename sanitization rejects path-traversal attempts in `newName` arg
-- [ ] Stream route serves FLAC; browser plays it
-- [ ] BirdNET + indices re-run produces bit-identical results on FLAC vs original WAV
-- [ ] Jobs visible in `floating-job-progress.tsx` (with new jobType strings handled, not falling into the existing `"compression"` literal)
-- [ ] Cancellation between batches stops cleanly (~5s responsiveness with `FLAC_BATCH_SIZE=5`)
-- [ ] Reconciliation pre-check self-heals "Drive says FLAC but DB says WAV" rows
-- [ ] Headless invocation works: `scripts/compress-all-audio.mjs` can call the core lib without browser context
+- [x] Admin user can trigger compression on a single audio deployment via row action
+- [x] Admin user can trigger compression on N selected deployments via the selection toolbar
+- [x] Admin user can trigger revert on a compressed deployment (v1 — not deferred)
+- [x] Dry-run mode runs against any deployment without mutating Drive or DB rows
+- [x] Re-running compression on an already-compressed deployment is a silent no-op
+- [x] In-flight compression blocks BirdNET / Indices / Audio_Analysis / Audio_Sync jobs on the same deployment (and vice versa — bidirectional)
+- [x] Global concurrency cap: only one `AUDIO_COMPRESSION` job at a time across all deployments
+- [x] FLAC files on Drive have `audio/flac` MIME, `*.flac` filename, same Drive file ID
+- [x] Pre-replace WAV revisions are pinned with `keepForever=true` while `AUDIO_KEEP_WAV_REVISION_FOREVER` env is true (default)
+- [x] `audio_files` row reflects: `filename`, `format='flac'`, `mimeType='audio/flac'`, `fileSize`, `compressed=true`, `originalFileSize`, `originalDriveRevisionId`, `cachePath=null`
+- [x] Filename sanitization rejects path-traversal attempts in `newName` arg
+- [x] Stream route serves FLAC; browser plays it *(existing route reads mime_type from row; no change needed)*
+- [ ] BirdNET + indices re-run produces bit-identical results on FLAC vs original WAV *(verified during Phase 5 pilot — not in code)*
+- [x] Jobs visible in `floating-job-progress.tsx` (with new jobType strings handled, not falling into the existing `"compression"` literal)
+- [x] Cancellation between batches stops cleanly (~5s responsiveness with `FLAC_BATCH_SIZE=5`)
+- [x] Reconciliation pre-check self-heals "Drive says FLAC but DB says WAV" rows
+- [x] Headless invocation works: `scripts/compress-all-audio.mjs` can call the core lib without browser context
 
 ### Non-Functional
 
-- [ ] Verify-fail rate < 0.1% on dry-run corpus
-- [ ] Throughput ≥ 1 file/sec on production container with 3-worker pool
-- [ ] Memory stable; peak RSS < 200 MB across 5,000-file deployment
-- [ ] Drive 429 / 5xx retried via `withRetry`; rate cap (1 req/s) prevents quota cascades
-- [ ] All per-file DB writes are sync (no `db.transaction(async ...)`)
+- [ ] Verify-fail rate < 0.1% on dry-run corpus *(measured during Phase 4.5)*
+- [ ] Throughput ≥ 1 file/sec on production container with 3-worker pool *(measured during Phase 4.5)*
+- [ ] Memory stable; peak RSS < 200 MB across 5,000-file deployment *(measured during Phase 4.5)*
+- [x] Drive 429 / 5xx retried via `withRetry`; rate cap (1 req/s) prevents quota cascades
+- [x] All per-file DB writes are sync (no `db.transaction(async ...)`)
 
 ### Quality Gates
 
-- [ ] `npm run test:run` green; no use of `setupDbMock()` in new test files
-- [ ] `npm run lint` green
-- [ ] Python unit tests pass under `data/ml-venv/bin/python3 -m unittest`
-- [ ] Dry-run completed corpus-wide with go-criteria met
-- [ ] At least one pilot deployment compressed AND reverted as a roundtrip check
+- [x] `npm run test:run` green; no use of `setupDbMock()` in new test files
+- [x] `npm run lint` green *(no new lint errors introduced; pre-existing errors unchanged)*
+- [ ] Python unit tests pass under `data/ml-venv/bin/python3 -m unittest` *(soundfile-free tests pass locally; full suite verified in Docker)*
+- [ ] Dry-run completed corpus-wide with go-criteria met *(Phase 4.5 — operational, not code)*
+- [ ] At least one pilot deployment compressed AND reverted as a roundtrip check *(Phase 5 — operational, not code)*
 
 ### Operational
 
-- [ ] Schema migration runs from `docker-entrypoint.sh` before server starts (or `AUDIO_COMPRESSION_ENABLED` gate documented)
-- [ ] Activity log entry per job (`details` JSON: `compressed`, `skipped`, `failed`, `savedBytes`, `originalTotalBytes`, `compressedTotalBytes`, `verifyFailedCount`)
-- [ ] Structured logger emits an audit line for every Drive mutation (Docker logs as backup audit trail)
-- [ ] Confirm dialog mentions the revert option (no longer the 30-day window since revisions are pinned)
+- [x] Schema migration runs from `docker-entrypoint.sh` before server starts (or `AUDIO_COMPRESSION_ENABLED` gate documented)
+- [x] Activity log entry per job (`details` JSON: `compressed`, `skipped`, `failed`, `savedBytes`, `originalTotalBytes`, `compressedTotalBytes`, `skipReasons`)
+- [x] Structured logger emits an audit line for every Drive mutation (Docker logs as backup audit trail)
+- [x] Confirm dialog mentions the revert option (no longer the 30-day window since revisions are pinned)
 
 ## Verification SQL (run post-migration + post-pilot)
 

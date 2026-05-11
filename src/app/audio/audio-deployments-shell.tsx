@@ -217,17 +217,19 @@ export function AudioDeploymentsShell({
 
   const handleScanAll = () => {
     startSync(async () => {
-      setSyncMessage("Encolando sincronización...");
+      setSyncMessage(null);
       try {
         const result = await enqueueAudioSyncJob();
-        if (result.success) {
-          setSyncMessage(
-            "Sincronización en curso — sigue el progreso en la barra inferior."
-          );
-          router.refresh();
-        } else {
-          setSyncMessage(result.error);
+        if (!result.success) {
+          setSyncMessage(`Error: ${result.error}`);
+          return;
         }
+        setSyncMessage(
+          "Sincronización iniciada. Puedes seguir trabajando — el progreso se muestra en la esquina inferior derecha."
+        );
+        // Wake FloatingJobProgress immediately instead of waiting up to 3s
+        // for the next mount-time poll tick.
+        window.dispatchEvent(new Event("job-started"));
       } catch (err) {
         setSyncMessage(
           err instanceof Error ? err.message : "Error inesperado"

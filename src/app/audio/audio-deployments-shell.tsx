@@ -83,7 +83,7 @@ export function AudioDeploymentsShell({
     { id: "name", desc: false },
   ]);
   const [globalFilter, setGlobalFilter] = useState("");
-  const [projectFilter, setProjectFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
   // Shift+click range selection across the (filter-, group-, and collapse-aware)
   // visible row order. Shared hook keeps refs internally so the cell renderer
@@ -250,11 +250,9 @@ export function AudioDeploymentsShell({
   );
 
   const filteredData = useMemo(() => {
-    if (!projectFilter) return initialDeployments;
-    return initialDeployments.filter(
-      (d) => d.ctProjectName === projectFilter
-    );
-  }, [initialDeployments, projectFilter]);
+    if (!statusFilter) return initialDeployments;
+    return initialDeployments.filter((d) => d.displayStatus === statusFilter);
+  }, [initialDeployments, statusFilter]);
 
   const table = useReactTable({
     data: filteredData,
@@ -286,17 +284,22 @@ export function AudioDeploymentsShell({
   }, [sortedRows]);
 
   const sortedGroups = useMemo(() => {
-    const filtered = projectFilter
-      ? groups.filter((g) => g.projectLabel === projectFilter)
-      : groups;
-    return filtered.map((g) => ({
-      ...g,
-      deployments: [...g.deployments].sort(
-        (a, b) =>
-          (sortedRowOrder.get(a.id) ?? 0) - (sortedRowOrder.get(b.id) ?? 0)
-      ),
-    }));
-  }, [groups, projectFilter, sortedRowOrder]);
+    return groups
+      .map((g) => {
+        const deps = statusFilter
+          ? g.deployments.filter((d) => d.displayStatus === statusFilter)
+          : g.deployments;
+        return {
+          ...g,
+          deployments: [...deps].sort(
+            (a, b) =>
+              (sortedRowOrder.get(a.id) ?? 0) - (sortedRowOrder.get(b.id) ?? 0)
+          ),
+          totalCount: deps.length,
+        };
+      })
+      .filter((g) => g.deployments.length > 0);
+  }, [groups, statusFilter, sortedRowOrder]);
 
   // Flat ordered list of currently visible deployment IDs, in the same order
   // they render: across groups, skipping collapsed ones, respecting filters.
@@ -439,16 +442,16 @@ export function AudioDeploymentsShell({
 
         <div className="ml-auto flex flex-wrap items-center gap-3">
           <select
-            value={projectFilter}
-            onChange={(e) => setProjectFilter(e.target.value)}
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
             className="h-9 rounded-md border border-input bg-background px-3 text-sm"
           >
-            <option value="">Todos los proyectos</option>
-            {distinctProjects.map((p) => (
-              <option key={p.id} value={p.name}>
-                {p.name}
-              </option>
-            ))}
+            <option value="">Todos los estados</option>
+            <option value="unscanned">Sin escanear</option>
+            <option value="scanned">Escaneados</option>
+            <option value="birdnet_processing">Procesando</option>
+            <option value="analyzed">Por revisar</option>
+            <option value="reviewed">Revisados</option>
           </select>
 
           <div className="relative w-[260px]">
@@ -531,8 +534,14 @@ export function AudioDeploymentsShell({
                   colSpan={columns.length}
                   className="text-center text-muted-foreground py-8"
                 >
-                  No hay instalaciones con audio.
-                  {isEditor && ' Usa "Sincronizar audio" para buscar archivos.'}
+                  {statusFilter || globalFilter
+                    ? "No hay instalaciones que coincidan con el filtro."
+                    : (
+                      <>
+                        No hay instalaciones con audio.
+                        {isEditor && ' Usa "Sincronizar audio" para buscar archivos.'}
+                      </>
+                    )}
                 </TableCell>
               </TableRow>
             ) : (
@@ -608,7 +617,7 @@ export function AudioDeploymentsShell({
       {/* Row count */}
       <p className="mt-4 text-sm text-muted-foreground">
         {table.getFilteredRowModel().rows.length} instalaciones
-        {(globalFilter || projectFilter) && " (filtradas)"}
+        {(globalFilter || statusFilter) && " (filtradas)"}
       </p>
     </div>
   );

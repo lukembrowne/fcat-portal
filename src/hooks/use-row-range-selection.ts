@@ -5,6 +5,35 @@ import type { Dispatch, MouseEvent, SetStateAction } from "react";
 import type { Row, RowSelectionState } from "@tanstack/react-table";
 
 /**
+ * Pure helper: given an existing selection map, an anchor id, a current id,
+ * the ordered list of visible ids, and whether to add or remove — return
+ * the new selection map. Returns `null` to mean "no anchored range applies,
+ * fall back to toggling just `currentId`."
+ *
+ * Extracted so we can unit-test the selection algebra without a React tree.
+ */
+export function computeRangeSelection(
+  prev: RowSelectionState,
+  anchorId: number | null,
+  currentId: number,
+  orderedIds: number[],
+  checked: boolean
+): RowSelectionState | null {
+  if (anchorId === null || anchorId === currentId) return null;
+  const fromIdx = orderedIds.indexOf(anchorId);
+  const toIdx = orderedIds.indexOf(currentId);
+  if (fromIdx === -1 || toIdx === -1) return null;
+  const [start, end] = fromIdx < toIdx ? [fromIdx, toIdx] : [toIdx, fromIdx];
+  const rangeIds = orderedIds.slice(start, end + 1);
+  const next = { ...prev };
+  for (const id of rangeIds) {
+    if (checked) next[String(id)] = true;
+    else delete next[String(id)];
+  }
+  return next;
+}
+
+/**
  * Shift+click row range selection over an ordered list of row IDs.
  *
  * Pairs with `@tanstack/react-table`'s `rowSelection` state. The page owns the
@@ -42,27 +71,24 @@ export function useRowRangeSelection<TData extends { id: number }>(
 
   const handleCheckedChange = useCallback(
     (row: Row<TData>, checked: boolean) => {
-      const anchorId = lastSelectedIdRef.current;
-      const ids = visibleOrderedIdsRef.current;
       const rowId = row.original.id;
-      if (shiftClickRef.current && anchorId !== null && anchorId !== rowId) {
-        const fromIdx = ids.indexOf(anchorId);
-        const toIdx = ids.indexOf(rowId);
-        if (fromIdx !== -1 && toIdx !== -1) {
-          const [start, end] =
-            fromIdx < toIdx ? [fromIdx, toIdx] : [toIdx, fromIdx];
-          const rangeIds = ids.slice(start, end + 1);
-          setRowSelection((prev) => {
-            const next = { ...prev };
-            for (const id of rangeIds) {
-              if (checked) next[String(id)] = true;
-              else delete next[String(id)];
-            }
+      if (shiftClickRef.current) {
+        let applied = false;
+        setRowSelection((prev) => {
+          const next = computeRangeSelection(
+            prev,
+            lastSelectedIdRef.current,
+            rowId,
+            visibleOrderedIdsRef.current,
+            checked
+          );
+          if (next) {
+            applied = true;
             return next;
-          });
-        } else {
-          row.toggleSelected(checked);
-        }
+          }
+          return prev;
+        });
+        if (!applied) row.toggleSelected(checked);
       } else {
         row.toggleSelected(checked);
       }

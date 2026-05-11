@@ -165,7 +165,7 @@ export function FloatingJobProgress() {
   const isRevert = jobType === "revert_compression";
   const isBirdnet = jobType === "birdnet";
   const isCompressionLike = isCompression || isRevert;
-  const isDriveSync = jobType === "drive_sync";
+  const isDriveSync = jobType === "drive_sync" || jobType === "audio_sync";
   const isLinkable = !isCompressionLike && !isDriveSync && !isBirdnet;
   const unitLabel = isDriveSync
     ? "instalaciones"

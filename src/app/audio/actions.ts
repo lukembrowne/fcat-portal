@@ -12,10 +12,6 @@ import {
 } from "@/db/schema";
 import { eq, sql, and, isNotNull, inArray, count as drizzleCount } from "drizzle-orm";
 import {
-  listFolderFiles,
-  AUDIO_EXTENSIONS,
-} from "@/lib/drive-client";
-import {
   getUserCameraTrapProjects,
   ctProjectFilter,
   requireDeploymentAccess,
@@ -27,20 +23,7 @@ import path from "path";
 import { log } from "@/lib/log";
 import { ensureAudioCached } from "@/lib/audio-cache";
 import { runBirdNETAnalysis } from "@/lib/birdnet-runner";
-
-// Browser-native audio formats
-const PLAYABLE_FORMATS = new Set(["wav", "mp3", "flac", "ogg", "aac", "m4a"]);
-
-const AUDIO_MIME_TYPES: Record<string, string> = {
-  wav: "audio/wav",
-  mp3: "audio/mpeg",
-  flac: "audio/flac",
-  ogg: "audio/ogg",
-  aac: "audio/aac",
-  m4a: "audio/mp4",
-  wac: "application/octet-stream",
-  w4v: "application/octet-stream",
-};
+import { scanDeploymentAudioInternal } from "@/lib/audio-sync-internals";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -276,7 +259,6 @@ export async function scanDeploymentAudio(
   const user = await requirePermission("grabaciones", "editor");
   await requireDeploymentAccess(user, deploymentId);
 
-  // Get the deployment's audio folder ID
   const [dep] = await db
     .select({
       uploadAudioFolderId: deployments.uploadAudioFolderId,
@@ -291,147 +273,15 @@ export async function scanDeploymentAudio(
     };
   }
 
-  // List files from Drive (recursive — audio files may be in subfolders)
-  const driveFiles = await listFolderFiles(
-    dep.uploadAudioFolderId,
-    AUDIO_EXTENSIONS
-  );
-
-  // Build set of Drive file IDs for cleanup
-  const driveFileIds = new Set(driveFiles.map((f) => f.id));
-
-  // Batch upsert in a synchronous transaction (better-sqlite3 requirement)
-  const result = db.transaction((tx) => {
-    let added = 0;
-    let updated = 0;
-
-    for (const file of driveFiles) {
-      const ext = path.extname(file.name).toLowerCase().replace(".", "");
-      const playable = PLAYABLE_FORMATS.has(ext);
-      const mimeType = AUDIO_MIME_TYPES[ext] ?? "application/octet-stream";
-      const modifiedAt = file.modifiedTime
-        ? new Date(file.modifiedTime)
-        : null;
-
-      const [existing] = tx
-        .select({ id: audioFiles.id })
-        .from(audioFiles)
-        .where(
-          and(
-            eq(audioFiles.deploymentId, deploymentId),
-            eq(audioFiles.driveFileId, file.id)
-          )
-        )
-        .all();
-
-      if (existing) {
-        tx.update(audioFiles)
-          .set({
-            filename: file.name,
-            fileSize: file.size ?? null,
-            mimeType,
-            modifiedAt: modifiedAt ?? null,
-            format: ext,
-            playable,
-          })
-          .where(eq(audioFiles.id, existing.id))
-          .run();
-        updated++;
-      } else {
-        tx.insert(audioFiles)
-          .values({
-            deploymentId,
-            filename: file.name,
-            driveFileId: file.id,
-            fileSize: file.size ?? null,
-            mimeType,
-            modifiedAt: modifiedAt ?? null,
-            format: ext,
-            playable,
-          })
-          .run();
-        added++;
-      }
-    }
-
-    // Remove files that no longer exist on Drive
-    // Soft-delete (null driveFileId) if file has annotations, hard-delete otherwise
-    const dbFiles = tx
-      .select({ id: audioFiles.id, driveFileId: audioFiles.driveFileId })
-      .from(audioFiles)
-      .where(eq(audioFiles.deploymentId, deploymentId))
-      .all();
-
-    for (const dbFile of dbFiles) {
-      if (dbFile.driveFileId && !driveFileIds.has(dbFile.driveFileId)) {
-        // Check if this file has any annotations
-        const [det] = tx
-          .select({ id: audioDetections.id })
-          .from(audioDetections)
-          .where(eq(audioDetections.audioFileId, dbFile.id))
-          .limit(1)
-          .all();
-
-        if (det) {
-          // Soft-delete: preserve row but clear Drive reference
-          tx.update(audioFiles)
-            .set({ driveFileId: null })
-            .where(eq(audioFiles.id, dbFile.id))
-            .run();
-        } else {
-          tx.delete(audioFiles).where(eq(audioFiles.id, dbFile.id)).run();
-        }
-      }
-    }
-
-    return { added, updated, total: driveFiles.length };
+  const result = await scanDeploymentAudioInternal({
+    id: deploymentId,
+    uploadAudioFolderId: dep.uploadAudioFolderId,
   });
 
   revalidatePath("/audio");
   revalidatePath(`/audio/${deploymentId}`);
 
-  return {
-    success: true,
-    data: {
-      added: result.added,
-      updated: result.updated,
-      total: driveFiles.length,
-    },
-  };
-}
-
-export async function scanAllAudio(): Promise<
-  ActionResult<{ scanned: number; errors: number }>
-> {
-  await requirePermission("grabaciones", "editor");
-
-  // Get all deployments with audio folders
-  const deps = await db
-    .select({
-      id: deployments.id,
-      uploadAudioFolderId: deployments.uploadAudioFolderId,
-    })
-    .from(deployments)
-    .where(isNotNull(deployments.uploadAudioFolderId));
-
-  let scanned = 0;
-  let errors = 0;
-
-  for (const dep of deps) {
-    try {
-      await scanDeploymentAudio(dep.id);
-      scanned++;
-    } catch (err) {
-      log.error(
-        { err, deploymentId: dep.id },
-        "[audio] Failed to scan deployment"
-      );
-      errors++;
-    }
-  }
-
-  revalidatePath("/audio");
-  return { success: true, data: { scanned, errors } };
+  return { success: true, data: result };
 }
 
 // ---------------------------------------------------------------------------

@@ -30,7 +30,7 @@ import {
   AudioLines,
   ChevronRight,
 } from "lucide-react";
-import { scanAllAudio } from "./actions";
+import { enqueueAudioSyncJob } from "./drive-actions";
 import type { AudioDeploymentRow, AudioProject } from "./actions";
 import type { AudioProjectGroup } from "./page";
 import { AudioDeploymentRowActions } from "./audio-deployment-row-actions";
@@ -217,12 +217,12 @@ export function AudioDeploymentsShell({
 
   const handleScanAll = () => {
     startSync(async () => {
-      setSyncMessage("Escaneando archivos de audio...");
+      setSyncMessage("Encolando sincronización...");
       try {
-        const result = await scanAllAudio();
+        const result = await enqueueAudioSyncJob();
         if (result.success) {
           setSyncMessage(
-            `${result.data.scanned} escaneado(s). ${result.data.errors > 0 ? `${result.data.errors} error(es).` : "Sin errores."}`
+            "Sincronización en curso — sigue el progreso en la barra inferior."
           );
           router.refresh();
         } else {

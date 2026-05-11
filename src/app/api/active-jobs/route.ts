@@ -78,7 +78,11 @@ export async function GET() {
     const displayName =
       deploymentName ??
       ctProjectName ??
-      (job.jobType === "drive_sync" ? "Sincronización con Drive" : "Trabajo");
+      (job.jobType === "drive_sync"
+        ? "Sincronización con Drive"
+        : job.jobType === "audio_sync"
+          ? "Sincronización de audio"
+          : "Trabajo");
 
     return {
       jobId: job.id,

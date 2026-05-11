@@ -50,8 +50,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import type { DeploymentRow } from "./actions";
 import { DeploymentRowActions } from "./deployment-row-actions";
-import { BatchEditDialog } from "./batch-edit-dialog";
+import { BatchEditDialog } from "@/components/deployments/batch-edit-dialog";
 import { BatchDeleteDialog } from "./batch-delete-dialog";
+import { bulkUpdateMetadata } from "./actions";
 import { enqueueDriveSyncJob } from "./drive-actions";
 import { ProcessConfirmDialog } from "./process-confirm-dialog";
 import type { ProjectGroup } from "./page";
@@ -899,6 +900,7 @@ export function DeploymentsTable({
             selectedIds={selectedIds}
             selectedCount={selectedRows.length}
             distinctProjects={distinctProjects}
+            onSubmit={bulkUpdateMetadata}
             onComplete={() => setRowSelection({})}
           />
           <BatchDeleteDialog

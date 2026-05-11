@@ -22,11 +22,27 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Loader2 } from "lucide-react";
-import { bulkUpdateMetadata } from "./actions";
+import type { ActionResult } from "@/lib/types";
 
-interface CtProject {
+interface CtProjectOption {
   id: number;
   name: string;
+}
+
+/**
+ * Field set the dialog can apply. All fields are optional — only those whose
+ * `apply*` checkbox is ticked are populated and sent to `onSubmit`. Modules
+ * that don't care about a field can simply ignore it server-side.
+ */
+export interface BatchEditFields {
+  cameraTrapProjectId?: number | null;
+  siteName?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  dateStart?: string | null;
+  dateEnd?: string | null;
+  excluded?: boolean;
+  qaNotes?: string | null;
 }
 
 interface BatchEditDialogProps {
@@ -34,16 +50,31 @@ interface BatchEditDialogProps {
   onOpenChange: (open: boolean) => void;
   selectedIds: number[];
   selectedCount: number;
-  distinctProjects: CtProject[];
+  distinctProjects: CtProjectOption[];
+  /** Module-specific mutation. Called with the IDs and the subset of fields
+   *  whose `apply*` checkbox was ticked. */
+  onSubmit: (
+    ids: number[],
+    fields: BatchEditFields
+  ) => Promise<ActionResult<unknown>>;
+  /** Called after a successful submit so the caller can clear selection,
+   *  invalidate caches, etc. */
   onComplete: () => void;
 }
 
+/**
+ * Bulk-edit deployment metadata. Shared between camera-trap and audio: each
+ * module passes its own `onSubmit` callback that hits the appropriate server
+ * action. Fields map 1:1 to columns on the `deployments` table, which both
+ * modules share.
+ */
 export function BatchEditDialog({
   open,
   onOpenChange,
   selectedIds,
   selectedCount,
   distinctProjects,
+  onSubmit,
   onComplete,
 }: BatchEditDialogProps) {
   const [applyProject, setApplyProject] = useState(false);
@@ -66,9 +97,11 @@ export function BatchEditDialog({
   const handleSubmit = () => {
     startSaving(async () => {
       setError(null);
-      const fields: Record<string, unknown> = {};
+      const fields: BatchEditFields = {};
       if (applyProject) {
-        fields.cameraTrapProjectId = selectedProjectId ? parseInt(selectedProjectId, 10) : null;
+        fields.cameraTrapProjectId = selectedProjectId
+          ? parseInt(selectedProjectId, 10)
+          : null;
       }
       if (applySite) fields.siteName = siteName.trim() || null;
       if (applyLocation) {
@@ -91,7 +124,7 @@ export function BatchEditDialog({
         return;
       }
 
-      const result = await bulkUpdateMetadata(selectedIds, fields);
+      const result = await onSubmit(selectedIds, fields);
       if (result.success) {
         onOpenChange(false);
         onComplete();

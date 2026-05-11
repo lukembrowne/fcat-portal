@@ -12,15 +12,19 @@ import { eq, and, sql, desc, inArray } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import { fetchAudioFiles } from "../actions";
 import { AudioFilesShell } from "./audio-files-shell";
+import { RecordingsShell } from "./recordings-shell";
 
 export default async function AudioDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ view?: string }>;
 }) {
   const user = await requirePermission("grabaciones", "viewer");
 
   const { id } = await params;
+  const { view } = await searchParams;
   const deploymentId = parseInt(id, 10);
   if (isNaN(deploymentId)) notFound();
 
@@ -175,8 +179,12 @@ export default async function AudioDetailPage({
     ? { verified: birdnetStats.verified, total: birdnetStats.verified + birdnetStats.pending }
     : null;
 
+  // Phase 1: raster lives behind ?view=raster while the list still ships.
+  // Phase 2 will delete AudioFilesShell and drop the flag.
+  const Shell = view === "raster" ? RecordingsShell : AudioFilesShell;
+
   return (
-    <AudioFilesShell
+    <Shell
       deployment={deployment}
       files={files}
       isEditor={isEditor}

@@ -40,6 +40,7 @@ import type { OdkSiteEntity } from "@/lib/odk-types";
 import { HABITAT_COLORS } from "@/app/biochoco/habitat/types";
 import { getHabitatName } from "@/app/biochoco/overview/types";
 import { DIEL_PERIODS, type DielPeriod } from "@/lib/acoustic-indices";
+import { parseRecordingTimestamp } from "@/lib/audio-filename";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -83,6 +84,15 @@ export interface AudioFileRow {
   format: string | null;
   playable: boolean;
   detectionCount: number;
+  // Parsed once server-side from the filename. Local Ecuador time (UTC-5).
+  recordedDate: string | null;
+  recordedTime: string | null;
+  // 1:1 LEFT JOIN on acoustic_indices. Null when indices have not been computed.
+  soundscapeSaturation: number | null;
+  acousticComplexityIndex: number | null;
+  frequencyEntropy: number | null;
+  temporalEntropy: number | null;
+  eventsPerSecond: number | null;
 }
 
 export interface AudioStats {
@@ -221,6 +231,8 @@ export async function fetchAudioFiles(
   const user = await requirePermission("grabaciones", "viewer");
   await requireDeploymentAccess(user, deploymentId);
 
+  // LEFT JOIN acoustic_indices (1:1 via uniqueIndex on audio_file_id) so files
+  // without computed indices still return — index fields will be null.
   const rows = await db
     .select({
       id: audioFiles.id,
@@ -232,12 +244,27 @@ export async function fetchAudioFiles(
       format: audioFiles.format,
       playable: audioFiles.playable,
       detectionCount: sql<number>`(SELECT COUNT(*) FROM audio_detections WHERE audio_file_id = ${audioFiles.id})`,
+      soundscapeSaturation: acousticIndices.soundscapeSaturation,
+      acousticComplexityIndex: acousticIndices.acousticComplexityIndex,
+      frequencyEntropy: acousticIndices.frequencyEntropy,
+      temporalEntropy: acousticIndices.temporalEntropy,
+      eventsPerSecond: acousticIndices.eventsPerSecond,
     })
     .from(audioFiles)
+    .leftJoin(acousticIndices, eq(acousticIndices.audioFileId, audioFiles.id))
     .where(eq(audioFiles.deploymentId, deploymentId))
     .orderBy(audioFiles.filename);
 
-  return { success: true, data: rows };
+  const enriched: AudioFileRow[] = rows.map((row) => {
+    const parsed = parseRecordingTimestamp(row.filename);
+    return {
+      ...row,
+      recordedDate: parsed?.date ?? null,
+      recordedTime: parsed?.time ?? null,
+    };
+  });
+
+  return { success: true, data: enriched };
 }
 
 export async function getAudioStats(): Promise<ActionResult<AudioStats>> {

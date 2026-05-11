@@ -113,12 +113,17 @@ const CAMERA_TRAP_DDL = `
     upload_newest_camera_date TEXT,
     upload_newest_audio_date TEXT,
     upload_newest_ibutton_date TEXT,
-    training_split TEXT
+    training_split TEXT,
+    previous_camera_count INTEGER,
+    previous_audio_count INTEGER,
+    previous_ibutton_count INTEGER,
+    previous_counts_checked_at INTEGER
   );
 
   CREATE TABLE biochoco_processing_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    deployment_id INTEGER NOT NULL REFERENCES biochoco_deployments(id) ON DELETE CASCADE,
+    deployment_id INTEGER REFERENCES biochoco_deployments(id) ON DELETE CASCADE,
+    camera_trap_project_id INTEGER REFERENCES ct_projects(id) ON DELETE SET NULL,
     detector_model TEXT,
     classifier_model TEXT,
     confidence_threshold REAL DEFAULT 0.1,

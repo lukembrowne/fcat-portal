@@ -87,6 +87,7 @@ export function AudioFilesShell({
   birdnetStats = null,
   hasBirdnetDetections = false,
   isAcousticIndicesProcessing = false,
+  isAudioAnalysisProcessing = false,
   reviewStats = null,
 }: {
   deployment: DeploymentInfo;
@@ -97,6 +98,7 @@ export function AudioFilesShell({
   birdnetStats?: BirdnetStats | null;
   hasBirdnetDetections?: boolean;
   isAcousticIndicesProcessing?: boolean;
+  isAudioAnalysisProcessing?: boolean;
   reviewStats?: { verified: number; total: number } | null;
 }) {
   const [activeFileId, setActiveFileId] = useState<string | null>(null);
@@ -210,6 +212,7 @@ export function AudioFilesShell({
                 isBirdnetProcessing={isBirdnetProcessing}
                 hasBirdnetDetections={hasBirdnetDetections}
                 isAcousticIndicesProcessing={isAcousticIndicesProcessing}
+                isAudioAnalysisProcessing={isAudioAnalysisProcessing}
                 hasFiles={files.length > 0}
               />
             )}

@@ -86,6 +86,19 @@ export default async function AudioDetailPage({
     )
     .limit(1);
 
+  // Check for active combined audio-analysis job
+  const [activeAudioAnalysisJob] = await db
+    .select({ id: processingJobs.id })
+    .from(processingJobs)
+    .where(
+      and(
+        eq(processingJobs.deploymentId, deploymentId),
+        eq(processingJobs.jobType, "audio_analysis"),
+        inArray(processingJobs.status, ["pending", "processing"])
+      )
+    )
+    .limit(1);
+
   // Get last completed BirdNET job stats
   const [lastBirdnetJob] = await db
     .select({
@@ -146,7 +159,7 @@ export default async function AudioDetailPage({
   let displayStatus: string;
   if (fileCount === 0) {
     displayStatus = "unscanned";
-  } else if (activeBirdnetJob) {
+  } else if (activeBirdnetJob || activeAudioAnalysisJob) {
     displayStatus = "birdnet_processing";
   } else if (birdnetStats && birdnetStats.totalDetections > 0) {
     if (birdnetStats.pending === 0 && birdnetStats.verified > 0) {
@@ -172,6 +185,7 @@ export default async function AudioDetailPage({
       birdnetStats={birdnetStats}
       hasBirdnetDetections={hasBirdnetDetections}
       isAcousticIndicesProcessing={!!activeIndicesJob}
+      isAudioAnalysisProcessing={!!activeAudioAnalysisJob}
       reviewStats={reviewStats}
     />
   );

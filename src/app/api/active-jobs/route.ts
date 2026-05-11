@@ -84,7 +84,9 @@ export async function GET() {
           ? "Sincronización de audio"
           : job.jobType === "acoustic_indices"
             ? "Índices acústicos"
-            : "Trabajo");
+            : job.jobType === "audio_analysis"
+              ? "Análisis acústico"
+              : "Trabajo");
 
     return {
       jobId: job.id,

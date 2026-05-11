@@ -21,8 +21,9 @@ import { revalidatePath } from "next/cache";
 import type { ActionResult } from "@/lib/types";
 import os from "os";
 import path from "path";
+import { promises as fs } from "fs";
 import { log } from "@/lib/log";
-import { ensureAudioCached } from "@/lib/audio-cache";
+import { ensureAudioCached, releaseFiles } from "@/lib/audio-cache";
 import { runBirdNETAnalysis } from "@/lib/birdnet-runner";
 import {
   runAcousticIndicesAnalysis,
@@ -150,12 +151,13 @@ export async function fetchAudioDeployments(): Promise<
       lastBirdnetAt: sql<Date | null>`(
         SELECT MAX(completed_at) FROM biochoco_processing_jobs
         WHERE deployment_id = ${deployments.id}
-        AND job_type = 'birdnet' AND status = 'completed'
+        AND job_type IN ('birdnet', 'audio_analysis') AND status = 'completed'
       )`,
       isBirdnetProcessing: sql<number>`(
         SELECT COUNT(*) FROM biochoco_processing_jobs
         WHERE deployment_id = ${deployments.id}
-        AND job_type = 'birdnet' AND status IN ('pending', 'processing')
+        AND job_type IN ('birdnet', 'acoustic_indices', 'audio_analysis')
+        AND status IN ('pending', 'processing')
       )`,
     })
     .from(deployments)
@@ -621,6 +623,10 @@ export async function cancelProcessingJob(
     return cancelAcousticIndicesJob(jobId);
   }
 
+  if (job.jobType === JOB_TYPES.AUDIO_ANALYSIS) {
+    return cancelAudioAnalysisJob(jobId);
+  }
+
   // For camera trap jobs, delegate to camera-trap cancel
   const { cancelJob } = await import("@/app/camera-trap/actions");
   return cancelJob(jobId);
@@ -959,6 +965,487 @@ async function cancelAcousticIndicesJob(
     revalidatePath(`/audio/${job.deploymentId}`);
   }
   revalidatePath("/audio/indices");
+  return { success: true, data: undefined };
+}
+
+// ---------------------------------------------------------------------------
+// Combined audio analysis (BirdNET + acoustic indices, chunked)
+// ---------------------------------------------------------------------------
+
+interface CreateAudioAnalysisJobInput {
+  deploymentId: number;
+  includeBirdnet?: boolean;
+  includeIndices?: boolean;
+}
+
+/**
+ * Enqueue a combined audio analysis. Processes the deployment in chunks of
+ * `AUDIO_ANALYSIS_CHUNK_SIZE` files (default 1000). Each chunk downloads,
+ * runs BirdNET and/or indices, then actively releases the chunk's cache so
+ * peak disk usage stays bounded — important for deployments larger than the
+ * cache cap.
+ */
+export async function createAudioAnalysisJob(
+  input: CreateAudioAnalysisJobInput
+): Promise<ActionResult<{ jobId: number }>> {
+  const { deploymentId, includeBirdnet = true, includeIndices = true } = input;
+
+  if (!includeBirdnet && !includeIndices) {
+    return { success: false, error: "Selecciona al menos un análisis" };
+  }
+
+  const user = await requirePermission("grabaciones", "editor");
+  await requireDeploymentAccess(user, deploymentId);
+
+  const [fileRow] = await db
+    .select({ count: sql<number>`COUNT(*)` })
+    .from(audioFiles)
+    .where(eq(audioFiles.deploymentId, deploymentId));
+  const totalFiles = fileRow?.count ?? 0;
+  if (totalFiles === 0) {
+    return { success: false, error: "No hay archivos de audio en esta instalación" };
+  }
+
+  // Single-flight across all three audio analysis job types — a deployment
+  // can only have one of {birdnet, acoustic_indices, audio_analysis} in flight.
+  const [activeJob] = await db
+    .select({ id: processingJobs.id })
+    .from(processingJobs)
+    .where(
+      and(
+        eq(processingJobs.deploymentId, deploymentId),
+        inArray(processingJobs.jobType, [
+          JOB_TYPES.BIRDNET,
+          JOB_TYPES.ACOUSTIC_INDICES,
+          JOB_TYPES.AUDIO_ANALYSIS,
+        ]),
+        inArray(processingJobs.status, ["pending", "processing"])
+      )
+    )
+    .limit(1);
+  if (activeJob) {
+    return { success: false, error: "Ya existe un análisis activo para esta instalación" };
+  }
+
+  if (includeBirdnet) {
+    await db.run(sql`
+      DELETE FROM audio_detections
+      WHERE audio_file_id IN (
+        SELECT id FROM audio_files WHERE deployment_id = ${deploymentId}
+      )
+      AND job_id IS NOT NULL
+    `);
+  }
+
+  const phaseLabel =
+    includeBirdnet && includeIndices
+      ? "Preparando análisis (BirdNET + índices)..."
+      : includeBirdnet
+        ? "Preparando análisis BirdNET..."
+        : "Preparando cálculo de índices acústicos...";
+
+  const [job] = await db
+    .insert(processingJobs)
+    .values({
+      deploymentId,
+      jobType: JOB_TYPES.AUDIO_ANALYSIS,
+      totalImages: totalFiles,
+      status: "pending",
+      createdBy: user.email,
+      statusMessage: phaseLabel,
+    })
+    .returning();
+
+  processAudioAnalysisJob(job.id, { includeBirdnet, includeIndices }).catch((err) => {
+    log.error(
+      { err, jobId: job.id },
+      "[audio-analysis] Unhandled error in processAudioAnalysisJob"
+    );
+  });
+
+  return { success: true, data: { jobId: job.id } };
+}
+
+async function processAudioAnalysisJob(
+  jobId: number,
+  opts: { includeBirdnet: boolean; includeIndices: boolean }
+): Promise<void> {
+  try {
+    await db
+      .update(processingJobs)
+      .set({ status: "processing", startedAt: new Date() })
+      .where(eq(processingJobs.id, jobId));
+
+    const [job] = await db
+      .select()
+      .from(processingJobs)
+      .where(eq(processingJobs.id, jobId));
+    if (!job) throw new Error(`Job ${jobId} not found`);
+    if (job.deploymentId === null) {
+      throw new Error(`Audio analysis job ${jobId} has null deploymentId`);
+    }
+    const deploymentId = job.deploymentId;
+
+    const [deployment] = await db
+      .select({
+        id: deployments.id,
+        latitude: deployments.latitude,
+        longitude: deployments.longitude,
+        dateStart: deployments.dateStart,
+      })
+      .from(deployments)
+      .where(eq(deployments.id, deploymentId));
+    if (!deployment) throw new Error(`Deployment ${deploymentId} not found`);
+
+    // BirdNET location/time defaults — same fallbacks as processBirdNETJob.
+    const lat = deployment.latitude ?? -0.3;
+    const lon = deployment.longitude ?? -79.2;
+    if (deployment.latitude === null || deployment.longitude === null) {
+      log.warn(
+        { jobId, deploymentId },
+        "[audio-analysis] Using default lat/lon — deployment has no coordinates"
+      );
+    }
+    let week = -1;
+    if (deployment.dateStart) {
+      const d = new Date(deployment.dateStart);
+      const start = new Date(d.getFullYear(), 0, 1);
+      const dayOfYear = Math.ceil((d.getTime() - start.getTime()) / 86400000) + 1;
+      week = Math.ceil(dayOfYear / 7);
+    }
+
+    const files = await db
+      .select({
+        id: audioFiles.id,
+        filename: audioFiles.filename,
+        driveFileId: audioFiles.driveFileId,
+      })
+      .from(audioFiles)
+      .where(eq(audioFiles.deploymentId, deploymentId));
+
+    const filesWithDrive = files.filter((f) => f.driveFileId !== null);
+    const downloadTotal = filesWithDrive.length;
+
+    const chunkSize = Math.max(
+      1,
+      parseInt(process.env.AUDIO_ANALYSIS_CHUNK_SIZE ?? "1000", 10) || 1000
+    );
+    const chunks: typeof filesWithDrive[] = [];
+    for (let i = 0; i < filesWithDrive.length; i += chunkSize) {
+      chunks.push(filesWithDrive.slice(i, i + chunkSize));
+    }
+    const totalChunks = chunks.length;
+
+    await db
+      .update(processingJobs)
+      .set({
+        downloadTotal,
+        statusMessage:
+          totalChunks > 1
+            ? `Procesando ${downloadTotal} archivos en ${totalChunks} lotes...`
+            : `Procesando ${downloadTotal} archivos...`,
+      })
+      .where(eq(processingJobs.id, jobId));
+
+    const threads = Math.max(
+      1,
+      (os.availableParallelism?.() ?? os.cpus().length) - 1
+    );
+
+    let globalDownloaded = 0;
+    let globalProcessed = 0;
+    let totalDetections = 0;
+    let totalIndices = 0;
+
+    for (let chunkIdx = 0; chunkIdx < chunks.length; chunkIdx++) {
+      const chunk = chunks[chunkIdx];
+      const chunkLabel = totalChunks > 1 ? `Lote ${chunkIdx + 1}/${totalChunks} · ` : "";
+
+      // Phase 1 — download chunk to cache.
+      const cachedFiles: Array<{ id: number; path: string; filename: string }> = [];
+      for (const file of chunk) {
+        try {
+          const cachePath = await ensureAudioCached(file.id);
+          cachedFiles.push({ id: file.id, path: cachePath, filename: file.filename });
+          globalDownloaded++;
+          await db
+            .update(processingJobs)
+            .set({
+              downloadedImages: globalDownloaded,
+              statusMessage: `${chunkLabel}descargando (${globalDownloaded}/${downloadTotal})...`,
+            })
+            .where(eq(processingJobs.id, jobId));
+        } catch (err) {
+          log.warn(
+            { err, fileId: file.id },
+            "[audio-analysis] Failed to cache audio file, skipping"
+          );
+        }
+      }
+
+      if (cachedFiles.length === 0) {
+        log.warn(
+          { jobId, chunkIdx },
+          "[audio-analysis] Chunk has no cached files after download phase — skipping"
+        );
+        continue;
+      }
+
+      // Phase 2 — stage symlinks for BirdNET's CLI (which wants a directory).
+      let chunkDir: string | null = null;
+      if (opts.includeBirdnet) {
+        chunkDir = path.join(
+          process.cwd(),
+          "data",
+          "cache",
+          "audio",
+          String(deploymentId),
+          `_chunk_${chunkIdx}`
+        );
+        await fs.mkdir(chunkDir, { recursive: true });
+        for (const f of cachedFiles) {
+          const linkPath = path.join(chunkDir, f.filename);
+          try {
+            await fs.unlink(linkPath);
+          } catch {
+            // No prior link — expected.
+          }
+          await fs.symlink(f.path, linkPath);
+        }
+      }
+
+      // Phase 3 — BirdNET on the chunk.
+      if (opts.includeBirdnet && chunkDir) {
+        await db
+          .update(processingJobs)
+          .set({
+            statusMessage: `${chunkLabel}BirdNET (0/${cachedFiles.length})...`,
+            processedImages: globalProcessed,
+          })
+          .where(eq(processingJobs.id, jobId));
+
+        const filenameToFileId = new Map<string, number>();
+        for (const f of cachedFiles) {
+          filenameToFileId.set(f.filename, f.id);
+          const base = f.filename.replace(/\.[^.]+$/, "");
+          filenameToFileId.set(base, f.id);
+        }
+
+        const result = await runBirdNETAnalysis(
+          jobId,
+          {
+            audioDir: chunkDir,
+            lat,
+            lon,
+            week,
+            minConf: 0.1,
+            threads,
+            totalFiles: cachedFiles.length,
+            sensitivity: 1.0,
+            overlap: 1.0,
+          },
+          filenameToFileId
+        );
+
+        if (!result.success) {
+          throw new Error(
+            `BirdNET (lote ${chunkIdx + 1}/${totalChunks}): ${result.error}`
+          );
+        }
+        totalDetections += result.totalDetections;
+      }
+
+      // Phase 4 — indices on the chunk.
+      if (opts.includeIndices) {
+        await db
+          .update(processingJobs)
+          .set({
+            statusMessage: `${chunkLabel}índices (0/${cachedFiles.length})...`,
+            processedImages: globalProcessed,
+          })
+          .where(eq(processingJobs.id, jobId));
+
+        const result = await runAcousticIndicesAnalysis({
+          jobId,
+          files: cachedFiles,
+          onResult: async (r: AcousticIndicesResult) => {
+            const now = new Date();
+            await db
+              .insert(acousticIndices)
+              .values({
+                audioFileId: r.audioFileId,
+                soundscapeSaturation: r.soundscapeSaturation,
+                acousticComplexityIndex: r.acousticComplexityIndex,
+                frequencyEntropy: r.frequencyEntropy,
+                temporalEntropy: r.temporalEntropy,
+                eventsPerSecond: r.eventsPerSecond,
+                recordedDate: r.recordedDate,
+                dielPeriod: r.dielPeriod,
+                configHash: r.configHash,
+                computedAt: now,
+              })
+              .onConflictDoUpdate({
+                target: acousticIndices.audioFileId,
+                set: {
+                  soundscapeSaturation: sql`excluded.soundscape_saturation`,
+                  acousticComplexityIndex: sql`excluded.acoustic_complexity_index`,
+                  frequencyEntropy: sql`excluded.frequency_entropy`,
+                  temporalEntropy: sql`excluded.temporal_entropy`,
+                  eventsPerSecond: sql`excluded.events_per_second`,
+                  recordedDate: sql`COALESCE(excluded.recorded_date, ${acousticIndices.recordedDate})`,
+                  dielPeriod: sql`excluded.diel_period`,
+                  configHash: sql`excluded.config_hash`,
+                  computedAt: sql`excluded.computed_at`,
+                },
+              });
+          },
+        });
+
+        if (!result.success) {
+          throw new Error(
+            `Índices (lote ${chunkIdx + 1}/${totalChunks}): ${result.error}`
+          );
+        }
+        totalIndices += result.totalProcessed;
+      }
+
+      // Phase 5 — release the chunk's cache so the next chunk has room.
+      globalProcessed += cachedFiles.length;
+      await db
+        .update(processingJobs)
+        .set({
+          processedImages: globalProcessed,
+          statusMessage: `${chunkLabel}lote completo (${globalProcessed}/${downloadTotal})`,
+        })
+        .where(eq(processingJobs.id, jobId));
+
+      const chunkIds = cachedFiles.map((f) => f.id);
+      try {
+        await releaseFiles(chunkIds);
+      } catch (err) {
+        log.warn(
+          { err, jobId, chunkIdx },
+          "[audio-analysis] Failed to release chunk cache (continuing)"
+        );
+      }
+      if (chunkDir) {
+        try {
+          await fs.rm(chunkDir, { recursive: true, force: true });
+        } catch (err) {
+          log.warn(
+            { err, chunkDir },
+            "[audio-analysis] Failed to remove chunk symlink dir"
+          );
+        }
+      }
+    }
+
+    // Summary: re-count species for the run if BirdNET ran. Detections are
+    // attributed to this job's id by runBirdNETAnalysis.
+    let totalSpecies = 0;
+    if (opts.includeBirdnet) {
+      const [speciesCount] = await db
+        .select({
+          count: sql<number>`COUNT(DISTINCT ${audioIdentifications.species})`,
+        })
+        .from(audioDetections)
+        .innerJoin(
+          audioIdentifications,
+          eq(audioIdentifications.audioDetectionId, audioDetections.id)
+        )
+        .where(eq(audioDetections.jobId, jobId));
+      totalSpecies = speciesCount?.count ?? 0;
+    }
+
+    const parts: string[] = [`${globalProcessed} archivos`];
+    if (opts.includeBirdnet) {
+      parts.push(`${totalDetections} detecciones`, `${totalSpecies} especies`);
+    }
+    if (opts.includeIndices) {
+      parts.push(`${totalIndices} índices`);
+    }
+
+    await db
+      .update(processingJobs)
+      .set({
+        status: "completed",
+        completedAt: new Date(),
+        processedImages: globalProcessed,
+        statusMessage: parts.join(", "),
+      })
+      .where(eq(processingJobs.id, jobId));
+
+    log.info(
+      {
+        jobId,
+        deploymentId,
+        processed: globalProcessed,
+        detections: totalDetections,
+        species: totalSpecies,
+        indices: totalIndices,
+        chunks: totalChunks,
+      },
+      "[audio-analysis] Job completed successfully"
+    );
+
+    revalidatePath(`/audio/${deploymentId}`);
+    revalidatePath("/audio/indices");
+    revalidatePath("/audio");
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.error({ err, jobId }, "[audio-analysis] Job failed");
+    await db
+      .update(processingJobs)
+      .set({
+        status: "failed",
+        completedAt: new Date(),
+        errorMessage: message,
+        statusMessage: "Fallido",
+      })
+      .where(eq(processingJobs.id, jobId));
+  }
+}
+
+async function cancelAudioAnalysisJob(
+  jobId: number
+): Promise<ActionResult> {
+  const user = await requirePermission("grabaciones", "editor");
+
+  const [job] = await db
+    .select()
+    .from(processingJobs)
+    .where(eq(processingJobs.id, jobId));
+  if (!job) return { success: false, error: "Trabajo no encontrado" };
+  if (job.deploymentId === null) {
+    return { success: false, error: "Trabajo sin instalación asociada" };
+  }
+  await requireDeploymentAccess(user, job.deploymentId);
+  if (!["pending", "processing"].includes(job.status)) {
+    return { success: false, error: "El trabajo ya finalizó" };
+  }
+
+  if (job.pid) {
+    try {
+      process.kill(job.pid, "SIGTERM");
+    } catch {
+      // Already exited.
+    }
+  }
+
+  // Partial results (detections from completed chunks, indices rows) are
+  // valid — leave them in place.
+  await db
+    .update(processingJobs)
+    .set({
+      status: "cancelled",
+      completedAt: new Date(),
+      statusMessage: null,
+    })
+    .where(eq(processingJobs.id, jobId));
+
+  revalidatePath(`/audio/${job.deploymentId}`);
+  revalidatePath("/audio/indices");
+  revalidatePath("/audio");
   return { success: true, data: undefined };
 }
 
@@ -1319,6 +1806,67 @@ export async function batchCreateBirdNETJobs(
       }
     } catch (err) {
       log.error({ err, deploymentId: id }, "[audio] Batch BirdNET enqueue failed");
+      errorMessages.push(
+        `#${id}: ${err instanceof Error ? err.message : "Error desconocido"}`
+      );
+    }
+  }
+
+  revalidatePath("/audio");
+  return {
+    success: true,
+    data: { enqueued, skipped, noFiles, errorMessages },
+  };
+}
+
+/**
+ * Enqueue a combined audio_analysis job per deployment. Shares the same
+ * single-flight + soft-failure classification shape as `batchCreateBirdNETJobs`
+ * so the batch dialog can summarise results consistently.
+ */
+export async function batchCreateAudioAnalysisJobs(
+  ids: number[],
+  opts: { includeBirdnet?: boolean; includeIndices?: boolean } = {}
+): Promise<
+  ActionResult<{ enqueued: number; skipped: number; noFiles: number; errorMessages: string[] }>
+> {
+  const user = await requirePermission("grabaciones", "editor");
+
+  if (ids.length === 0) {
+    return {
+      success: true,
+      data: { enqueued: 0, skipped: 0, noFiles: 0, errorMessages: [] },
+    };
+  }
+
+  for (const id of ids) {
+    await requireDeploymentAccess(user, id);
+  }
+
+  let enqueued = 0;
+  let skipped = 0;
+  let noFiles = 0;
+  const errorMessages: string[] = [];
+
+  for (const id of ids) {
+    try {
+      const result = await createAudioAnalysisJob({
+        deploymentId: id,
+        includeBirdnet: opts.includeBirdnet,
+        includeIndices: opts.includeIndices,
+      });
+      if (result.success) {
+        enqueued++;
+      } else {
+        if (result.error.includes("activo")) skipped++;
+        else if (result.error.includes("No hay archivos")) noFiles++;
+        else errorMessages.push(`#${id}: ${result.error}`);
+      }
+    } catch (err) {
+      log.error(
+        { err, deploymentId: id },
+        "[audio-analysis] Batch enqueue failed"
+      );
       errorMessages.push(
         `#${id}: ${err instanceof Error ? err.message : "Error desconocido"}`
       );

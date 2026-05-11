@@ -13,7 +13,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import { db } from "@/db";
 import { audioFiles } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { downloadFile } from "./drive-client";
 import { log } from "@/lib/log";
 
@@ -92,6 +92,37 @@ async function doEnsureAudioCached(
     .where(eq(audioFiles.id, audioFileId));
 
   return localPath;
+}
+
+/**
+ * Actively release a set of audio files from the cache.
+ *
+ * Used by the chunked audio_analysis orchestrator to free disk after each
+ * chunk finishes (rather than waiting for cap-driven LRU). Best-effort: a
+ * missing file on disk or a failed unlink does not throw.
+ */
+export async function releaseFiles(audioFileIds: number[]): Promise<void> {
+  if (audioFileIds.length === 0) return;
+
+  const rows = await db
+    .select()
+    .from(audioFiles)
+    .where(inArray(audioFiles.id, audioFileIds));
+
+  for (const row of rows) {
+    if (row.cachePath) {
+      try {
+        await fs.unlink(row.cachePath);
+      } catch {
+        // file may already be gone; safe to ignore
+      }
+    }
+  }
+
+  await db
+    .update(audioFiles)
+    .set({ cachePath: null })
+    .where(inArray(audioFiles.id, audioFileIds));
 }
 
 /**

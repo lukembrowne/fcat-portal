@@ -11,6 +11,7 @@ export const JOB_TYPES = {
   ML: "ml",
   BIRDNET: "birdnet",
   ACOUSTIC_INDICES: "acoustic_indices",
+  AUDIO_ANALYSIS: "audio_analysis",
   DRIVE_SYNC: "drive_sync",
   AUDIO_SYNC: "audio_sync",
   COMPRESSION: "compression",

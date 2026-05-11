@@ -1101,6 +1101,130 @@ export async function updateFileContent(
   );
 }
 
+// ---------------------------------------------------------------------------
+// Drive write rate cap (used for audio compression bulk-rewrites)
+// ---------------------------------------------------------------------------
+// Drive's per-user write quota is 100 requests / 100 s. A 1 req/s cap leaves
+// headroom for retries and keeps a 50k-file backfill from triggering 429
+// cascades. Best-effort process-local — survives if the process is the only
+// writer; reset on container restart.
+
+const DRIVE_WRITE_MIN_INTERVAL_MS = 1000;
+let lastDriveWriteMs = 0;
+
+async function waitForDriveWriteSlot(): Promise<void> {
+  const now = Date.now();
+  const elapsed = now - lastDriveWriteMs;
+  if (elapsed < DRIVE_WRITE_MIN_INTERVAL_MS) {
+    await new Promise((r) => setTimeout(r, DRIVE_WRITE_MIN_INTERVAL_MS - elapsed));
+  }
+  lastDriveWriteMs = Date.now();
+}
+
+/**
+ * Atomically replace a file's content AND filename in one Drive call.
+ * Used for the audio compression workflow: WAV bytes + name → FLAC bytes + name,
+ * preserving the file ID. The pre-replacement revision id and the post-replacement
+ * file size are returned so callers can pin the revision and update DB rows.
+ *
+ * Filename sanitization: `newName` must be a basename — no path separators, no
+ * `..` segments. This closes a pre-existing path-traversal surface in
+ * audio-cache.ts where Drive names flow back into local FS paths.
+ */
+export async function replaceFileContentAndRename(
+  fileId: string,
+  buffer: Buffer,
+  newName: string,
+  mimeType: string,
+): Promise<{ headRevisionId: string | null; size: number | null }> {
+  if (!newName || newName !== path.basename(newName) || newName.includes("..")) {
+    throw new Error(`Refusing unsafe Drive filename: ${JSON.stringify(newName)}`);
+  }
+
+  await waitForDriveWriteSlot();
+  const drive = getDrive();
+  const res = await withRetry(
+    () =>
+      drive.files.update({
+        fileId,
+        requestBody: { name: newName, mimeType },
+        media: { mimeType, body: Readable.from(buffer) },
+        fields: "id,name,mimeType,headRevisionId,size",
+        supportsAllDrives: true,
+      }),
+    `replaceFileContentAndRename(${fileId})`,
+  );
+  return {
+    headRevisionId: res.data.headRevisionId ?? null,
+    size: res.data.size ? parseInt(res.data.size, 10) : null,
+  };
+}
+
+/**
+ * Pin a specific revision with `keepForever=true` so Drive never garbage-collects
+ * it beyond the 30-day default window. Used during the first 90 days of the
+ * audio compression rollout to keep pre-replace WAVs revertible.
+ *
+ * Non-fatal at the call site — caller logs failure and continues.
+ */
+export async function pinFileRevision(
+  fileId: string,
+  revisionId: string,
+): Promise<void> {
+  const drive = getDrive();
+  await withRetry(
+    () =>
+      drive.revisions.update({
+        fileId,
+        revisionId,
+        requestBody: { keepForever: true },
+      }),
+    `pinFileRevision(${fileId}, ${revisionId})`,
+  );
+}
+
+/**
+ * Fetch the metadata needed by the audio compression reconciliation pre-check:
+ * the current filename, MIME type, head revision id, and size. Returns null if
+ * the file no longer exists on Drive (treat as "skip this file").
+ */
+export async function getFileMetadataWithRevision(
+  fileId: string,
+): Promise<
+  | {
+      name: string;
+      mimeType: string;
+      headRevisionId: string | null;
+      size: number | null;
+    }
+  | null
+> {
+  const drive = getDrive();
+  try {
+    const res = await withRetry(
+      () =>
+        drive.files.get({
+          fileId,
+          fields: "id,name,mimeType,headRevisionId,size,trashed",
+          supportsAllDrives: true,
+        }),
+      `getFileMetadataWithRevision(${fileId})`,
+    );
+    if (res.data.trashed) return null;
+    return {
+      name: res.data.name ?? "",
+      mimeType: res.data.mimeType ?? "application/octet-stream",
+      headRevisionId: res.data.headRevisionId ?? null,
+      size: res.data.size ? parseInt(res.data.size, 10) : null,
+    };
+  } catch (err) {
+    const status = (err as { code?: number; status?: number })?.code
+      ?? (err as { code?: number; status?: number })?.status;
+    if (status === 404) return null;
+    throw err;
+  }
+}
+
 /**
  * Soft-delete a file to Drive trash (recoverable for 30 days).
  * Used for blank image deletion — safer than permanent delete.

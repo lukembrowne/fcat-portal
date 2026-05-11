@@ -31,6 +31,7 @@ import {
 } from "@/lib/acoustic-indices-runner";
 import { scanDeploymentAudioInternal } from "@/lib/audio-sync-internals";
 import { JOB_TYPES } from "@/lib/job-types";
+import { findActiveAudioJob } from "@/lib/job-locks";
 import { fetchEntities } from "@/lib/odk-client";
 import {
   BIOCHOCO_PROJECT_ID,
@@ -627,6 +628,14 @@ export async function cancelProcessingJob(
     return cancelAudioAnalysisJob(jobId);
   }
 
+  if (
+    job.jobType === JOB_TYPES.AUDIO_COMPRESSION ||
+    job.jobType === JOB_TYPES.REVERT_AUDIO_COMPRESSION
+  ) {
+    const { cancelAudioCompressionJobAction } = await import("./compression-actions");
+    return cancelAudioCompressionJobAction(jobId);
+  }
+
   // For camera trap jobs, delegate to camera-trap cancel
   const { cancelJob } = await import("@/app/camera-trap/actions");
   return cancelJob(jobId);
@@ -1006,25 +1015,14 @@ export async function createAudioAnalysisJob(
     return { success: false, error: "No hay archivos de audio en esta instalación" };
   }
 
-  // Single-flight across all three audio analysis job types — a deployment
-  // can only have one of {birdnet, acoustic_indices, audio_analysis} in flight.
-  const [activeJob] = await db
-    .select({ id: processingJobs.id })
-    .from(processingJobs)
-    .where(
-      and(
-        eq(processingJobs.deploymentId, deploymentId),
-        inArray(processingJobs.jobType, [
-          JOB_TYPES.BIRDNET,
-          JOB_TYPES.ACOUSTIC_INDICES,
-          JOB_TYPES.AUDIO_ANALYSIS,
-        ]),
-        inArray(processingJobs.status, ["pending", "processing"])
-      )
-    )
-    .limit(1);
+  // Single-flight: only one audio job (analysis OR compression OR sync) per
+  // deployment in `pending`/`processing` at any time. See AUDIO_JOB_TYPES.
+  const activeJob = await findActiveAudioJob(deploymentId);
   if (activeJob) {
-    return { success: false, error: "Ya existe un análisis activo para esta instalación" };
+    return {
+      success: false,
+      error: "Ya existe un trabajo activo para esta instalación",
+    };
   }
 
   if (includeBirdnet) {

@@ -163,20 +163,25 @@ export function FloatingJobProgress() {
   const jobType = sseData?.jobType ?? activeJob?.jobType ?? "ml";
   const isCompression = jobType === "compression";
   const isRevert = jobType === "revert_compression";
+  const isAudioCompression = jobType === "audio_compression";
+  const isAudioRevert = jobType === "revert_audio_compression";
   const isBirdnet = jobType === "birdnet";
   const isAcousticIndices = jobType === "acoustic_indices";
   const isAudioAnalysis = jobType === "audio_analysis";
-  const isCompressionLike = isCompression || isRevert;
+  const isCompressionLike =
+    isCompression || isRevert || isAudioCompression || isAudioRevert;
   const isDriveSync = jobType === "drive_sync" || jobType === "audio_sync";
+  const isAudioJob =
+    isBirdnet ||
+    isAcousticIndices ||
+    isAudioAnalysis ||
+    isAudioCompression ||
+    isAudioRevert;
   const isLinkable =
-    !isCompressionLike &&
-    !isDriveSync &&
-    !isBirdnet &&
-    !isAcousticIndices &&
-    !isAudioAnalysis;
+    !isCompressionLike && !isDriveSync && !isAudioJob;
   const unitLabel = isDriveSync
     ? "instalaciones"
-    : isBirdnet || isAcousticIndices || isAudioAnalysis
+    : isAudioJob
       ? "archivos"
       : "imágenes";
   const canCancel = activeJob?.canCancel ?? false;

@@ -113,12 +113,17 @@ const CAMERA_TRAP_DDL = `
     upload_newest_camera_date TEXT,
     upload_newest_audio_date TEXT,
     upload_newest_ibutton_date TEXT,
-    training_split TEXT
+    training_split TEXT,
+    previous_camera_count INTEGER,
+    previous_audio_count INTEGER,
+    previous_ibutton_count INTEGER,
+    previous_counts_checked_at INTEGER
   );
 
   CREATE TABLE biochoco_processing_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    deployment_id INTEGER NOT NULL REFERENCES biochoco_deployments(id) ON DELETE CASCADE,
+    deployment_id INTEGER REFERENCES biochoco_deployments(id) ON DELETE CASCADE,
+    camera_trap_project_id INTEGER REFERENCES ct_projects(id) ON DELETE SET NULL,
     detector_model TEXT,
     classifier_model TEXT,
     confidence_threshold REAL DEFAULT 0.1,
@@ -225,6 +230,51 @@ const CAMERA_TRAP_DDL = `
     target_id TEXT,
     details TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+
+  CREATE TABLE audio_files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    deployment_id INTEGER NOT NULL REFERENCES biochoco_deployments(id) ON DELETE CASCADE,
+    filename TEXT NOT NULL,
+    drive_file_id TEXT,
+    file_size INTEGER,
+    mime_type TEXT,
+    modified_at INTEGER,
+    format TEXT,
+    playable INTEGER NOT NULL DEFAULT 1,
+    duration REAL,
+    sample_rate INTEGER,
+    cache_path TEXT,
+    spectrogram_path TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+  CREATE UNIQUE INDEX idx_audio_files_deployment_drive_file
+    ON audio_files(deployment_id, drive_file_id);
+
+  CREATE TABLE audio_detections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    audio_file_id INTEGER NOT NULL REFERENCES audio_files(id) ON DELETE CASCADE,
+    start_time REAL NOT NULL,
+    end_time REAL NOT NULL,
+    min_freq REAL NOT NULL,
+    max_freq REAL NOT NULL,
+    confidence REAL,
+    model_version TEXT,
+    job_id INTEGER REFERENCES biochoco_processing_jobs(id) ON DELETE SET NULL,
+    created_by TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+
+  CREATE TABLE audio_identifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    audio_detection_id INTEGER NOT NULL REFERENCES audio_detections(id) ON DELETE CASCADE,
+    species TEXT NOT NULL,
+    confidence REAL,
+    model_version TEXT,
+    verification_status TEXT NOT NULL DEFAULT 'unverified',
+    corrected_species TEXT,
+    verified_by TEXT,
+    verified_at INTEGER
   );
 `;
 

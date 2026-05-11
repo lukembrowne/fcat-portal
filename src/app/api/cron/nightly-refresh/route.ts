@@ -9,20 +9,34 @@
  */
 
 import { db } from "@/db";
-import { deployments, processingJobs, uploadCountSnapshots } from "@/db/schema";
+import {
+  deployments,
+  processingJobs,
+  uploadCountSnapshots,
+  audioFiles,
+  audioDetections,
+  audioIdentifications,
+} from "@/db/schema";
 import type { UploadStatus } from "@/lib/drive-client";
 import { verifyCronSecret } from "@/lib/cron-auth";
-import { and, inArray, isNotNull, eq, sql } from "drizzle-orm";
+import { and, inArray, isNotNull, eq, gte, sql, count } from "drizzle-orm";
 import { Resend } from "resend";
 import { log } from "@/lib/log";
 import {
   awaitJobTerminal,
   runDriveSyncWorker,
 } from "@/lib/camera-trap-sync-worker";
+import { runAudioSyncWorker } from "@/lib/audio-sync-worker";
+import { JOB_TYPES } from "@/lib/job-types";
 
 export const dynamic = "force-dynamic";
 
-const NIGHTLY_TIMEOUT_MS = 540_000; // leaves headroom under cron --max-time 600
+// Budgets carved out of the cron --max-time 600s wall: CT first, then audio,
+// with ~60s of slack left for snapshot + email. If either phase consistently
+// runs hot, raise the matching constant AND --max-time in scripts/crontab
+// together (the cron will SIGTERM before our timeout fires otherwise).
+const CT_SYNC_TIMEOUT_MS = 420_000; // 7 min
+const AUDIO_SYNC_TIMEOUT_MS = 120_000; // 2 min
 const POLL_INTERVAL_MS = 5_000;
 
 // ---------------------------------------------------------------------------
@@ -161,7 +175,7 @@ export async function POST(request: Request) {
 
     const terminal = await awaitJobTerminal(jobId, {
       intervalMs: POLL_INTERVAL_MS,
-      timeoutMs: NIGHTLY_TIMEOUT_MS,
+      timeoutMs: CT_SYNC_TIMEOUT_MS,
     });
 
     if (!terminal) {
@@ -184,6 +198,22 @@ export async function POST(request: Request) {
       },
       "[nightly] drive_sync terminal",
     );
+
+    // Step 2b: run audio_sync sequentially after CT. We don't fail the whole
+    // cron if audio sync misbehaves — log it and keep going so the email
+    // still ships with whatever data we have. Single-flight: reuse an
+    // in-flight audio_sync job if one exists.
+    const audioTerminal = await runNightlyAudioSync();
+    if (audioTerminal) {
+      log.info(
+        {
+          status: audioTerminal.status,
+          processed: audioTerminal.processedImages,
+          failed: audioTerminal.failedImages,
+        },
+        "[nightly] audio_sync terminal",
+      );
+    }
 
     // Step 3: promote previous_* columns from the prior snapshot for any row
     // we observed before the worker ran. New rows created during sync are
@@ -316,12 +346,24 @@ export async function POST(request: Request) {
       previousSnapshotDate: prev ? prev.date : null,
     };
 
+    // Step 4b: gather audio stats (BirdNET index totals + today's deltas).
+    // Uses createdAt on the audio tables so we don't need a separate snapshot
+    // table — the totals grow monotonically in practice.
+    const audioReport = await collectAudioReport(prev?.date ?? null);
+
     // Step 5: Send email
     const RESEND_API_KEY = process.env.RESEND_API_KEY;
     const NIGHTLY_REPORT_EMAILS = process.env.NIGHTLY_REPORT_EMAILS;
 
     if (RESEND_API_KEY && NIGHTLY_REPORT_EMAILS) {
-      await sendReport(RESEND_API_KEY, NIGHTLY_REPORT_EMAILS, today, results, delta);
+      await sendReport(
+        RESEND_API_KEY,
+        NIGHTLY_REPORT_EMAILS,
+        today,
+        results,
+        delta,
+        audioReport,
+      );
     } else {
       log.warn("[nightly] Email skipped — RESEND_API_KEY or NIGHTLY_REPORT_EMAILS not set");
     }
@@ -356,6 +398,173 @@ export async function POST(request: Request) {
       { status: 500 }
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// Audio sync (run after CT) + report
+// ---------------------------------------------------------------------------
+
+interface NightlyJobTerminal {
+  status: string;
+  processedImages: number;
+  failedImages: number;
+}
+
+/**
+ * Run an audio_sync job for the nightly cron. Mirrors the CT pattern in the
+ * main handler: reuse an in-flight job if one exists, otherwise insert + kick
+ * the worker inline (not via `after()`, which only runs once the response is
+ * sent — we need it to run now so we can await terminal).
+ *
+ * Never throws — returns null on timeout/error so the cron can still send
+ * whatever email data it has.
+ */
+async function runNightlyAudioSync(): Promise<NightlyJobTerminal | null> {
+  try {
+    const [inflight] = db
+      .select({ id: processingJobs.id, status: processingJobs.status })
+      .from(processingJobs)
+      .where(
+        and(
+          eq(processingJobs.jobType, JOB_TYPES.AUDIO_SYNC),
+          inArray(processingJobs.status, ["pending", "processing"]),
+        ),
+      )
+      .all();
+
+    let jobId: number;
+    if (inflight) {
+      jobId = inflight.id;
+      log.info(
+        { jobId, status: inflight.status },
+        "[nightly] Reusing in-flight audio_sync job",
+      );
+      if (inflight.status === "pending") {
+        runAudioSyncWorker(jobId).catch((err) =>
+          log.error({ err, jobId }, "[nightly] audio worker rejected"),
+        );
+      }
+    } else {
+      const [job] = db
+        .insert(processingJobs)
+        .values({
+          jobType: JOB_TYPES.AUDIO_SYNC,
+          deploymentId: null,
+          cameraTrapProjectId: null,
+          status: "pending",
+          totalImages: 0,
+          processedImages: 0,
+          failedImages: 0,
+          statusMessage: "En cola (nightly)...",
+          createdBy: "cron@nightly",
+        })
+        .returning()
+        .all();
+      jobId = job.id;
+      log.info({ jobId }, "[nightly] Enqueued audio_sync job");
+      runAudioSyncWorker(jobId).catch((err) =>
+        log.error({ err, jobId }, "[nightly] audio worker rejected"),
+      );
+    }
+
+    const terminal = await awaitJobTerminal(jobId, {
+      intervalMs: POLL_INTERVAL_MS,
+      timeoutMs: AUDIO_SYNC_TIMEOUT_MS,
+    });
+
+    if (!terminal) {
+      log.error({ jobId }, "[nightly] audio_sync did not finish within timeout");
+      return null;
+    }
+    return terminal;
+  } catch (err) {
+    log.error({ err }, "[nightly] audio_sync failed");
+    return null;
+  }
+}
+
+export interface AudioReport {
+  /** Total indexed audio files across all deployments. */
+  totalFiles: number;
+  /** Total BirdNET detections (rows in audio_detections). */
+  totalDetections: number;
+  /** Distinct species across all audio_identifications. */
+  totalSpecies: number;
+  /** Deployments that have at least one indexed audio file. */
+  deploymentsWithAudio: number;
+  /** Audio files indexed since the previous nightly snapshot. */
+  newFilesSincePrev: number | null;
+  /** BirdNET detections created since the previous nightly snapshot. */
+  newDetectionsSincePrev: number | null;
+  /** BirdNET jobs that completed since the previous nightly snapshot. */
+  birdnetJobsCompletedSincePrev: number | null;
+  /** Previous snapshot date used to compute the "since" deltas. */
+  previousSnapshotDate: string | null;
+}
+
+/**
+ * Read audio totals + "new since previous snapshot" deltas. We piggy-back on
+ * the `previousSnapshotDate` from `uploadCountSnapshots` so the audio block
+ * shares the same comparison window as the CT block.
+ */
+async function collectAudioReport(
+  previousSnapshotDate: string | null,
+): Promise<AudioReport> {
+  const [files] = await db.select({ n: count() }).from(audioFiles);
+  const [detections] = await db.select({ n: count() }).from(audioDetections);
+  const [species] = await db
+    .select({ n: sql<number>`COUNT(DISTINCT ${audioIdentifications.species})` })
+    .from(audioIdentifications);
+  const [deps] = await db
+    .select({
+      n: sql<number>`COUNT(DISTINCT ${audioFiles.deploymentId})`,
+    })
+    .from(audioFiles);
+
+  let newFilesSincePrev: number | null = null;
+  let newDetectionsSincePrev: number | null = null;
+  let birdnetJobsCompletedSincePrev: number | null = null;
+
+  if (previousSnapshotDate) {
+    // Treat the previous snapshot's date as the lower bound (midnight UTC of
+    // that date). New rows since then are "today's progress" from the email's
+    // point of view.
+    const cutoff = new Date(`${previousSnapshotDate}T00:00:00Z`);
+    const [f] = await db
+      .select({ n: count() })
+      .from(audioFiles)
+      .where(gte(audioFiles.createdAt, cutoff));
+    newFilesSincePrev = f?.n ?? 0;
+
+    const [d] = await db
+      .select({ n: count() })
+      .from(audioDetections)
+      .where(gte(audioDetections.createdAt, cutoff));
+    newDetectionsSincePrev = d?.n ?? 0;
+
+    const [j] = await db
+      .select({ n: count() })
+      .from(processingJobs)
+      .where(
+        and(
+          eq(processingJobs.jobType, JOB_TYPES.BIRDNET),
+          eq(processingJobs.status, "completed"),
+          gte(processingJobs.completedAt, cutoff),
+        ),
+      );
+    birdnetJobsCompletedSincePrev = j?.n ?? 0;
+  }
+
+  return {
+    totalFiles: files?.n ?? 0,
+    totalDetections: detections?.n ?? 0,
+    totalSpecies: species?.n ?? 0,
+    deploymentsWithAudio: deps?.n ?? 0,
+    newFilesSincePrev,
+    newDetectionsSincePrev,
+    birdnetJobsCompletedSincePrev,
+    previousSnapshotDate,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -404,7 +613,8 @@ async function sendReport(
   recipientEmails: string,
   date: string,
   results: DeploymentResult[],
-  delta: SnapshotDelta
+  delta: SnapshotDelta,
+  audioReport: AudioReport,
 ) {
   const resend = new Resend(apiKey);
   const fromEmail = process.env.RESEND_FROM_EMAIL ?? "portal@fcat-ecuador.org";
@@ -420,7 +630,7 @@ async function sendReport(
     ? `Completado con errores (${errors.length} fallos)`
     : "Completado";
 
-  const html = buildEmailHtml(date, statusLine, results, delta, errors);
+  const html = buildEmailHtml(date, statusLine, results, delta, errors, audioReport);
 
   try {
     const { error } = await resend.emails.send({
@@ -481,12 +691,50 @@ function formatDeltaHtml(
   return ` <span style="color:${color};font-weight:600">${parts.join(", ")} ${sinceLabel}</span>`;
 }
 
+function formatNewSince(value: number | null, previousDate: string | null): string {
+  if (value === null) return "";
+  const sinceLabel = previousDate ? `desde ${previousDate}` : "desde último conteo";
+  if (value === 0) {
+    return ` <span style="color:#6b7280">sin cambios ${sinceLabel}</span>`;
+  }
+  const color = value > 0 ? "#16a34a" : "#dc2626";
+  return ` <span style="color:${color};font-weight:600">+${value.toLocaleString()} ${sinceLabel}</span>`;
+}
+
+function buildAudioSection(report: AudioReport): string {
+  return `
+  <h3 style="margin-top:32px">🎙️ Audio (BirdNET)</h3>
+  <table style="border-collapse:collapse;margin-top:8px">
+    <tr>
+      <td style="padding:6px 16px 6px 0;font-weight:600">Instalaciones con audio indexado</td>
+      <td style="padding:6px 0">${report.deploymentsWithAudio.toLocaleString()}</td>
+    </tr>
+    <tr>
+      <td style="padding:6px 16px 6px 0;font-weight:600">Archivos de audio</td>
+      <td style="padding:6px 0">${report.totalFiles.toLocaleString()}${formatNewSince(report.newFilesSincePrev, report.previousSnapshotDate)}</td>
+    </tr>
+    <tr>
+      <td style="padding:6px 16px 6px 0;font-weight:600">Detecciones BirdNET</td>
+      <td style="padding:6px 0">${report.totalDetections.toLocaleString()}${formatNewSince(report.newDetectionsSincePrev, report.previousSnapshotDate)}</td>
+    </tr>
+    <tr>
+      <td style="padding:6px 16px 6px 0;font-weight:600">Especies detectadas</td>
+      <td style="padding:6px 0">${report.totalSpecies.toLocaleString()}</td>
+    </tr>
+    <tr>
+      <td style="padding:6px 16px 6px 0;font-weight:600">Instalaciones analizadas</td>
+      <td style="padding:6px 0">${report.birdnetJobsCompletedSincePrev === null ? "—" : `${report.birdnetJobsCompletedSincePrev.toLocaleString()}${report.previousSnapshotDate ? ` desde ${report.previousSnapshotDate}` : ""}`}</td>
+    </tr>
+  </table>`;
+}
+
 function buildEmailHtml(
   date: string,
   statusLine: string,
   results: DeploymentResult[],
   delta: SnapshotDelta,
-  errors: DeploymentResult[]
+  errors: DeploymentResult[],
+  audioReport: AudioReport,
 ): string {
   const totalFiles = delta.totalCameras + delta.totalAudio + delta.totalIbutton;
   const totalSize = delta.totalCameraSizeBytes + delta.totalAudioSizeBytes + delta.totalIbuttonSizeBytes;
@@ -611,6 +859,8 @@ function buildEmailHtml(
   </table>
 
   ${newDeploymentsSection}
+
+  ${buildAudioSection(audioReport)}
 
   <h3 style="margin-top:24px">Por instalación</h3>
   <table style="border-collapse:collapse;width:100%;margin-top:8px">

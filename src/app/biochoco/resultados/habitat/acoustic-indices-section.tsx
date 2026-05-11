@@ -6,12 +6,15 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { BoxPlot, type BoxPlotGroup } from "@/components/box-plot";
 import type { AcousticIndicesData } from "@/app/audio/actions";
 import {
-  DIEL_PERIODS,
   DIEL_PERIOD_LABELS,
   type DielPeriod,
 } from "@/lib/acoustic-indices";
-import type { HabitatFilterOption } from "./filter-bar";
-import { habitatFilter } from "./filter-bar";
+import {
+  parseHabitatsParam,
+  parseDielParam,
+  habitatMatches,
+  type HabitatFilterOption,
+} from "./filter-utils";
 
 type IndexKey =
   | "soundscapeSaturation"
@@ -92,10 +95,13 @@ export function AcousticIndicesSection({
   const params = useSearchParams();
   const selectedHabitats = useMemo(
     () =>
-      habitatFilter.parseHabitats(params.get("h_habitats") ?? undefined, habitatOptions),
+      parseHabitatsParam(
+        params.get("h_habitats") ?? undefined,
+        habitatOptions,
+      ),
     [params, habitatOptions],
   );
-  const selectedDiel = habitatFilter.parseDiel(
+  const selectedDiel = parseDielParam(
     params.get("h_diel") ?? undefined,
     availableDielPeriods,
   );
@@ -104,7 +110,7 @@ export function AcousticIndicesSection({
     return data.groups.filter(
       (g) =>
         g.dielPeriod === selectedDiel &&
-        habitatFilter.matches(g.habitatKey, selectedHabitats),
+        habitatMatches(g.habitatKey, selectedHabitats),
     );
   }, [data.groups, selectedDiel, selectedHabitats]);
 
@@ -191,13 +197,3 @@ function formatIndexTick(v: number): string {
   return v.toFixed(2);
 }
 
-/** Compute diel periods that have actual data, in the canonical order. */
-export function dielPeriodsWithData(
-  groups: AcousticIndicesData["groups"],
-): DielPeriod[] {
-  const present = new Set<DielPeriod>();
-  for (const g of groups) {
-    if (g.points.length > 0) present.add(g.dielPeriod);
-  }
-  return DIEL_PERIODS.filter((d) => present.has(d));
-}

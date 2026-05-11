@@ -6,7 +6,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { HabitatSpeciesRollup } from "../habitat-actions";
-import { habitatFilter, type HabitatFilterOption } from "./filter-bar";
+import {
+  parseHabitatsParam,
+  habitatMatches,
+  type HabitatFilterOption,
+} from "./filter-utils";
 
 const LOW_COVERAGE_THRESHOLD = 4;
 
@@ -31,7 +35,7 @@ export function SpeciesSection({
   const params = useSearchParams();
   const selected = useMemo(
     () =>
-      habitatFilter.parseHabitats(
+      parseHabitatsParam(
         params.get("h_habitats") ?? undefined,
         habitatOptions,
       ),
@@ -39,7 +43,7 @@ export function SpeciesSection({
   );
 
   const visible = useMemo(
-    () => data.filter((r) => habitatFilter.matches(r.habitatKey, selected)),
+    () => data.filter((r) => habitatMatches(r.habitatKey, selected)),
     [data, selected],
   );
 

@@ -170,10 +170,7 @@ export function SidebarNav({ user }: SidebarNavProps) {
     analysisItems.push({
       label: "Grabaciones",
       icon: "audio-lines",
-      children: [
-        { label: "Instalaciones", href: "/audio" },
-        { label: "Índices acústicos", href: "/audio/indices" },
-      ],
+      children: [{ label: "Instalaciones", href: "/audio" }],
     });
   }
 

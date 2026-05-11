@@ -25,9 +25,11 @@ import { getHabitatName } from "@/app/biochoco/overview/types";
 import {
   getAcousticIndicesForProject,
   type AcousticIndicesData,
+  type AcousticIndicesGroup,
 } from "@/app/audio/actions";
 import { fetchTemperatureDistributions } from "@/app/biochoco/ibutton/actions";
 import type { DeploymentStatPoint } from "@/app/biochoco/ibutton/types";
+import type { SiteAudioData, SiteAudioSpecies } from "./types";
 
 const UNKNOWN_HABITAT_COLOR = "#94a3b8"; // slate-400 — matches box plot neutral
 const UNKNOWN_HABITAT_LABEL = "Sin clasificar";
@@ -483,6 +485,159 @@ export async function fetchHabitatDashboardData(): Promise<
     return {
       success: false,
       error: err instanceof Error ? err.message : "Error al cargar el panel",
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Per-site audio data (used by the site detail drill-down)
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns acoustic indices + verified BirdNET species for the supplied
+ * deployment IDs. Used by /biochoco/resultados/[siteId] to render the audio
+ * panels under Fauna. Public-share variant skips this entirely.
+ */
+export async function fetchSiteAudio(
+  deploymentIds: number[],
+): Promise<ActionResult<SiteAudioData>> {
+  await requirePermission("biochoco", "viewer");
+  try {
+    if (deploymentIds.length === 0) {
+      return {
+        success: true,
+        data: {
+          hasAudio: false,
+          indices: [],
+          species: [],
+          reviewedDeploymentCount: 0,
+          totalAudioDeploymentCount: 0,
+        },
+      };
+    }
+
+    const ctProjectId = await getBiochocoCameraTrapProjectId();
+    if (!ctProjectId) {
+      return {
+        success: true,
+        data: {
+          hasAudio: false,
+          indices: [],
+          species: [],
+          reviewedDeploymentCount: 0,
+          totalAudioDeploymentCount: 0,
+        },
+      };
+    }
+
+    const depIdSet = new Set(deploymentIds);
+
+    // Deployments at this site that actually have audio files.
+    const audioDepRows = await db
+      .selectDistinct({ deploymentId: audioFiles.deploymentId })
+      .from(audioFiles)
+      .where(inArray(audioFiles.deploymentId, deploymentIds));
+    const audioDepIds = audioDepRows.map((r) => r.deploymentId);
+
+    if (audioDepIds.length === 0) {
+      return {
+        success: true,
+        data: {
+          hasAudio: false,
+          indices: [],
+          species: [],
+          reviewedDeploymentCount: 0,
+          totalAudioDeploymentCount: 0,
+        },
+      };
+    }
+
+    // Deployments where at least one annotation has been reviewed.
+    const reviewedRows = await db
+      .selectDistinct({ deploymentId: audioFiles.deploymentId })
+      .from(audioIdentifications)
+      .innerJoin(
+        audioDetections,
+        eq(audioDetections.id, audioIdentifications.audioDetectionId),
+      )
+      .innerJoin(audioFiles, eq(audioFiles.id, audioDetections.audioFileId))
+      .where(
+        and(
+          inArray(audioFiles.deploymentId, audioDepIds),
+          ne(audioIdentifications.verificationStatus, "unverified"),
+        ),
+      );
+    const reviewedDeploymentCount = reviewedRows.length;
+
+    // Verified species, aggregated.
+    const speciesRows = await db
+      .select({
+        speciesName: sql<string>`coalesce(${audioIdentifications.correctedSpecies}, ${audioIdentifications.species})`,
+        spanishName: species.spanishName,
+        commonName: species.commonName,
+        detectionCount: sql<number>`count(*)`,
+        avgConfidence: sql<number>`round(avg(${audioIdentifications.confidence}), 3)`,
+      })
+      .from(audioIdentifications)
+      .innerJoin(
+        audioDetections,
+        eq(audioDetections.id, audioIdentifications.audioDetectionId),
+      )
+      .innerJoin(audioFiles, eq(audioFiles.id, audioDetections.audioFileId))
+      .leftJoin(
+        species,
+        sql`${species.scientificName} = coalesce(${audioIdentifications.correctedSpecies}, ${audioIdentifications.species})`,
+      )
+      .where(
+        and(
+          inArray(audioFiles.deploymentId, audioDepIds),
+          inArray(audioIdentifications.verificationStatus, [
+            ...VERIFIED_ID_STATUSES,
+          ]),
+        ),
+      )
+      .groupBy(
+        sql`coalesce(${audioIdentifications.correctedSpecies}, ${audioIdentifications.species})`,
+      )
+      .orderBy(sql`count(*) DESC`);
+
+    const audioSpecies: SiteAudioSpecies[] = speciesRows
+      .filter((r) => Boolean(r.speciesName))
+      .map((r) => ({
+        speciesName: r.speciesName,
+        spanishName: r.spanishName,
+        commonName: r.commonName,
+        detectionCount: r.detectionCount,
+        avgConfidence: r.avgConfidence,
+      }));
+
+    // Acoustic indices: reuse the project-wide aggregator and filter to this
+    // site's deployments. The result is small enough that re-grouping in
+    // memory is fine; saves us a parallel query path.
+    const projectIndices = await getAcousticIndicesForProject(ctProjectId);
+    const siteIndices: AcousticIndicesGroup[] = projectIndices.success
+      ? projectIndices.data.groups
+          .map((g) => ({
+            ...g,
+            points: g.points.filter((p) => depIdSet.has(p.deploymentId)),
+          }))
+          .filter((g) => g.points.length > 0)
+      : [];
+
+    return {
+      success: true,
+      data: {
+        hasAudio: true,
+        indices: siteIndices,
+        species: audioSpecies,
+        reviewedDeploymentCount,
+        totalAudioDeploymentCount: audioDepIds.length,
+      },
+    };
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : "Error al cargar audio del sitio",
     };
   }
 }

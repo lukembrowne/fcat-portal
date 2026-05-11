@@ -2,12 +2,14 @@ import {
   fetchHabitatDashboardData,
   type HabitatDashboardData,
 } from "./habitat-actions";
+import { FilterBar } from "./habitat/filter-bar";
 import {
-  FilterBar,
-  habitatFilter,
+  buildHabitatOption,
+  UNKNOWN_KEY,
   type HabitatFilterOption,
-} from "./habitat/filter-bar";
-import { AcousticIndicesSection, dielPeriodsWithData } from "./habitat/acoustic-indices-section";
+} from "./habitat/filter-utils";
+import { AcousticIndicesSection } from "./habitat/acoustic-indices-section";
+import { dielPeriodsWithData } from "./habitat/filter-utils";
 import { SpeciesSection } from "./habitat/species-section";
 import { TemperatureSection } from "./habitat/temperature-section";
 
@@ -94,10 +96,10 @@ function collectHabitatOptions(
   for (const r of data.audioSpecies) keys.add(r.habitatKey);
   for (const g of data.acousticIndices.groups) keys.add(g.habitatKey);
   for (const p of data.temperature.points) keys.add(p.habitatType);
-  const options = Array.from(keys).map((k) => habitatFilter.buildOption(k));
+  const options = Array.from(keys).map((k) => buildHabitatOption(k));
   return options.sort((a, b) => {
-    if (a.key === habitatFilter.UNKNOWN_KEY) return 1;
-    if (b.key === habitatFilter.UNKNOWN_KEY) return -1;
+    if (a.key === UNKNOWN_KEY) return 1;
+    if (b.key === UNKNOWN_KEY) return -1;
     return a.label.localeCompare(b.label);
   });
 }

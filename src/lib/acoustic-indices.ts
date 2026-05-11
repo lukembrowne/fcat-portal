@@ -14,7 +14,7 @@
 export const DIEL_PERIODS = ["dawn", "midday", "dusk", "night", "other"] as const;
 export type DielPeriod = (typeof DIEL_PERIODS)[number];
 
-/** Spanish labels rendered next to the diel-period tabs on /audio/indices. */
+/** Spanish labels for the diel-period selector on the habitat dashboard. */
 export const DIEL_PERIOD_LABELS: Record<DielPeriod, string> = {
   dawn: "Madrugada (05–07)",
   midday: "Mediodía (11–13)",

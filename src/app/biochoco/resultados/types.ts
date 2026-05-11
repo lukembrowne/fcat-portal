@@ -67,3 +67,29 @@ export interface SiteDetail {
   habitat: HabitatAssessment | null;
   habitatAssessmentCount: number;
 }
+
+/** Verified BirdNET species detected at a site, used by the audio panels. */
+export interface SiteAudioSpecies {
+  speciesName: string;
+  spanishName: string | null;
+  commonName: string | null;
+  detectionCount: number;
+  avgConfidence: number;
+}
+
+/**
+ * Audio data for a single site's drill-down. Returned separately from
+ * SiteDetail so the public share view (which hides audio) can skip this
+ * fetch entirely.
+ */
+export interface SiteAudioData {
+  hasAudio: boolean;
+  /** Per-diel acoustic indices boxplot groups for this site's deployments. */
+  indices: import("@/app/audio/actions").AcousticIndicesGroup[];
+  /** Verified BirdNET species observed at the site. */
+  species: SiteAudioSpecies[];
+  /** Deployments with at least one reviewed annotation. */
+  reviewedDeploymentCount: number;
+  /** All audio deployments at the site (denominator for the badge). */
+  totalAudioDeploymentCount: number;
+}

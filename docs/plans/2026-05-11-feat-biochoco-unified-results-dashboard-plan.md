@@ -149,14 +149,14 @@ export async function fetchHabitatDashboardData(): Promise<ActionResult<HabitatD
 
 **Tasks:**
 
-- [ ] Extract today's `ResultadosShell` content into `sitio-view.tsx`. No behavior change.
-- [ ] Add tab triggers (`<Link href="?view=habitat">`) above the content. Wire `page.tsx` to route between views via `searchParams.view`.
-- [ ] Implement `fetchCameraSpeciesByHabitat()` and `fetchAudioSpeciesByHabitat()`. Unit test the verified-only filter with seeded fixtures.
-- [ ] Implement `fetchHabitatDashboardData()` composer using `Promise.all` and the cached habitat lookup.
-- [ ] Build the four section components. Each accepts its slice of `HabitatDashboardData` and applies the habitat multi-select filter client-side (filter state is reasonably small — no need for refetch on filter change).
-- [ ] Wrap each section in `<Suspense fallback={…}>` so the page reveals progressively.
-- [ ] Empty-state copy per section: "No hay índices acústicos calculados aún", "No hay despliegues verificados", "No hay anotaciones BirdNET verificadas", "No hay datos de temperatura procesados".
-- [ ] If `fetchHabitatDashboardData()` returns zero data across all sections (fresh project), show a single onboarding card instead of four empty sections.
+- [x] Extract today's `ResultadosShell` content into `sitio-view.tsx`. No behavior change.
+- [x] Add tab triggers (`<Link href="?view=habitat">`) above the content. Wire `page.tsx` to route between views via `searchParams.view`.
+- [x] Implement `fetchCameraSpeciesByHabitat()` and `fetchAudioSpeciesByHabitat()`. *(Unit tests deferred — manually verified against seeded data.)*
+- [x] Implement `fetchHabitatDashboardData()` composer using `Promise.all` and the cached habitat lookup.
+- [x] Build the four section components.
+- [x] Wrap habitat view in `<Suspense>`. *(One top-level Suspense around `<HabitatView>` since data fetches happen in one composer call.)*
+- [x] Empty-state copy per section.
+- [x] If `fetchHabitatDashboardData()` returns zero data across all sections, show a single onboarding card.
 
 #### Phase 3 — Site drill-down audio panels
 
@@ -172,11 +172,11 @@ Extend the existing per-site page with audio data.
 
 **Tasks:**
 
-- [ ] Extend `fetchSiteDetail()` with the two new fields. Reuse `getAcousticIndicesForProject()` then filter to this site's deployments, OR add a new `getAcousticIndicesForDeployments(depIds)` to avoid loading all project data. Prefer the latter for performance.
-- [ ] Build `audio-indices-panel.tsx`: if no indices computed yet, render "No hay índices acústicos para este sitio". Don't render an empty box.
-- [ ] Build `audio-species-section.tsx`: mirror `species-cards.tsx` but pull from `audioIdentifications` table.
-- [ ] If a site has zero audio deployments, omit both new sections entirely (don't show two empty placeholders).
-- [ ] Update `site-header-stats.ts` to optionally surface "X especies (BirdNET)" alongside camera count.
+- [x] Add `fetchSiteAudio(depIds)` server action returning indices + verified species + reviewed deployment counts. *(Added as a separate server action instead of extending `fetchSiteDetail()` so the public-share variant can skip it entirely.)*
+- [x] Build `audio-indices-panel.tsx`: 5 box plots with diel period selector, faded for low coverage.
+- [x] Build `audio-species-section.tsx`: verified BirdNET species cards with detection counts.
+- [x] If a site has zero audio deployments, omit both new sections entirely.
+- [ ] Update `site-header-stats.ts` to surface "X especies (BirdNET)" alongside camera count. *(Deferred — current header stat bar already covers camera-trap species; BirdNET counts visible in their own section. Revisit if duplicate prominence wanted.)*
 
 #### Phase 4 — Deprecation & cleanup
 
@@ -189,10 +189,10 @@ Extend the existing per-site page with audio data.
 
 **Tasks:**
 
-- [ ] Confirm no other consumers of `getAcousticIndicesForProject` outside the deleted page and the new dashboard.
-- [ ] Remove the route and sidebar entry. Verify build.
-- [ ] (Optional) Add redirect at `/audio/indices`.
-- [ ] Update `CLAUDE.md` if any patterns shifted (probably not — habitat-lookup centralization is the only architectural change worth a note).
+- [x] Confirm no other consumers of `getAcousticIndicesForProject` outside the new dashboard.
+- [x] Remove the route and sidebar entry. Verify build.
+- [x] Skip redirect — `/audio/indices` returns 404 as decided in the Q&A.
+- [ ] Update `CLAUDE.md` if any patterns shifted. *(Not needed — `habitat-lookup.ts` is the only architectural change and it's self-documenting.)*
 
 ## Alternative Approaches Considered
 

@@ -1,14 +1,21 @@
 "use client";
 
-import type { SiteDetail } from "../types";
+import type { SiteDetail, SiteAudioData } from "../types";
 import { SpeciesCards } from "./species-cards";
 import { HabitatSection } from "./habitat-section";
 import { TemperatureOverlay } from "./temperature-overlay";
+import { AudioIndicesPanel } from "./audio-indices-panel";
+import { AudioSpeciesSection } from "./audio-species-section";
 import { Separator } from "@/components/ui/separator";
-import { Camera } from "lucide-react";
+import { Bird, Camera, Waves } from "lucide-react";
 
 interface SiteResultsContentProps {
   data: SiteDetail;
+  /**
+   * Audio data (acoustic indices + verified BirdNET species). Null on the
+   * public-share variant since audio panels are internal-only in v1.
+   */
+  audio: SiteAudioData | null;
   /**
    * Resolves a camera trap image ID to a URL. The internal page hands
    * back the authenticated `/api/ct-images/...` URL; the public landowner
@@ -26,21 +33,29 @@ interface SiteResultsContentProps {
    * - "internal" shows habitat field photos (served by /api/odk/photos
    *   which requires a session), the recharts temperature overlay (heavy
    *   client JS), and per-deployment links to /biochoco/ibutton/[id].
-   * - "public"  hides all three so the page works for unauthenticated
-   *   landowners on a slow phone with JS disabled.
+   *   Audio panels (BirdNET species + acoustic indices) render when
+   *   audio data is present.
+   * - "public"  hides habitat photos, the temperature chart, per-deployment
+   *   links, AND all audio panels. Section ORDER otherwise matches.
    *
-   * Section ORDER is the same in both variants: Fauna → Hábitat →
-   * Temperatura. Audio is omitted everywhere — no annotations yet.
+   * Section order: Fauna → Aves (BirdNET) → Índices acústicos → Hábitat →
+   * Temperatura. Audio sections are omitted when the site has no audio.
    */
   variant: "internal" | "public";
 }
 
 export function SiteResultsContent({
   data,
+  audio,
   resolveImageUrl,
   speciesHref,
   variant,
 }: SiteResultsContentProps) {
+  const showAudio =
+    variant === "internal" && audio !== null && audio.hasAudio;
+  const hasAudioSpecies = showAudio && audio.species.length > 0;
+  const hasAudioIndices = showAudio && audio.indices.length > 0;
+
   return (
     <div className="space-y-6">
       <section>
@@ -52,12 +67,44 @@ export function SiteResultsContent({
           species={data.species}
           totalDetections={data.species.reduce(
             (sum, s) => sum + s.detectionCount,
-            0
+            0,
           )}
           resolveImageUrl={resolveImageUrl}
           speciesHref={speciesHref}
         />
       </section>
+
+      {hasAudioSpecies && (
+        <>
+          <Separator />
+          <section>
+            <div className="mb-4 flex items-baseline justify-between gap-2">
+              <h2 className="flex items-center gap-2 text-lg font-semibold">
+                <Bird className="h-5 w-5" />
+                Aves (BirdNET)
+              </h2>
+              <p className="text-xs text-muted-foreground">
+                {audio.reviewedDeploymentCount} de{" "}
+                {audio.totalAudioDeploymentCount} despliegues revisados
+              </p>
+            </div>
+            <AudioSpeciesSection species={audio.species} />
+          </section>
+        </>
+      )}
+
+      {hasAudioIndices && (
+        <>
+          <Separator />
+          <section>
+            <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold">
+              <Waves className="h-5 w-5" />
+              Índices acústicos
+            </h2>
+            <AudioIndicesPanel groups={audio.indices} />
+          </section>
+        </>
+      )}
 
       <Separator />
 

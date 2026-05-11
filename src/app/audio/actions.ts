@@ -909,7 +909,7 @@ async function processAcousticIndicesJob(jobId: number): Promise<void> {
     if (job.deploymentId != null) {
       revalidatePath(`/audio/${job.deploymentId}`);
     }
-    revalidatePath("/audio/indices");
+    revalidatePath("/biochoco/resultados");
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     log.error({ err, jobId }, "[acoustic-indices] Job failed");
@@ -964,7 +964,7 @@ async function cancelAcousticIndicesJob(
   if (job.deploymentId != null) {
     revalidatePath(`/audio/${job.deploymentId}`);
   }
-  revalidatePath("/audio/indices");
+  revalidatePath("/biochoco/resultados");
   return { success: true, data: undefined };
 }
 
@@ -1389,7 +1389,7 @@ async function processAudioAnalysisJob(
     );
 
     revalidatePath(`/audio/${deploymentId}`);
-    revalidatePath("/audio/indices");
+    revalidatePath("/biochoco/resultados");
     revalidatePath("/audio");
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -1444,7 +1444,7 @@ async function cancelAudioAnalysisJob(
     .where(eq(processingJobs.id, jobId));
 
   revalidatePath(`/audio/${job.deploymentId}`);
-  revalidatePath("/audio/indices");
+  revalidatePath("/biochoco/resultados");
   revalidatePath("/audio");
   return { success: true, data: undefined };
 }
@@ -1516,7 +1516,7 @@ async function loadSiteHabitatMapSafe(): Promise<Map<string, string>> {
 
 /**
  * Returns per-deployment medians of each index, grouped by (habitat, diel_period).
- * The diel-period tabs and BoxPlotChart on /audio/indices both consume this shape.
+ * Consumed by the BioChoco habitat dashboard at /biochoco/resultados?view=habitat.
  */
 export async function getAcousticIndicesForProject(
   cameraTrapProjectId: number

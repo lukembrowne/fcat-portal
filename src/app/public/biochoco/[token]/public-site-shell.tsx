@@ -60,6 +60,7 @@ export function PublicSiteShell({ data, token }: PublicSiteShellProps) {
 
       <SiteResultsContent
         data={data}
+        audio={null}
         resolveImageUrl={resolveImageUrl}
         speciesHref={speciesHref}
         variant="public"

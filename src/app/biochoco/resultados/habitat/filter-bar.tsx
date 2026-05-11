@@ -8,16 +8,11 @@ import {
   type DielPeriod,
 } from "@/lib/acoustic-indices";
 import { Button } from "@/components/ui/button";
-import { getHabitatName } from "../../overview/types";
-import { HABITAT_COLORS } from "../../habitat/types";
-
-const UNKNOWN_KEY = "unknown";
-
-export interface HabitatFilterOption {
-  key: string;
-  label: string;
-  color: string;
-}
+import {
+  parseHabitats,
+  parseDiel,
+  type HabitatFilterOption,
+} from "./filter-utils";
 
 interface FilterBarProps {
   habitatOptions: HabitatFilterOption[];
@@ -159,56 +154,3 @@ export function FilterBar({ habitatOptions, availableDielPeriods }: FilterBarPro
     </div>
   );
 }
-
-function parseHabitats(
-  raw: string | null,
-  options: HabitatFilterOption[],
-): Set<string> {
-  if (!raw) return new Set();
-  const valid = new Set(options.map((o) => o.key));
-  const result = new Set<string>();
-  for (const token of raw.split(",")) {
-    const t = token.trim();
-    if (t && valid.has(t)) result.add(t);
-  }
-  return result;
-}
-
-function parseDiel(
-  raw: string | null,
-  available: DielPeriod[],
-): DielPeriod {
-  if (!raw || !available.length) return available[0] ?? ("dawn" as DielPeriod);
-  if ((available as readonly string[]).includes(raw)) return raw as DielPeriod;
-  return available[0];
-}
-
-/** Shared helpers also used by the section components. */
-export const habitatFilter = {
-  /** Read habitats from URL params on the server side (for SSR). */
-  parseHabitats(rawParam: string | string[] | undefined, options: HabitatFilterOption[]) {
-    const raw = Array.isArray(rawParam) ? rawParam[0] : rawParam;
-    return parseHabitats(raw ?? null, options);
-  },
-  parseDiel(
-    rawParam: string | string[] | undefined,
-    available: DielPeriod[],
-  ): DielPeriod {
-    const raw = Array.isArray(rawParam) ? rawParam[0] : rawParam;
-    return parseDiel(raw ?? null, available);
-  },
-  /** True when a habitat should be visible given the current filter. */
-  matches(key: string, selected: Set<string>): boolean {
-    if (selected.size === 0) return true;
-    return selected.has(key);
-  },
-  UNKNOWN_KEY,
-  buildOption(habitatKey: string): HabitatFilterOption {
-    return {
-      key: habitatKey,
-      label:
-        habitatKey === UNKNOWN_KEY ? "Sin clasificar" : getHabitatName(habitatKey),
-      color: HABITAT_COLORS[habitatKey] ?? "#94a3b8",
-    };
-  },
-};

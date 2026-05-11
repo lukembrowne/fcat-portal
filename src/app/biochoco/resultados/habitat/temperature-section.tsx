@@ -5,7 +5,11 @@ import { useSearchParams } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { BoxPlot, type BoxPlotGroup } from "@/components/box-plot";
 import type { DeploymentStatPoint } from "@/app/biochoco/ibutton/types";
-import { habitatFilter, type HabitatFilterOption } from "./filter-bar";
+import {
+  parseHabitatsParam,
+  habitatMatches,
+  type HabitatFilterOption,
+} from "./filter-utils";
 
 type TempStat = "tempMin" | "tempMean" | "tempMax";
 
@@ -43,7 +47,7 @@ export function TemperatureSection({
   const params = useSearchParams();
   const selected = useMemo(
     () =>
-      habitatFilter.parseHabitats(
+      parseHabitatsParam(
         params.get("h_habitats") ?? undefined,
         habitatOptions,
       ),
@@ -51,7 +55,7 @@ export function TemperatureSection({
   );
 
   const filteredPoints = useMemo(
-    () => points.filter((p) => habitatFilter.matches(p.habitatType, selected)),
+    () => points.filter((p) => habitatMatches(p.habitatType, selected)),
     [points, selected],
   );
 

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import type { SiteDetail } from "../types";
+import type { SiteDetail, SiteAudioData } from "../types";
 import { getHabitatName } from "../../overview/types";
 import { SiteResultsContent } from "./site-results-content";
 import { SiteShareButton } from "./site-share-button";
@@ -19,6 +19,8 @@ interface SiteShareLink {
 
 interface SiteDetailShellProps {
   data: SiteDetail;
+  /** Audio panels (acoustic indices + BirdNET species). Null on share-public view. */
+  audio: SiteAudioData | null;
   siteId: string;
   /** True only for biochoco editors+ — gates the share button render. */
   canShare: boolean;
@@ -30,6 +32,7 @@ const internalImageUrl = (id: number, size: "thumb" | "large") =>
 
 export function SiteDetailShell({
   data,
+  audio,
   siteId,
   canShare,
   existingShareLink,
@@ -88,6 +91,7 @@ export function SiteDetailShell({
 
       <SiteResultsContent
         data={data}
+        audio={audio}
         resolveImageUrl={internalImageUrl}
         speciesHref={null}
         variant="internal"

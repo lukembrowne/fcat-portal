@@ -7,6 +7,7 @@ import {
   audioFiles,
   audioDetections,
   audioIdentifications,
+  acousticIndices,
   cameraTrapProjects,
   processingJobs,
 } from "@/db/schema";
@@ -23,7 +24,21 @@ import path from "path";
 import { log } from "@/lib/log";
 import { ensureAudioCached } from "@/lib/audio-cache";
 import { runBirdNETAnalysis } from "@/lib/birdnet-runner";
+import {
+  runAcousticIndicesAnalysis,
+  type AcousticIndicesResult,
+} from "@/lib/acoustic-indices-runner";
 import { scanDeploymentAudioInternal } from "@/lib/audio-sync-internals";
+import { JOB_TYPES } from "@/lib/job-types";
+import { fetchEntities } from "@/lib/odk-client";
+import {
+  BIOCHOCO_PROJECT_ID,
+  BIOCHOCO_DATASET_SITES,
+} from "@/lib/odk-constants";
+import type { OdkSiteEntity } from "@/lib/odk-types";
+import { HABITAT_COLORS } from "@/app/biochoco/habitat/types";
+import { getHabitatName } from "@/app/biochoco/overview/types";
+import { DIEL_PERIODS, type DielPeriod } from "@/lib/acoustic-indices";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -598,13 +613,548 @@ export async function cancelProcessingJob(
     return { success: false, error: "Trabajo no encontrado" };
   }
 
-  if (job.jobType === "birdnet") {
+  if (job.jobType === JOB_TYPES.BIRDNET) {
     return cancelBirdNETJob(jobId);
+  }
+
+  if (job.jobType === JOB_TYPES.ACOUSTIC_INDICES) {
+    return cancelAcousticIndicesJob(jobId);
   }
 
   // For camera trap jobs, delegate to camera-trap cancel
   const { cancelJob } = await import("@/app/camera-trap/actions");
   return cancelJob(jobId);
+}
+
+// ---------------------------------------------------------------------------
+// Acoustic Indices
+// ---------------------------------------------------------------------------
+
+interface CreateAcousticIndicesJobInput {
+  deploymentId?: number;
+  cameraTrapProjectId?: number;
+  /** Bypass the single-flight guard. Used internally for batch flows. */
+  force?: boolean;
+}
+
+/**
+ * Enqueue an acoustic-indices computation. Scope is determined by which of
+ * `deploymentId` / `cameraTrapProjectId` is set:
+ *
+ *   - `deploymentId`: editor on `grabaciones` + deployment access.
+ *   - `cameraTrapProjectId`: admin on `grabaciones` (project-wide scan).
+ *   - neither: error.
+ *
+ * Single-flight is enforced at the DB level — concurrent jobs for the same
+ * scope are refused unless `force: true`.
+ */
+export async function createAcousticIndicesJob(
+  input: CreateAcousticIndicesJobInput
+): Promise<ActionResult<{ jobId: number }>> {
+  const { deploymentId, cameraTrapProjectId, force } = input;
+
+  if (deploymentId == null && cameraTrapProjectId == null) {
+    return {
+      success: false,
+      error: "Especifica una instalación o un proyecto",
+    };
+  }
+
+  // Scope-specific auth: admin gates project-wide, editor gates per-deployment.
+  const user = cameraTrapProjectId != null
+    ? await requirePermission("grabaciones", "admin")
+    : await requirePermission("grabaciones", "editor");
+  if (deploymentId != null) {
+    await requireDeploymentAccess(user, deploymentId);
+  }
+
+  // Count target files. Project-wide skips deployments without audio.
+  let totalFiles = 0;
+  if (deploymentId != null) {
+    const [row] = await db
+      .select({ count: sql<number>`COUNT(*)` })
+      .from(audioFiles)
+      .where(eq(audioFiles.deploymentId, deploymentId));
+    totalFiles = row?.count ?? 0;
+  } else if (cameraTrapProjectId != null) {
+    const [row] = await db
+      .select({ count: sql<number>`COUNT(*)` })
+      .from(audioFiles)
+      .innerJoin(deployments, eq(audioFiles.deploymentId, deployments.id))
+      .where(eq(deployments.cameraTrapProjectId, cameraTrapProjectId));
+    totalFiles = row?.count ?? 0;
+  }
+
+  if (totalFiles === 0) {
+    return {
+      success: false,
+      error: "No hay archivos de audio en este alcance",
+    };
+  }
+
+  // DB single-flight: refuse if a pending/processing job already exists for
+  // this exact scope. The plan rejects the in-process Map — the row is the
+  // authority across processes, restarts, and deploys.
+  if (!force) {
+    const scopeFilter = deploymentId != null
+      ? eq(processingJobs.deploymentId, deploymentId)
+      : eq(processingJobs.cameraTrapProjectId, cameraTrapProjectId!);
+    const [activeJob] = await db
+      .select({ id: processingJobs.id })
+      .from(processingJobs)
+      .where(
+        and(
+          scopeFilter,
+          eq(processingJobs.jobType, JOB_TYPES.ACOUSTIC_INDICES),
+          inArray(processingJobs.status, ["pending", "processing"])
+        )
+      )
+      .limit(1);
+    if (activeJob) {
+      return {
+        success: false,
+        error: "Ya existe un cálculo de índices acústicos activo para este alcance",
+      };
+    }
+  }
+
+  const [job] = await db
+    .insert(processingJobs)
+    .values({
+      deploymentId: deploymentId ?? null,
+      cameraTrapProjectId: cameraTrapProjectId ?? null,
+      jobType: JOB_TYPES.ACOUSTIC_INDICES,
+      totalImages: totalFiles,
+      status: "pending",
+      createdBy: user.email,
+      statusMessage: "Preparando cálculo de índices acústicos...",
+    })
+    .returning();
+
+  processAcousticIndicesJob(job.id).catch((err) => {
+    log.error(
+      { err, jobId: job.id },
+      "[acoustic-indices] Unhandled error in processAcousticIndicesJob"
+    );
+  });
+
+  return { success: true, data: { jobId: job.id } };
+}
+
+async function processAcousticIndicesJob(jobId: number): Promise<void> {
+  try {
+    await db
+      .update(processingJobs)
+      .set({ status: "processing", startedAt: new Date() })
+      .where(eq(processingJobs.id, jobId));
+
+    const [job] = await db
+      .select()
+      .from(processingJobs)
+      .where(eq(processingJobs.id, jobId));
+    if (!job) throw new Error(`Job ${jobId} not found`);
+
+    // Resolve the file set for this scope (deployment or project).
+    const fileRows = job.deploymentId != null
+      ? await db
+          .select({
+            id: audioFiles.id,
+            filename: audioFiles.filename,
+            driveFileId: audioFiles.driveFileId,
+          })
+          .from(audioFiles)
+          .where(eq(audioFiles.deploymentId, job.deploymentId))
+      : job.cameraTrapProjectId != null
+        ? await db
+            .select({
+              id: audioFiles.id,
+              filename: audioFiles.filename,
+              driveFileId: audioFiles.driveFileId,
+            })
+            .from(audioFiles)
+            .innerJoin(
+              deployments,
+              eq(audioFiles.deploymentId, deployments.id)
+            )
+            .where(
+              eq(deployments.cameraTrapProjectId, job.cameraTrapProjectId)
+            )
+        : [];
+
+    const filesWithDrive = fileRows.filter((f) => f.driveFileId !== null);
+    const downloadTotal = filesWithDrive.length;
+
+    await db
+      .update(processingJobs)
+      .set({
+        downloadTotal,
+        statusMessage: `Descargando audio... (0 de ${downloadTotal})`,
+      })
+      .where(eq(processingJobs.id, jobId));
+
+    // Phase 1: Cache audio locally. Same shape as BirdNET worker; skip per
+    // file on failure rather than aborting the run.
+    let downloadedCount = 0;
+    const cachedFiles: Array<{ id: number; path: string; filename: string }> = [];
+
+    for (const file of filesWithDrive) {
+      try {
+        const cachePath = await ensureAudioCached(file.id);
+        cachedFiles.push({
+          id: file.id,
+          path: cachePath,
+          filename: file.filename,
+        });
+        downloadedCount++;
+        await db
+          .update(processingJobs)
+          .set({
+            downloadedImages: downloadedCount,
+            statusMessage: `Descargando audio... (${downloadedCount} de ${downloadTotal})`,
+          })
+          .where(eq(processingJobs.id, jobId));
+      } catch (err) {
+        log.warn(
+          { err, fileId: file.id },
+          "[acoustic-indices] Failed to cache audio file, skipping"
+        );
+      }
+    }
+
+    if (cachedFiles.length === 0) {
+      throw new Error("No audio files could be cached for indices computation");
+    }
+
+    await db
+      .update(processingJobs)
+      .set({
+        processedImages: 0,
+        statusMessage: "Iniciando cálculo de índices acústicos...",
+      })
+      .where(eq(processingJobs.id, jobId));
+
+    // Phase 2: spawn the Python runner. Sequential per-file UPSERT keeps the
+    // BUSY pressure low and dodges the "async transaction" trap documented at
+    // docs/solutions/runtime-errors/async-transaction-better-sqlite3-CameraTrap-20260223.md
+    const result = await runAcousticIndicesAnalysis({
+      jobId,
+      files: cachedFiles,
+      onResult: async (r: AcousticIndicesResult) => {
+        const now = new Date();
+        await db
+          .insert(acousticIndices)
+          .values({
+            audioFileId: r.audioFileId,
+            soundscapeSaturation: r.soundscapeSaturation,
+            acousticComplexityIndex: r.acousticComplexityIndex,
+            frequencyEntropy: r.frequencyEntropy,
+            temporalEntropy: r.temporalEntropy,
+            eventsPerSecond: r.eventsPerSecond,
+            recordedDate: r.recordedDate,
+            dielPeriod: r.dielPeriod,
+            configHash: r.configHash,
+            computedAt: now,
+          })
+          .onConflictDoUpdate({
+            target: acousticIndices.audioFileId,
+            set: {
+              soundscapeSaturation: sql`excluded.soundscape_saturation`,
+              acousticComplexityIndex: sql`excluded.acoustic_complexity_index`,
+              frequencyEntropy: sql`excluded.frequency_entropy`,
+              temporalEntropy: sql`excluded.temporal_entropy`,
+              eventsPerSecond: sql`excluded.events_per_second`,
+              // COALESCE so a re-run with an unparseable filename doesn't
+              // clobber a previously valid recorded_date.
+              recordedDate: sql`COALESCE(excluded.recorded_date, ${acousticIndices.recordedDate})`,
+              dielPeriod: sql`excluded.diel_period`,
+              configHash: sql`excluded.config_hash`,
+              computedAt: sql`excluded.computed_at`,
+            },
+          });
+      },
+    });
+
+    if (result.success) {
+      await db
+        .update(processingJobs)
+        .set({
+          status: "completed",
+          completedAt: new Date(),
+          processedImages: result.totalProcessed,
+          statusMessage:
+            `${result.totalProcessed} archivos procesados` +
+            (result.totalSkipped > 0
+              ? `, ${result.totalSkipped} omitidos`
+              : ""),
+        })
+        .where(eq(processingJobs.id, jobId));
+      log.info(
+        {
+          jobId,
+          processed: result.totalProcessed,
+          skipped: result.totalSkipped,
+        },
+        "[acoustic-indices] Job completed successfully"
+      );
+    } else {
+      throw new Error(result.error);
+    }
+
+    if (job.deploymentId != null) {
+      revalidatePath(`/audio/${job.deploymentId}`);
+    }
+    revalidatePath("/audio/indices");
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.error({ err, jobId }, "[acoustic-indices] Job failed");
+    await db
+      .update(processingJobs)
+      .set({
+        status: "failed",
+        completedAt: new Date(),
+        errorMessage: message,
+        statusMessage: "Fallido",
+      })
+      .where(eq(processingJobs.id, jobId));
+  }
+}
+
+async function cancelAcousticIndicesJob(
+  jobId: number
+): Promise<ActionResult> {
+  const user = await requirePermission("grabaciones", "editor");
+
+  const [job] = await db
+    .select()
+    .from(processingJobs)
+    .where(eq(processingJobs.id, jobId));
+  if (!job) return { success: false, error: "Trabajo no encontrado" };
+  if (!["pending", "processing"].includes(job.status)) {
+    return { success: false, error: "El trabajo ya finalizó" };
+  }
+  if (job.deploymentId != null) {
+    await requireDeploymentAccess(user, job.deploymentId);
+  } else if (job.cameraTrapProjectId != null) {
+    await requirePermission("grabaciones", "admin");
+  }
+
+  if (job.pid) {
+    try {
+      process.kill(job.pid, "SIGTERM");
+    } catch {
+      // process may have exited already
+    }
+  }
+  // Per-file results are valid as-is — no rollback. Next run upserts.
+  await db
+    .update(processingJobs)
+    .set({
+      status: "cancelled",
+      completedAt: new Date(),
+      statusMessage: null,
+    })
+    .where(eq(processingJobs.id, jobId));
+
+  if (job.deploymentId != null) {
+    revalidatePath(`/audio/${job.deploymentId}`);
+  }
+  revalidatePath("/audio/indices");
+  return { success: true, data: undefined };
+}
+
+export interface AcousticIndicesPoint {
+  deploymentId: number;
+  deploymentName: string;
+  siteName: string | null;
+  nFiles: number;
+  soundscapeSaturation: number;
+  acousticComplexityIndex: number;
+  frequencyEntropy: number;
+  temporalEntropy: number;
+  eventsPerSecond: number;
+}
+
+export interface AcousticIndicesGroup {
+  habitatKey: string;
+  habitatLabel: string;
+  color: string;
+  dielPeriod: DielPeriod;
+  points: AcousticIndicesPoint[];
+}
+
+export interface AcousticIndicesData {
+  groups: AcousticIndicesGroup[];
+  totalDeployments: number;
+}
+
+const UNKNOWN_HABITAT_COLOR = "#94a3b8"; // slate-400 — matches BoxPlotChart NEUTRAL_COLOR
+
+/** Median of a non-empty number array. */
+function median(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? (sorted[mid - 1] + sorted[mid]) / 2
+    : sorted[mid];
+}
+
+/** Extract site_id from `SEC-006_V1` → `SEC-006`. */
+function extractSiteId(deploymentName: string): string | null {
+  const m = deploymentName.match(/^(.+?)_V\d+$/i);
+  return m ? m[1] : null;
+}
+
+/** Build site → habitat map from ODK. Returns an empty Map on error. */
+async function loadSiteHabitatMapSafe(): Promise<Map<string, string>> {
+  try {
+    const sites = await fetchEntities<OdkSiteEntity>(
+      BIOCHOCO_PROJECT_ID,
+      BIOCHOCO_DATASET_SITES
+    );
+    const map = new Map<string, string>();
+    for (const site of sites) {
+      if (!site.habitat_type) continue;
+      if (site.site_id) map.set(site.site_id, site.habitat_type);
+      if (site.site_name) map.set(site.site_name, site.habitat_type);
+      if (site.label && site.label !== site.site_name) {
+        map.set(site.label, site.habitat_type);
+      }
+    }
+    return map;
+  } catch (err) {
+    log.warn({ err }, "[acoustic-indices] ODK habitat map unavailable");
+    return new Map();
+  }
+}
+
+/**
+ * Returns per-deployment medians of each index, grouped by (habitat, diel_period).
+ * The diel-period tabs and BoxPlotChart on /audio/indices both consume this shape.
+ */
+export async function getAcousticIndicesForProject(
+  cameraTrapProjectId: number
+): Promise<ActionResult<AcousticIndicesData>> {
+  await requirePermission("grabaciones", "viewer");
+
+  const rows = await db
+    .select({
+      deploymentId: deployments.id,
+      deploymentName: deployments.name,
+      siteName: deployments.siteName,
+      soundscapeSaturation: acousticIndices.soundscapeSaturation,
+      acousticComplexityIndex: acousticIndices.acousticComplexityIndex,
+      frequencyEntropy: acousticIndices.frequencyEntropy,
+      temporalEntropy: acousticIndices.temporalEntropy,
+      eventsPerSecond: acousticIndices.eventsPerSecond,
+      dielPeriod: acousticIndices.dielPeriod,
+    })
+    .from(acousticIndices)
+    .innerJoin(audioFiles, eq(audioFiles.id, acousticIndices.audioFileId))
+    .innerJoin(deployments, eq(deployments.id, audioFiles.deploymentId))
+    .where(eq(deployments.cameraTrapProjectId, cameraTrapProjectId));
+
+  if (rows.length === 0) {
+    return { success: true, data: { groups: [], totalDeployments: 0 } };
+  }
+
+  const habitatMap = await loadSiteHabitatMapSafe();
+
+  // First bucket: (habitat, diel_period, deploymentId) → all rows.
+  type Bucket = {
+    habitatKey: string;
+    dielPeriod: DielPeriod;
+    deploymentId: number;
+    deploymentName: string;
+    siteName: string | null;
+    ss: number[];
+    aci: number[];
+    hf: number[];
+    ht: number[];
+    eps: number[];
+  };
+  const buckets = new Map<string, Bucket>();
+
+  for (const row of rows) {
+    const dielPeriod = (DIEL_PERIODS as readonly string[]).includes(row.dielPeriod)
+      ? (row.dielPeriod as DielPeriod)
+      : "other";
+    const habitatKey =
+      (row.siteName ? habitatMap.get(row.siteName) : null) ??
+      habitatMap.get(extractSiteId(row.deploymentName) ?? "") ??
+      "unknown";
+
+    const key = `${habitatKey}|${dielPeriod}|${row.deploymentId}`;
+    let b = buckets.get(key);
+    if (!b) {
+      b = {
+        habitatKey,
+        dielPeriod,
+        deploymentId: row.deploymentId,
+        deploymentName: row.deploymentName,
+        siteName: row.siteName,
+        ss: [],
+        aci: [],
+        hf: [],
+        ht: [],
+        eps: [],
+      };
+      buckets.set(key, b);
+    }
+    if (row.soundscapeSaturation != null) b.ss.push(row.soundscapeSaturation);
+    if (row.acousticComplexityIndex != null) b.aci.push(row.acousticComplexityIndex);
+    if (row.frequencyEntropy != null) b.hf.push(row.frequencyEntropy);
+    if (row.temporalEntropy != null) b.ht.push(row.temporalEntropy);
+    if (row.eventsPerSecond != null) b.eps.push(row.eventsPerSecond);
+  }
+
+  // Now flatten to per-deployment points and re-group by (habitat, diel_period).
+  const groupMap = new Map<string, AcousticIndicesGroup>();
+  for (const b of buckets.values()) {
+    // Skip empty deployments — they'd produce NaN medians.
+    const nFiles = Math.max(b.ss.length, b.aci.length, b.hf.length, b.ht.length, b.eps.length);
+    if (nFiles === 0) continue;
+    const point: AcousticIndicesPoint = {
+      deploymentId: b.deploymentId,
+      deploymentName: b.deploymentName,
+      siteName: b.siteName,
+      nFiles,
+      soundscapeSaturation: b.ss.length ? median(b.ss) : 0,
+      acousticComplexityIndex: b.aci.length ? median(b.aci) : 0,
+      frequencyEntropy: b.hf.length ? median(b.hf) : 0,
+      temporalEntropy: b.ht.length ? median(b.ht) : 0,
+      eventsPerSecond: b.eps.length ? median(b.eps) : 0,
+    };
+    const groupKey = `${b.habitatKey}|${b.dielPeriod}`;
+    let g = groupMap.get(groupKey);
+    if (!g) {
+      g = {
+        habitatKey: b.habitatKey,
+        habitatLabel:
+          b.habitatKey === "unknown"
+            ? "Sin clasificar"
+            : getHabitatName(b.habitatKey),
+        color: HABITAT_COLORS[b.habitatKey] ?? UNKNOWN_HABITAT_COLOR,
+        dielPeriod: b.dielPeriod,
+        points: [],
+      };
+      groupMap.set(groupKey, g);
+    }
+    g.points.push(point);
+  }
+
+  // Stable ordering: habitats first by label, then deployments by name within group.
+  const groups = Array.from(groupMap.values())
+    .sort((a, b) => a.habitatLabel.localeCompare(b.habitatLabel))
+    .map((g) => ({
+      ...g,
+      points: g.points.sort((a, b) => a.deploymentName.localeCompare(b.deploymentName)),
+    }));
+
+  // Total distinct deployments across all groups (used for the page summary).
+  const deploymentIds = new Set<number>();
+  for (const g of groups) for (const p of g.points) deploymentIds.add(p.deploymentId);
+
+  return { success: true, data: { groups, totalDeployments: deploymentIds.size } };
 }
 
 // ---------------------------------------------------------------------------

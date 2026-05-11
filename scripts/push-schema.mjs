@@ -430,6 +430,22 @@ const statements = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_audio_identifications_detection ON audio_identifications(audio_detection_id)`,
 
+  // Acoustic Indices (Müller 2023 / Kümmet 2025 five-index recipe per audio file)
+  `CREATE TABLE IF NOT EXISTS acoustic_indices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    audio_file_id INTEGER NOT NULL REFERENCES audio_files(id) ON DELETE CASCADE,
+    soundscape_saturation REAL,
+    acoustic_complexity_index REAL,
+    frequency_entropy REAL,
+    temporal_entropy REAL,
+    events_per_second REAL,
+    recorded_date TEXT,
+    diel_period TEXT NOT NULL,
+    config_hash TEXT NOT NULL,
+    computed_at INTEGER NOT NULL
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_audio_file ON acoustic_indices(audio_file_id)`,
+
   // Upload Count Snapshots (daily aggregate of Drive upload counts)
   `CREATE TABLE IF NOT EXISTS upload_count_snapshots (
     date TEXT PRIMARY KEY,

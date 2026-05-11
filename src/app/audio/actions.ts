@@ -611,6 +611,244 @@ export async function cancelProcessingJob(
 // Audio Deployment QA
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Batch actions (selection toolbar)
+// ---------------------------------------------------------------------------
+
+/**
+ * Bulk-update metadata on the selected audio deployments. Mirrors
+ * `bulkUpdateMetadata` in camera-trap but checks the `grabaciones` permission.
+ *
+ * `fields` is a partial — only keys whose value is not `undefined` are written.
+ * The shared `BatchEditDialog` passes only the apply-checked fields.
+ */
+export async function bulkUpdateAudioMetadata(
+  ids: number[],
+  fields: {
+    cameraTrapProjectId?: number | null;
+    siteName?: string | null;
+    latitude?: number | null;
+    longitude?: number | null;
+    dateStart?: string | null;
+    dateEnd?: string | null;
+    excluded?: boolean;
+    qaNotes?: string | null;
+  }
+): Promise<ActionResult<{ count: number }>> {
+  const user = await requirePermission("grabaciones", "editor");
+
+  try {
+    if (ids.length === 0) {
+      return { success: true, data: { count: 0 } };
+    }
+
+    for (const id of ids) {
+      await requireDeploymentAccess(user, id);
+    }
+
+    const updates: Record<string, unknown> = { updatedAt: new Date() };
+    if (fields.cameraTrapProjectId !== undefined) {
+      updates.cameraTrapProjectId = fields.cameraTrapProjectId;
+      if (fields.cameraTrapProjectId) {
+        const [proj] = await db
+          .select({ name: cameraTrapProjects.name })
+          .from(cameraTrapProjects)
+          .where(eq(cameraTrapProjects.id, fields.cameraTrapProjectId));
+        if (proj) updates.projectLabel = proj.name;
+      }
+    }
+    if (fields.siteName !== undefined) updates.siteName = fields.siteName;
+    if (fields.latitude !== undefined) updates.latitude = fields.latitude;
+    if (fields.longitude !== undefined) updates.longitude = fields.longitude;
+    if (fields.dateStart !== undefined) updates.dateStart = fields.dateStart || null;
+    if (fields.dateEnd !== undefined) updates.dateEnd = fields.dateEnd || null;
+    if (fields.excluded !== undefined) updates.excluded = fields.excluded;
+    if (fields.qaNotes !== undefined) updates.qaNotes = fields.qaNotes;
+
+    await db
+      .update(deployments)
+      .set(updates)
+      .where(inArray(deployments.id, ids));
+
+    revalidatePath("/audio");
+    return { success: true, data: { count: ids.length } };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Error al actualizar en lote",
+    };
+  }
+}
+
+/**
+ * Re-scan audio for a batch of deployments. Iterates `scanDeploymentAudio`
+ * per deployment — simpler than threading deploymentIds through the worker,
+ * which is built for whole-project syncs. Failures don't abort the batch:
+ * each error is collected and returned.
+ */
+export async function batchRescanAudio(
+  ids: number[]
+): Promise<ActionResult<{ scanned: number; errors: number; errorMessages: string[] }>> {
+  const user = await requirePermission("grabaciones", "editor");
+
+  if (ids.length === 0) {
+    return { success: true, data: { scanned: 0, errors: 0, errorMessages: [] } };
+  }
+
+  for (const id of ids) {
+    await requireDeploymentAccess(user, id);
+  }
+
+  let scanned = 0;
+  const errorMessages: string[] = [];
+
+  for (const id of ids) {
+    try {
+      const result = await scanDeploymentAudio(id);
+      if (result.success) {
+        scanned++;
+      } else {
+        errorMessages.push(`#${id}: ${result.error}`);
+      }
+    } catch (err) {
+      log.error({ err, deploymentId: id }, "[audio] Batch rescan failed for deployment");
+      errorMessages.push(
+        `#${id}: ${err instanceof Error ? err.message : "Error desconocido"}`
+      );
+    }
+  }
+
+  revalidatePath("/audio");
+  return {
+    success: true,
+    data: { scanned, errors: errorMessages.length, errorMessages },
+  };
+}
+
+/**
+ * Enqueue a BirdNET job for each selected deployment that has audio files
+ * and isn't already being analysed. The existing per-deployment guard in
+ * `createBirdNETJob` skips deployments with an in-flight BirdNET job, so
+ * this is safe to call repeatedly. Returns counts so the UI can report
+ * "started N, skipped M (already analysing), no files for K".
+ */
+export async function batchCreateBirdNETJobs(
+  ids: number[]
+): Promise<
+  ActionResult<{ enqueued: number; skipped: number; noFiles: number; errorMessages: string[] }>
+> {
+  const user = await requirePermission("grabaciones", "editor");
+
+  if (ids.length === 0) {
+    return {
+      success: true,
+      data: { enqueued: 0, skipped: 0, noFiles: 0, errorMessages: [] },
+    };
+  }
+
+  for (const id of ids) {
+    await requireDeploymentAccess(user, id);
+  }
+
+  let enqueued = 0;
+  let skipped = 0;
+  let noFiles = 0;
+  const errorMessages: string[] = [];
+
+  for (const id of ids) {
+    try {
+      const result = await createBirdNETJob(id);
+      if (result.success) {
+        enqueued++;
+      } else {
+        // Classify the soft-failure cases so the UI can summarise rather
+        // than dump N identical "Already analysing" lines.
+        if (result.error.includes("activo")) skipped++;
+        else if (result.error.includes("No hay archivos")) noFiles++;
+        else errorMessages.push(`#${id}: ${result.error}`);
+      }
+    } catch (err) {
+      log.error({ err, deploymentId: id }, "[audio] Batch BirdNET enqueue failed");
+      errorMessages.push(
+        `#${id}: ${err instanceof Error ? err.message : "Error desconocido"}`
+      );
+    }
+  }
+
+  revalidatePath("/audio");
+  return {
+    success: true,
+    data: { enqueued, skipped, noFiles, errorMessages },
+  };
+}
+
+/**
+ * Hard-delete the audio file index for the selected deployments. Does NOT
+ * touch Drive — just clears the local `audio_files` rows so the next sync
+ * re-indexes from scratch. Files with annotations are soft-deleted instead
+ * (drive_file_id nulled, row preserved) so detection rows remain valid.
+ *
+ * Admin-only. Use case: the index got out of sync with Drive (renames,
+ * folder moves, schema migration), and a fresh re-scan is faster than
+ * trying to reconcile.
+ */
+export async function clearAudioIndex(
+  ids: number[]
+): Promise<ActionResult<{ hardDeleted: number; softDeleted: number }>> {
+  const user = await requirePermission("grabaciones", "admin");
+
+  if (ids.length === 0) {
+    return { success: true, data: { hardDeleted: 0, softDeleted: 0 } };
+  }
+
+  for (const id of ids) {
+    await requireDeploymentAccess(user, id);
+  }
+
+  let hardDeleted = 0;
+  let softDeleted = 0;
+
+  // Synchronous transaction — better-sqlite3 requirement (no async callbacks).
+  db.transaction((tx) => {
+    for (const depId of ids) {
+      const files = tx
+        .select({ id: audioFiles.id })
+        .from(audioFiles)
+        .where(eq(audioFiles.deploymentId, depId))
+        .all();
+
+      for (const f of files) {
+        const [det] = tx
+          .select({ id: audioDetections.id })
+          .from(audioDetections)
+          .where(eq(audioDetections.audioFileId, f.id))
+          .limit(1)
+          .all();
+
+        if (det) {
+          // Preserve row + detections; null the Drive reference so a fresh
+          // sync re-attaches it if the file still exists.
+          tx.update(audioFiles)
+            .set({ driveFileId: null })
+            .where(eq(audioFiles.id, f.id))
+            .run();
+          softDeleted++;
+        } else {
+          tx.delete(audioFiles).where(eq(audioFiles.id, f.id)).run();
+          hardDeleted++;
+        }
+      }
+    }
+  });
+
+  revalidatePath("/audio");
+  return { success: true, data: { hardDeleted, softDeleted } };
+}
+
+// ---------------------------------------------------------------------------
+// Audio Deployment QA
+// ---------------------------------------------------------------------------
+
 export async function updateAudioDeploymentQa(
   deploymentId: number,
   fields: {

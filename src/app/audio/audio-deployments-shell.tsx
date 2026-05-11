@@ -49,10 +49,17 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useRowRangeSelection } from "@/hooks/use-row-range-selection";
 import { GroupSelectAllCheckbox } from "@/components/deployments/group-select-all-checkbox";
+import { BatchEditDialog } from "@/components/deployments/batch-edit-dialog";
 import { enqueueAudioSyncJob } from "./drive-actions";
+import {
+  bulkUpdateAudioMetadata,
+  batchRescanAudio,
+} from "./actions";
 import type { AudioDeploymentRow, AudioProject } from "./actions";
 import type { AudioProjectGroup } from "./page";
 import { AudioDeploymentRowActions } from "./audio-deployment-row-actions";
+import { BatchAnalyzeDialog } from "./batch-analyze-dialog";
+import { BatchClearAudioIndexDialog } from "./batch-clear-index-dialog";
 
 interface AudioDeploymentsShellProps {
   groups: AudioProjectGroup[];
@@ -66,6 +73,7 @@ interface AudioDeploymentsShellProps {
   };
   distinctProjects: AudioProject[];
   isEditor: boolean;
+  isAdmin: boolean;
   /** ISO string of the last successful audio Drive sync, or null. */
   lastSyncAt: string | null;
 }
@@ -76,6 +84,7 @@ export function AudioDeploymentsShell({
   counts,
   distinctProjects,
   isEditor,
+  isAdmin,
   lastSyncAt: initialLastSyncAt,
 }: AudioDeploymentsShellProps) {
   const router = useRouter();
@@ -90,7 +99,11 @@ export function AudioDeploymentsShell({
   // doesn't re-memo on every selection change.
   const rangeSelection = useRowRangeSelection<AudioDeploymentRow>(setRowSelection);
   const [syncing, startSync] = useTransition();
+  const [rescanning, startRescan] = useTransition();
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
+  const [batchEditOpen, setBatchEditOpen] = useState(false);
+  const [batchAnalyzeOpen, setBatchAnalyzeOpen] = useState(false);
+  const [batchClearIndexOpen, setBatchClearIndexOpen] = useState(false);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
     () => new Set()
   );
@@ -269,6 +282,26 @@ export function AudioDeploymentsShell({
   });
 
   const selectedRows = table.getFilteredSelectedRowModel().rows;
+  const selectedIds = selectedRows.map((r) => r.original.id);
+
+  const handleBatchRescan = () => {
+    startRescan(async () => {
+      setSyncMessage(null);
+      const result = await batchRescanAudio(selectedIds);
+      if (!result.success) {
+        setSyncMessage(`Error: ${result.error}`);
+        return;
+      }
+      const { scanned, errors } = result.data;
+      setSyncMessage(
+        errors > 0
+          ? `Re-escaneado: ${scanned} ok, ${errors} con error(es).`
+          : `Re-escaneado: ${scanned} instalación(es).`
+      );
+      setRowSelection({});
+      router.refresh();
+    });
+  };
 
   const filteredRowIds = useMemo(() => {
     return new Set(table.getFilteredRowModel().rows.map((r) => r.id));
@@ -473,12 +506,50 @@ export function AudioDeploymentsShell({
         </p>
       )}
 
-      {/* Selection toolbar — actions wired up in Phase 5 */}
+      {/* Selection toolbar */}
       {selectedRows.length > 0 && (
-        <div className="mb-3 flex items-center gap-3 px-3 py-2 bg-muted/50 rounded-md">
+        <div className="mb-3 flex items-center gap-2 px-3 py-2 bg-muted/50 rounded-md">
           <span className="text-sm font-medium">
             {selectedRows.length} seleccionado(s)
           </span>
+          {isEditor && (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setBatchEditOpen(true)}
+              >
+                Editar
+              </Button>
+              <Button
+                variant="default"
+                size="sm"
+                onClick={() => setBatchAnalyzeOpen(true)}
+              >
+                Analizar con BirdNET
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleBatchRescan}
+                disabled={rescanning}
+              >
+                {rescanning && (
+                  <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                )}
+                Re-escanear
+              </Button>
+              {isAdmin && (
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => setBatchClearIndexOpen(true)}
+                >
+                  Limpiar índice
+                </Button>
+              )}
+            </>
+          )}
           <Button
             variant="ghost"
             size="sm"
@@ -619,6 +690,37 @@ export function AudioDeploymentsShell({
         {table.getFilteredRowModel().rows.length} instalaciones
         {(globalFilter || statusFilter) && " (filtradas)"}
       </p>
+
+      {/* Batch dialogs */}
+      {isEditor && (
+        <>
+          <BatchEditDialog
+            open={batchEditOpen}
+            onOpenChange={setBatchEditOpen}
+            selectedIds={selectedIds}
+            selectedCount={selectedRows.length}
+            distinctProjects={distinctProjects}
+            onSubmit={bulkUpdateAudioMetadata}
+            onComplete={() => setRowSelection({})}
+          />
+          <BatchAnalyzeDialog
+            open={batchAnalyzeOpen}
+            onOpenChange={setBatchAnalyzeOpen}
+            selectedIds={selectedIds}
+            selectedCount={selectedRows.length}
+            onComplete={() => setRowSelection({})}
+          />
+          {isAdmin && (
+            <BatchClearAudioIndexDialog
+              open={batchClearIndexOpen}
+              onOpenChange={setBatchClearIndexOpen}
+              selectedIds={selectedIds}
+              selectedCount={selectedRows.length}
+              onComplete={() => setRowSelection({})}
+            />
+          )}
+        </>
+      )}
     </div>
   );
 }

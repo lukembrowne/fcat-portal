@@ -81,6 +81,12 @@ export default async function AudioPage() {
         (p.role === "editor" || p.role === "admin")
     );
 
+  const isAdmin =
+    user.globalRole === "super_admin" ||
+    user.permissions.some(
+      (p) => p.projectId === "grabaciones" && p.role === "admin"
+    );
+
   const [deploymentsResult, distinctProjects, lastSyncAt] = await Promise.all([
     fetchAudioDeployments(),
     fetchDistinctAudioProjects(),
@@ -98,6 +104,7 @@ export default async function AudioPage() {
       counts={counts}
       distinctProjects={distinctProjects}
       isEditor={isEditor}
+      isAdmin={isAdmin}
       lastSyncAt={lastSyncAt ? lastSyncAt.toISOString() : null}
     />
   );

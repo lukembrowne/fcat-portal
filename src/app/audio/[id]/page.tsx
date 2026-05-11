@@ -73,6 +73,19 @@ export default async function AudioDetailPage({
     )
     .limit(1);
 
+  // Check for active acoustic-indices job
+  const [activeIndicesJob] = await db
+    .select({ id: processingJobs.id })
+    .from(processingJobs)
+    .where(
+      and(
+        eq(processingJobs.deploymentId, deploymentId),
+        eq(processingJobs.jobType, "acoustic_indices"),
+        inArray(processingJobs.status, ["pending", "processing"])
+      )
+    )
+    .limit(1);
+
   // Get last completed BirdNET job stats
   const [lastBirdnetJob] = await db
     .select({
@@ -158,6 +171,7 @@ export default async function AudioDetailPage({
       isBirdnetProcessing={!!activeBirdnetJob}
       birdnetStats={birdnetStats}
       hasBirdnetDetections={hasBirdnetDetections}
+      isAcousticIndicesProcessing={!!activeIndicesJob}
       reviewStats={reviewStats}
     />
   );

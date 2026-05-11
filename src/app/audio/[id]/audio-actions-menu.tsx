@@ -14,16 +14,22 @@ import {
   MoreHorizontal,
   FolderSync,
   Bird,
+  AudioWaveform,
   ExternalLink,
   Loader2,
 } from "lucide-react";
-import { scanDeploymentAudio, createBirdNETJob } from "../actions";
+import {
+  scanDeploymentAudio,
+  createBirdNETJob,
+  createAcousticIndicesJob,
+} from "../actions";
 
 interface AudioActionsMenuProps {
   deploymentId: number;
   uploadAudioFolderId: string | null;
   isBirdnetProcessing: boolean;
   hasBirdnetDetections: boolean;
+  isAcousticIndicesProcessing: boolean;
   hasFiles: boolean;
 }
 
@@ -32,11 +38,13 @@ export function AudioActionsMenu({
   uploadAudioFolderId,
   isBirdnetProcessing,
   hasBirdnetDetections,
+  isAcousticIndicesProcessing,
   hasFiles,
 }: AudioActionsMenuProps) {
   const router = useRouter();
   const [scanning, setScanning] = useState(false);
   const [birdnetStarting, setBirdnetStarting] = useState(false);
+  const [indicesStarting, setIndicesStarting] = useState(false);
 
   async function handleScan() {
     setScanning(true);
@@ -69,6 +77,22 @@ export function AudioActionsMenu({
       router.refresh();
     } catch {
       setBirdnetStarting(false);
+    }
+  }
+
+  async function handleAcousticIndices() {
+    setIndicesStarting(true);
+    try {
+      const result = await createAcousticIndicesJob({ deploymentId });
+      if (!result.success) {
+        alert(result.error);
+        setIndicesStarting(false);
+        return;
+      }
+      window.dispatchEvent(new Event("job-started"));
+      router.refresh();
+    } catch {
+      setIndicesStarting(false);
     }
   }
 
@@ -117,6 +141,29 @@ export function AudioActionsMenu({
               </div>
               <div className="text-xs text-muted-foreground font-normal">
                 Identificación automática de aves
+              </div>
+            </div>
+          </DropdownMenuItem>
+        )}
+
+        {hasFiles && (
+          <DropdownMenuItem
+            onClick={handleAcousticIndices}
+            disabled={isAcousticIndicesProcessing || indicesStarting}
+          >
+            {indicesStarting || isAcousticIndicesProcessing ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <AudioWaveform className="h-4 w-4 mr-2" />
+            )}
+            <div>
+              <div>
+                {indicesStarting || isAcousticIndicesProcessing
+                  ? "Calculando..."
+                  : "Calcular Índices Acústicos"}
+              </div>
+              <div className="text-xs text-muted-foreground font-normal">
+                Saturación, ACI, entropías, eventos
               </div>
             </div>
           </DropdownMenuItem>

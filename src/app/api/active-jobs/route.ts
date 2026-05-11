@@ -82,7 +82,9 @@ export async function GET() {
         ? "Sincronización con Drive"
         : job.jobType === "audio_sync"
           ? "Sincronización de audio"
-          : "Trabajo");
+          : job.jobType === "acoustic_indices"
+            ? "Índices acústicos"
+            : "Trabajo");
 
     return {
       jobId: job.id,

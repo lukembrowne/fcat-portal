@@ -172,6 +172,7 @@ export function SidebarNav({ user }: SidebarNavProps) {
       icon: "audio-lines",
       children: [
         { label: "Instalaciones", href: "/audio" },
+        { label: "Índices acústicos", href: "/audio/indices" },
       ],
     });
   }

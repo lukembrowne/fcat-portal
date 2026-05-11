@@ -10,9 +10,9 @@ import {
   correctIdentification,
 } from "@/app/camera-trap/actions";
 import type { Species } from "@/db/schema";
+import type { AnnotationDetection } from "@/types/annotation";
 
-export interface DetectionWithIdentification {
-  id: number;
+export interface DetectionWithIdentification extends AnnotationDetection {
   detectionClass: number;
   detectionConfidence: number;
   bboxX: number;

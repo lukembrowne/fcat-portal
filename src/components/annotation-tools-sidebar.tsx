@@ -7,9 +7,9 @@ import { cn } from "@/lib/utils";
 import { DetectionCardStrip } from "@/components/detection-card-strip";
 import { AnnotationHelpPanel } from "@/components/annotation-help-panel";
 import { BrightnessControl } from "@/components/brightness-control";
-import type { DetectionWithIdentification } from "@/components/annotation-toolbar";
+import type { AnnotationDetection } from "@/types/annotation";
 import type { Species } from "@/db/schema";
-import type { NameDisplay } from "@/components/species-sidebar";
+import type { NameDisplay } from "@/lib/species-display";
 
 const DISPLAY_LABELS: Record<NameDisplay, string> = {
   common: "Inglés",
@@ -18,7 +18,7 @@ const DISPLAY_LABELS: Record<NameDisplay, string> = {
 };
 
 interface AnnotationToolsSidebarProps {
-  detections: DetectionWithIdentification[];
+  detections: AnnotationDetection[];
   selectedDetectionId: number | null;
   onSelectDetection: (id: number) => void;
   onDeleteDetection?: (id: number) => void;
@@ -40,8 +40,8 @@ interface AnnotationToolsSidebarProps {
   } | null;
   onApplyDateSuggestion?: () => void;
   onDismissDateSuggestion?: () => void;
-  brightness: number;
-  onBrightnessChange: (value: number) => void;
+  brightness?: number;
+  onBrightnessChange?: (value: number) => void;
   jobId: number;
   onBack?: () => void;
 }
@@ -106,56 +106,70 @@ export function AnnotationToolsSidebar({
         />
       </div>
 
-      {/* Acciones de imagen */}
-      {canEdit && (
+      {/* Acciones de imagen. Each action hides when its callback is
+          undefined (audio omits star + setup tags). The wrapper hides
+          entirely when no actions remain. */}
+      {canEdit &&
+        (onToggleStarred ||
+          onToggleSetupDeployment ||
+          onToggleSetupRetrieval ||
+          dateSuggestion) && (
         <div className="px-2 py-2 border-t flex flex-col gap-1.5">
           <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-1">
             Acciones
           </p>
-          <button
-            type="button"
-            onClick={onToggleStarred}
-            title={isStarred && starredBy ? `Destacada por ${starredBy}` : "Destacar imagen (s)"}
-            className={cn(
-              "w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md border text-sm transition-colors",
-              isStarred
-                ? "bg-amber-500 border-amber-500 text-white hover:bg-amber-600"
-                : "border-border hover:bg-amber-50 hover:border-amber-200 hover:text-amber-700"
-            )}
-          >
-            <StarIcon filled={isStarred} className="size-4 shrink-0" />
-            <span className="truncate">{isStarred ? "Destacada" : "Destacar"}</span>
-          </button>
-          <div className="grid grid-cols-2 gap-1.5">
+          {onToggleStarred && (
             <button
               type="button"
-              onClick={onToggleSetupDeployment}
-              title="Marcar como instalación (i)"
+              onClick={onToggleStarred}
+              title={isStarred && starredBy ? `Destacada por ${starredBy}` : "Destacar imagen (s)"}
               className={cn(
-                "flex flex-col items-center justify-center gap-1 px-2 py-2 rounded-md border text-xs transition-colors",
-                setupTag === "deployment"
-                  ? "bg-blue-600 border-blue-600 text-white hover:bg-blue-700"
-                  : "border-border hover:bg-blue-50 hover:border-blue-200 hover:text-blue-700"
+                "w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md border text-sm transition-colors",
+                isStarred
+                  ? "bg-amber-500 border-amber-500 text-white hover:bg-amber-600"
+                  : "border-border hover:bg-amber-50 hover:border-amber-200 hover:text-amber-700"
               )}
             >
-              <Camera className="size-4 shrink-0" />
-              Instalación
+              <StarIcon filled={isStarred} className="size-4 shrink-0" />
+              <span className="truncate">{isStarred ? "Destacada" : "Destacar"}</span>
             </button>
-            <button
-              type="button"
-              onClick={onToggleSetupRetrieval}
-              title="Marcar como recogida (t)"
-              className={cn(
-                "flex flex-col items-center justify-center gap-1 px-2 py-2 rounded-md border text-xs transition-colors",
-                setupTag === "retrieval"
-                  ? "bg-orange-600 border-orange-600 text-white hover:bg-orange-700"
-                  : "border-border hover:bg-orange-50 hover:border-orange-200 hover:text-orange-700"
+          )}
+          {(onToggleSetupDeployment || onToggleSetupRetrieval) && (
+            <div className="grid grid-cols-2 gap-1.5">
+              {onToggleSetupDeployment && (
+                <button
+                  type="button"
+                  onClick={onToggleSetupDeployment}
+                  title="Marcar como instalación (i)"
+                  className={cn(
+                    "flex flex-col items-center justify-center gap-1 px-2 py-2 rounded-md border text-xs transition-colors",
+                    setupTag === "deployment"
+                      ? "bg-blue-600 border-blue-600 text-white hover:bg-blue-700"
+                      : "border-border hover:bg-blue-50 hover:border-blue-200 hover:text-blue-700"
+                  )}
+                >
+                  <Camera className="size-4 shrink-0" />
+                  Instalación
+                </button>
               )}
-            >
-              <Camera className="size-4 shrink-0" />
-              Recogida
-            </button>
-          </div>
+              {onToggleSetupRetrieval && (
+                <button
+                  type="button"
+                  onClick={onToggleSetupRetrieval}
+                  title="Marcar como recogida (t)"
+                  className={cn(
+                    "flex flex-col items-center justify-center gap-1 px-2 py-2 rounded-md border text-xs transition-colors",
+                    setupTag === "retrieval"
+                      ? "bg-orange-600 border-orange-600 text-white hover:bg-orange-700"
+                      : "border-border hover:bg-orange-50 hover:border-orange-200 hover:text-orange-700"
+                  )}
+                >
+                  <Camera className="size-4 shrink-0" />
+                  Recogida
+                </button>
+              )}
+            </div>
+          )}
           {dateSuggestion && (
             <DateSuggestionCard
               suggestion={dateSuggestion}
@@ -166,16 +180,20 @@ export function AnnotationToolsSidebar({
         </div>
       )}
 
-      {/* Vista — view-only settings, available to viewers and editors */}
-      <div className="px-2 py-2 border-t flex flex-col gap-1.5">
-        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-1">
-          Vista
-        </p>
-        <BrightnessControl
-          value={brightness}
-          onChange={onBrightnessChange}
-        />
-      </div>
+      {/* Vista — view-only settings, available to viewers and editors.
+       *  Audio annotation reuses this sidebar but has no image to brighten,
+       *  so the brightness control is gated on the props being provided. */}
+      {brightness !== undefined && onBrightnessChange && (
+        <div className="px-2 py-2 border-t flex flex-col gap-1.5">
+          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-1">
+            Vista
+          </p>
+          <BrightnessControl
+            value={brightness}
+            onChange={onBrightnessChange}
+          />
+        </div>
+      )}
 
       {/* Ayuda */}
       <div className="px-2 py-2 border-t">

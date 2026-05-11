@@ -117,7 +117,7 @@ PYWARM
 
 # Check if venv already exists and has all required packages
 if [ -x "$ML_PYTHON" ]; then
-  if "$ML_PYTHON" -c "import PytorchWildlife; import librosa; import timm" 2>/dev/null; then
+  if "$ML_PYTHON" -c "import PytorchWildlife; import librosa; import timm; import birdnet_analyzer" 2>/dev/null; then
     echo "[ml-setup] ML venv ready at $ML_VENV_DIR"
     warm_model_cache
     exit 0
@@ -146,6 +146,9 @@ uv pip install --python "$ML_PYTHON" timm
 
 echo "[ml-setup] Installing librosa + audio spectrogram deps..."
 uv pip install --python "$ML_PYTHON" librosa soundfile numpy matplotlib Pillow
+
+echo "[ml-setup] Installing birdnet-analyzer..."
+uv pip install --python "$ML_PYTHON" birdnet-analyzer
 
 # pkg_resources (from setuptools) is needed by yolov5 at runtime but:
 # 1. uv's resolver strips setuptools since nothing explicitly depends on it

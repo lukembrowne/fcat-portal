@@ -26,6 +26,17 @@ const DEPLOYMENT_STATUS_CONFIG: Record<
   verified_empty: { variant: "default", label: "Vacía (verificada)", className: "bg-slate-500" },
 };
 
+const AUDIO_DEPLOYMENT_STATUS_CONFIG: Record<
+  string,
+  { variant: BadgeVariant; label: string; className?: string }
+> = {
+  unscanned: { variant: "secondary", label: "Sin escanear", className: "bg-gray-100 text-gray-600" },
+  scanned: { variant: "secondary", label: "Escaneado", className: "bg-blue-100 text-blue-700" },
+  birdnet_processing: { variant: "default", label: "Procesando BirdNET", className: "bg-yellow-500" },
+  analyzed: { variant: "default", label: "Por Revisar", className: "bg-orange-500" },
+  reviewed: { variant: "default", label: "Revisado", className: "bg-emerald-700" },
+};
+
 const IMAGE_STATUS_CONFIG: Record<
   string,
   { variant: BadgeVariant; label: string; className?: string }
@@ -35,12 +46,13 @@ const IMAGE_STATUS_CONFIG: Record<
   failed: { variant: "destructive", label: "Fallida" },
 };
 
-type StatusType = "job" | "deployment" | "image";
+type StatusType = "job" | "deployment" | "image" | "audio-deployment";
 
 const CONFIG_MAP: Record<StatusType, Record<string, { variant: BadgeVariant; label: string; className?: string }>> = {
   job: JOB_STATUS_CONFIG,
   deployment: DEPLOYMENT_STATUS_CONFIG,
   image: IMAGE_STATUS_CONFIG,
+  "audio-deployment": AUDIO_DEPLOYMENT_STATUS_CONFIG,
 };
 
 export function StatusBadge({

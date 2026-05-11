@@ -5,7 +5,8 @@ import Link from "next/link";
 import { X, Minus, ChevronUp, ChevronDown, Clock, Loader2, CheckCircle2, XCircle, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatDuration } from "@/lib/format-duration";
-import { cancelJob, cancelQueue } from "@/app/camera-trap/actions";
+import { cancelQueue } from "@/app/camera-trap/actions";
+import { cancelProcessingJob } from "@/app/audio/actions";
 import { useActiveJobs } from "@/hooks/use-active-jobs";
 
 interface SSEData {
@@ -162,10 +163,15 @@ export function FloatingJobProgress() {
   const jobType = sseData?.jobType ?? activeJob?.jobType ?? "ml";
   const isCompression = jobType === "compression";
   const isRevert = jobType === "revert_compression";
+  const isBirdnet = jobType === "birdnet";
   const isCompressionLike = isCompression || isRevert;
   const isDriveSync = jobType === "drive_sync";
-  const isLinkable = !isCompressionLike && !isDriveSync;
-  const unitLabel = isDriveSync ? "instalaciones" : "imágenes";
+  const isLinkable = !isCompressionLike && !isDriveSync && !isBirdnet;
+  const unitLabel = isDriveSync
+    ? "instalaciones"
+    : isBirdnet
+      ? "archivos"
+      : "imágenes";
   const canCancel = activeJob?.canCancel ?? false;
   const dlTotal = sseData?.downloadTotal ?? activeJob?.downloadTotal ?? 0;
   const dlDone = sseData?.downloadedImages ?? activeJob?.downloadedImages ?? 0;
@@ -226,7 +232,7 @@ export function FloatingJobProgress() {
         setCancelling(false);
       }
     } else {
-      const result = await cancelJob(jobId);
+      const result = await cancelProcessingJob(jobId);
       if (!result.success) {
         alert(`Error al cancelar: ${result.error}`);
         setCancelling(false);
@@ -267,9 +273,11 @@ export function FloatingJobProgress() {
                 ? "Comprimiendo..."
                 : isRevert
                   ? "Revirtiendo..."
-                  : isDriveSync
-                    ? "Sincronizando..."
-                    : `Trabajo #${jobId}`}
+                  : isBirdnet
+                    ? "Análisis BirdNET..."
+                    : isDriveSync
+                      ? "Sincronizando..."
+                      : `Trabajo #${jobId}`}
           </span>
           <ChevronUp className="h-3 w-3" />
         </button>
@@ -290,9 +298,11 @@ export function FloatingJobProgress() {
                 ? "Compresión de imágenes"
                 : isRevert
                   ? "Revirtiendo compresión"
-                  : isDriveSync
-                    ? "Sincronización con Drive"
-                    : `Trabajo #${jobId}`}
+                  : isBirdnet
+                    ? "Análisis BirdNET"
+                    : isDriveSync
+                      ? "Sincronización con Drive"
+                      : `Trabajo #${jobId}`}
           </p>
         </div>
         <div className="flex items-center gap-1 ml-2 shrink-0">
@@ -471,6 +481,11 @@ export function FloatingJobProgress() {
           {status === "completed" && isRevert && (
             <span className="text-xs font-medium text-green-600">
               Reversión completada
+            </span>
+          )}
+          {status === "completed" && isBirdnet && (
+            <span className="text-xs font-medium text-green-600">
+              Análisis completado
             </span>
           )}
           {(status === "failed" || status === "cancelled") && isLinkable && (

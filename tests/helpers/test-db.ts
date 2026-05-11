@@ -138,6 +138,7 @@ const CAMERA_TRAP_DDL = `
     total_videos INTEGER DEFAULT 0,
     extracted_frames INTEGER DEFAULT 0,
     compress_first INTEGER DEFAULT 0,
+    video_timestamp_method TEXT DEFAULT 'metadata',
     downloaded_images INTEGER DEFAULT 0,
     download_total INTEGER DEFAULT 0,
     cached_images INTEGER DEFAULT 0

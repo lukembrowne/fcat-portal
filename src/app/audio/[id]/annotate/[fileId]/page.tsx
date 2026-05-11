@@ -13,6 +13,7 @@ import {
 import { eq, and, asc } from "drizzle-orm";
 import { AudioAnnotationClient } from "./annotation-client";
 import { parseRecordingTimestamp } from "@/lib/audio-filename";
+import { getFrequentAudioSpecies } from "@/app/audio/annotation-actions";
 
 interface PageProps {
   params: Promise<{ id: string; fileId: string }>;
@@ -80,7 +81,7 @@ export default async function AudioAnnotatePage({ params }: PageProps) {
         endTime: det.endTime,
         minFreq: det.minFreq,
         maxFreq: det.maxFreq,
-        confidence: det.confidence,
+        detectionConfidence: det.confidence,
         modelVersion: det.modelVersion,
         identification: ident
           ? {
@@ -113,6 +114,10 @@ export default async function AudioAnnotatePage({ params }: PageProps) {
     .select()
     .from(species)
     .orderBy(species.commonName);
+
+  // Frequent species (hotkey slots 1-9), scoped to this deployment.
+  const frequentResult = await getFrequentAudioSpecies(deploymentId, 9);
+  const frequentSpecies = frequentResult.success ? frequentResult.data : [];
 
   return (
     <div className="flex flex-col h-[calc(100vh-4rem)]">
@@ -149,7 +154,7 @@ export default async function AudioAnnotatePage({ params }: PageProps) {
         format={audioFile.format}
         detections={detectionsWithIds}
         speciesList={speciesList}
-        frequentSpecies={[]}
+        frequentSpecies={frequentSpecies}
         isEditor={isEditor}
         prevFileId={prevFileId}
         nextFileId={nextFileId}

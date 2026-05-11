@@ -1,25 +1,23 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
-  AudioLines,
   ArrowLeft,
   Download,
-  FolderSync,
-  Loader2,
-  MapPin,
-  Calendar,
   ChevronRight,
   Play,
   ScanSearch,
 } from "lucide-react";
-import { scanDeploymentAudio } from "../actions";
 import type { AudioFileRow } from "../actions";
 import { AudioPlayer } from "./audio-player";
+import { AudioActionsMenu } from "./audio-actions-menu";
+import { AudioMetadataSection } from "./audio-metadata-section";
+import { AudioQaSection } from "./audio-qa-section";
+import { StatusBadge } from "@/components/status-badge";
+import { CollapsibleSection } from "@/components/collapsible-section";
 import { parseRecordingTimestamp } from "@/lib/audio-filename";
 
 /** Format a YYYY-MM-DD date string in Spanish locale */
@@ -47,19 +45,58 @@ interface DeploymentInfo {
   latitude: number | null;
   longitude: number | null;
   ctProjectName: string | null;
+  excluded: boolean;
+  qaNotes: string | null;
+  fieldNotes: string | null;
+  uploadAudioFolderId: string | null;
+}
+
+interface BirdnetStats {
+  totalDetections: number;
+  totalSpecies: number;
+  verified: number;
+  pending: number;
+}
+
+function ReviewProgress({ reviewed, total }: { reviewed: number; total: number }) {
+  const pct = total > 0 ? Math.round((reviewed / total) * 100) : 0;
+  const isComplete = reviewed >= total;
+
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-muted-foreground">·</span>
+      <div className="w-32 h-2 rounded-full bg-muted overflow-hidden">
+        <div
+          className={`h-full rounded-full transition-all ${isComplete ? "bg-emerald-500" : "bg-blue-500"}`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <span className={`tabular-nums ${isComplete ? "text-emerald-600 font-medium" : ""}`}>
+        {reviewed.toLocaleString()}/{total.toLocaleString()} revisadas
+      </span>
+    </div>
+  );
 }
 
 export function AudioFilesShell({
   deployment,
   files,
   isEditor,
+  displayStatus = "unscanned",
+  isBirdnetProcessing = false,
+  birdnetStats = null,
+  hasBirdnetDetections = false,
+  reviewStats = null,
 }: {
   deployment: DeploymentInfo;
   files: AudioFileRow[];
   isEditor: boolean;
+  displayStatus?: string;
+  isBirdnetProcessing?: boolean;
+  birdnetStats?: BirdnetStats | null;
+  hasBirdnetDetections?: boolean;
+  reviewStats?: { verified: number; total: number } | null;
 }) {
-  const router = useRouter();
-  const [scanning, setScanning] = useState(false);
   const [activeFileId, setActiveFileId] = useState<string | null>(null);
 
   // Group files by date
@@ -124,19 +161,7 @@ export function AudioFilesShell({
   }
 
   function handlePlay(driveFileId: string) {
-    // Spotify behavior: clicking the currently-playing file pauses it
     setActiveFileId((prev) => (prev === driveFileId ? null : driveFileId));
-  }
-
-  async function handleScan() {
-    setScanning(true);
-    try {
-      await scanDeploymentAudio(deployment.id);
-      router.refresh();
-    } catch {
-      // silent
-    }
-    setScanning(false);
   }
 
   const activeFile = activeFileId
@@ -144,60 +169,82 @@ export function AudioFilesShell({
     : null;
 
   return (
-    <div className={`space-y-4 ${activeFileId ? "pb-40" : ""}`}>
-      {/* Header */}
-      <div className="flex items-center gap-3">
-        <Link href="/audio">
-          <Button variant="ghost" size="icon">
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-        </Link>
-        <div className="flex-1 min-w-0">
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <AudioLines className="h-6 w-6 shrink-0" />
-            <span className="truncate">{deployment.name}</span>
-          </h1>
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground mt-1">
-            {deployment.siteName && (
-              <span className="flex items-center gap-1">
-                <MapPin className="h-3 w-3" />
-                {deployment.siteName}
-              </span>
-            )}
-            {deployment.dateStart && (
-              <span className="flex items-center gap-1">
-                <Calendar className="h-3 w-3" />
-                {deployment.dateStart}
-                {deployment.dateEnd ? ` → ${deployment.dateEnd}` : ""}
-              </span>
-            )}
-            {deployment.ctProjectName && (
-              <Badge variant="outline">{deployment.ctProjectName}</Badge>
+    <div className={`max-w-screen-2xl mx-auto space-y-3 ${activeFileId ? "pb-40" : ""}`}>
+      {/* Status Banner Card */}
+      <div className="rounded-lg border bg-card px-4 py-2.5">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3 min-w-0 flex-wrap">
+            <Link href="/audio">
+              <Button variant="ghost" size="icon" className="h-8 w-8">
+                <ArrowLeft className="h-4 w-4" />
+              </Button>
+            </Link>
+            <h1 className="text-lg font-bold shrink-0">{deployment.name}</h1>
+            <StatusBadge status={displayStatus} type="audio-deployment" />
+            <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
+              {files.length > 0 && (
+                <span>{files.length.toLocaleString()} grabaciones</span>
+              )}
+              {birdnetStats && birdnetStats.totalDetections > 0 && (
+                <span>
+                  · {birdnetStats.totalDetections.toLocaleString()} detecciones · {birdnetStats.totalSpecies} especies
+                </span>
+              )}
+              {reviewStats && reviewStats.total > 0 && (
+                <ReviewProgress
+                  reviewed={reviewStats.verified}
+                  total={reviewStats.total}
+                />
+              )}
+            </div>
+          </div>
+
+          {/* Actions */}
+          <div className="flex items-center gap-2 shrink-0">
+            {isEditor && (
+              <AudioActionsMenu
+                deploymentId={deployment.id}
+                uploadAudioFolderId={deployment.uploadAudioFolderId}
+                isBirdnetProcessing={isBirdnetProcessing}
+                hasBirdnetDetections={hasBirdnetDetections}
+                hasFiles={files.length > 0}
+              />
             )}
           </div>
         </div>
-        {isEditor && (
-          <Button
-            onClick={handleScan}
-            disabled={scanning}
-            variant="outline"
-            size="sm"
-          >
-            {scanning ? (
-              <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
-            ) : (
-              <FolderSync className="h-4 w-4 mr-1.5" />
+
+        {/* Collapsible details */}
+        <div className="mt-2 border-t pt-2">
+          <CollapsibleSection title="Detalles" defaultOpen={false}>
+            {deployment.fieldNotes && (
+              <div className="rounded-md border bg-amber-50 dark:bg-amber-950/20 px-3 py-2 mb-4">
+                <p className="text-muted-foreground text-xs font-medium uppercase tracking-wide mb-0.5">
+                  Notas de campo
+                </p>
+                <p className="text-sm whitespace-pre-wrap">{deployment.fieldNotes}</p>
+              </div>
             )}
-            Escanear
-          </Button>
-        )}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <AudioMetadataSection
+                deployment={deployment}
+                fileCount={files.length}
+              />
+              <AudioQaSection
+                deploymentId={deployment.id}
+                canEdit={isEditor}
+                excluded={deployment.excluded ?? false}
+                qaNotes={deployment.qaNotes}
+              />
+            </div>
+          </CollapsibleSection>
+        </div>
       </div>
 
       {/* Date-grouped sections */}
       {files.length === 0 ? (
-        <div className="rounded-xl border p-8 text-center text-muted-foreground">
+        <div className="rounded-lg border bg-card px-6 py-10 text-center text-muted-foreground">
           {isEditor
-            ? 'No hay archivos escaneados. Haz clic en "Escanear" para buscar archivos en Drive.'
+            ? 'No hay archivos escaneados. Usa "Acciones → Escanear archivos" para buscar archivos en Drive.'
             : "No hay archivos de audio."}
         </div>
       ) : (
@@ -236,7 +283,7 @@ export function AudioFilesShell({
                           {file.time ?? "—"}
                         </span>
 
-                        {/* Filename (for "Sin fecha" group or always visible) */}
+                        {/* Filename */}
                         {group.dateKey === "__no_date__" ? (
                           <span className="font-mono text-xs truncate flex-1 min-w-0">
                             {file.filename}
@@ -305,13 +352,6 @@ export function AudioFilesShell({
             );
           })}
         </div>
-      )}
-
-      {/* Footer */}
-      {files.length > 0 && (
-        <p className="text-sm text-muted-foreground">
-          {files.length.toLocaleString()} grabaciones
-        </p>
       )}
 
       {/* Sticky bottom audio player */}

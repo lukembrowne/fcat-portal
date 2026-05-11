@@ -8,7 +8,7 @@ import {
   audioIdentifications,
   species,
 } from "@/db/schema";
-import { eq, and, asc, isNotNull, sql } from "drizzle-orm";
+import { eq, and, asc, desc, inArray, isNotNull, sql } from "drizzle-orm";
 import {
   requireDeploymentAccess,
   getDeploymentIdForAudioDetection,
@@ -131,6 +131,37 @@ export async function createAudioDetection(
       success: false,
       error:
         error instanceof Error ? error.message : "Error al crear detección",
+    };
+  }
+}
+
+export async function updateAudioDetection(
+  detectionId: number,
+  box: { startTime: number; endTime: number; minFreq: number; maxFreq: number }
+): Promise<ActionResult> {
+  const user = await requirePermission("grabaciones", "editor");
+
+  try {
+    const depId = await getDeploymentIdForAudioDetection(detectionId);
+    if (depId) await requireDeploymentAccess(user, depId);
+
+    const { startTime, endTime, minFreq, maxFreq } = box;
+    if (startTime >= endTime || minFreq >= maxFreq) {
+      return { success: false, error: "Coordenadas de detección inválidas" };
+    }
+
+    await db
+      .update(audioDetections)
+      .set({ startTime, endTime, minFreq, maxFreq })
+      .where(eq(audioDetections.id, detectionId));
+
+    revalidatePath("/audio");
+    return { success: true, data: undefined };
+  } catch (error) {
+    return {
+      success: false,
+      error:
+        error instanceof Error ? error.message : "Error al actualizar detección",
     };
   }
 }
@@ -419,4 +450,83 @@ export async function getRecentAudioSpecies(
     .where(sql`${species.scientificName} IN (${sql.join(names.map(n => sql`${n}`), sql`, `)})`);
 
   return { success: true, data: result };
+}
+
+const FREQUENT_AUDIO_SPECIES_TYPE_ORDER = [
+  "bird",
+  "mammal",
+  "amphibian",
+  "reptile",
+  "insect",
+  "system",
+];
+
+/**
+ * Frequent species for the audio annotation hotkey slots, mirroring the
+ * camera-trap `getFrequentSpecies` shape. Scoped per deployment so that the
+ * 1-9 keys reflect what's actually being identified at that site. Pads with
+ * an alphabetical-by-type fallback so the slots are always full.
+ */
+export async function getFrequentAudioSpecies(
+  deploymentId: number | null,
+  limit = 9
+): Promise<ActionResult<typeof species.$inferSelect[]>> {
+  await requirePermission("grabaciones", "viewer");
+
+  const coalesced = sql`COALESCE(
+    NULLIF(TRIM(${audioIdentifications.correctedSpecies}), ''),
+    NULLIF(TRIM(${audioIdentifications.species}), '')
+  )`;
+
+  const top = await db
+    .select({
+      id: species.id,
+      scientificName: species.scientificName,
+      commonName: species.commonName,
+      spanishName: species.spanishName,
+      type: species.type,
+      taxonomicRank: species.taxonomicRank,
+    })
+    .from(audioIdentifications)
+    .innerJoin(
+      audioDetections,
+      eq(audioDetections.id, audioIdentifications.audioDetectionId)
+    )
+    .innerJoin(audioFiles, eq(audioFiles.id, audioDetections.audioFileId))
+    .innerJoin(species, sql`${species.scientificName} = ${coalesced}`)
+    .where(
+      and(
+        inArray(audioIdentifications.verificationStatus, ["verified", "corrected"]),
+        deploymentId !== null ? eq(audioFiles.deploymentId, deploymentId) : undefined
+      )
+    )
+    .groupBy(coalesced)
+    .orderBy(desc(sql`count(*)`))
+    .limit(limit);
+
+  if (top.length < limit) {
+    const seen = new Set(top.map((s) => s.scientificName));
+    const allSpecies = await db
+      .select({
+        id: species.id,
+        scientificName: species.scientificName,
+        commonName: species.commonName,
+        spanishName: species.spanishName,
+        type: species.type,
+        taxonomicRank: species.taxonomicRank,
+      })
+      .from(species);
+    const typeRank = new Map(FREQUENT_AUDIO_SPECIES_TYPE_ORDER.map((t, i) => [t, i]));
+    const fallback = allSpecies
+      .filter((s) => !seen.has(s.scientificName))
+      .sort((a, b) => {
+        const ra = typeRank.get(a.type) ?? 999;
+        const rb = typeRank.get(b.type) ?? 999;
+        return ra !== rb ? ra - rb : a.scientificName.localeCompare(b.scientificName);
+      })
+      .slice(0, limit - top.length);
+    top.push(...fallback);
+  }
+
+  return { success: true, data: top as typeof species.$inferSelect[] };
 }

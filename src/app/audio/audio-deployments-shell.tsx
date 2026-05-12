@@ -60,6 +60,7 @@ import type { AudioProjectGroup } from "./page";
 import { AudioDeploymentRowActions } from "./audio-deployment-row-actions";
 import { BatchAnalyzeDialog } from "./batch-analyze-dialog";
 import { BatchClearAudioIndexDialog } from "./batch-clear-index-dialog";
+import { BatchCompressAudioDialog } from "./batch-compress-audio-dialog";
 
 interface AudioDeploymentsShellProps {
   groups: AudioProjectGroup[];
@@ -103,6 +104,7 @@ export function AudioDeploymentsShell({
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [batchEditOpen, setBatchEditOpen] = useState(false);
   const [batchAnalyzeOpen, setBatchAnalyzeOpen] = useState(false);
+  const [batchCompressOpen, setBatchCompressOpen] = useState(false);
   const [batchClearIndexOpen, setBatchClearIndexOpen] = useState(false);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
     () => new Set()
@@ -253,13 +255,14 @@ export function AudioDeploymentsShell({
           <AudioDeploymentRowActions
             deployment={row.original}
             canEdit={isEditor}
+            canAdmin={isAdmin}
           />
         ),
         enableSorting: false,
         enableGlobalFilter: false,
       },
     ],
-    [isEditor, rangeSelection]
+    [isEditor, isAdmin, rangeSelection]
   );
 
   const filteredData = useMemo(() => {
@@ -541,6 +544,15 @@ export function AudioDeploymentsShell({
               </Button>
               {isAdmin && (
                 <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setBatchCompressOpen(true)}
+                >
+                  Comprimir a FLAC
+                </Button>
+              )}
+              {isAdmin && (
+                <Button
                   variant="destructive"
                   size="sm"
                   onClick={() => setBatchClearIndexOpen(true)}
@@ -714,6 +726,15 @@ export function AudioDeploymentsShell({
             <BatchClearAudioIndexDialog
               open={batchClearIndexOpen}
               onOpenChange={setBatchClearIndexOpen}
+              selectedIds={selectedIds}
+              selectedCount={selectedRows.length}
+              onComplete={() => setRowSelection({})}
+            />
+          )}
+          {isAdmin && (
+            <BatchCompressAudioDialog
+              open={batchCompressOpen}
+              onOpenChange={setBatchCompressOpen}
               selectedIds={selectedIds}
               selectedCount={selectedRows.length}
               onComplete={() => setRowSelection({})}

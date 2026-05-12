@@ -31,6 +31,7 @@ import {
 } from "@/lib/acoustic-indices-runner";
 import { scanDeploymentAudioInternal } from "@/lib/audio-sync-internals";
 import { JOB_TYPES } from "@/lib/job-types";
+import { findActiveAudioJob } from "@/lib/job-locks";
 import { fetchEntities } from "@/lib/odk-client";
 import {
   BIOCHOCO_PROJECT_ID,
@@ -67,6 +68,14 @@ export interface AudioDeploymentRow {
   isBirdnetProcessing: boolean;
   excluded: boolean;
   displayStatus: string;
+  /** Number of audio_files where compressed=true AND filename LIKE %.flac (truly compressed). */
+  compressedFileCount: number;
+  /** Number of audio_files where compressed=false (still WAV). */
+  uncompressedFileCount: number;
+  /** Number of compressed files revertible via in-portal action (priorRev anchor present). */
+  revertibleFileCount: number;
+  /** True if any audio_compression / revert_audio_compression job is pending or processing for this deployment. */
+  isAudioCompressionProcessing: boolean;
 }
 
 export interface AudioProject {
@@ -169,6 +178,32 @@ export async function fetchAudioDeployments(): Promise<
         AND job_type IN ('birdnet', 'acoustic_indices', 'audio_analysis')
         AND status IN ('pending', 'processing')
       )`,
+      compressedFileCount: sql<number>`(
+        SELECT COUNT(*) FROM audio_files
+        WHERE audio_files.deployment_id = ${deployments.id}
+        AND audio_files.compressed = 1
+        AND lower(audio_files.filename) LIKE '%.flac'
+      )`,
+      uncompressedFileCount: sql<number>`(
+        SELECT COUNT(*) FROM audio_files
+        WHERE audio_files.deployment_id = ${deployments.id}
+        AND audio_files.compressed = 0
+        AND lower(audio_files.filename) LIKE '%.wav'
+        AND audio_files.drive_file_id IS NOT NULL
+      )`,
+      revertibleFileCount: sql<number>`(
+        SELECT COUNT(*) FROM audio_files
+        WHERE audio_files.deployment_id = ${deployments.id}
+        AND audio_files.compressed = 1
+        AND audio_files.original_drive_revision_id IS NOT NULL
+        AND audio_files.drive_file_id IS NOT NULL
+      )`,
+      isAudioCompressionProcessingRaw: sql<number>`(
+        SELECT COUNT(*) FROM biochoco_processing_jobs
+        WHERE deployment_id = ${deployments.id}
+        AND job_type IN ('audio_compression', 'revert_audio_compression')
+        AND status IN ('pending', 'processing')
+      )`,
     })
     .from(deployments)
     .leftJoin(
@@ -196,9 +231,11 @@ export async function fetchAudioDeployments(): Promise<
       displayStatus = "scanned";
     }
 
+    const { isAudioCompressionProcessingRaw, ...rest } = row;
     return {
-      ...row,
+      ...rest,
       isBirdnetProcessing: row.isBirdnetProcessing > 0,
+      isAudioCompressionProcessing: isAudioCompressionProcessingRaw > 0,
       displayStatus,
     };
   });
@@ -654,6 +691,14 @@ export async function cancelProcessingJob(
     return cancelAudioAnalysisJob(jobId);
   }
 
+  if (
+    job.jobType === JOB_TYPES.AUDIO_COMPRESSION ||
+    job.jobType === JOB_TYPES.REVERT_AUDIO_COMPRESSION
+  ) {
+    const { cancelAudioCompressionJobAction } = await import("./compression-actions");
+    return cancelAudioCompressionJobAction(jobId);
+  }
+
   // For camera trap jobs, delegate to camera-trap cancel
   const { cancelJob } = await import("@/app/camera-trap/actions");
   return cancelJob(jobId);
@@ -1033,25 +1078,14 @@ export async function createAudioAnalysisJob(
     return { success: false, error: "No hay archivos de audio en esta instalación" };
   }
 
-  // Single-flight across all three audio analysis job types — a deployment
-  // can only have one of {birdnet, acoustic_indices, audio_analysis} in flight.
-  const [activeJob] = await db
-    .select({ id: processingJobs.id })
-    .from(processingJobs)
-    .where(
-      and(
-        eq(processingJobs.deploymentId, deploymentId),
-        inArray(processingJobs.jobType, [
-          JOB_TYPES.BIRDNET,
-          JOB_TYPES.ACOUSTIC_INDICES,
-          JOB_TYPES.AUDIO_ANALYSIS,
-        ]),
-        inArray(processingJobs.status, ["pending", "processing"])
-      )
-    )
-    .limit(1);
+  // Single-flight: only one audio job (analysis OR compression OR sync) per
+  // deployment in `pending`/`processing` at any time. See AUDIO_JOB_TYPES.
+  const activeJob = await findActiveAudioJob(deploymentId);
   if (activeJob) {
-    return { success: false, error: "Ya existe un análisis activo para esta instalación" };
+    return {
+      success: false,
+      error: "Ya existe un trabajo activo para esta instalación",
+    };
   }
 
   if (includeBirdnet) {

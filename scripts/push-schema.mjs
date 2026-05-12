@@ -699,6 +699,13 @@ const migrations = [
   `ALTER TABLE biochoco_deployments ADD COLUMN previous_counts_checked_at INTEGER`,
   // Drive sync background job: scope to a CT project (nullable) (2026-05-06)
   `ALTER TABLE biochoco_processing_jobs ADD COLUMN camera_trap_project_id INTEGER REFERENCES ct_projects(id) ON DELETE SET NULL`,
+  // Audio WAV→FLAC compression tracking (2026-05-11)
+  // `compressed=true` is set for both successful FLAC encodes and non_compressible
+  // WAVs left as-is. `original_drive_revision_id` is the Drive revision captured
+  // immediately before replacement — the anchor used by the revert job.
+  `ALTER TABLE audio_files ADD COLUMN compressed INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE audio_files ADD COLUMN original_file_size INTEGER`,
+  `ALTER TABLE audio_files ADD COLUMN original_drive_revision_id TEXT`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }

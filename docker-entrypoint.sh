@@ -16,6 +16,20 @@ mkdir -p "$TORCH_HOME"
 # Ensure backup directory exists
 mkdir -p /app/data/backups
 
+# Run database migrations BEFORE starting the server.
+# push-schema.mjs is idempotent (CREATE TABLE IF NOT EXISTS + try/catch ALTERs),
+# so it is safe to run on every boot. This guarantees new columns exist before
+# any new server code can query them — required by the audio_compression rollout.
+echo "[entrypoint] Running database migrations (push-schema.mjs)..."
+if node scripts/push-schema.mjs > /tmp/push-schema.log 2>&1; then
+  echo "[entrypoint] Migrations applied."
+else
+  echo "[entrypoint] ERROR: push-schema.mjs failed. Tail of log:"
+  tail -20 /tmp/push-schema.log
+  echo "[entrypoint] Refusing to start server with stale schema."
+  exit 1
+fi
+
 # Export env vars for cron jobs (Debian cron doesn't inherit Docker env)
 echo "CRON_SECRET=${CRON_SECRET}" > /etc/cron.d/portal-env
 chmod 0600 /etc/cron.d/portal-env

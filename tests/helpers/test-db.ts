@@ -276,6 +276,21 @@ const CAMERA_TRAP_DDL = `
     verified_by TEXT,
     verified_at INTEGER
   );
+
+  CREATE TABLE acoustic_indices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    audio_file_id INTEGER NOT NULL REFERENCES audio_files(id) ON DELETE CASCADE,
+    soundscape_saturation REAL,
+    acoustic_complexity_index REAL,
+    frequency_entropy REAL,
+    temporal_entropy REAL,
+    events_per_second REAL,
+    recorded_date TEXT,
+    diel_period TEXT NOT NULL,
+    config_hash TEXT NOT NULL,
+    computed_at INTEGER NOT NULL
+  );
+  CREATE UNIQUE INDEX idx_ai_audio_file ON acoustic_indices(audio_file_id);
 `;
 
 export function createTestDb() {

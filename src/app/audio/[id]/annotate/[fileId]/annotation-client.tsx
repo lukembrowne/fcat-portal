@@ -9,7 +9,7 @@ import { AnnotationToolsSidebar } from "@/components/annotation-tools-sidebar";
 import { AnnotationPickerPopover } from "@/components/annotation-picker-popover";
 import { Popover, PopoverAnchor } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
-import { Calendar, ChevronLeft, ChevronRight, Play, Pause, SkipBack, SkipForward } from "lucide-react";
+import { Calendar, ChevronLeft, ChevronRight, Download, Play, Pause, SkipBack, SkipForward } from "lucide-react";
 import type { Species } from "@/db/schema";
 import {
   FftSpectrogram,
@@ -609,6 +609,22 @@ export function AudioAnnotationClient({
                   {formatTime(currentTime)}
                   {duration != null ? ` / ${formatTime(duration)}` : ""}
                 </span>
+                {driveFileId && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    asChild
+                    title="Descargar archivo"
+                  >
+                    <a
+                      href={`/api/audio/stream?fileId=${encodeURIComponent(driveFileId)}&download=true`}
+                      download
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                    </a>
+                  </Button>
+                )}
               </>
             )}
           </div>

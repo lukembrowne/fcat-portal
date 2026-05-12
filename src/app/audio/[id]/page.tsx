@@ -11,7 +11,7 @@ import {
 import { eq, and, sql, desc, inArray } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import { fetchAudioFiles } from "../actions";
-import { AudioFilesShell } from "./audio-files-shell";
+import { RecordingsShell } from "./recordings-shell";
 
 export default async function AudioDetailPage({
   params,
@@ -68,6 +68,32 @@ export default async function AudioDetailPage({
       and(
         eq(processingJobs.deploymentId, deploymentId),
         eq(processingJobs.jobType, "birdnet"),
+        inArray(processingJobs.status, ["pending", "processing"])
+      )
+    )
+    .limit(1);
+
+  // Check for active acoustic-indices job
+  const [activeIndicesJob] = await db
+    .select({ id: processingJobs.id })
+    .from(processingJobs)
+    .where(
+      and(
+        eq(processingJobs.deploymentId, deploymentId),
+        eq(processingJobs.jobType, "acoustic_indices"),
+        inArray(processingJobs.status, ["pending", "processing"])
+      )
+    )
+    .limit(1);
+
+  // Check for active combined audio-analysis job
+  const [activeAudioAnalysisJob] = await db
+    .select({ id: processingJobs.id })
+    .from(processingJobs)
+    .where(
+      and(
+        eq(processingJobs.deploymentId, deploymentId),
+        eq(processingJobs.jobType, "audio_analysis"),
         inArray(processingJobs.status, ["pending", "processing"])
       )
     )
@@ -133,7 +159,7 @@ export default async function AudioDetailPage({
   let displayStatus: string;
   if (fileCount === 0) {
     displayStatus = "unscanned";
-  } else if (activeBirdnetJob) {
+  } else if (activeBirdnetJob || activeAudioAnalysisJob) {
     displayStatus = "birdnet_processing";
   } else if (birdnetStats && birdnetStats.totalDetections > 0) {
     if (birdnetStats.pending === 0 && birdnetStats.verified > 0) {
@@ -150,7 +176,7 @@ export default async function AudioDetailPage({
     : null;
 
   return (
-    <AudioFilesShell
+    <RecordingsShell
       deployment={deployment}
       files={files}
       isEditor={isEditor}
@@ -158,6 +184,8 @@ export default async function AudioDetailPage({
       isBirdnetProcessing={!!activeBirdnetJob}
       birdnetStats={birdnetStats}
       hasBirdnetDetections={hasBirdnetDetections}
+      isAcousticIndicesProcessing={!!activeIndicesJob}
+      isAudioAnalysisProcessing={!!activeAudioAnalysisJob}
       reviewStats={reviewStats}
     />
   );

@@ -837,6 +837,37 @@ export const audioIdentifications = sqliteTable(
 );
 
 // ---------------------------------------------------------------------------
+// Acoustic Indices (Müller 2023 / Kümmet 2025 five-index recipe per audio file)
+// ---------------------------------------------------------------------------
+//
+// 1:1 with audio_files. On re-run with new config, the latest row wins via
+// ON CONFLICT DO UPDATE on the unique audio_file_id index. We accept that
+// time-series comparison of older config values is not supported; if the
+// algorithm changes, delete + recompute.
+
+export const acousticIndices = sqliteTable(
+  "acoustic_indices",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    audioFileId: integer("audio_file_id")
+      .notNull()
+      .references(() => audioFiles.id, { onDelete: "cascade" }),
+    soundscapeSaturation: real("soundscape_saturation"),
+    acousticComplexityIndex: real("acoustic_complexity_index"),
+    frequencyEntropy: real("frequency_entropy"),
+    temporalEntropy: real("temporal_entropy"),
+    eventsPerSecond: real("events_per_second"),
+    recordedDate: text("recorded_date"),
+    dielPeriod: text("diel_period").notNull(),
+    configHash: text("config_hash").notNull(),
+    computedAt: integer("computed_at", { mode: "timestamp" }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("idx_ai_audio_file").on(table.audioFileId),
+  ]
+);
+
+// ---------------------------------------------------------------------------
 // Share Tokens (public share links for camera trap deployments)
 // ---------------------------------------------------------------------------
 
@@ -997,6 +1028,9 @@ export type NewFinanceProjection = typeof financeProjections.$inferInsert;
 
 export type FinanceUpload = typeof financeUploads.$inferSelect;
 export type NewFinanceUpload = typeof financeUploads.$inferInsert;
+
+export type AcousticIndicesRow = typeof acousticIndices.$inferSelect;
+export type NewAcousticIndicesRow = typeof acousticIndices.$inferInsert;
 
 export type ClimateReading = typeof climateReadings.$inferSelect;
 export type NewClimateReading = typeof climateReadings.$inferInsert;

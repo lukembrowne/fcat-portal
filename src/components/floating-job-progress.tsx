@@ -164,12 +164,19 @@ export function FloatingJobProgress() {
   const isCompression = jobType === "compression";
   const isRevert = jobType === "revert_compression";
   const isBirdnet = jobType === "birdnet";
+  const isAcousticIndices = jobType === "acoustic_indices";
+  const isAudioAnalysis = jobType === "audio_analysis";
   const isCompressionLike = isCompression || isRevert;
   const isDriveSync = jobType === "drive_sync" || jobType === "audio_sync";
-  const isLinkable = !isCompressionLike && !isDriveSync && !isBirdnet;
+  const isLinkable =
+    !isCompressionLike &&
+    !isDriveSync &&
+    !isBirdnet &&
+    !isAcousticIndices &&
+    !isAudioAnalysis;
   const unitLabel = isDriveSync
     ? "instalaciones"
-    : isBirdnet
+    : isBirdnet || isAcousticIndices || isAudioAnalysis
       ? "archivos"
       : "imágenes";
   const canCancel = activeJob?.canCancel ?? false;
@@ -275,9 +282,13 @@ export function FloatingJobProgress() {
                   ? "Revirtiendo..."
                   : isBirdnet
                     ? "Análisis BirdNET..."
-                    : isDriveSync
-                      ? "Sincronizando..."
-                      : `Trabajo #${jobId}`}
+                    : isAcousticIndices
+                      ? "Índices acústicos..."
+                      : isAudioAnalysis
+                        ? "Análisis acústico..."
+                        : isDriveSync
+                          ? "Sincronizando..."
+                          : `Trabajo #${jobId}`}
           </span>
           <ChevronUp className="h-3 w-3" />
         </button>
@@ -300,9 +311,13 @@ export function FloatingJobProgress() {
                   ? "Revirtiendo compresión"
                   : isBirdnet
                     ? "Análisis BirdNET"
-                    : isDriveSync
-                      ? "Sincronización con Drive"
-                      : `Trabajo #${jobId}`}
+                    : isAcousticIndices
+                      ? "Índices acústicos"
+                      : isAudioAnalysis
+                        ? "Análisis acústico (BirdNET + índices)"
+                        : isDriveSync
+                          ? "Sincronización con Drive"
+                          : `Trabajo #${jobId}`}
           </p>
         </div>
         <div className="flex items-center gap-1 ml-2 shrink-0">
@@ -488,6 +503,16 @@ export function FloatingJobProgress() {
               Análisis completado
             </span>
           )}
+          {status === "completed" && isAcousticIndices && (
+            <span className="text-xs font-medium text-green-600">
+              Índices acústicos calculados
+            </span>
+          )}
+          {status === "completed" && isAudioAnalysis && (
+            <span className="text-xs font-medium text-green-600">
+              Análisis acústico completado
+            </span>
+          )}
           {(status === "failed" || status === "cancelled") && isLinkable && (
             <Link
               href={`/camera-trap/process?jobId=${jobId}`}
@@ -509,6 +534,16 @@ export function FloatingJobProgress() {
           {(status === "failed" || status === "cancelled") && isRevert && (
             <span className="text-xs text-muted-foreground">
               {status === "failed" ? "Reversión fallida" : "Reversión cancelada"}
+            </span>
+          )}
+          {(status === "failed" || status === "cancelled") && isAcousticIndices && (
+            <span className="text-xs text-muted-foreground">
+              {status === "failed" ? "Cálculo fallido" : "Cálculo cancelado"}
+            </span>
+          )}
+          {(status === "failed" || status === "cancelled") && isAudioAnalysis && (
+            <span className="text-xs text-muted-foreground">
+              {status === "failed" ? "Análisis fallido" : "Análisis cancelado"}
             </span>
           )}
         </div>

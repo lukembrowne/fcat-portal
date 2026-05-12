@@ -26,6 +26,8 @@ services:
       - RESEND_FROM_EMAIL=${RESEND_FROM_EMAIL:-portal@fcat-ecuador.org}
       - CRON_SECRET=${CRON_SECRET:-}
       - TZ=America/New_York
+      - FLAC_COMPRESSION_BATCH_SIZE=20
+      - FLAC_COMPRESSION_WORKERS=8
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000"]

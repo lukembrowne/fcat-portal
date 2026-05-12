@@ -26,7 +26,7 @@ import { and, eq, inArray, sql, count, sum } from "drizzle-orm";
 import { JOB_TYPES } from "@/lib/job-types";
 import {
   findActiveAudioJob,
-  countActiveAudioCompressionJobs,
+  countActiveAudioWorkWithCompression,
 } from "@/lib/job-locks";
 import {
   getFileMetadataWithRevision,
@@ -175,7 +175,7 @@ export async function enqueueAudioCompressionJob(
   // Prevents the admin from saturating the droplet by queueing every deployment.
   // Skipped in dry-run (parallel dry-runs are fine — no Drive load).
   if (!dryRun) {
-    const active = await countActiveAudioCompressionJobs();
+    const active = await countActiveAudioWorkWithCompression();
     if (active >= 1) {
       return {
         success: false,
@@ -301,13 +301,40 @@ async function sweepOrphanTempFlacs(deploymentId: number): Promise<void> {
   }
 }
 
-export async function processFlacCompressionJob(
-  jobId: number,
-  deploymentId: number,
-  actorEmail: string,
-  dryRun = false,
-): Promise<void> {
-  const startTime = Date.now();
+export interface CompressionPhaseResult {
+  processed: number;
+  failed: number;
+  skipped: number;
+  savedBytes: number;
+  originalTotalBytes: number;
+  compressedTotalBytes: number;
+  skipReasons: Record<string, number>;
+  total: number;
+  cancelled: boolean;
+}
+
+/**
+ * Internal core loop — encode + Drive replace + DB update for every
+ * uncompressed WAV in a deployment, while reporting progress on the
+ * caller-supplied job row.
+ *
+ * Lifecycle is owned by the caller: this function does NOT mark the job
+ * processing/completed/failed and does NOT write an activity log entry.
+ * Designed to be invoked from two places:
+ *   1. `processFlacCompressionJob` — standalone AUDIO_COMPRESSION job
+ *   2. `processAudioAnalysisJob` — pre-phase of an AUDIO_ANALYSIS job
+ *      when `compressFirst=true`
+ *
+ * Status messages written to the job row use the prefix "Comprimiendo X de Y"
+ * (or "Dry-run X de Y") so the floating progress indicator surfaces phase
+ * state for the user.
+ */
+export async function runAudioCompressionPhase(opts: {
+  jobId: number;
+  deploymentId: number;
+  dryRun?: boolean;
+}): Promise<CompressionPhaseResult> {
+  const { jobId, deploymentId, dryRun = false } = opts;
   let processed = 0;
   let failed = 0;
   let skipped = 0;
@@ -320,87 +347,79 @@ export async function processFlacCompressionJob(
     skipReasons[reason] = (skipReasons[reason] ?? 0) + 1;
   };
 
-  try {
-    await db
-      .update(processingJobs)
-      .set({ status: "processing", startedAt: new Date() })
-      .where(eq(processingJobs.id, jobId));
+  await sweepOrphanTempFlacs(deploymentId);
 
-    await sweepOrphanTempFlacs(deploymentId);
-
-    const allFiles = await db
-      .select({
-        id: audioFiles.id,
-        filename: audioFiles.filename,
-        driveFileId: audioFiles.driveFileId,
-        fileSize: audioFiles.fileSize,
-        cachePath: audioFiles.cachePath,
-      })
-      .from(audioFiles)
-      .where(
-        and(
-          eq(audioFiles.deploymentId, deploymentId),
-          eq(audioFiles.compressed, false),
-          sql`${audioFiles.driveFileId} IS NOT NULL`,
-          sql`lower(${audioFiles.filename}) LIKE '%.wav'`,
-        ),
-      );
-
-    const total = allFiles.length;
-
-    await db
-      .update(processingJobs)
-      .set({
-        totalImages: total,
-        statusMessage: dryRun
-          ? `Dry-run: 0 de ${total}`
-          : `Comprimiendo 0 de ${total}`,
-      })
-      .where(eq(processingJobs.id, jobId));
-
-    log.info(
-      { jobId, deploymentId, total, dryRun },
-      "[flac] job starting",
+  const allFiles = await db
+    .select({
+      id: audioFiles.id,
+      filename: audioFiles.filename,
+      driveFileId: audioFiles.driveFileId,
+      fileSize: audioFiles.fileSize,
+      cachePath: audioFiles.cachePath,
+    })
+    .from(audioFiles)
+    .where(
+      and(
+        eq(audioFiles.deploymentId, deploymentId),
+        eq(audioFiles.compressed, false),
+        sql`${audioFiles.driveFileId} IS NOT NULL`,
+        sql`lower(${audioFiles.filename}) LIKE '%.wav'`,
+      ),
     );
 
-    for (let i = 0; i < allFiles.length; i += FLAC_BATCH_SIZE) {
-      // Cancellation check (~ every batch — ≤ FLAC_BATCH_SIZE files of latency)
-      const [{ status }] = await db
-        .select({ status: processingJobs.status })
-        .from(processingJobs)
-        .where(eq(processingJobs.id, jobId));
-      if (status === "cancelled") {
-        log.info({ jobId, processed, failed }, "[flac] cancelled mid-job");
-        break;
-      }
+  const total = allFiles.length;
+  let cancelled = false;
 
-      const rawBatch = allFiles.slice(i, i + FLAC_BATCH_SIZE) as BatchFile[];
+  await db
+    .update(processingJobs)
+    .set({
+      totalImages: total,
+      processedImages: 0,
+      failedImages: 0,
+      statusMessage: dryRun
+        ? `Dry-run: 0 de ${total}`
+        : `Comprimiendo 0 de ${total}`,
+    })
+    .where(eq(processingJobs.id, jobId));
 
-      // Reconciliation pre-check — fetch Drive metadata for every file.
-      // Self-heals "Drive ahead of DB" (Drive shows .flac but DB shows .wav)
-      // and captures the prior head revision id for revert.
-      const driveMetas = await Promise.all(
-        rawBatch.map((f) =>
-          getFileMetadataWithRevision(f.driveFileId).catch(() => null),
-        ),
-      );
+  log.info(
+    { jobId, deploymentId, total, dryRun },
+    "[flac] phase starting",
+  );
 
-      const toEncode: BatchFile[] = [];
-      for (let k = 0; k < rawBatch.length; k++) {
-        const f = rawBatch[k];
+  // Tagged result types — defined once, used by the prep helper and aggregator.
+  type PreResult =
+    | { kind: "missing_meta"; file: BatchFile }
+    | { kind: "self_heal"; file: BatchFile }
+    | { kind: "cache_failed"; file: BatchFile; err: unknown }
+    | { kind: "ready"; file: BatchFile };
+
+  interface PreparedBatch {
+    preResults: PreResult[];
+    toEncode: BatchFile[];
+    encodeInputs: { id: number; wavPath: string }[];
+  }
+
+  // Per-batch preparation: Drive metadata fetch + reconciliation + cache
+  // pre-fetch + encodeInputs assembly. Pure prep — does not mutate phase
+  // counters; the caller aggregates the returned PreResult list serially.
+  // Self-heal DB updates and the cache-row lookup are scoped to a single batch
+  // and touch disjoint rows from other batches, so it's safe to run multiple
+  // prep() invocations concurrently with the main encode/upload pipeline.
+  const prepBatch = async (
+    rawBatch: BatchFile[],
+  ): Promise<PreparedBatch> => {
+    const driveMetas = await Promise.all(
+      rawBatch.map((f) =>
+        getFileMetadataWithRevision(f.driveFileId).catch(() => null),
+      ),
+    );
+
+    const preResults = await Promise.all(
+      rawBatch.map(async (f, k): Promise<PreResult> => {
         const meta = driveMetas[k];
-        if (!meta) {
-          // File missing from Drive — count as failed and log.
-          failed++;
-          log.warn(
-            { jobId, audioFileId: f.id, driveFileId: f.driveFileId },
-            "[flac] Drive metadata fetch returned null (trashed or 404)",
-          );
-          continue;
-        }
+        if (!meta) return { kind: "missing_meta", file: f };
         if (meta.mimeType === "audio/flac") {
-          // Self-heal — Drive already migrated, DB out of sync. (Likely a
-          // previous job crashed between Drive write and DB update.)
           if (!dryRun) {
             await db
               .update(audioFiles)
@@ -411,40 +430,27 @@ export async function processFlacCompressionJob(
                 mimeType: "audio/flac",
                 fileSize: meta.size,
                 originalFileSize: f.fileSize,
-                // originalDriveRevisionId left null — anchor unknown.
               })
               .where(eq(audioFiles.id, f.id));
           }
-          processed++;
-          log.info(
-            { jobId, audioFileId: f.id, filename: f.filename },
-            "[flac] reconciliation self-heal — Drive already FLAC",
-          );
-          continue;
+          return { kind: "self_heal", file: f };
         }
         f.priorRev = meta.headRevisionId;
-
-        // Pre-encode: ensure the source is in the local cache.
         try {
           await ensureAudioCached(f.id);
+          return { kind: "ready", file: f };
         } catch (err) {
-          recordSkip("cache_failed");
-          log.warn(
-            { err, jobId, audioFileId: f.id },
-            "[flac] cache download failed",
-          );
-          continue;
+          return { kind: "cache_failed", file: f, err };
         }
-        toEncode.push(f);
-      }
+      }),
+    );
 
-      if (toEncode.length === 0) {
-        await updateProgress(jobId, processed, failed, total, dryRun, savedBytes);
-        continue;
-      }
+    const toEncode = preResults
+      .filter((r): r is { kind: "ready"; file: BatchFile } => r.kind === "ready")
+      .map((r) => r.file);
 
-      // Re-read cachePath after ensureAudioCached so we have fresh values.
-      const idToCachePath = new Map<number, string>();
+    let encodeInputs: { id: number; wavPath: string }[] = [];
+    if (toEncode.length > 0) {
       const cacheRows = await db
         .select({ id: audioFiles.id, cachePath: audioFiles.cachePath })
         .from(audioFiles)
@@ -454,75 +460,138 @@ export async function processFlacCompressionJob(
             toEncode.map((x) => x.id),
           ),
         );
+      const idToCachePath = new Map<number, string>();
       for (const r of cacheRows) {
         if (r.cachePath) idToCachePath.set(r.id, r.cachePath);
       }
-
-      const encodeInputs = toEncode
+      encodeInputs = toEncode
         .map((f) => {
           const wavPath = idToCachePath.get(f.id);
           return wavPath ? { id: f.id, wavPath } : null;
         })
         .filter((x): x is { id: number; wavPath: string } => x !== null);
+    }
 
-      if (encodeInputs.length === 0) {
-        await updateProgress(jobId, processed, failed, total, dryRun, savedBytes);
-        continue;
-      }
+    return { preResults, toEncode, encodeInputs };
+  };
 
-      const results: FlacEncodeResult[] = [];
-      const skips: { audioFileId: number; reason: string }[] = [];
-      const runOutcome = await runFlacEncoding({
-        jobId,
-        files: encodeInputs,
-        workers: FLAC_WORKERS,
-        compressionLevel: 0.8,
-        subtype: "PCM_16",
-        onResult: (r) => {
-          results.push(r);
-        },
-        onSkip: (s) => {
-          skips.push(s);
-        },
-        onProgress: async (idx, t) => {
-          // Surface per-batch progress; full progress updated after the
-          // batch finishes when DB updates run.
-          await db
-            .update(processingJobs)
-            .set({
-              statusMessage: `${dryRun ? "Dry-run" : "Codificando"} (${idx} de ${t} en lote)`,
-            })
-            .where(eq(processingJobs.id, jobId));
-        },
-      });
+  // Pre-slice batches so we can start prep for batch N+1 while batch N runs.
+  const batches: BatchFile[][] = [];
+  for (let i = 0; i < allFiles.length; i += FLAC_BATCH_SIZE) {
+    batches.push(allFiles.slice(i, i + FLAC_BATCH_SIZE) as BatchFile[]);
+  }
 
-      if (!runOutcome.success) {
-        log.error(
-          { jobId, error: runOutcome.error },
-          "[flac] encoder batch failed — counting batch as failed",
+  // Kick off prep for the first batch BEFORE entering the loop. Each iteration
+  // awaits its prep, immediately launches prep for the next batch, then runs
+  // encode + Drive replace for the current batch in parallel with that next prep.
+  // Net effect: the inter-batch download/cache gap overlaps with upload time.
+  let nextPrep: Promise<PreparedBatch> | null =
+    batches.length > 0 ? prepBatch(batches[0]) : null;
+
+  for (let bi = 0; bi < batches.length; bi++) {
+    // Cancellation check (~ every batch — ≤ FLAC_BATCH_SIZE files of latency)
+    const [{ status }] = await db
+      .select({ status: processingJobs.status })
+      .from(processingJobs)
+      .where(eq(processingJobs.id, jobId));
+    if (status === "cancelled") {
+      log.info({ jobId, processed, failed }, "[flac] cancelled mid-phase");
+      cancelled = true;
+      break;
+    }
+
+    const prep = await nextPrep!;
+    // Pipeline: launch the next batch's prep right away so it runs concurrently
+    // with this batch's encode + Drive replace.
+    nextPrep = bi + 1 < batches.length ? prepBatch(batches[bi + 1]) : null;
+
+    // Aggregate counters from prep (serial — keeps mutations ordered).
+    for (const r of prep.preResults) {
+      if (r.kind === "missing_meta") {
+        failed++;
+        log.warn(
+          { jobId, audioFileId: r.file.id, driveFileId: r.file.driveFileId },
+          "[flac] Drive metadata fetch returned null (trashed or 404)",
         );
-        failed += encodeInputs.length;
-        await updateProgress(jobId, processed, failed, total, dryRun, savedBytes);
-        continue;
+      } else if (r.kind === "self_heal") {
+        processed++;
+        log.info(
+          { jobId, audioFileId: r.file.id, filename: r.file.filename },
+          "[flac] reconciliation self-heal — Drive already FLAC",
+        );
+      } else if (r.kind === "cache_failed") {
+        recordSkip("cache_failed");
+        log.warn(
+          { err: r.err, jobId, audioFileId: r.file.id },
+          "[flac] cache download failed",
+        );
       }
+    }
 
-      // Apply skips (encoder side)
-      for (const s of skips) {
-        recordSkip(s.reason);
-      }
+    const { toEncode, encodeInputs } = prep;
+    if (encodeInputs.length === 0) {
+      await updateProgress(jobId, processed, failed, total, dryRun, savedBytes);
+      continue;
+    }
 
-      // Apply results: per file, replace Drive + update DB.
-      for (const r of results) {
+    const results: FlacEncodeResult[] = [];
+    const skips: { audioFileId: number; reason: string }[] = [];
+    const runOutcome = await runFlacEncoding({
+      jobId,
+      files: encodeInputs,
+      workers: FLAC_WORKERS,
+      compressionLevel: 0.8,
+      subtype: "PCM_16",
+      onResult: (r) => {
+        results.push(r);
+      },
+      onSkip: (s) => {
+        skips.push(s);
+      },
+      onProgress: async (idx, t) => {
+        await db
+          .update(processingJobs)
+          .set({
+            statusMessage: `${dryRun ? "Dry-run" : "Codificando"} (${idx} de ${t} en lote)`,
+          })
+          .where(eq(processingJobs.id, jobId));
+      },
+    });
+
+    if (!runOutcome.success) {
+      log.error(
+        { jobId, error: runOutcome.error },
+        "[flac] encoder batch failed — counting batch as failed",
+      );
+      failed += encodeInputs.length;
+      await updateProgress(jobId, processed, failed, total, dryRun, savedBytes);
+      continue;
+    }
+
+    for (const s of skips) {
+      recordSkip(s.reason);
+    }
+
+    // Per-file Drive replace + DB update — independent per file, so run in parallel.
+    // The Drive write rate-limit gate in drive-client.ts still serializes the
+    // actual API calls; parallel awaits just let their upload-latency overlap.
+    type PostOutcome =
+      | { kind: "ok"; wavSize: number; newSize: number }
+      | { kind: "non_compressible" }
+      | { kind: "dry_run"; wavSize: number; flacSize: number }
+      | { kind: "orphan" }
+      | { kind: "failed" };
+
+    const postOutcomes = await Promise.all(
+      results.map(async (r): Promise<PostOutcome> => {
         const f = toEncode.find((x) => x.id === r.audioFileId);
         if (!f) {
           log.warn({ jobId, audioFileId: r.audioFileId }, "[flac] orphan result");
           if (r.flacPath) await fs.unlink(r.flacPath).catch(() => {});
-          continue;
+          return { kind: "orphan" };
         }
 
         if (r.verdict === "non_compressible") {
-          // FLAC was no smaller than WAV — keep WAV but mark compressed so we
-          // don't retry. No Drive write, no revert anchor.
           if (!dryRun) {
             await db
               .update(audioFiles)
@@ -532,7 +601,6 @@ export async function processFlacCompressionJob(
               })
               .where(eq(audioFiles.id, f.id));
           }
-          processed++;
           log.info(
             {
               jobId,
@@ -542,19 +610,13 @@ export async function processFlacCompressionJob(
             },
             "[flac] non_compressible — kept as WAV",
           );
-          continue;
+          return { kind: "non_compressible" };
         }
 
-        // Verdict: compressed. Drive replace + DB update (skipped in dry-run).
         const newName = f.filename.replace(/\.wav$/i, ".flac");
         if (dryRun) {
-          processed++;
-          originalTotalBytes += r.wavSize;
-          compressedTotalBytes += r.flacSize;
-          savedBytes += Math.max(r.wavSize - r.flacSize, 0);
-          // Clean up dry-run tmp file
           if (r.flacPath) await fs.unlink(r.flacPath).catch(() => {});
-          continue;
+          return { kind: "dry_run", wavSize: r.wavSize, flacSize: r.flacSize };
         }
 
         try {
@@ -567,7 +629,6 @@ export async function processFlacCompressionJob(
           );
           const newSize = upload.size ?? r.flacSize;
 
-          // Pin the prior revision so revert always works (env-gated).
           if (keepWavRevisionForever() && f.priorRev) {
             try {
               await pinFileRevision(f.driveFileId, f.priorRev);
@@ -589,14 +650,9 @@ export async function processFlacCompressionJob(
               fileSize: newSize,
               originalFileSize: f.fileSize,
               originalDriveRevisionId: f.priorRev ?? null,
-              cachePath: null, // next request re-downloads the smaller FLAC
+              cachePath: null,
             })
             .where(eq(audioFiles.id, f.id));
-
-          processed++;
-          originalTotalBytes += r.wavSize;
-          compressedTotalBytes += newSize;
-          savedBytes += Math.max(r.wavSize - newSize, 0);
 
           log.info(
             {
@@ -610,33 +666,87 @@ export async function processFlacCompressionJob(
             },
             "[flac] audit — Drive replaced + DB updated",
           );
+          return { kind: "ok", wavSize: r.wavSize, newSize };
         } catch (err) {
-          failed++;
           log.error(
             { err, jobId, audioFileId: f.id, driveFileId: f.driveFileId },
             "[flac] Drive upload or DB update failed",
           );
+          return { kind: "failed" };
         } finally {
           if (r.flacPath) await fs.unlink(r.flacPath).catch(() => {});
         }
-      }
+      }),
+    );
 
-      await updateProgress(jobId, processed, failed, total, dryRun, savedBytes);
+    for (const o of postOutcomes) {
+      if (o.kind === "ok") {
+        processed++;
+        originalTotalBytes += o.wavSize;
+        compressedTotalBytes += o.newSize;
+        savedBytes += Math.max(o.wavSize - o.newSize, 0);
+      } else if (o.kind === "non_compressible") {
+        processed++;
+      } else if (o.kind === "dry_run") {
+        processed++;
+        originalTotalBytes += o.wavSize;
+        compressedTotalBytes += o.flacSize;
+        savedBytes += Math.max(o.wavSize - o.flacSize, 0);
+      } else if (o.kind === "failed") {
+        failed++;
+      }
+      // "orphan" — no counter change (matches prior behavior)
     }
 
+    await updateProgress(jobId, processed, failed, total, dryRun, savedBytes);
+  }
+
+  return {
+    processed,
+    failed,
+    skipped,
+    savedBytes,
+    originalTotalBytes,
+    compressedTotalBytes,
+    skipReasons,
+    total,
+    cancelled,
+  };
+}
+
+/**
+ * Standalone AUDIO_COMPRESSION job runner — owns the `processingJobs`
+ * lifecycle around the shared `runAudioCompressionPhase` helper.
+ */
+export async function processFlacCompressionJob(
+  jobId: number,
+  deploymentId: number,
+  actorEmail: string,
+  dryRun = false,
+): Promise<void> {
+  const startTime = Date.now();
+  try {
+    await db
+      .update(processingJobs)
+      .set({ status: "processing", startedAt: new Date() })
+      .where(eq(processingJobs.id, jobId));
+
+    const result = await runAudioCompressionPhase({ jobId, deploymentId, dryRun });
+
     const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(0);
-    const savedMB = (savedBytes / (1024 * 1024)).toFixed(1);
+    const savedMB = (result.savedBytes / (1024 * 1024)).toFixed(1);
     const completionMsg = dryRun
-      ? `Dry-run completo — ${processed} OK, ${skipped} omitidos, ${failed} errores. Ahorro estimado: ${savedMB} MB`
-      : `Compresión completa — ${processed} OK, ${skipped} omitidos, ${failed} errores. Ahorro: ${savedMB} MB`;
+      ? `Dry-run completo — ${result.processed} OK, ${result.skipped} omitidos, ${result.failed} errores. Ahorro estimado: ${savedMB} MB`
+      : `Compresión completa — ${result.processed} OK, ${result.skipped} omitidos, ${result.failed} errores. Ahorro: ${savedMB} MB`;
 
     await db
       .update(processingJobs)
       .set({
         status: "completed",
         completedAt: new Date(),
-        processedImages: processed + failed + skipped,
-        failedImages: failed + skipped,
+        totalImages: result.total,
+        processedImages: result.processed + result.failed + result.skipped,
+        failedImages: result.failed + result.skipped,
         statusMessage: completionMsg,
       })
       .where(eq(processingJobs.id, jobId));
@@ -648,13 +758,13 @@ export async function processFlacCompressionJob(
       targetType: "deployment",
       targetId: String(deploymentId),
       details: JSON.stringify({
-        compressed: processed,
-        skipped,
-        failed,
-        savedBytes,
-        originalTotalBytes,
-        compressedTotalBytes,
-        skipReasons,
+        compressed: result.processed,
+        skipped: result.skipped,
+        failed: result.failed,
+        savedBytes: result.savedBytes,
+        originalTotalBytes: result.originalTotalBytes,
+        compressedTotalBytes: result.compressedTotalBytes,
+        skipReasons: result.skipReasons,
         dryRun,
       }),
     });
@@ -663,12 +773,12 @@ export async function processFlacCompressionJob(
       {
         jobId,
         deploymentId,
-        compressed: processed,
-        skipped,
-        failed,
-        savedBytes,
-        originalTotalBytes,
-        compressedTotalBytes,
+        compressed: result.processed,
+        skipped: result.skipped,
+        failed: result.failed,
+        savedBytes: result.savedBytes,
+        originalTotalBytes: result.originalTotalBytes,
+        compressedTotalBytes: result.compressedTotalBytes,
         elapsedSec,
         dryRun,
       },

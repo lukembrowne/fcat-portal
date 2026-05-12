@@ -1104,12 +1104,14 @@ export async function updateFileContent(
 // ---------------------------------------------------------------------------
 // Drive write rate cap (used for audio compression bulk-rewrites)
 // ---------------------------------------------------------------------------
-// Drive's per-user write quota is 100 requests / 100 s. A 1 req/s cap leaves
-// headroom for retries and keeps a 50k-file backfill from triggering 429
-// cascades. Best-effort process-local — survives if the process is the only
-// writer; reset on container restart.
+// Drive's per-user write quota is 1000 requests / 100 s = 10 req/s sustained.
+// A 200ms floor (~5 req/s sustained, with burst tolerance via Promise.all)
+// leaves headroom under the quota. `withRetry` (below) handles transient 429s
+// with exponential backoff, so accidental bursts are safe.
+// Best-effort process-local — survives if the process is the only writer;
+// reset on container restart.
 
-const DRIVE_WRITE_MIN_INTERVAL_MS = 1000;
+const DRIVE_WRITE_MIN_INTERVAL_MS = 200;
 let lastDriveWriteMs = 0;
 
 async function waitForDriveWriteSlot(): Promise<void> {

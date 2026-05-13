@@ -126,6 +126,9 @@ interface FftSpectrogramProps {
   audioUrl: string;
   boxes: AudioBoxData[];
   selectedBoxId: number | null;
+  /** Externally-driven hover (e.g. sidebar card hover). OR-ed with the
+   *  spec's own internal SVG hover state when computing `isHovered`. */
+  hoveredBoxId?: number | null;
   editable: boolean;
   displayMaxHz: number;
   gainDB: number;
@@ -221,6 +224,7 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
       audioUrl,
       boxes,
       selectedBoxId,
+      hoveredBoxId,
       editable,
       displayMaxHz,
       gainDB,
@@ -373,6 +377,12 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
       if (!magnitudes || !specCanvasRef.current || specSize.width === 0 || specSize.height === 0)
         return;
 
+      // Size the canvas immediately before drawing. The ResizeObserver effect
+      // (below) only updates state; centralising the sizing here avoids a
+      // declaration-order race where the render effect drew onto a stale
+      // bitmap and the ResizeObserver effect then cleared it.
+      sizeCanvas(specCanvasRef.current, specSize.width, specSize.height);
+
       const displayMaxBin = Math.min(
         magnitudes.binCount,
         binFromHz(displayMaxHz, magnitudes.fftSize, magnitudes.sampleRate) + 1
@@ -466,7 +476,9 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
             ? ((prevScroll + prevViewport / 2) / prevInner) * duration
             : 0;
 
-        if (specCanvasRef.current) sizeCanvas(specCanvasRef.current, newInner, cssH);
+        // Canvas sizing happens inside the render-to-spec-canvas effect so
+        // the bitmap is always sized just before drawImage runs. This effect
+        // only owns state updates + scroll-restore.
         setViewportWidth(cssW);
         setSpecHeight(cssH);
 
@@ -712,6 +724,31 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
       [duration],
     );
 
+    // Scrolls to `time` only when it's outside the literal visible window
+    // (with a small leading-edge margin). Used by keyboard skip and any
+    // imperative seek so the playhead stays in view after a jump.
+    const ensurePlayheadVisible = useCallback(
+      (time: number) => {
+        const v = scrollViewportRef.current;
+        if (!v || duration <= 0) return;
+        if (v.scrollWidth <= v.clientWidth) return;
+        // padViewports=0 → actual visible window, no virtualization padding.
+        const win = visibleTimeWindow(
+          v.scrollLeft,
+          v.clientWidth,
+          v.scrollWidth,
+          duration,
+          0,
+        );
+        const margin = 0.05 * (win.endTime - win.startTime);
+        if (time >= win.startTime + margin && time <= win.endTime - margin) {
+          return;
+        }
+        scrollToTimeInternal(time);
+      },
+      [duration, scrollToTimeInternal],
+    );
+
     // ---- Imperative ref ----------------------------------------------------
     useImperativeHandle(
       ref,
@@ -747,7 +784,9 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
           loopRef.current = false;
           selectionEndRef.current = null;
           selectionStartRef.current = null;
-          a.currentTime = clamp(time, 0, a.duration || 0);
+          const newTime = clamp(time, 0, a.duration || 0);
+          a.currentTime = newTime;
+          ensurePlayheadVisible(newTime);
         },
         skip: (seconds: number) => {
           const a = audioRef.current;
@@ -755,7 +794,9 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
           loopRef.current = false;
           selectionEndRef.current = null;
           selectionStartRef.current = null;
-          a.currentTime = clamp((a.currentTime || 0) + seconds, 0, a.duration || 0);
+          const newTime = clamp((a.currentTime || 0) + seconds, 0, a.duration || 0);
+          a.currentTime = newTime;
+          ensurePlayheadVisible(newTime);
         },
         playSelection: async (startTime: number, endTime: number) => {
           const a = audioRef.current;
@@ -787,7 +828,7 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
         isPlaying: () => !!audioRef.current && !audioRef.current.paused,
         scrollToTime: scrollToTimeInternal,
       }),
-      [scrollToTimeInternal],
+      [scrollToTimeInternal, ensurePlayheadVisible],
     );
 
     // ---- Coordinate helpers (CSS px ↔ time/freq/normalized) ----------------
@@ -1272,27 +1313,44 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
                   onClick={handleSvgClick}
                 >
                   {/* Vertical time guide lines at each major tick. Drawn first
-                      so detection boxes/labels render on top. */}
+                      so detection boxes/labels render on top. Stacked pair
+                      (dark underlay + bright top) gives high-contrast
+                      legibility against any colormap. */}
                   {timeTicks.map((t) => {
                     const x = timeToNX(t);
                     return (
-                      <line
-                        key={`tick-${t}`}
-                        x1={x}
-                        x2={x}
-                        y1={0}
-                        y2={1}
-                        stroke="rgba(255,255,255,0.18)"
-                        strokeWidth={1}
-                        vectorEffect="non-scaling-stroke"
-                        pointerEvents="none"
-                      />
+                      <g key={`tick-${t}`} pointerEvents="none">
+                        <line
+                          x1={x}
+                          x2={x}
+                          y1={0}
+                          y2={1}
+                          stroke="rgba(0,0,0,0.55)"
+                          strokeWidth={2}
+                          strokeDasharray="3 5"
+                          vectorEffect="non-scaling-stroke"
+                        />
+                        <line
+                          x1={x}
+                          x2={x}
+                          y1={0}
+                          y2={1}
+                          stroke="rgba(255,255,255,0.7)"
+                          strokeWidth={1}
+                          strokeDasharray="3 5"
+                          vectorEffect="non-scaling-stroke"
+                        />
+                      </g>
                     );
                   })}
 
                   {visibleBoxes.map((box) => {
                     const isSelected = selectedBoxId === box.id;
-                    const isHovered = hoverBoxId === box.id && !isSelected;
+                    // OR external sidebar-hover into the internal SVG-hover
+                    // signal. Either source highlights the same box.
+                    const isHovered =
+                      (hoverBoxId === box.id || hoveredBoxId === box.id) &&
+                      !isSelected;
                     const isLegacyFull =
                       box.minFreq === 0 && (box.maxFreq >= 15000 - 1 || box.maxFreq >= nyquist - 1);
                     const status = box.verificationStatus ?? "unverified";
@@ -1306,8 +1364,14 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
                     const yBot = hzToNY(box.minFreq);
                     const h = Math.max(0.0005, yBot - yTop);
 
+                    // Halo offsets in normalised viewBox space. Pixel
+                    // offsets converted via current specSize so the halo
+                    // sits a consistent ~6 px outside the box at any zoom.
+                    const haloX = specSize.width > 0 ? 6 / specSize.width : 0;
+                    const haloY = specSize.height > 0 ? 6 / specSize.height : 0;
+
                     const fillOpacity = isSelected
-                      ? 0.3
+                      ? 0.42
                       : isRejected
                         ? 0.05
                         : isVerified
@@ -1329,6 +1393,40 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
                         onPointerLeave={() => setHoverBoxId(null)}
                         style={{ cursor: editable ? "grab" : "pointer" }}
                       >
+                        {/* Hover halo: dashed outline around the box, drawn
+                            below the main rect so the box's own stroke and
+                            fill remain primary. */}
+                        {isHovered && (
+                          <rect
+                            x={Math.max(0, x - haloX)}
+                            y={Math.max(0, yTop - haloY)}
+                            width={Math.min(1, w + haloX * 2)}
+                            height={Math.min(1, h + haloY * 2)}
+                            fill="none"
+                            stroke={color}
+                            strokeOpacity={0.6}
+                            strokeWidth={2}
+                            strokeDasharray="4 3"
+                            vectorEffect="non-scaling-stroke"
+                            pointerEvents="none"
+                          />
+                        )}
+                        {/* Selected halo: solid colour ring around the box,
+                            visible even without the pulse animation. */}
+                        {isSelected && (
+                          <rect
+                            x={Math.max(0, x - haloX)}
+                            y={Math.max(0, yTop - haloY)}
+                            width={Math.min(1, w + haloX * 2)}
+                            height={Math.min(1, h + haloY * 2)}
+                            fill="none"
+                            stroke={color}
+                            strokeOpacity={0.55}
+                            strokeWidth={3}
+                            vectorEffect="non-scaling-stroke"
+                            pointerEvents="none"
+                          />
+                        )}
                         <rect
                           x={x}
                           y={yTop}
@@ -1338,7 +1436,7 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
                           fillOpacity={fillOpacity}
                           stroke={color}
                           strokeOpacity={strokeOpacity}
-                          strokeWidth={isSelected ? 2.5 : isHovered ? 2 : 1.5}
+                          strokeWidth={isSelected ? 3 : isHovered ? 2 : 1.5}
                           strokeDasharray={isLegacyFull ? "4 3" : undefined}
                           vectorEffect="non-scaling-stroke"
                         />
@@ -1466,12 +1564,27 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
                     const opacity = isOverflowLane ? 0.6 : isSelected ? 1 : 0.95;
                     const tooltip = `${box.displayLabel} · ${box.startTime.toFixed(1)}s–${box.endTime.toFixed(1)}s · ${(box.minFreq / 1000).toFixed(1)}–${(box.maxFreq / 1000).toFixed(1)} kHz`;
 
+                    // Labels are interactive (clicking selects the box).
+                    // `pointer-events: auto` overrides the container's
+                    // `pointer-events-none`; stopPropagation on pointerdown
+                    // prevents the SVG underneath from starting a pan or
+                    // draw gesture on the same press.
+                    const stopPropagationDown = (e: React.PointerEvent) => {
+                      e.stopPropagation();
+                    };
+                    const selectOnClick = (e: React.MouseEvent) => {
+                      e.stopPropagation();
+                      onBoxClickRef.current?.(box);
+                    };
+
                     if (collapseMode === "collapsed") {
                       return (
                         <div
                           key={box.id}
                           aria-label={box.displayLabel}
                           title={tooltip}
+                          onClick={selectOnClick}
+                          onPointerDown={stopPropagationDown}
                           className="absolute font-semibold flex items-center justify-center"
                           style={{
                             left: xPx,
@@ -1484,6 +1597,8 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
                             borderRadius: 3,
                             opacity,
                             zIndex: isSelected ? 2 : 1,
+                            pointerEvents: "auto",
+                            cursor: "pointer",
                           }}
                         >
                           {speciesInitial(box.displayLabel)}
@@ -1500,6 +1615,8 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
                       <div
                         key={box.id}
                         className="absolute font-semibold leading-none whitespace-nowrap overflow-hidden text-ellipsis"
+                        onClick={selectOnClick}
+                        onPointerDown={stopPropagationDown}
                         style={{
                           left: xPx,
                           top,
@@ -1514,6 +1631,8 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
                           opacity,
                           zIndex: isSelected ? 2 : 1,
                           transition: "max-width 180ms ease",
+                          pointerEvents: "auto",
+                          cursor: "pointer",
                         }}
                         title={tooltip}
                       >

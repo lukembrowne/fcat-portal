@@ -22,6 +22,12 @@ interface AnnotationToolsSidebarProps {
   selectedDetectionId: number | null;
   onSelectDetection: (id: number) => void;
   onDeleteDetection?: (id: number) => void;
+  /** Audio-only: fired on card mouse enter/leave so the spec can highlight
+   *  the corresponding bounding box. Forwarded to DetectionCardStrip. */
+  onHoverDetection?: (id: number | null) => void;
+  /** Audio-only: fired when a card's play icon is clicked. Forwarded to
+   *  DetectionCardStrip. */
+  onPlayDetection?: (id: number) => void;
   confirmedBlank: boolean;
   onToggleConfirmedBlank?: () => void;
   speciesList: Species[];
@@ -51,6 +57,8 @@ export function AnnotationToolsSidebar({
   selectedDetectionId,
   onSelectDetection,
   onDeleteDetection,
+  onHoverDetection,
+  onPlayDetection,
   confirmedBlank,
   onToggleConfirmedBlank,
   speciesList,
@@ -99,6 +107,8 @@ export function AnnotationToolsSidebar({
           selectedDetectionId={selectedDetectionId}
           onSelectDetection={onSelectDetection}
           onDeleteDetection={onDeleteDetection}
+          onHoverDetection={onHoverDetection}
+          onPlayDetection={onPlayDetection}
           confirmedBlank={confirmedBlank}
           onToggleConfirmedBlank={undefined}
           nameDisplay={nameDisplay}

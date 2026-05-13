@@ -139,6 +139,12 @@ export function AudioAnnotationClient({
   const [selectedDetectionId, setSelectedDetectionId] = useState<number | null>(
     null
   );
+  // Cross-component hover: sidebar card → bbox halo. Distinct from
+  // `hoverBoxId` inside FftSpectrogram (direct SVG hover); the two are OR-ed
+  // on the spec side so either source highlights the same box.
+  const [hoveredDetectionId, setHoveredDetectionId] = useState<number | null>(
+    null
+  );
   const popoverSearchInputRef = useRef<HTMLInputElement>(null);
   const spectrogramContainerRef = useRef<HTMLDivElement>(null);
   const [nameDisplay, cycleDisplay] = useNameDisplay();
@@ -298,6 +304,20 @@ export function AudioAnnotationClient({
       selectedDetection.endTime
     );
   }, [selectedDetection]);
+
+  // Sidebar card play-button: seek + unbounded play. Distinct from
+  // `handlePlaySelection` (the bottom "Reproducir selección" button + `p`
+  // shortcut), which uses `playSelection` to auto-stop at the detection
+  // end. Per user preference, the card button plays past the detection.
+  const handlePlayDetection = useCallback(
+    (id: number) => {
+      const det = detections.find((d) => d.id === id);
+      if (!det) return;
+      spectrogramRef.current?.seek(det.startTime);
+      void spectrogramRef.current?.play();
+    },
+    [detections]
+  );
 
   const handleToggleLoop = useCallback(() => {
     if (!selectedDetection) return;
@@ -512,6 +532,8 @@ export function AudioAnnotationClient({
             onSelectDetection={(id) =>
               setSelectedDetectionId((prev) => (prev === id ? null : id))
             }
+            onHoverDetection={setHoveredDetectionId}
+            onPlayDetection={handlePlayDetection}
             onDeleteDetection={isEditor ? handleDeleteDetection : undefined}
             confirmedBlank={false}
             speciesList={speciesList}
@@ -561,6 +583,7 @@ export function AudioAnnotationClient({
               audioUrl={audioStreamUrl}
               boxes={boxes}
               selectedBoxId={selectedDetectionId}
+              hoveredBoxId={hoveredDetectionId}
               editable={isEditor}
               displayMaxHz={settings.displayMaxHz}
               gainDB={settings.gainDB}

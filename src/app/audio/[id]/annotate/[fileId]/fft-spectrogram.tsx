@@ -20,11 +20,14 @@ import {
 import { renderImageData } from "@/lib/spectrogram-render";
 import { COLORMAPS, type ColormapName } from "@/lib/spectrogram-colormaps";
 import { getSpeciesColor } from "@/lib/species-color";
+import {
+  FREQ_AXIS_WIDTH,
+  TIME_AXIS_HEIGHT,
+  SPEC_HEIGHT_PRESETS,
+  type HeightPreset,
+} from "@/lib/spectrogram-layout";
 import { Button } from "@/components/ui/button";
 
-const FREQ_AXIS_WIDTH = 70;
-const TIME_AXIS_HEIGHT = 24;
-const SPEC_HEIGHT = 256;
 const DRAG_THRESHOLD_PX = 5;
 const MIN_BOX_PX = 10;
 const HANDLE_PX = 8;
@@ -101,6 +104,11 @@ interface FftSpectrogramProps {
   rangeDB: number;
   fftSize: number;
   colormap: ColormapName;
+  /** Spec-area pixel height, resolved from a `HeightPreset` (Compacto /
+   *  Cómodo / Alto). Parent applies the narrow-viewport mobile cap before
+   *  passing this in. Defaults to `"comodo"` so callers that don't yet wire
+   *  up the toggle still get the new default. */
+  height?: HeightPreset;
   onBoxClick?: (box: AudioBoxData) => void;
   onDrawComplete?: (box: BoxRect) => void;
   onBoxResized?: (boxId: number, box: BoxRect) => void;
@@ -171,6 +179,7 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
       rangeDB,
       fftSize,
       colormap,
+      height = "comodo",
       onBoxClick,
       onDrawComplete,
       onBoxResized,
@@ -179,6 +188,10 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
       onPlayPause,
       onSpecSizeChange,
     } = props;
+
+    // Resolve the height preset to pixels. All canvas sizing, layout, and
+    // coordinate math reads this — never the raw constant.
+    const specHeight = SPEC_HEIGHT_PRESETS[height];
 
     const containerRef = useRef<HTMLDivElement>(null);
     const specCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -197,7 +210,7 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
     const [error, setError] = useState<string | null>(null);
     const [decoded, setDecoded] = useState<DecodedAudio | null>(null);
     const [magnitudes, setMagnitudes] = useState<Magnitudes | null>(null);
-    const [specSize, setSpecSize] = useState({ width: 0, height: SPEC_HEIGHT });
+    const [specSize, setSpecSize] = useState({ width: 0, height: specHeight });
     const [hoverBoxId, setHoverBoxId] = useState<number | null>(null);
     const [previewRect, setPreviewRect] = useState<BoxRect | null>(null);
     const [dragOverride, setDragOverride] = useState<{ boxId: number; rect: BoxRect } | null>(null);
@@ -332,12 +345,12 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
       // Own the sizing here so the bitmap and DPR transform are fresh on every
       // run — including the post-mount run after the resize observer first
       // publishes a non-zero specSize.
-      sizeCanvas(canvas, FREQ_AXIS_WIDTH, SPEC_HEIGHT);
+      sizeCanvas(canvas, FREQ_AXIS_WIDTH, specHeight);
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
-      ctx.clearRect(0, 0, FREQ_AXIS_WIDTH, SPEC_HEIGHT);
+      ctx.clearRect(0, 0, FREQ_AXIS_WIDTH, specHeight);
       ctx.fillStyle = "#0a0a0a";
-      ctx.fillRect(0, 0, FREQ_AXIS_WIDTH, SPEC_HEIGHT);
+      ctx.fillRect(0, 0, FREQ_AXIS_WIDTH, specHeight);
       ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
       ctx.fillStyle = "#d4d4d8";
       ctx.strokeStyle = "#3f3f46";
@@ -345,12 +358,12 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
       ctx.textAlign = "right";
       ctx.textBaseline = "middle";
 
-      const hzPerPx = displayMaxHz / SPEC_HEIGHT;
+      const hzPerPx = displayMaxHz / specHeight;
       const step = pickTickStep(hzPerPx, 36, FREQ_TICK_STEPS);
       const firstTick = 0;
       for (let hz = firstTick; hz <= displayMaxHz + 0.001; hz += step) {
-        const y = SPEC_HEIGHT - (hz / displayMaxHz) * SPEC_HEIGHT;
-        if (y < 8 || y > SPEC_HEIGHT - 4) continue;
+        const y = specHeight - (hz / displayMaxHz) * specHeight;
+        if (y < 8 || y > specHeight - 4) continue;
         ctx.beginPath();
         ctx.moveTo(FREQ_AXIS_WIDTH - 4, y);
         ctx.lineTo(FREQ_AXIS_WIDTH, y);
@@ -395,17 +408,20 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
 
       const apply = () => {
         const cssW = Math.max(0, container.clientWidth - FREQ_AXIS_WIDTH);
-        if (specCanvasRef.current) sizeCanvas(specCanvasRef.current, cssW, SPEC_HEIGHT);
+        if (specCanvasRef.current) sizeCanvas(specCanvasRef.current, cssW, specHeight);
         if (timeAxisRef.current) sizeCanvas(timeAxisRef.current, cssW, TIME_AXIS_HEIGHT);
         // freq-axis canvas sizes itself in its own effect (depends on specSize.height)
-        setSpecSize({ width: cssW, height: SPEC_HEIGHT });
+        setSpecSize({ width: cssW, height: specHeight });
       };
       apply();
 
       const ro = new ResizeObserver(apply);
       ro.observe(container);
       return () => ro.disconnect();
-    }, []);
+      // `specHeight` is part of deps so the canvas re-allocates when the
+      // height preset changes (the ResizeObserver alone only fires on
+      // *container* width changes).
+    }, [specHeight]);
 
     // Surface spec area pixel size to the parent for popover anchor positioning.
     useEffect(() => {
@@ -831,7 +847,7 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
         <audio ref={audioRef} src={audioUrl} preload="auto" />
 
         {/* Left: frequency axis */}
-        <div style={{ width: FREQ_AXIS_WIDTH, height: SPEC_HEIGHT }} className="shrink-0">
+        <div style={{ width: FREQ_AXIS_WIDTH, height: specHeight }} className="shrink-0">
           <canvas ref={freqAxisRef} />
         </div>
 
@@ -839,7 +855,7 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
         <div className="flex-1 min-w-0 flex flex-col">
           <div
             className="relative"
-            style={{ height: SPEC_HEIGHT, width: specSize.width || "100%" }}
+            style={{ height: specHeight, width: specSize.width || "100%" }}
           >
             <canvas
               ref={specCanvasRef}

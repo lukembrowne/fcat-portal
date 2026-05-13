@@ -21,8 +21,10 @@ import {
   loadStoredSettings,
   cycleYMax,
   cycleColormap,
+  useIsNarrowViewport,
   type SpectrogramSettings,
 } from "./spectrogram-controls";
+import { FREQ_AXIS_WIDTH } from "@/lib/spectrogram-layout";
 import { useAnnotationShortcuts } from "@/hooks/use-annotation-shortcuts";
 import { useAudioPlaybackShortcuts } from "@/hooks/use-audio-playback-shortcuts";
 import {
@@ -142,6 +144,10 @@ export function AudioAnnotationClient({
   const [duration, setDuration] = useState<number | null>(null);
   const [sampleRate, setSampleRate] = useState<number | null>(null);
   const [settings, setSettings] = useState<SpectrogramSettings>(() => loadStoredSettings());
+  // Narrow-viewport sentinel for the spectrogram-height mobile cap. The
+  // user's stored preference is preserved; we just clamp the value passed
+  // to <FftSpectrogram> on `sm`-and-below viewports.
+  const isNarrowViewport = useIsNarrowViewport();
   const [specPx, setSpecPx] = useState<{ width: number; height: number }>({
     width: 0,
     height: 0,
@@ -387,10 +393,10 @@ export function AudioAnnotationClient({
     : 0;
 
   // Anchor pixel rect for the popover. The spec area starts after the
-  // freq-axis gutter (70px), so the anchor div offsets by that to land on
-  // the spec canvas. Time/freq → pixel uses the same linear transform the
-  // spectrogram itself uses (timeToNX = t/duration, hzToNY = 1 - hz/maxHz).
-  const FREQ_AXIS_WIDTH = 70;
+  // freq-axis gutter (FREQ_AXIS_WIDTH from spectrogram-layout — single source
+  // of truth, was previously inlined here too). Time/freq → pixel uses the
+  // same linear transform the spectrogram itself uses
+  // (timeToNX = t/duration, hzToNY = 1 - hz/maxHz).
   const anchorStyle = useMemo(() => {
     if (
       !selectedDetection ||
@@ -536,6 +542,7 @@ export function AudioAnnotationClient({
               rangeDB={settings.rangeDB}
               fftSize={settings.fftSize}
               colormap={settings.colormap}
+              height={isNarrowViewport ? "compacto" : settings.spectrogramHeight}
               onBoxClick={(box) =>
                 setSelectedDetectionId((prev) =>
                   prev === box.id ? null : box.id

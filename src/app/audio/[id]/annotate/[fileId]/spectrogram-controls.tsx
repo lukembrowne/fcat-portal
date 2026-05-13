@@ -1,48 +1,28 @@
 "use client";
 
-import { useEffect, useCallback } from "react";
+import { useEffect, useCallback, useState } from "react";
 import { COLORMAP_NAMES, type ColormapName } from "@/lib/spectrogram-colormaps";
+import { HEIGHT_PRESETS, type HeightPreset } from "@/lib/spectrogram-layout";
+import {
+  DEFAULT_SETTINGS,
+  loadStoredSettings,
+  saveStoredSettings,
+  type CurrentSettings,
+} from "@/lib/spectrogram-settings";
 
-const STORAGE_KEY = "audio.spectrogram.v1";
-
-export interface SpectrogramSettings {
-  displayMaxHz: number;
-  gainDB: number;
-  rangeDB: number;
-  fftSize: 512 | 1024 | 2048;
-  colormap: ColormapName;
-}
-
-export const DEFAULT_SETTINGS: SpectrogramSettings = {
-  displayMaxHz: 12000,
-  gainDB: 25,
-  rangeDB: 70,
-  fftSize: 1024,
-  colormap: "magma",
-};
+// Re-export the canonical settings type + helpers so the rest of the annotate
+// page imports from one place. (Pre-existing import shape; we're shifting the
+// source of truth to `@/lib/spectrogram-settings` without breaking callers.)
+export type SpectrogramSettings = CurrentSettings;
+export { DEFAULT_SETTINGS, loadStoredSettings };
 
 const Y_MAX_PRESETS_HZ: readonly number[] = [3000, 6000, 9000, 12000];
 
-export function loadStoredSettings(): SpectrogramSettings {
-  if (typeof window === "undefined") return DEFAULT_SETTINGS;
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return DEFAULT_SETTINGS;
-    const parsed = JSON.parse(raw) as Partial<SpectrogramSettings>;
-    return {
-      displayMaxHz: typeof parsed.displayMaxHz === "number" ? parsed.displayMaxHz : DEFAULT_SETTINGS.displayMaxHz,
-      gainDB: typeof parsed.gainDB === "number" ? parsed.gainDB : DEFAULT_SETTINGS.gainDB,
-      rangeDB: typeof parsed.rangeDB === "number" ? parsed.rangeDB : DEFAULT_SETTINGS.rangeDB,
-      fftSize: parsed.fftSize === 512 || parsed.fftSize === 2048 ? parsed.fftSize : DEFAULT_SETTINGS.fftSize,
-      colormap:
-        parsed.colormap && COLORMAP_NAMES.includes(parsed.colormap)
-          ? parsed.colormap
-          : DEFAULT_SETTINGS.colormap,
-    };
-  } catch {
-    return DEFAULT_SETTINGS;
-  }
-}
+const HEIGHT_LABELS: Record<HeightPreset, string> = {
+  compacto: "Compacto",
+  comodo: "Cómodo",
+  alto: "Alto",
+};
 
 interface SpectrogramControlsProps {
   settings: SpectrogramSettings;
@@ -52,14 +32,10 @@ interface SpectrogramControlsProps {
 }
 
 export function SpectrogramControls({ settings, onChange, sampleRate }: SpectrogramControlsProps) {
-  // Persist on every change
+  // Persist on every change. saveStoredSettings is a silent no-op when
+  // localStorage is unavailable (SSR, private-mode Safari, quota exceeded).
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
-    } catch {
-      // localStorage may be disabled — ignore
-    }
+    saveStoredSettings(settings);
   }, [settings]);
 
   const update = useCallback(
@@ -114,6 +90,11 @@ export function SpectrogramControls({ settings, onChange, sampleRate }: Spectrog
         </select>
       </Field>
 
+      <HeightToggle
+        value={settings.spectrogramHeight}
+        onChange={(next) => update("spectrogramHeight", next)}
+      />
+
       <Field label={`Ganancia ${settings.gainDB} dB`}>
         <input
           type="range"
@@ -139,6 +120,78 @@ export function SpectrogramControls({ settings, onChange, sampleRate }: Spectrog
       </Field>
     </div>
   );
+}
+
+function HeightToggle({
+  value,
+  onChange,
+}: {
+  value: HeightPreset;
+  onChange: (next: HeightPreset) => void;
+}) {
+  // Mobile cap — on narrow viewports the spectrogram pins to `compacto`
+  // regardless of preference (the parent uses the same hook to clamp the
+  // value actually passed to <FftSpectrogram>). The toggle still renders
+  // so users on a tablet rotated to landscape get their preference back.
+  const isNarrow = useIsNarrowViewport();
+  return (
+    <label
+      className="flex items-center gap-1.5 text-muted-foreground"
+      title={
+        isNarrow
+          ? "Disponible en pantallas más anchas"
+          : "Altura del espectrograma"
+      }
+    >
+      <span>Altura</span>
+      <div
+        role="radiogroup"
+        aria-label="Altura del espectrograma"
+        className="inline-flex border rounded overflow-hidden"
+      >
+        {HEIGHT_PRESETS.map((preset) => {
+          const active = preset === value;
+          return (
+            <button
+              key={preset}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              disabled={isNarrow}
+              onClick={() => onChange(preset)}
+              className={
+                "px-2 py-0.5 border-r last:border-r-0 transition-colors " +
+                (active
+                  ? "bg-foreground text-background"
+                  : "bg-background hover:bg-muted") +
+                (isNarrow ? " opacity-50 cursor-not-allowed" : "")
+              }
+            >
+              {HEIGHT_LABELS[preset]}
+            </button>
+          );
+        })}
+      </div>
+    </label>
+  );
+}
+
+/**
+ * `true` when the viewport is narrower than the Tailwind `sm` breakpoint
+ * (640 px). Drives the mobile cap on the height toggle and on the value
+ * passed to the spectrogram (see `effectiveHeightPreset` in annotation-client).
+ */
+export function useIsNarrowViewport(): boolean {
+  const [narrow, setNarrow] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia("(max-width: 640px)");
+    const handler = () => setNarrow(mq.matches);
+    handler();
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
+  return narrow;
 }
 
 function Field({

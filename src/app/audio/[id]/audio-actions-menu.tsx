@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -17,12 +17,17 @@ import {
   ExternalLink,
   Loader2,
   FileArchive,
+  FileDown,
   Undo2,
 } from "lucide-react";
 import { scanDeploymentAudio } from "../actions";
 import { AnalyzeAudioDialog } from "../analyze-audio-dialog";
 import { CompressAudioConfirmDialog } from "../compress-audio-confirm-dialog";
 import { RevertAudioCompressionConfirmDialog } from "../revert-audio-compression-confirm-dialog";
+import {
+  formatThreshold,
+  parseThresholdParam,
+} from "@/lib/audio-confidence";
 
 interface AudioActionsMenuProps {
   deploymentId: number;
@@ -55,10 +60,16 @@ export function AudioActionsMenu({
   hasFiles,
 }: AudioActionsMenuProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [scanning, setScanning] = useState(false);
   const [analyzeOpen, setAnalyzeOpen] = useState(false);
   const [compressTargetId, setCompressTargetId] = useState<number | null>(null);
   const [revertTargetId, setRevertTargetId] = useState<number | null>(null);
+
+  const exportThreshold = parseThresholdParam(searchParams.get("conf"));
+  const exportUrl = `/api/audio/export?deployment=${deploymentId}&conf=${formatThreshold(
+    exportThreshold
+  )}`;
 
   const analyzing =
     isBirdnetProcessing || isAcousticIndicesProcessing || isAudioAnalysisProcessing;
@@ -153,6 +164,23 @@ export function AudioActionsMenu({
                 </div>
               </div>
             </DropdownMenuItem>
+          )}
+
+          {hasBirdnetDetections && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem asChild>
+                <a href={exportUrl} download>
+                  <FileDown className="h-4 w-4 mr-2" />
+                  <div>
+                    <div>Exportar CSV</div>
+                    <div className="text-xs text-muted-foreground font-normal">
+                      Umbral {formatThreshold(exportThreshold)}
+                    </div>
+                  </div>
+                </a>
+              </DropdownMenuItem>
+            </>
           )}
 
           {driveFolderUrl && (

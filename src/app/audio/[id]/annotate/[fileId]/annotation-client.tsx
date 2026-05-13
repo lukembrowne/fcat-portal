@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect, useMemo, useRef, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
 import { useNameDisplay, type NameDisplay } from "@/lib/species-display";
@@ -139,6 +139,22 @@ export function AudioAnnotationClient({
   showAll,
 }: AudioAnnotationClientProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
+
+  // Preserve filter context (?conf= / ?showAll=) when navigating between files.
+  const buildSiblingUrl = useCallback(
+    (targetFileId: number) => {
+      const params = new URLSearchParams();
+      const conf = searchParams.get("conf");
+      const showAllParam = searchParams.get("showAll");
+      if (conf) params.set("conf", conf);
+      if (showAllParam) params.set("showAll", showAllParam);
+      const qs = params.toString();
+      const base = `/audio/${deploymentId}/annotate/${targetFileId}`;
+      return qs ? `${base}?${qs}` : base;
+    },
+    [deploymentId, searchParams]
+  );
   const [selectedDetectionId, setSelectedDetectionId] = useState<number | null>(
     null
   );
@@ -396,12 +412,12 @@ export function AudioAnnotationClient({
     startTransition(async () => {
       const result = await verifyAllAudioAndAdvance(unverifiedIds, deploymentId, audioFileId);
       if (result.success && result.data.nextFileId) {
-        router.push(`/audio/${deploymentId}/annotate/${result.data.nextFileId}`);
+        router.push(buildSiblingUrl(result.data.nextFileId));
       } else {
         router.refresh();
       }
     });
-  }, [detections, deploymentId, audioFileId, router]);
+  }, [detections, deploymentId, audioFileId, router, buildSiblingUrl]);
 
   // Auto-scroll the spectrogram to the selected box and trigger the pulse
   // animation. Fires on every selection change (sidebar card click,
@@ -474,10 +490,10 @@ export function AudioAnnotationClient({
     enabled: true,
     onQuickVerifyAll: handleQuickVerifyAll,
     onNext: () => {
-      if (nextFileId) router.push(`/audio/${deploymentId}/annotate/${nextFileId}`);
+      if (nextFileId) router.push(buildSiblingUrl(nextFileId));
     },
     onPrev: () => {
-      if (prevFileId) router.push(`/audio/${deploymentId}/annotate/${prevFileId}`);
+      if (prevFileId) router.push(buildSiblingUrl(prevFileId));
     },
     onSelectDetection: (index) => {
       if (index < detections.length) {
@@ -707,9 +723,7 @@ export function AudioAnnotationClient({
               asChild={!!prevFileId}
             >
               {prevFileId ? (
-                <Link
-                  href={`/audio/${deploymentId}/annotate/${prevFileId}`}
-                >
+                <Link href={buildSiblingUrl(prevFileId)}>
                   <ChevronLeft className="h-4 w-4 mr-1" />
                   Anterior
                 </Link>
@@ -727,9 +741,7 @@ export function AudioAnnotationClient({
               asChild={!!nextFileId}
             >
               {nextFileId ? (
-                <Link
-                  href={`/audio/${deploymentId}/annotate/${nextFileId}`}
-                >
+                <Link href={buildSiblingUrl(nextFileId)}>
                   Siguiente
                   <ChevronRight className="h-4 w-4 ml-1" />
                 </Link>

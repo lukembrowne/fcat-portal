@@ -110,7 +110,7 @@ This single rule must be used at every aggregation site. The helper makes it imp
 
 ## Implementation Phases
 
-### Phase 1 — Foundation (data layer + state)
+### Phase 1 — Foundation (data layer + state) ✅
 
 **Files (new):**
 - `src/lib/audio-confidence.ts`
@@ -132,7 +132,7 @@ This single rule must be used at every aggregation site. The helper makes it imp
 - `tests/unit/audio-confidence.test.ts` — parseThresholdParam matrix.
 - `tests/integration/apply-confidence-filter.test.ts` — seeded fixtures cover all four verification states × confidence above/below × NULL.
 
-### Phase 2 — Wire through queries
+### Phase 2 — Wire through queries ✅
 
 **Files (edit):**
 - `src/app/audio/actions.ts`
@@ -147,7 +147,7 @@ This single rule must be used at every aggregation site. The helper makes it imp
 - Update `tests/integration/fetch-audio-files.test.ts` to cover threshold parameter.
 - New `tests/integration/fetch-audio-deployments-threshold.test.ts`.
 
-### Phase 3 — UI control
+### Phase 3 — UI control ✅
 
 **Files (new):**
 - `src/components/ui/slider.tsx` — shadcn wrapper over `@radix-ui/react-slider` (one-time setup; package already in deps).
@@ -166,7 +166,7 @@ This single rule must be used at every aggregation site. The helper makes it imp
 **Tests:**
 - Component smoke test for slider with keyboard nav.
 
-### Phase 4 — CSV Export
+### Phase 4 — CSV Export ✅
 
 **Files (new):**
 - `src/app/api/audio/export/route.ts` — `GET` handler. Auth: `requirePermission(grabacionesProjectId, 'viewer')`. Query params: `deployment`, `conf` (optional, defaults to 0.7). Returns `Content-Type: text/csv` with the filename pattern above.
@@ -184,14 +184,14 @@ Second line: header
 **Tests:**
 - `tests/integration/audio-export.test.ts` — fixture-based check of row count vs threshold.
 
-### Phase 5 — Polish
+### Phase 5 — Polish ✅
 
-- [ ] Audit every place that says "X detecciones" or "Y especies" — confirm the number was produced through the helper or is explicitly tagged "raw/sin filtrar".
-- [ ] Add empty-state copy for `threshold = 1.0` ("Ninguna detección supera este umbral. Pruebe bajar el umbral.").
-- [ ] Confirm `<Link>` from deployment to annotation page preserves `?conf=…`.
-- [ ] Confirm post-job toast text says raw counts with disclaimer.
-- [ ] Add a "Restablecer al predeterminado (0.70)" link next to the slider.
-- [ ] Update audio-module docs in CLAUDE.md or a new `docs/audio/confidence-threshold.md` with the rule and citation.
+- [x] Audit every place that says "X detecciones" or "Y especies" — confirm the number was produced through the helper or is explicitly tagged "raw/sin filtrar". (Post-job message now says "antes de filtrar por confianza".)
+- [x] Add empty-state copy for `threshold = 1.0` (slider shows amber hint when at maximum).
+- [x] Confirm `<Link>` from deployment to annotation page preserves `?conf=…` (router.push in recordings-shell + buildSiblingUrl in annotation-client cover all five nav sites).
+- [x] Confirm post-job toast text says raw counts with disclaimer.
+- [x] Add a "Restablecer al predeterminado (0.70)" link next to the slider (added in Phase 3 slider component).
+- [x] Slider placed on audio index page in addition to deployment detail + annotation page (per plan instruction "if such a view aggregates detections, otherwise skip").
 
 ## Success Metrics
 

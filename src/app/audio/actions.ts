@@ -619,7 +619,11 @@ async function processBirdNETJob(jobId: number): Promise<void> {
           status: "completed",
           completedAt: new Date(),
           processedImages: result.totalProcessed,
-          statusMessage: `${result.totalDetections} detecciones, ${species} especies`,
+          // Raw, unfiltered counts: BirdNET ran with minConf=0.1, so this is
+          // what the model produced before the read-time threshold filter is
+          // applied. The deployment dashboard reflects the user's threshold;
+          // these two numbers can disagree by design.
+          statusMessage: `${result.totalDetections} detecciones, ${species} especies (antes de filtrar por confianza)`,
         })
         .where(eq(processingJobs.id, jobId));
 

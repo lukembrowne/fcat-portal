@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/status-badge";
@@ -96,6 +96,7 @@ export function RecordingsShell({
   reviewStats?: { verified: number; total: number } | null;
 }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [metricKey, setMetricKey] = useState<RasterMetricKey>("detectionCount");
 
   // Which acoustic-index metrics are available depends on whether any rows have
@@ -130,7 +131,11 @@ export function RecordingsShell({
   }, [files, metricKey]);
 
   function handleClickCell(cell: RasterCell) {
-    router.push(`/audio/${deployment.id}/annotate/${cell.fileId}`);
+    // Preserve the current threshold (?conf=) when navigating to the
+    // annotation page so the filter context carries through.
+    const conf = searchParams.get("conf");
+    const qs = conf ? `?conf=${conf}` : "";
+    router.push(`/audio/${deployment.id}/annotate/${cell.fileId}${qs}`);
   }
 
   return (

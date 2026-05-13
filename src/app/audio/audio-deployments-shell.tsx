@@ -61,6 +61,7 @@ import { AudioDeploymentRowActions } from "./audio-deployment-row-actions";
 import { BatchAnalyzeDialog } from "./batch-analyze-dialog";
 import { BatchClearAudioIndexDialog } from "./batch-clear-index-dialog";
 import { BatchCompressAudioDialog } from "./batch-compress-audio-dialog";
+import { ConfidenceThresholdSlider } from "@/components/audio/confidence-threshold-slider";
 
 interface AudioDeploymentsShellProps {
   groups: AudioProjectGroup[];
@@ -504,6 +505,11 @@ export function AudioDeploymentsShell({
             />
           </div>
         </div>
+      </div>
+
+      {/* Confidence-threshold filter applies across every deployment row's counts. */}
+      <div className="mb-3 max-w-md">
+        <ConfidenceThresholdSlider />
       </div>
 
       {/* Sync message — brief banner; live progress lives in the floating widget */}

@@ -65,6 +65,7 @@ export function ConfidenceThresholdSlider({ className, disabled }: Props) {
   }, [setThreshold]);
 
   const isDefault = threshold === DEFAULT_CONFIDENCE_THRESHOLD;
+  const isMaxedOut = threshold >= 1.0;
 
   return (
     <div
@@ -147,6 +148,12 @@ export function ConfidenceThresholdSlider({ className, disabled }: Props) {
           className="w-20 tabular-nums"
         />
       </div>
+      {isMaxedOut && !disabled && (
+        <p className="text-xs text-amber-600 dark:text-amber-400">
+          A 1,00 casi ninguna detección pasa el filtro. BirdNET rara vez
+          emite confianzas exactas de 1,00 — baje el umbral para ver resultados.
+        </p>
+      )}
     </div>
   );
 }

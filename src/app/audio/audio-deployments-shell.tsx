@@ -286,6 +286,10 @@ export function AudioDeploymentsShell({
 
   const selectedRows = table.getFilteredSelectedRowModel().rows;
   const selectedIds = selectedRows.map((r) => r.original.id);
+  const selectedUncompressedCount = selectedRows.reduce(
+    (sum, r) => sum + (r.original.uncompressedFileCount ?? 0),
+    0,
+  );
 
   const handleBatchRescan = () => {
     startRescan(async () => {
@@ -720,6 +724,8 @@ export function AudioDeploymentsShell({
             onOpenChange={setBatchAnalyzeOpen}
             selectedIds={selectedIds}
             selectedCount={selectedRows.length}
+            canAdmin={isAdmin}
+            uncompressedFileCount={selectedUncompressedCount}
             onComplete={() => setRowSelection({})}
           />
           {isAdmin && (

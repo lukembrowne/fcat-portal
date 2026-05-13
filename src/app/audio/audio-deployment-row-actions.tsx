@@ -168,6 +168,8 @@ export function AudioDeploymentRowActions({
         deploymentIds={[deployment.id]}
         subjectLabel={deployment.name}
         hasExistingBirdnet={deployment.totalDetections > 0}
+        canAdmin={canAdmin}
+        uncompressedFileCount={deployment.uncompressedFileCount}
         onComplete={() => router.refresh()}
       />
 

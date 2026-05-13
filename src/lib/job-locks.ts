@@ -12,7 +12,7 @@ import "server-only";
 
 import { db } from "@/db";
 import { processingJobs } from "@/db/schema";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, or } from "drizzle-orm";
 import { JOB_TYPES, type JobType } from "@/lib/job-types";
 
 /**
@@ -58,6 +58,31 @@ export async function countActiveAudioCompressionJobs(): Promise<number> {
       and(
         eq(processingJobs.jobType, JOB_TYPES.AUDIO_COMPRESSION),
         inArray(processingJobs.status, ["pending", "processing"]),
+      ),
+    );
+  return rows.length;
+}
+
+/**
+ * Like `countActiveAudioCompressionJobs` but also counts audio_analysis jobs
+ * that include an embedded compression phase (`compress_first = true`). Both
+ * shapes consume the same CPU-bound FLAC encoder, so the global "one
+ * compression at a time" cap must cover both.
+ */
+export async function countActiveAudioWorkWithCompression(): Promise<number> {
+  const rows = await db
+    .select({ id: processingJobs.id })
+    .from(processingJobs)
+    .where(
+      and(
+        inArray(processingJobs.status, ["pending", "processing"]),
+        or(
+          eq(processingJobs.jobType, JOB_TYPES.AUDIO_COMPRESSION),
+          and(
+            eq(processingJobs.jobType, JOB_TYPES.AUDIO_ANALYSIS),
+            eq(processingJobs.compressFirst, true),
+          ),
+        ),
       ),
     );
   return rows.length;

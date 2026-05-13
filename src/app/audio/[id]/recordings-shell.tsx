@@ -67,23 +67,31 @@ export function RecordingsShell({
   deployment,
   files,
   isEditor,
+  isAdmin = false,
   displayStatus = "unscanned",
   isBirdnetProcessing = false,
   birdnetStats = null,
   hasBirdnetDetections = false,
   isAcousticIndicesProcessing = false,
   isAudioAnalysisProcessing = false,
+  isAudioCompressionProcessing = false,
+  uncompressedFileCount = 0,
+  revertibleFileCount = 0,
   reviewStats = null,
 }: {
   deployment: DeploymentInfo;
   files: AudioFileRow[];
   isEditor: boolean;
+  isAdmin?: boolean;
   displayStatus?: string;
   isBirdnetProcessing?: boolean;
   birdnetStats?: BirdnetStats | null;
   hasBirdnetDetections?: boolean;
   isAcousticIndicesProcessing?: boolean;
   isAudioAnalysisProcessing?: boolean;
+  isAudioCompressionProcessing?: boolean;
+  uncompressedFileCount?: number;
+  revertibleFileCount?: number;
   reviewStats?: { verified: number; total: number } | null;
 }) {
   const router = useRouter();
@@ -158,11 +166,16 @@ export function RecordingsShell({
             {isEditor && (
               <AudioActionsMenu
                 deploymentId={deployment.id}
+                deploymentName={deployment.name}
                 uploadAudioFolderId={deployment.uploadAudioFolderId}
                 isBirdnetProcessing={isBirdnetProcessing}
                 hasBirdnetDetections={hasBirdnetDetections}
                 isAcousticIndicesProcessing={isAcousticIndicesProcessing}
                 isAudioAnalysisProcessing={isAudioAnalysisProcessing}
+                isAudioCompressionProcessing={isAudioCompressionProcessing}
+                canAdmin={isAdmin}
+                uncompressedFileCount={uncompressedFileCount}
+                revertibleFileCount={revertibleFileCount}
                 hasFiles={files.length > 0}
               />
             )}

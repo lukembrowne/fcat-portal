@@ -11,10 +11,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Loader2 } from "lucide-react";
-import {
-  revertDeploymentAudioCompression,
-  getAudioRevertPreviewAction,
-} from "./compression-actions";
+import { revertDeploymentAudioCompression } from "./compression-actions";
+import { getAudioRevertPreviewAction } from "./preview-actions";
 import { useConfirmPreview } from "@/hooks/use-confirm-preview";
 
 interface RevertAudioCompressionConfirmDialogProps {

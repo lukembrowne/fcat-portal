@@ -7,8 +7,9 @@ import {
   processingJobs,
   audioDetections,
   audioIdentifications,
+  audioFiles,
 } from "@/db/schema";
-import { eq, and, sql, desc, inArray } from "drizzle-orm";
+import { eq, and, sql, desc, inArray, count as drizzleCount } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import { fetchAudioFiles } from "../actions";
 import { RecordingsShell } from "./recordings-shell";
@@ -32,6 +33,12 @@ export default async function AudioDetailPage({
       (p) =>
         p.projectId === "grabaciones" &&
         (p.role === "editor" || p.role === "admin")
+    );
+
+  const isAdmin =
+    user.globalRole === "super_admin" ||
+    user.permissions.some(
+      (p) => p.projectId === "grabaciones" && p.role === "admin",
     );
 
   const [deployment] = await db
@@ -98,6 +105,50 @@ export default async function AudioDetailPage({
       )
     )
     .limit(1);
+
+  // Check for active compression / revert job (drives menu-item disabled state)
+  const [activeCompressionJob] = await db
+    .select({ id: processingJobs.id })
+    .from(processingJobs)
+    .where(
+      and(
+        eq(processingJobs.deploymentId, deploymentId),
+        inArray(processingJobs.jobType, [
+          "audio_compression",
+          "revert_audio_compression",
+        ]),
+        inArray(processingJobs.status, ["pending", "processing"]),
+      ),
+    )
+    .limit(1);
+
+  // Aggregate WAV / revertible counts so the menu can hide actions that
+  // would no-op. Matches the per-row aggregation in `fetchAudioDeployments`.
+  const [uncompressedRow] = await db
+    .select({ cnt: drizzleCount() })
+    .from(audioFiles)
+    .where(
+      and(
+        eq(audioFiles.deploymentId, deploymentId),
+        eq(audioFiles.compressed, false),
+        sql`${audioFiles.driveFileId} IS NOT NULL`,
+        sql`lower(${audioFiles.filename}) LIKE '%.wav'`,
+      ),
+    );
+  const uncompressedFileCount = uncompressedRow?.cnt ?? 0;
+
+  const [revertibleRow] = await db
+    .select({ cnt: drizzleCount() })
+    .from(audioFiles)
+    .where(
+      and(
+        eq(audioFiles.deploymentId, deploymentId),
+        eq(audioFiles.compressed, true),
+        sql`${audioFiles.driveFileId} IS NOT NULL`,
+        sql`${audioFiles.originalDriveRevisionId} IS NOT NULL`,
+      ),
+    );
+  const revertibleFileCount = revertibleRow?.cnt ?? 0;
 
   // Get last completed BirdNET job stats
   const [lastBirdnetJob] = await db
@@ -180,12 +231,16 @@ export default async function AudioDetailPage({
       deployment={deployment}
       files={files}
       isEditor={isEditor}
+      isAdmin={isAdmin}
       displayStatus={displayStatus}
       isBirdnetProcessing={!!activeBirdnetJob}
       birdnetStats={birdnetStats}
       hasBirdnetDetections={hasBirdnetDetections}
       isAcousticIndicesProcessing={!!activeIndicesJob}
       isAudioAnalysisProcessing={!!activeAudioAnalysisJob}
+      isAudioCompressionProcessing={!!activeCompressionJob}
+      uncompressedFileCount={uncompressedFileCount}
+      revertibleFileCount={revertibleFileCount}
       reviewStats={reviewStats}
     />
   );

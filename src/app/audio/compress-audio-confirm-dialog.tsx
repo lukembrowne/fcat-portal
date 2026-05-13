@@ -11,10 +11,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Loader2 } from "lucide-react";
-import {
-  compressDeploymentAudio,
-  getAudioCompressionPreviewAction,
-} from "./compression-actions";
+import { compressDeploymentAudio } from "./compression-actions";
+import { getAudioCompressionPreviewAction } from "./preview-actions";
 import { useConfirmPreview } from "@/hooks/use-confirm-preview";
 
 interface CompressAudioConfirmDialogProps {

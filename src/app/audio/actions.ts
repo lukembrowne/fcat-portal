@@ -10,6 +10,7 @@ import {
   acousticIndices,
   cameraTrapProjects,
   processingJobs,
+  activityLog,
 } from "@/db/schema";
 import { eq, sql, and, isNotNull, inArray, count as drizzleCount } from "drizzle-orm";
 import {
@@ -31,7 +32,15 @@ import {
 } from "@/lib/acoustic-indices-runner";
 import { scanDeploymentAudioInternal } from "@/lib/audio-sync-internals";
 import { JOB_TYPES } from "@/lib/job-types";
-import { findActiveAudioJob } from "@/lib/job-locks";
+import {
+  findActiveAudioJob,
+  countActiveAudioWorkWithCompression,
+} from "@/lib/job-locks";
+import {
+  enqueueAudioCompressionJob,
+  runAudioCompressionPhase,
+} from "@/lib/audio-compression-core";
+import type { AuthUser } from "@/lib/types";
 import { fetchEntities } from "@/lib/odk-client";
 import {
   BIOCHOCO_PROJECT_ID,
@@ -1044,10 +1053,25 @@ async function cancelAcousticIndicesJob(
 // Combined audio analysis (BirdNET + acoustic indices, chunked)
 // ---------------------------------------------------------------------------
 
+function isGrabacionesAdmin(user: AuthUser): boolean {
+  if (user.globalRole === "super_admin") return true;
+  return user.permissions.some(
+    (p) => p.projectId === "grabaciones" && p.role === "admin",
+  );
+}
+
 interface CreateAudioAnalysisJobInput {
   deploymentId: number;
   includeBirdnet?: boolean;
   includeIndices?: boolean;
+  /**
+   * If true, run an embedded WAV→FLAC compression phase before BirdNET /
+   * indices. Admin-only — the flag is silently dropped for non-admin callers.
+   * If both `includeBirdnet` and `includeIndices` are false, this delegates to
+   * the standalone `enqueueAudioCompressionJob` path instead of creating an
+   * AUDIO_ANALYSIS row.
+   */
+  compressFirst?: boolean;
 }
 
 /**
@@ -1060,14 +1084,33 @@ interface CreateAudioAnalysisJobInput {
 export async function createAudioAnalysisJob(
   input: CreateAudioAnalysisJobInput
 ): Promise<ActionResult<{ jobId: number }>> {
-  const { deploymentId, includeBirdnet = true, includeIndices = true } = input;
+  const {
+    deploymentId,
+    includeBirdnet = true,
+    includeIndices = true,
+    compressFirst = false,
+  } = input;
 
-  if (!includeBirdnet && !includeIndices) {
+  if (!includeBirdnet && !includeIndices && !compressFirst) {
     return { success: false, error: "Selecciona al menos un análisis" };
   }
 
   const user = await requirePermission("grabaciones", "editor");
   await requireDeploymentAccess(user, deploymentId);
+
+  // Admin gate for the compression phase — silently drop for non-admins so
+  // the analyze dialog stays simple.
+  const userIsAdmin = isGrabacionesAdmin(user);
+  const wantCompress = compressFirst && userIsAdmin;
+
+  // Compress-only path: delegate to the standalone AUDIO_COMPRESSION job so
+  // the existing global cap, cancel UI, and revert anchor logic apply.
+  if (wantCompress && !includeBirdnet && !includeIndices) {
+    return enqueueAudioCompressionJob({
+      deploymentId,
+      actorEmail: user.email,
+    });
+  }
 
   const [fileRow] = await db
     .select({ count: sql<number>`COUNT(*)` })
@@ -1088,6 +1131,20 @@ export async function createAudioAnalysisJob(
     };
   }
 
+  // Global cap when this job will run a compression phase — shared with the
+  // standalone AUDIO_COMPRESSION enqueue path so the FLAC encoder never has
+  // two concurrent runs.
+  if (wantCompress) {
+    const active = await countActiveAudioWorkWithCompression();
+    if (active >= 1) {
+      return {
+        success: false,
+        error:
+          "Ya hay una compresión de audio en curso. Espera a que termine antes de iniciar otra.",
+      };
+    }
+  }
+
   if (includeBirdnet) {
     await db.run(sql`
       DELETE FROM audio_detections
@@ -1098,8 +1155,9 @@ export async function createAudioAnalysisJob(
     `);
   }
 
-  const phaseLabel =
-    includeBirdnet && includeIndices
+  const phaseLabel = wantCompress
+    ? "Preparando compresión + análisis..."
+    : includeBirdnet && includeIndices
       ? "Preparando análisis (BirdNET + índices)..."
       : includeBirdnet
         ? "Preparando análisis BirdNET..."
@@ -1114,10 +1172,16 @@ export async function createAudioAnalysisJob(
       status: "pending",
       createdBy: user.email,
       statusMessage: phaseLabel,
+      compressFirst: wantCompress,
     })
     .returning();
 
-  processAudioAnalysisJob(job.id, { includeBirdnet, includeIndices }).catch((err) => {
+  processAudioAnalysisJob(job.id, {
+    includeBirdnet,
+    includeIndices,
+    compressFirst: wantCompress,
+    actorEmail: user.email,
+  }).catch((err) => {
     log.error(
       { err, jobId: job.id },
       "[audio-analysis] Unhandled error in processAudioAnalysisJob"
@@ -1129,7 +1193,12 @@ export async function createAudioAnalysisJob(
 
 async function processAudioAnalysisJob(
   jobId: number,
-  opts: { includeBirdnet: boolean; includeIndices: boolean }
+  opts: {
+    includeBirdnet: boolean;
+    includeIndices: boolean;
+    compressFirst?: boolean;
+    actorEmail?: string;
+  }
 ): Promise<void> {
   try {
     await db
@@ -1146,6 +1215,59 @@ async function processAudioAnalysisJob(
       throw new Error(`Audio analysis job ${jobId} has null deploymentId`);
     }
     const deploymentId = job.deploymentId;
+
+    // Phase 0 — optional FLAC compression of any remaining WAVs in this
+    // deployment. Folded into this job (not a separate row) so the global
+    // single-flight encoder cap and the per-deployment lock both hold.
+    if (opts.compressFirst) {
+      log.info(
+        { jobId, deploymentId },
+        "[audio-analysis] Running embedded compression phase before analysis"
+      );
+      const phaseResult = await runAudioCompressionPhase({
+        jobId,
+        deploymentId,
+        // Promote freshly-encoded FLACs into the cache so the BirdNET /
+        // indices phases that follow don't re-download them from Drive.
+        keepCache: true,
+      });
+      if (opts.actorEmail) {
+        await db.insert(activityLog).values({
+          userEmail: opts.actorEmail,
+          action: "audio_compression",
+          projectId: "grabaciones",
+          targetType: "deployment",
+          targetId: String(deploymentId),
+          details: JSON.stringify({
+            compressed: phaseResult.processed,
+            skipped: phaseResult.skipped,
+            failed: phaseResult.failed,
+            savedBytes: phaseResult.savedBytes,
+            originalTotalBytes: phaseResult.originalTotalBytes,
+            compressedTotalBytes: phaseResult.compressedTotalBytes,
+            skipReasons: phaseResult.skipReasons,
+            embeddedInJobId: jobId,
+          }),
+        });
+      }
+      // If the user cancelled mid-compression, exit before kicking off the
+      // (much longer) ML phase.
+      if (phaseResult.cancelled) {
+        await db
+          .update(processingJobs)
+          .set({
+            status: "cancelled",
+            completedAt: new Date(),
+            statusMessage: "Cancelado durante la compresión",
+          })
+          .where(eq(processingJobs.id, jobId));
+        log.info(
+          { jobId, deploymentId, phaseResult },
+          "[audio-analysis] Cancelled during compression phase"
+        );
+        return;
+      }
+    }
 
     const [deployment] = await db
       .select({
@@ -1222,26 +1344,52 @@ async function processAudioAnalysisJob(
       const chunk = chunks[chunkIdx];
       const chunkLabel = totalChunks > 1 ? `Lote ${chunkIdx + 1}/${totalChunks} · ` : "";
 
-      // Phase 1 — download chunk to cache.
+      // Phase 1 — download chunk to cache. Run N concurrent downloads
+      // (capped by AUDIO_DOWNLOAD_CONCURRENCY, default 10) so a 1000-file
+      // chunk doesn't pay 1000× single-file Drive latency back-to-back.
+      // Drive's read quota (~10 req/s sustained) and droplet bandwidth are
+      // the natural ceilings; withRetry in drive-client handles transient 429s.
       const cachedFiles: Array<{ id: number; path: string; filename: string }> = [];
-      for (const file of chunk) {
-        try {
-          const cachePath = await ensureAudioCached(file.id);
-          cachedFiles.push({ id: file.id, path: cachePath, filename: file.filename });
-          globalDownloaded++;
-          await db
-            .update(processingJobs)
-            .set({
-              downloadedImages: globalDownloaded,
-              statusMessage: `${chunkLabel}descargando (${globalDownloaded}/${downloadTotal})...`,
-            })
-            .where(eq(processingJobs.id, jobId));
-        } catch (err) {
-          log.warn(
-            { err, fileId: file.id },
-            "[audio-analysis] Failed to cache audio file, skipping"
-          );
+      const downloadConcurrency = Math.max(
+        1,
+        parseInt(process.env.AUDIO_DOWNLOAD_CONCURRENCY ?? "10", 10) || 10,
+      );
+      for (let dlStart = 0; dlStart < chunk.length; dlStart += downloadConcurrency) {
+        const subBatch = chunk.slice(dlStart, dlStart + downloadConcurrency);
+        const results = await Promise.all(
+          subBatch.map(async (file) => {
+            try {
+              const cachePath = await ensureAudioCached(file.id);
+              return { ok: true as const, file, cachePath };
+            } catch (err) {
+              return { ok: false as const, file, err };
+            }
+          }),
+        );
+        for (const r of results) {
+          if (r.ok) {
+            cachedFiles.push({
+              id: r.file.id,
+              path: r.cachePath,
+              filename: r.file.filename,
+            });
+            globalDownloaded++;
+          } else {
+            log.warn(
+              { err: r.err, fileId: r.file.id },
+              "[audio-analysis] Failed to cache audio file, skipping",
+            );
+          }
         }
+        // Single DB progress write per sub-batch instead of per file —
+        // amortizes the SQLite round-trip across the parallel downloads.
+        await db
+          .update(processingJobs)
+          .set({
+            downloadedImages: globalDownloaded,
+            statusMessage: `${chunkLabel}descargando (${globalDownloaded}/${downloadTotal})...`,
+          })
+          .where(eq(processingJobs.id, jobId));
       }
 
       if (cachedFiles.length === 0) {
@@ -1304,6 +1452,10 @@ async function processAudioAnalysisJob(
             totalFiles: cachedFiles.length,
             sensitivity: 1.0,
             overlap: 1.0,
+            // Chunked-run progress so the UI bar ticks 0→downloadTotal smoothly
+            // across all chunks instead of regressing each chunk start.
+            offset: globalProcessed,
+            grandTotal: downloadTotal,
           },
           filenameToFileId
         );
@@ -1329,6 +1481,8 @@ async function processAudioAnalysisJob(
         const result = await runAcousticIndicesAnalysis({
           jobId,
           files: cachedFiles,
+          offset: globalProcessed,
+          grandTotal: downloadTotal,
           onResult: async (r: AcousticIndicesResult) => {
             const now = new Date();
             await db
@@ -1887,7 +2041,11 @@ export async function batchCreateBirdNETJobs(
  */
 export async function batchCreateAudioAnalysisJobs(
   ids: number[],
-  opts: { includeBirdnet?: boolean; includeIndices?: boolean } = {}
+  opts: {
+    includeBirdnet?: boolean;
+    includeIndices?: boolean;
+    compressFirst?: boolean;
+  } = {}
 ): Promise<
   ActionResult<{ enqueued: number; skipped: number; noFiles: number; errorMessages: string[] }>
 > {
@@ -1915,6 +2073,7 @@ export async function batchCreateAudioAnalysisJobs(
         deploymentId: id,
         includeBirdnet: opts.includeBirdnet,
         includeIndices: opts.includeIndices,
+        compressFirst: opts.compressFirst,
       });
       if (result.success) {
         enqueued++;

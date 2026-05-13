@@ -11,10 +11,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Loader2 } from "lucide-react";
-import {
-  batchCompressDeploymentAudio,
-  getAudioCompressionPreviewAction,
-} from "./compression-actions";
+import { batchCompressDeploymentAudio } from "./compression-actions";
+import { getAudioCompressionPreviewAction } from "./preview-actions";
 
 interface BatchCompressAudioDialogProps {
   open: boolean;

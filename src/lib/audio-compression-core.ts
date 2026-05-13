@@ -333,8 +333,17 @@ export async function runAudioCompressionPhase(opts: {
   jobId: number;
   deploymentId: number;
   dryRun?: boolean;
+  /**
+   * If true, promote the freshly-encoded `.tmp.flac` to a permanent cache
+   * entry (renaming it to `<cacheDir>/<newName>.flac`) and write the new
+   * path into `audio_files.cachePath`, instead of deleting the temp file
+   * and nulling `cachePath`. Saves a full re-download from Drive when the
+   * caller (e.g. audio_analysis with compressFirst=true) is about to read
+   * the same file in the next phase.
+   */
+  keepCache?: boolean;
 }): Promise<CompressionPhaseResult> {
-  const { jobId, deploymentId, dryRun = false } = opts;
+  const { jobId, deploymentId, dryRun = false, keepCache = false } = opts;
   let processed = 0;
   let failed = 0;
   let skipped = 0;
@@ -467,7 +476,12 @@ export async function runAudioCompressionPhase(opts: {
       encodeInputs = toEncode
         .map((f) => {
           const wavPath = idToCachePath.get(f.id);
-          return wavPath ? { id: f.id, wavPath } : null;
+          if (!wavPath) return null;
+          // Refresh the BatchFile's cachePath with the post-ensureAudioCached
+          // value so the post-outcome step (cache promotion) can find the WAV
+          // file to remove + the cache dir to write the FLAC into.
+          f.cachePath = wavPath;
+          return { id: f.id, wavPath };
         })
         .filter((x): x is { id: number; wavPath: string } => x !== null);
     }
@@ -619,6 +633,7 @@ export async function runAudioCompressionPhase(opts: {
           return { kind: "dry_run", wavSize: r.wavSize, flacSize: r.flacSize };
         }
 
+        let promotedCachePath: string | null = null;
         try {
           const flacBuf = await fs.readFile(r.flacPath!);
           const upload = await replaceFileContentAndRename(
@@ -640,6 +655,29 @@ export async function runAudioCompressionPhase(opts: {
             }
           }
 
+          // Cache promotion: when the caller (e.g. audio_analysis with
+          // compressFirst) is about to read this file in the next phase,
+          // rename the freshly-encoded temp FLAC into the cache slot
+          // instead of deleting it, and remove the old WAV. Saves a full
+          // re-download from Drive (~5 MB/file at 5274 files ≈ 26 GB).
+          if (keepCache && r.flacPath && f.cachePath) {
+            const cacheDir = path.dirname(f.cachePath);
+            const newCachePath = path.join(cacheDir, newName);
+            try {
+              await fs.rename(r.flacPath, newCachePath);
+              promotedCachePath = newCachePath;
+              if (f.cachePath !== newCachePath) {
+                await fs.unlink(f.cachePath).catch(() => {});
+              }
+            } catch (err) {
+              log.warn(
+                { err, jobId, audioFileId: f.id, flacPath: r.flacPath },
+                "[flac] cache promotion rename failed — falling back to discard",
+              );
+              promotedCachePath = null;
+            }
+          }
+
           await db
             .update(audioFiles)
             .set({
@@ -650,7 +688,7 @@ export async function runAudioCompressionPhase(opts: {
               fileSize: newSize,
               originalFileSize: f.fileSize,
               originalDriveRevisionId: f.priorRev ?? null,
-              cachePath: null,
+              cachePath: promotedCachePath,
             })
             .where(eq(audioFiles.id, f.id));
 
@@ -663,6 +701,7 @@ export async function runAudioCompressionPhase(opts: {
               wavSize: r.wavSize,
               flacSize: newSize,
               priorRev: f.priorRev,
+              cached: promotedCachePath !== null,
             },
             "[flac] audit — Drive replaced + DB updated",
           );
@@ -674,7 +713,12 @@ export async function runAudioCompressionPhase(opts: {
           );
           return { kind: "failed" };
         } finally {
-          if (r.flacPath) await fs.unlink(r.flacPath).catch(() => {});
+          // Only delete the temp FLAC if we did not promote it to the cache.
+          // After a successful rename, the source path no longer exists, but
+          // the .catch() swallows ENOENT defensively.
+          if (r.flacPath && !promotedCachePath) {
+            await fs.unlink(r.flacPath).catch(() => {});
+          }
         }
       }),
     );

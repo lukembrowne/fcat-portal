@@ -188,11 +188,9 @@ export function RecordingsShell({
           </div>
         </div>
 
-        {hasBirdnetDetections && (
-          <div className="mt-2">
-            <ConfidenceThresholdSlider className="max-w-md" />
-          </div>
-        )}
+        <div className="mt-2">
+          <ConfidenceThresholdSlider className="max-w-md" />
+        </div>
 
         <div className="mt-2 border-t pt-2">
           <CollapsibleSection title="Detalles" defaultOpen={false}>

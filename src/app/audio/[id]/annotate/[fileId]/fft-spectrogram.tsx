@@ -507,10 +507,19 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
         }
       };
       apply();
+      // Re-measure on the next frame so any post-commit layout settling is
+      // picked up. Zoom-down (e.g. 8× → 1×) triggered a stale `clientWidth`
+      // read because the inner div had just shrunk and the browser had not
+      // finalized scrollbar / overflow state yet. This catches it without
+      // forcing a `useLayoutEffect`.
+      const rafId = requestAnimationFrame(apply);
 
       const ro = new ResizeObserver(apply);
       ro.observe(viewport);
-      return () => ro.disconnect();
+      return () => {
+        cancelAnimationFrame(rafId);
+        ro.disconnect();
+      };
     }, [zoomLevel, duration]);
 
     // ---- Apply pending cursor-anchored scroll after zoom change ------------

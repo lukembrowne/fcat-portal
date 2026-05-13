@@ -13,17 +13,26 @@ import { eq, and, sql, desc, inArray, count as drizzleCount } from "drizzle-orm"
 import { notFound } from "next/navigation";
 import { fetchAudioFiles } from "../actions";
 import { RecordingsShell } from "./recordings-shell";
+import {
+  applyConfidenceFilter,
+  parseThresholdParam,
+} from "@/lib/audio-confidence";
 
 export default async function AudioDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ conf?: string }>;
 }) {
   const user = await requirePermission("grabaciones", "viewer");
 
   const { id } = await params;
   const deploymentId = parseInt(id, 10);
   if (isNaN(deploymentId)) notFound();
+
+  const { conf } = await searchParams;
+  const threshold = parseThresholdParam(conf);
 
   await requireDeploymentAccess(user, deploymentId);
 
@@ -65,7 +74,7 @@ export default async function AudioDetailPage({
 
   if (!deployment) notFound();
 
-  const filesResult = await fetchAudioFiles(deploymentId);
+  const filesResult = await fetchAudioFiles(deploymentId, { threshold });
 
   // Check for active BirdNET job
   const [activeBirdnetJob] = await db
@@ -177,19 +186,20 @@ export default async function AudioDetailPage({
   } | null = null;
 
   if (lastBirdnetJob) {
+    const visible = applyConfidenceFilter(threshold);
     const [detStats] = await db
       .select({
         totalDetections: sql<number>`COUNT(DISTINCT ${audioDetections.id})`,
         totalSpecies: sql<number>`COUNT(DISTINCT ${audioIdentifications.species})`,
         verified: sql<number>`SUM(CASE WHEN ${audioIdentifications.verificationStatus} = 'verified' THEN 1 ELSE 0 END)`,
-        pending: sql<number>`SUM(CASE WHEN ${audioIdentifications.verificationStatus} = 'unverified' THEN 1 ELSE 0 END)`,
+        pending: sql<number>`SUM(CASE WHEN ${audioIdentifications.verificationStatus} = 'unverified' AND (${audioIdentifications.confidence} IS NULL OR ${audioIdentifications.confidence} >= ${threshold}) THEN 1 ELSE 0 END)`,
       })
       .from(audioDetections)
       .innerJoin(
         audioIdentifications,
         eq(audioIdentifications.audioDetectionId, audioDetections.id)
       )
-      .where(eq(audioDetections.jobId, lastBirdnetJob.id));
+      .where(and(eq(audioDetections.jobId, lastBirdnetJob.id), visible));
 
     if (detStats) {
       birdnetStats = {

@@ -51,6 +51,11 @@ import { HABITAT_COLORS } from "@/app/biochoco/habitat/types";
 import { getHabitatName } from "@/app/biochoco/overview/types";
 import { DIEL_PERIODS, type DielPeriod } from "@/lib/acoustic-indices";
 import { parseRecordingTimestamp } from "@/lib/audio-filename";
+import {
+  DEFAULT_CONFIDENCE_THRESHOLD,
+  applyConfidenceFilter,
+  canonicalThreshold,
+} from "@/lib/audio-confidence";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -123,12 +128,16 @@ export interface AudioStats {
 // Queries
 // ---------------------------------------------------------------------------
 
-export async function fetchAudioDeployments(): Promise<
-  ActionResult<AudioDeploymentRow[]>
-> {
+export async function fetchAudioDeployments(
+  opts?: { threshold?: number }
+): Promise<ActionResult<AudioDeploymentRow[]>> {
   const user = await requirePermission("grabaciones", "viewer");
   const projects = await getUserCameraTrapProjects(user);
   const filter = ctProjectFilter(projects);
+  const threshold = canonicalThreshold(
+    opts?.threshold ?? DEFAULT_CONFIDENCE_THRESHOLD
+  );
+  const visible = applyConfidenceFilter(threshold);
 
   const rows = await db
     .select({
@@ -152,15 +161,18 @@ export async function fetchAudioDeployments(): Promise<
         WHERE audio_files.deployment_id = ${deployments.id}
       )`,
       totalDetections: sql<number>`(
-        SELECT COUNT(*) FROM audio_detections
+        SELECT COUNT(*) FROM audio_identifications
+        INNER JOIN audio_detections ON audio_detections.id = audio_identifications.audio_detection_id
         INNER JOIN audio_files ON audio_files.id = audio_detections.audio_file_id
         WHERE audio_files.deployment_id = ${deployments.id}
+        AND ${visible}
       )`,
       totalSpecies: sql<number>`(
         SELECT COUNT(DISTINCT audio_identifications.species) FROM audio_identifications
         INNER JOIN audio_detections ON audio_detections.id = audio_identifications.audio_detection_id
         INNER JOIN audio_files ON audio_files.id = audio_detections.audio_file_id
         WHERE audio_files.deployment_id = ${deployments.id}
+        AND ${visible}
       )`,
       verifiedCount: sql<number>`(
         SELECT COUNT(*) FROM audio_identifications
@@ -175,6 +187,7 @@ export async function fetchAudioDeployments(): Promise<
         INNER JOIN audio_files ON audio_files.id = audio_detections.audio_file_id
         WHERE audio_files.deployment_id = ${deployments.id}
         AND audio_identifications.verification_status = 'unverified'
+        AND (audio_identifications.confidence IS NULL OR audio_identifications.confidence >= ${threshold})
       )`,
       lastBirdnetAt: sql<Date | null>`(
         SELECT MAX(completed_at) FROM biochoco_processing_jobs
@@ -272,10 +285,16 @@ export async function fetchDistinctAudioProjects(): Promise<AudioProject[]> {
 }
 
 export async function fetchAudioFiles(
-  deploymentId: number
+  deploymentId: number,
+  opts?: { threshold?: number }
 ): Promise<ActionResult<AudioFileRow[]>> {
   const user = await requirePermission("grabaciones", "viewer");
   await requireDeploymentAccess(user, deploymentId);
+
+  const threshold = canonicalThreshold(
+    opts?.threshold ?? DEFAULT_CONFIDENCE_THRESHOLD
+  );
+  const visible = applyConfidenceFilter(threshold);
 
   // LEFT JOIN acoustic_indices (1:1 via uniqueIndex on audio_file_id) so files
   // without computed indices still return — index fields will be null.
@@ -289,7 +308,12 @@ export async function fetchAudioFiles(
       modifiedAt: audioFiles.modifiedAt,
       format: audioFiles.format,
       playable: audioFiles.playable,
-      detectionCount: sql<number>`(SELECT COUNT(*) FROM audio_detections WHERE audio_file_id = ${audioFiles.id})`,
+      detectionCount: sql<number>`(
+        SELECT COUNT(*) FROM audio_identifications
+        INNER JOIN audio_detections ON audio_detections.id = audio_identifications.audio_detection_id
+        WHERE audio_detections.audio_file_id = ${audioFiles.id}
+        AND ${visible}
+      )`,
       soundscapeSaturation: acousticIndices.soundscapeSaturation,
       acousticComplexityIndex: acousticIndices.acousticComplexityIndex,
       frequencyEntropy: acousticIndices.frequencyEntropy,

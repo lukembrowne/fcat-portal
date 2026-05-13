@@ -7,6 +7,7 @@ import {
 } from "./actions";
 import type { AudioDeploymentRow } from "./actions";
 import { AudioDeploymentsShell } from "./audio-deployments-shell";
+import { parseThresholdParam } from "@/lib/audio-confidence";
 
 export interface AudioProjectGroup {
   projectLabel: string;
@@ -70,8 +71,14 @@ function computeStatusCounts(deployments: AudioDeploymentRow[]) {
   return { sinEscanear, escaneados, procesando, porRevisar, revisados };
 }
 
-export default async function AudioPage() {
+export default async function AudioPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ conf?: string }>;
+}) {
   const user = await requirePermission("grabaciones", "viewer");
+  const { conf } = await searchParams;
+  const threshold = parseThresholdParam(conf);
 
   const isEditor =
     user.globalRole === "super_admin" ||
@@ -88,7 +95,7 @@ export default async function AudioPage() {
     );
 
   const [deploymentsResult, distinctProjects, lastSyncAt] = await Promise.all([
-    fetchAudioDeployments(),
+    fetchAudioDeployments({ threshold }),
     fetchDistinctAudioProjects(),
     getAppStateTimestamp(AUDIO_DRIVE_LAST_SYNC_KEY),
   ]);

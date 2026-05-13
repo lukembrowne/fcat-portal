@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { sql } from "drizzle-orm";
 import { requirePermission } from "@/lib/auth";
 import { requireDeploymentAccess } from "@/lib/camera-trap-auth";
 import { db } from "@/db";
@@ -14,18 +15,27 @@ import { eq, and, asc } from "drizzle-orm";
 import { AudioAnnotationClient } from "./annotation-client";
 import { parseRecordingTimestamp } from "@/lib/audio-filename";
 import { getFrequentAudioSpecies } from "@/app/audio/annotation-actions";
+import {
+  applyConfidenceFilter,
+  parseThresholdParam,
+} from "@/lib/audio-confidence";
 
 interface PageProps {
   params: Promise<{ id: string; fileId: string }>;
+  searchParams: Promise<{ conf?: string; showAll?: string }>;
 }
 
-export default async function AudioAnnotatePage({ params }: PageProps) {
+export default async function AudioAnnotatePage({ params, searchParams }: PageProps) {
   const user = await requirePermission("grabaciones", "viewer");
   const { id, fileId } = await params;
+  const { conf, showAll } = await searchParams;
   const deploymentId = parseInt(id, 10);
   const audioFileId = parseInt(fileId, 10);
 
   if (isNaN(deploymentId) || isNaN(audioFileId)) notFound();
+
+  const threshold = parseThresholdParam(conf);
+  const showAllMode = showAll === "1";
 
   await requireDeploymentAccess(user, deploymentId);
 
@@ -59,12 +69,32 @@ export default async function AudioAnnotatePage({ params }: PageProps) {
     .from(deployments)
     .where(eq(deployments.id, deploymentId));
 
-  // Fetch existing detections with identifications
-  const detectionsRaw = await db
-    .select()
-    .from(audioDetections)
-    .where(eq(audioDetections.audioFileId, audioFileId))
-    .orderBy(asc(audioDetections.startTime));
+  // Fetch existing detections with identifications.
+  //
+  // When showAllMode is on, fetch every detection box (including rejected and
+  // sub-threshold) so the annotator can validate borderline cases. Otherwise
+  // restrict to detections whose identification passes the shared filter.
+  const visible = applyConfidenceFilter(threshold);
+  const detectionsRaw = showAllMode
+    ? await db
+        .select()
+        .from(audioDetections)
+        .where(eq(audioDetections.audioFileId, audioFileId))
+        .orderBy(asc(audioDetections.startTime))
+    : await db
+        .select()
+        .from(audioDetections)
+        .where(
+          and(
+            eq(audioDetections.audioFileId, audioFileId),
+            sql`EXISTS (
+              SELECT 1 FROM audio_identifications
+              WHERE audio_identifications.audio_detection_id = ${audioDetections.id}
+              AND ${visible}
+            )`
+          )
+        )
+        .orderBy(asc(audioDetections.startTime));
 
   // Fetch identifications per detection
   const detectionsWithIds = await Promise.all(

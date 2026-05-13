@@ -22,9 +22,6 @@ export const AUDIO_PLAYBACK_SHORTCUTS = [
   { key: "f", description: "Cambiar frecuencia máx", category: "navigation" },
   { key: "m", description: "Cambiar mapa de color", category: "navigation" },
   { key: "+/-", description: "Ganancia ±5 dB", category: "navigation" },
-  { key: "Alt + = / Alt + -", description: "Acercar / alejar zoom", category: "navigation" },
-  { key: "Alt + 0", description: "Restablecer zoom", category: "navigation" },
-  { key: "Shift + ← / →", description: "Desplazar horizontalmente", category: "navigation" },
 ] as const;
 
 interface AudioPlaybackShortcutOptions {
@@ -40,12 +37,6 @@ interface AudioPlaybackShortcutOptions {
   onCycleYMax?: () => void;
   onCycleColormap?: () => void;
   onAdjustGain?: (deltaDB: number) => void;
-  /** Step zoom by +1 / -1 step on the discrete ladder, or reset to 1×. */
-  onZoomIn?: () => void;
-  onZoomOut?: () => void;
-  onZoomReset?: () => void;
-  /** Scroll the spectrogram viewport by a fraction of viewport width. */
-  onScrollBy?: (direction: -1 | 1) => void;
   /** Picker search input — when focused, suppress playback shortcuts so the
    *  user can type into the typeahead unhindered. The chrome hook still
    *  intercepts digits + arrows for species assignment / file nav. */
@@ -86,41 +77,6 @@ export function useAudioPlaybackShortcuts(opts: AudioPlaybackShortcutOptions) {
         target.isContentEditable ||
         target.getAttribute("role") === "combobox";
       if (isInEditableField) return;
-
-      // Alt-modified shortcuts: zoom (Alt + = / - / 0). Use Alt rather than
-      // bare Ctrl/Cmd to avoid colliding with browser page-zoom shortcuts.
-      if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
-        switch (e.key) {
-          case "=":
-          case "+":
-            e.preventDefault();
-            o.onZoomIn?.();
-            return;
-          case "-":
-          case "_":
-            e.preventDefault();
-            o.onZoomOut?.();
-            return;
-          case "0":
-            e.preventDefault();
-            o.onZoomReset?.();
-            return;
-        }
-      }
-
-      // Shift-modified shortcuts: horizontal scroll (Shift + ← / →).
-      if (e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        switch (e.key) {
-          case "ArrowLeft":
-            e.preventDefault();
-            o.onScrollBy?.(-1);
-            return;
-          case "ArrowRight":
-            e.preventDefault();
-            o.onScrollBy?.(1);
-            return;
-        }
-      }
 
       const hasModifier = e.metaKey || e.ctrlKey || e.altKey;
       if (hasModifier) return;

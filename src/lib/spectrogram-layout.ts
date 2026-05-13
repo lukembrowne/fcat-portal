@@ -242,151 +242,64 @@ export function speciesInitial(name: string | null | undefined): string {
 }
 
 // ---------------------------------------------------------------------------
-// Lane assignment for overlapping detections
+// Label lane assignment (vertical staggering of overlapping HTML labels)
 // ---------------------------------------------------------------------------
+//
+// Box-lane assignment was removed in the Round-2 UX revision — BirdNET
+// detections all share the 0–15 kHz frequency range, so slicing boxes into
+// vertical lanes misled users into reading the apparent narrower bands as
+// real signal. Boxes now render at their full claimed freq range and are
+// allowed to overlap. Labels get the lane treatment instead so they stay
+// individually readable.
 
-/**
- * Per-detection visual placement, produced by `assignLanes()`.
- *
- * - `full`: not overlapping anything — render at full frequency-range height
- *   as today (this matches the current pre-Phase-4 behavior).
- * - `lanes`: member of an overlap group — render at `laneIndex / laneCount`
- *   slice of the frequency range so overlapping boxes don't pile up.
- * - `dense`: > 12 lanes in the group — pathological case, fall back to
- *   full-height and emit a `console.warn` (no user-facing badge per the
- *   plan; this is for us, not them).
- */
-export type LaneAssignment =
-  | { mode: "full" }
-  | { mode: "lanes"; laneIndex: number; laneCount: number }
-  | { mode: "dense"; groupSize: number };
-
-export interface DetectionLike {
+export interface LabelInterval {
   id: number;
-  startTime: number;
-  endTime: number;
+  /** Left edge of the label's horizontal extent in inner-pixel space. */
+  leftPx: number;
+  /** Right edge of the label's horizontal extent in inner-pixel space. */
+  rightPx: number;
 }
 
-const MAX_LANES = 12;
-
 /**
- * Greedy first-fit lane assignment with per-overlap-group locality.
+ * Greedy first-fit lane assignment for HTML label collisions.
  *
- * IMPORTANT (memoization contract): callers should memoize the result of
- * this function keyed on a `detectionsVersion: number` counter, NOT on the
- * `detections` array reference. Parent re-renders that mint a fresh array
- * via `.map()` or `.filter()` will bust a reference-keyed memo on every
- * keystroke. The `detectionsVersion` counter increments only when the
- * detection set actually mutates.
+ * Returns the 0-based lane index for each input id. Labels are sorted by
+ * `(leftPx, rightPx, id)` (id as final tiebreaker for stability), then
+ * placed into the lowest-indexed lane whose last occupant ends before the
+ * incoming label starts.
  *
- * Stability: detections are sorted by `(startTime, endTime, id)` before
- * fitting. Appending a new detection that doesn't overlap any existing ones
- * never shifts the lane assignments of unrelated detections — proven by
- * unit test.
+ * Stability: appending a new label that doesn't horizontally overlap any
+ * existing one assigns it lane 0 (the first free lane) without shifting
+ * existing assignments. See unit tests.
+ *
+ * Memoization contract (carried over from the deleted `assignLanes`):
+ * callers should memoize on a `detectionsVersion: number` counter, NOT on
+ * the input array reference — fresh arrays from `.map()` / `.filter()` in
+ * parent renders would otherwise bust the memo on every keystroke.
  */
-export function assignLanes(
-  detections: readonly DetectionLike[],
-): ReadonlyMap<number, LaneAssignment> {
-  const result = new Map<number, LaneAssignment>();
-  if (detections.length === 0) return result;
+export function assignLabelLanes(
+  intervals: readonly LabelInterval[],
+): ReadonlyMap<number, number> {
+  const result = new Map<number, number>();
+  if (intervals.length === 0) return result;
 
-  // Sort by (start, end, id) — id is the final tiebreaker for determinism
-  // when two detections share start + end.
-  const sorted = [...detections].sort((a, b) => {
-    if (a.startTime !== b.startTime) return a.startTime - b.startTime;
-    if (a.endTime !== b.endTime) return a.endTime - b.endTime;
+  const sorted = [...intervals].sort((a, b) => {
+    if (a.leftPx !== b.leftPx) return a.leftPx - b.leftPx;
+    if (a.rightPx !== b.rightPx) return a.rightPx - b.rightPx;
     return a.id - b.id;
   });
 
-  // Step 1: find connected components in the overlap graph. Two detections
-  // overlap iff their [start, end] intervals intersect (open). A connected
-  // component is a maximal set of detections reachable from each other via
-  // pairwise overlap.
-  //
-  // Sweep-line: maintain a list of "active" detections (those whose end > the
-  // current detection's start). For each incoming detection, all active ones
-  // are by definition pairwise overlapping with it.
-  const componentOf = new Map<number, number>();
-  let nextComponentId = 0;
-  const active: DetectionLike[] = [];
-
-  for (const det of sorted) {
-    // Evict actives that ended before this one started.
-    for (let i = active.length - 1; i >= 0; i--) {
-      if (active[i].endTime <= det.startTime) active.splice(i, 1);
-    }
-
-    if (active.length === 0) {
-      componentOf.set(det.id, nextComponentId++);
+  // Track each lane's last `rightPx`.
+  const laneEnds: number[] = [];
+  for (const label of sorted) {
+    let lane = laneEnds.findIndex((end) => end <= label.leftPx);
+    if (lane === -1) {
+      lane = laneEnds.length;
+      laneEnds.push(label.rightPx);
     } else {
-      // Merge all overlapping actives' components into one. Pick the lowest
-      // component id for stability.
-      let minComponent = componentOf.get(active[0].id) ?? nextComponentId;
-      for (const a of active) {
-        const c = componentOf.get(a.id);
-        if (c !== undefined && c < minComponent) minComponent = c;
-      }
-      // Rewrite every active member's component to minComponent.
-      for (const a of active) {
-        const c = componentOf.get(a.id);
-        if (c !== undefined && c !== minComponent) {
-          for (const [k, v] of componentOf) {
-            if (v === c) componentOf.set(k, minComponent);
-          }
-        }
-      }
-      componentOf.set(det.id, minComponent);
+      laneEnds[lane] = label.rightPx;
     }
-    active.push(det);
+    result.set(label.id, lane);
   }
-
-  // Step 2: bucket detections by component.
-  const componentDetections = new Map<number, DetectionLike[]>();
-  for (const det of sorted) {
-    const c = componentOf.get(det.id)!;
-    const bucket = componentDetections.get(c);
-    if (bucket) bucket.push(det);
-    else componentDetections.set(c, [det]);
-  }
-
-  // Step 3: for each component, run greedy first-fit. A 1-element component
-  // is non-overlapping → `mode: 'full'`. Larger components → `mode: 'lanes'`
-  // (or `'dense'` if > MAX_LANES).
-  for (const [, members] of componentDetections) {
-    if (members.length === 1) {
-      result.set(members[0].id, { mode: "full" });
-      continue;
-    }
-
-    // Greedy first-fit: track each lane's last `endTime`.
-    const laneEnds: number[] = [];
-    const assignment = new Map<number, number>();
-    for (const det of members) {
-      let lane = laneEnds.findIndex((end) => end <= det.startTime);
-      if (lane === -1) {
-        lane = laneEnds.length;
-        laneEnds.push(det.endTime);
-      } else {
-        laneEnds[lane] = det.endTime;
-      }
-      assignment.set(det.id, lane);
-    }
-
-    const laneCount = laneEnds.length;
-    if (laneCount > MAX_LANES) {
-      for (const det of members) {
-        result.set(det.id, { mode: "dense", groupSize: members.length });
-      }
-    } else {
-      for (const det of members) {
-        result.set(det.id, {
-          mode: "lanes",
-          laneIndex: assignment.get(det.id)!,
-          laneCount,
-        });
-      }
-    }
-  }
-
   return result;
 }

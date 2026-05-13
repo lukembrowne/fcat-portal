@@ -45,17 +45,22 @@ export interface SettingsV2 extends BaseSettings {
   followPlayback: boolean;
 }
 
-export type StoredSettings = SettingsV1 | SettingsV2;
-export type CurrentSettings = SettingsV2;
+export interface SettingsV3 extends BaseSettings {
+  version: 3;
+  zoomLevel: ZoomLevel;
+  followPlayback: boolean;
+}
+
+export type StoredSettings = SettingsV1 | SettingsV2 | SettingsV3;
+export type CurrentSettings = SettingsV3;
 
 export const DEFAULT_SETTINGS: CurrentSettings = {
-  version: 2,
+  version: 3,
   displayMaxHz: 12000,
   gainDB: 25,
   rangeDB: 70,
   fftSize: 1024,
   colormap: "magma",
-  spectrogramHeight: "comodo",
   zoomLevel: 1,
   followPlayback: true,
 };
@@ -64,18 +69,26 @@ export const DEFAULT_SETTINGS: CurrentSettings = {
  * Exhaustive-switch migration from any prior version to the current shape.
  * Adding a new version: append a `case`; the `never` assertion in `default`
  * fails to compile until the new case lands.
+ *
+ * v2 → v3 drops `spectrogramHeight` (the toggle was removed; the spectrogram
+ * now fills the available vertical space dynamically).
  */
 export function migrate(stored: StoredSettings): CurrentSettings {
   switch (stored.version) {
     case 1:
       return {
         ...stored,
-        version: 2,
-        spectrogramHeight: DEFAULT_SETTINGS.spectrogramHeight,
+        version: 3,
         zoomLevel: DEFAULT_SETTINGS.zoomLevel,
         followPlayback: DEFAULT_SETTINGS.followPlayback,
       };
-    case 2:
+    case 2: {
+      // Strip spectrogramHeight, preserve everything else byte-for-byte.
+      const { spectrogramHeight: _ignored, ...rest } = stored;
+      void _ignored;
+      return { ...rest, version: 3 };
+    }
+    case 3:
       return stored;
     default: {
       const _exhaustive: never = stored;
@@ -89,14 +102,15 @@ export function migrate(stored: StoredSettings): CurrentSettings {
  * Validate an `unknown` parsed-JSON blob and produce a typed `StoredSettings`.
  * Missing or invalid field values fall back to `DEFAULT_SETTINGS`. Missing
  * `version` defaults to `1` (matches the on-disk shape that existed before
- * this change). Never throws.
+ * the version discriminator was added). Never throws.
  */
 export function normalize(parsed: unknown): StoredSettings {
   if (!parsed || typeof parsed !== "object") {
     return { ...DEFAULT_SETTINGS };
   }
   const obj = parsed as Record<string, unknown>;
-  const version: 1 | 2 = obj.version === 2 ? 2 : 1;
+  const version: 1 | 2 | 3 =
+    obj.version === 3 ? 3 : obj.version === 2 ? 2 : 1;
 
   const base: BaseSettings = {
     displayMaxHz:
@@ -120,19 +134,31 @@ export function normalize(parsed: unknown): StoredSettings {
 
   if (version === 1) return { ...base, version: 1 };
 
+  const zoomLevel = isZoomLevel(obj.zoomLevel)
+    ? obj.zoomLevel
+    : DEFAULT_SETTINGS.zoomLevel;
+  const followPlayback =
+    typeof obj.followPlayback === "boolean"
+      ? obj.followPlayback
+      : DEFAULT_SETTINGS.followPlayback;
+
+  if (version === 2) {
+    return {
+      ...base,
+      version: 2,
+      spectrogramHeight: isHeightPreset(obj.spectrogramHeight)
+        ? obj.spectrogramHeight
+        : "comodo",
+      zoomLevel,
+      followPlayback,
+    };
+  }
+
   return {
     ...base,
-    version: 2,
-    spectrogramHeight: isHeightPreset(obj.spectrogramHeight)
-      ? obj.spectrogramHeight
-      : DEFAULT_SETTINGS.spectrogramHeight,
-    zoomLevel: isZoomLevel(obj.zoomLevel)
-      ? obj.zoomLevel
-      : DEFAULT_SETTINGS.zoomLevel,
-    followPlayback:
-      typeof obj.followPlayback === "boolean"
-        ? obj.followPlayback
-        : DEFAULT_SETTINGS.followPlayback,
+    version: 3,
+    zoomLevel,
+    followPlayback,
   };
 }
 

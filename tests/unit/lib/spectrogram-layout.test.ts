@@ -17,8 +17,8 @@ import {
   anchorInViewport,
   decideLabelCollapse,
   speciesInitial,
-  assignLanes,
-  type DetectionLike,
+  assignLabelLanes,
+  type LabelInterval,
 } from "@/lib/spectrogram-layout";
 
 describe("spectrogram-layout", () => {
@@ -345,135 +345,82 @@ describe("spectrogram-layout", () => {
   });
 
   // -------------------------------------------------------------------------
-  // assignLanes
+  // assignLabelLanes
   // -------------------------------------------------------------------------
-  describe("assignLanes", () => {
-    const make = (id: number, start: number, end: number): DetectionLike => ({
+  describe("assignLabelLanes", () => {
+    const make = (id: number, leftPx: number, rightPx: number): LabelInterval => ({
       id,
-      startTime: start,
-      endTime: end,
+      leftPx,
+      rightPx,
     });
 
     it("returns empty map for empty input", () => {
-      const result = assignLanes([]);
-      expect(result.size).toBe(0);
+      expect(assignLabelLanes([]).size).toBe(0);
     });
 
-    it("3 sequential detections → all mode: 'full'", () => {
-      const detections = [make(1, 0, 1), make(2, 2, 3), make(3, 4, 5)];
-      const result = assignLanes(detections);
-      expect(result.get(1)).toEqual({ mode: "full" });
-      expect(result.get(2)).toEqual({ mode: "full" });
-      expect(result.get(3)).toEqual({ mode: "full" });
+    it("three non-overlapping labels all sit in lane 0", () => {
+      const result = assignLabelLanes([
+        make(1, 0, 20),
+        make(2, 30, 50),
+        make(3, 60, 80),
+      ]);
+      expect(result.get(1)).toBe(0);
+      expect(result.get(2)).toBe(0);
+      expect(result.get(3)).toBe(0);
     });
 
-    it("3 fully-overlapping detections → 3 lanes", () => {
-      const detections = [make(1, 0, 3), make(2, 0, 3), make(3, 0, 3)];
-      const result = assignLanes(detections);
-      expect(result.get(1)).toEqual({ mode: "lanes", laneIndex: 0, laneCount: 3 });
-      expect(result.get(2)).toEqual({ mode: "lanes", laneIndex: 1, laneCount: 3 });
-      expect(result.get(3)).toEqual({ mode: "lanes", laneIndex: 2, laneCount: 3 });
+    it("three fully overlapping labels stack into three lanes", () => {
+      const result = assignLabelLanes([
+        make(1, 0, 50),
+        make(2, 0, 50),
+        make(3, 0, 50),
+      ]);
+      expect(result.get(1)).toBe(0);
+      expect(result.get(2)).toBe(1);
+      expect(result.get(3)).toBe(2);
     });
 
-    it("2-overlap cluster + 3 standalone → cluster gets lanes, others full", () => {
-      const detections = [
-        make(1, 0, 2),
-        make(2, 1, 3), // overlaps 1
-        make(3, 5, 6),
-        make(4, 10, 11),
-        make(5, 20, 21),
-      ];
-      const result = assignLanes(detections);
-      expect(result.get(1)).toEqual({ mode: "lanes", laneIndex: 0, laneCount: 2 });
-      expect(result.get(2)).toEqual({ mode: "lanes", laneIndex: 1, laneCount: 2 });
-      expect(result.get(3)).toEqual({ mode: "full" });
-      expect(result.get(4)).toEqual({ mode: "full" });
-      expect(result.get(5)).toEqual({ mode: "full" });
+    it("greedy first-fit reuses a lane once its previous occupant ends", () => {
+      // 1: [0,10]  → lane 0
+      // 2: [5,20]  → lane 1 (overlaps 1)
+      // 3: [25,30] → lane 0 (1 ended at 10, free)
+      const result = assignLabelLanes([
+        make(1, 0, 10),
+        make(2, 5, 20),
+        make(3, 25, 30),
+      ]);
+      expect(result.get(1)).toBe(0);
+      expect(result.get(2)).toBe(1);
+      expect(result.get(3)).toBe(0);
     });
 
-    it("per-group locality: large cluster doesn't force small cluster into N lanes", () => {
-      const detections = [
-        // Cluster A: 4 overlapping
-        make(1, 0, 5),
-        make(2, 0, 5),
-        make(3, 0, 5),
-        make(4, 0, 5),
-        // Cluster B (disjoint in time): 2 overlapping
-        make(10, 100, 105),
-        make(11, 100, 105),
-      ];
-      const result = assignLanes(detections);
-      const a1 = result.get(1);
-      const b10 = result.get(10);
-      if (a1?.mode !== "lanes" || b10?.mode !== "lanes") {
-        throw new Error("expected lanes mode");
-      }
-      expect(a1.laneCount).toBe(4);
-      expect(b10.laneCount).toBe(2);
+    it("sort tiebreaker is deterministic for identical leftPx", () => {
+      const result = assignLabelLanes([
+        make(3, 0, 10),
+        make(1, 0, 10),
+        make(2, 0, 10),
+      ]);
+      // Sorted by id: 1, 2, 3 → lanes 0, 1, 2
+      expect(result.get(1)).toBe(0);
+      expect(result.get(2)).toBe(1);
+      expect(result.get(3)).toBe(2);
     });
 
-    it("13 fully-overlapping detections → all mode: 'dense'", () => {
-      const detections: DetectionLike[] = [];
-      for (let i = 1; i <= 13; i++) detections.push(make(i, 0, 5));
-      const result = assignLanes(detections);
-      for (let i = 1; i <= 13; i++) {
-        expect(result.get(i)).toEqual({ mode: "dense", groupSize: 13 });
-      }
+    it("appending a non-overlapping label does not shift existing assignments", () => {
+      const base = [make(1, 0, 50), make(2, 10, 60)];
+      const before = assignLabelLanes(base);
+      const after = assignLabelLanes([...base, make(99, 200, 220)]);
+      expect(after.get(1)).toBe(before.get(1));
+      expect(after.get(2)).toBe(before.get(2));
+      expect(after.get(99)).toBe(0); // new free lane
     });
 
-    it("appending a non-overlapping detection does not shift unrelated assignments", () => {
-      const base = [
-        make(1, 0, 2),
-        make(2, 1, 3),
-        make(3, 10, 11),
-      ];
-      const before = assignLanes(base);
-
-      // Append a new detection that does NOT overlap any existing one.
-      const extended = [...base, make(99, 20, 21)];
-      const after = assignLanes(extended);
-
-      // Existing assignments are byte-identical.
-      expect(after.get(1)).toEqual(before.get(1));
-      expect(after.get(2)).toEqual(before.get(2));
-      expect(after.get(3)).toEqual(before.get(3));
-      expect(after.get(99)).toEqual({ mode: "full" });
-    });
-
-    it("sort tiebreaker is deterministic: identical start+end ordered by id", () => {
-      const detections = [make(3, 0, 1), make(1, 0, 1), make(2, 0, 1)];
-      const result = assignLanes(detections);
-      // After sort by id: 1, 2, 3 → lanes 0, 1, 2
-      const a1 = result.get(1);
-      const a2 = result.get(2);
-      const a3 = result.get(3);
-      if (a1?.mode !== "lanes" || a2?.mode !== "lanes" || a3?.mode !== "lanes") {
-        throw new Error("expected lanes mode");
-      }
-      expect(a1.laneIndex).toBe(0);
-      expect(a2.laneIndex).toBe(1);
-      expect(a3.laneIndex).toBe(2);
-    });
-
-    it("greedy first-fit reuses lanes when a detection ends before another starts", () => {
-      // detection 1: [0, 1]; 2: [2, 3]; 3: [0.5, 2.5] — 1 and 3 overlap;
-      // 2 and 3 overlap; 1 and 2 are sequential. So all three are in one
-      // connected component. Greedy fit:
-      //  - 1 → lane 0
-      //  - 3 → lane 1 (overlaps 1)
-      //  - 2 → lane 0 (ends 1 ≤ start 2)
-      const detections = [make(1, 0, 1), make(2, 2, 3), make(3, 0.5, 2.5)];
-      const result = assignLanes(detections);
-      const a1 = result.get(1);
-      const a2 = result.get(2);
-      const a3 = result.get(3);
-      if (a1?.mode !== "lanes" || a2?.mode !== "lanes" || a3?.mode !== "lanes") {
-        throw new Error("expected lanes mode");
-      }
-      expect(a1.laneIndex).toBe(0);
-      expect(a3.laneIndex).toBe(1);
-      expect(a2.laneIndex).toBe(0); // reused lane 0 since 1 ended
-      expect(a1.laneCount).toBe(2);
+    it("touching intervals (right === next left) are treated as non-overlapping", () => {
+      // The sweep uses `end <= leftPx` as the eviction condition, so a label
+      // ending at 10 frees its lane for one starting at 10. Documented.
+      const result = assignLabelLanes([make(1, 0, 10), make(2, 10, 20)]);
+      expect(result.get(1)).toBe(0);
+      expect(result.get(2)).toBe(0);
     });
   });
 });

@@ -1,13 +1,8 @@
 "use client";
 
-import { useEffect, useCallback, useState } from "react";
+import { useEffect, useCallback } from "react";
 import { COLORMAP_NAMES, type ColormapName } from "@/lib/spectrogram-colormaps";
-import {
-  HEIGHT_PRESETS,
-  ZOOM_LEVELS,
-  type HeightPreset,
-  type ZoomLevel,
-} from "@/lib/spectrogram-layout";
+import { ZOOM_LEVELS, type ZoomLevel } from "@/lib/spectrogram-layout";
 import {
   DEFAULT_SETTINGS,
   loadStoredSettings,
@@ -22,12 +17,6 @@ export type SpectrogramSettings = CurrentSettings;
 export { DEFAULT_SETTINGS, loadStoredSettings };
 
 const Y_MAX_PRESETS_HZ: readonly number[] = [3000, 6000, 9000, 12000];
-
-const HEIGHT_LABELS: Record<HeightPreset, string> = {
-  compacto: "Compacto",
-  comodo: "Cómodo",
-  alto: "Alto",
-};
 
 interface SpectrogramControlsProps {
   settings: SpectrogramSettings;
@@ -95,11 +84,6 @@ export function SpectrogramControls({ settings, onChange, sampleRate }: Spectrog
         </select>
       </Field>
 
-      <HeightToggle
-        value={settings.spectrogramHeight}
-        onChange={(next) => update("spectrogramHeight", next)}
-      />
-
       <Field label="Zoom" title="Acercar el espectrograma en el eje del tiempo">
         <select
           value={settings.zoomLevel}
@@ -152,78 +136,6 @@ export function SpectrogramControls({ settings, onChange, sampleRate }: Spectrog
       </Field>
     </div>
   );
-}
-
-function HeightToggle({
-  value,
-  onChange,
-}: {
-  value: HeightPreset;
-  onChange: (next: HeightPreset) => void;
-}) {
-  // Mobile cap — on narrow viewports the spectrogram pins to `compacto`
-  // regardless of preference (the parent uses the same hook to clamp the
-  // value actually passed to <FftSpectrogram>). The toggle still renders
-  // so users on a tablet rotated to landscape get their preference back.
-  const isNarrow = useIsNarrowViewport();
-  return (
-    <label
-      className="flex items-center gap-1.5 text-muted-foreground"
-      title={
-        isNarrow
-          ? "Disponible en pantallas más anchas"
-          : "Altura del espectrograma"
-      }
-    >
-      <span>Altura</span>
-      <div
-        role="radiogroup"
-        aria-label="Altura del espectrograma"
-        className="inline-flex border rounded overflow-hidden"
-      >
-        {HEIGHT_PRESETS.map((preset) => {
-          const active = preset === value;
-          return (
-            <button
-              key={preset}
-              type="button"
-              role="radio"
-              aria-checked={active}
-              disabled={isNarrow}
-              onClick={() => onChange(preset)}
-              className={
-                "px-2 py-0.5 border-r last:border-r-0 transition-colors " +
-                (active
-                  ? "bg-foreground text-background"
-                  : "bg-background hover:bg-muted") +
-                (isNarrow ? " opacity-50 cursor-not-allowed" : "")
-              }
-            >
-              {HEIGHT_LABELS[preset]}
-            </button>
-          );
-        })}
-      </div>
-    </label>
-  );
-}
-
-/**
- * `true` when the viewport is narrower than the Tailwind `sm` breakpoint
- * (640 px). Drives the mobile cap on the height toggle and on the value
- * passed to the spectrogram (see `effectiveHeightPreset` in annotation-client).
- */
-export function useIsNarrowViewport(): boolean {
-  const [narrow, setNarrow] = useState(false);
-  useEffect(() => {
-    if (typeof window === "undefined" || !window.matchMedia) return;
-    const mq = window.matchMedia("(max-width: 640px)");
-    const handler = () => setNarrow(mq.matches);
-    handler();
-    mq.addEventListener("change", handler);
-    return () => mq.removeEventListener("change", handler);
-  }, []);
-  return narrow;
 }
 
 function Field({

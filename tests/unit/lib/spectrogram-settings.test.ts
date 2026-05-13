@@ -8,6 +8,7 @@ import {
   normalize,
   type SettingsV1,
   type SettingsV2,
+  type SettingsV3,
 } from "@/lib/spectrogram-settings";
 
 // ---------------------------------------------------------------------------
@@ -48,7 +49,7 @@ afterEach(() => {
 // migrate()
 // ---------------------------------------------------------------------------
 describe("migrate", () => {
-  it("upgrades a v1 payload to v2 with defaulted new fields", () => {
+  it("upgrades a v1 payload straight to v3 with defaulted new fields", () => {
     const v1: SettingsV1 = {
       version: 1,
       displayMaxHz: 9000,
@@ -58,8 +59,7 @@ describe("migrate", () => {
       colormap: "viridis",
     };
     const out = migrate(v1);
-    expect(out.version).toBe(2);
-    expect(out.spectrogramHeight).toBe(DEFAULT_SETTINGS.spectrogramHeight);
+    expect(out.version).toBe(3);
     expect(out.zoomLevel).toBe(DEFAULT_SETTINGS.zoomLevel);
     expect(out.followPlayback).toBe(DEFAULT_SETTINGS.followPlayback);
     // v1 fields preserved byte-for-byte
@@ -68,9 +68,11 @@ describe("migrate", () => {
     expect(out.rangeDB).toBe(64);
     expect(out.fftSize).toBe(2048);
     expect(out.colormap).toBe("viridis");
+    // v3 has no spectrogramHeight field at all.
+    expect("spectrogramHeight" in out).toBe(false);
   });
 
-  it("passes a v2 payload through unchanged", () => {
+  it("upgrades a v2 payload to v3, stripping spectrogramHeight and preserving the rest", () => {
     const v2: SettingsV2 = {
       version: 2,
       displayMaxHz: 15000,
@@ -82,7 +84,28 @@ describe("migrate", () => {
       zoomLevel: 4,
       followPlayback: false,
     };
-    expect(migrate(v2)).toEqual(v2);
+    const out = migrate(v2);
+    expect(out.version).toBe(3);
+    expect("spectrogramHeight" in out).toBe(false);
+    expect(out.displayMaxHz).toBe(15000);
+    expect(out.gainDB).toBe(30);
+    expect(out.colormap).toBe("turbo");
+    expect(out.zoomLevel).toBe(4);
+    expect(out.followPlayback).toBe(false);
+  });
+
+  it("passes a v3 payload through unchanged", () => {
+    const v3: SettingsV3 = {
+      version: 3,
+      displayMaxHz: 12000,
+      gainDB: 25,
+      rangeDB: 70,
+      fftSize: 1024,
+      colormap: "magma",
+      zoomLevel: 2,
+      followPlayback: true,
+    };
+    expect(migrate(v3)).toEqual(v3);
   });
 });
 
@@ -109,7 +132,7 @@ describe("normalize", () => {
     expect(out.version).toBe(1);
   });
 
-  it("preserves a v2 payload's new fields", () => {
+  it("preserves a v2 payload's fields including spectrogramHeight so migrate can strip it", () => {
     const out = normalize({
       version: 2,
       displayMaxHz: 6000,
@@ -131,40 +154,46 @@ describe("normalize", () => {
     });
   });
 
-  it("falls back to defaults for invalid individual fields without throwing", () => {
+  it("preserves a v3 payload's fields", () => {
     const out = normalize({
-      version: 2,
+      version: 3,
+      displayMaxHz: 6000,
+      gainDB: 10,
+      rangeDB: 40,
+      fftSize: 512,
+      colormap: "inferno",
+      zoomLevel: 2,
+      followPlayback: false,
+    });
+    expect(out).toMatchObject({
+      version: 3,
+      zoomLevel: 2,
+      followPlayback: false,
+      fftSize: 512,
+      colormap: "inferno",
+    });
+  });
+
+  it("falls back to defaults for invalid individual fields without throwing (v3)", () => {
+    const out = normalize({
+      version: 3,
       displayMaxHz: "not a number",
       gainDB: NaN,
       rangeDB: 70,
-      fftSize: 9999,                   // not in the FftSize union
+      fftSize: 9999,
       colormap: "not-a-colormap",
-      spectrogramHeight: "extra-tall", // not a valid preset
-      zoomLevel: 3,                    // not in ZOOM_LEVELS
+      zoomLevel: 3, // not in ZOOM_LEVELS
       followPlayback: "yes",
     });
     expect(out).toMatchObject({
-      version: 2,
+      version: 3,
       displayMaxHz: DEFAULT_SETTINGS.displayMaxHz,
       fftSize: DEFAULT_SETTINGS.fftSize,
       colormap: DEFAULT_SETTINGS.colormap,
-      spectrogramHeight: DEFAULT_SETTINGS.spectrogramHeight,
       zoomLevel: DEFAULT_SETTINGS.zoomLevel,
       followPlayback: DEFAULT_SETTINGS.followPlayback,
     });
-    // NaN passes the typeof === "number" check by design; tightening that
-    // would require a Number.isFinite gate. Documented behavior.
     expect(Number.isNaN(out.gainDB)).toBe(true);
-  });
-
-  it("accepts each valid HeightPreset", () => {
-    for (const preset of ["compacto", "comodo", "alto"] as const) {
-      const out = normalize({ version: 2, spectrogramHeight: preset });
-      expect(out.version).toBe(2);
-      if (out.version === 2) {
-        expect(out.spectrogramHeight).toBe(preset);
-      }
-    }
   });
 });
 
@@ -185,7 +214,7 @@ describe("loadStoredSettings", () => {
     expect(loadStoredSettings()).toEqual(DEFAULT_SETTINGS);
   });
 
-  it("migrates legacy (no version field) payload to v2 with defaulted height", () => {
+  it("migrates legacy (no version field) payload through the chain to v3", () => {
     window.localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
@@ -197,20 +226,43 @@ describe("loadStoredSettings", () => {
       }),
     );
     const out = loadStoredSettings();
-    expect(out.version).toBe(2);
-    expect(out.spectrogramHeight).toBe(DEFAULT_SETTINGS.spectrogramHeight);
+    expect(out.version).toBe(3);
     expect(out.displayMaxHz).toBe(9000);
     expect(out.colormap).toBe("viridis");
+    expect("spectrogramHeight" in out).toBe(false);
   });
 
-  it("round-trips a saved v2 payload", () => {
-    const v2: SettingsV2 = {
+  it("migrates a stored v2 payload to v3 on load, dropping spectrogramHeight", () => {
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: 2,
+        displayMaxHz: 15000,
+        gainDB: 30,
+        rangeDB: 50,
+        fftSize: 1024,
+        colormap: "turbo",
+        spectrogramHeight: "alto",
+        zoomLevel: 4,
+        followPlayback: false,
+      }),
+    );
+    const out = loadStoredSettings();
+    expect(out.version).toBe(3);
+    expect(out.zoomLevel).toBe(4);
+    expect(out.followPlayback).toBe(false);
+    expect(out.colormap).toBe("turbo");
+    expect("spectrogramHeight" in out).toBe(false);
+  });
+
+  it("round-trips a saved v3 payload", () => {
+    const v3: SettingsV3 = {
       ...DEFAULT_SETTINGS,
-      spectrogramHeight: "alto",
       colormap: "inferno",
+      zoomLevel: 4,
     };
-    saveStoredSettings(v2);
-    expect(loadStoredSettings()).toEqual(v2);
+    saveStoredSettings(v3);
+    expect(loadStoredSettings()).toEqual(v3);
   });
 });
 

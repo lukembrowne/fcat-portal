@@ -22,7 +22,6 @@ import {
   loadStoredSettings,
   cycleYMax,
   cycleColormap,
-  useIsNarrowViewport,
   type SpectrogramSettings,
 } from "./spectrogram-controls";
 import {
@@ -149,10 +148,6 @@ export function AudioAnnotationClient({
   const [duration, setDuration] = useState<number | null>(null);
   const [sampleRate, setSampleRate] = useState<number | null>(null);
   const [settings, setSettings] = useState<SpectrogramSettings>(() => loadStoredSettings());
-  // Narrow-viewport sentinel for the spectrogram-height mobile cap. The
-  // user's stored preference is preserved; we just clamp the value passed
-  // to <FftSpectrogram> on `sm`-and-below viewports.
-  const isNarrowViewport = useIsNarrowViewport();
   const [measurements, setMeasurements] = useState<SpecMeasurement>({
     viewportWidth: 0,
     scrollWidth: 0,
@@ -395,6 +390,10 @@ export function AudioAnnotationClient({
     if (!det) return;
     const center = (det.startTime + det.endTime) / 2;
     spectrogramRef.current?.scrollToTime(center);
+    // Bump the pulse counter so the spectrogram retriggers the keyframe. The
+    // counter has no derived state — it's just a render token — so the
+    // set-state-in-effect rule is overly cautious here.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setPulseKey((k) => k + 1);
   }, [selectedDetectionId, detections]);
 
@@ -493,10 +492,6 @@ export function AudioAnnotationClient({
         ...s,
         gainDB: Math.max(-20, Math.min(60, s.gainDB + delta)),
       })),
-    onZoomIn: () => spectrogramRef.current?.zoomIn(),
-    onZoomOut: () => spectrogramRef.current?.zoomOut(),
-    onZoomReset: () => spectrogramRef.current?.zoomReset(),
-    onScrollBy: (direction) => spectrogramRef.current?.scrollBy(direction),
     isPickerOpen: pickerOpen,
     searchInputRef: popoverSearchInputRef,
   });
@@ -556,9 +551,10 @@ export function AudioAnnotationClient({
         )}
 
         {/* Spectrogram display — client-side FFT renderer.
-            Wrapped in `relative` so the PopoverAnchor positions correctly
-            over the selected box. */}
-        <div ref={spectrogramContainerRef} className="shrink-0 relative">
+            Fills the remaining vertical space between the controls bar and
+            the playback controls. `relative` so the PopoverAnchor positions
+            correctly over the selected box. */}
+        <div ref={spectrogramContainerRef} className="flex-1 min-h-0 relative">
           {audioStreamUrl ? (
             <FftSpectrogram
               ref={spectrogramRef}
@@ -571,7 +567,6 @@ export function AudioAnnotationClient({
               rangeDB={settings.rangeDB}
               fftSize={settings.fftSize}
               colormap={settings.colormap}
-              height={isNarrowViewport ? "compacto" : settings.spectrogramHeight}
               zoomLevel={settings.zoomLevel}
               followPlayback={settings.followPlayback}
               detectionsVersion={detections.length}

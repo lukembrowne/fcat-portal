@@ -22,9 +22,6 @@ import { COLORMAPS, type ColormapName } from "@/lib/spectrogram-colormaps";
 import { getSpeciesColor } from "@/lib/species-color";
 import {
   FREQ_AXIS_WIDTH,
-  TIME_AXIS_HEIGHT,
-  SPEC_HEIGHT_PRESETS,
-  type HeightPreset,
   type ZoomLevel,
   stepZoom,
   viewportToTime,
@@ -33,8 +30,7 @@ import {
   visibleTimeWindow,
   decideLabelCollapse,
   speciesInitial,
-  assignLanes,
-  type LaneAssignment,
+  assignLabelLanes,
 } from "@/lib/spectrogram-layout";
 import { Button } from "@/components/ui/button";
 
@@ -44,7 +40,10 @@ const HANDLE_PX = 8;
 const HANDLE_HIT_PX = 18;
 const TIME_TICK_STEPS = [0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300];
 const FREQ_TICK_STEPS = [50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000];
-const SCROLL_STEP_FRACTION = 0.25;
+const LABEL_ROW_HEIGHT = 18;
+const LABEL_ROW_GAP = 2;
+const TIME_OVERLAY_HEIGHT = 18;
+const MAX_LABEL_LANES = 4;
 
 type LoadStage = "idle" | "fetching" | "computing" | "ready" | "error";
 type ResizeHandle = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
@@ -78,6 +77,12 @@ type DragState =
       currentNX: number;
       currentNY: number;
       original: AudioBoxData;
+    }
+  | {
+      kind: "panning";
+      startClientX: number;
+      startScrollLeft: number;
+      hasDragged: boolean;
     };
 
 export interface AudioBoxData {
@@ -106,12 +111,6 @@ export interface SpectrogramMethods {
   /** Smooth-scroll the viewport so `time` lands at the centre. Respects
    *  `prefers-reduced-motion`. */
   scrollToTime: (time: number) => void;
-  /** Step zoom up / down / reset (with cursor anchor at viewport centre). */
-  zoomIn: () => void;
-  zoomOut: () => void;
-  zoomReset: () => void;
-  /** Scroll by ±25% of the viewport width. */
-  scrollBy: (direction: -1 | 1) => void;
 }
 
 export interface SpecMeasurement {
@@ -119,7 +118,7 @@ export interface SpecMeasurement {
   viewportWidth: number;
   /** Total inner-container width = baseWidth × zoomLevel. */
   scrollWidth: number;
-  /** Current spec-area pixel height (resolved from `HeightPreset`). */
+  /** Current spec-area pixel height (dynamic, fills the parent flex slot). */
   specHeight: number;
 }
 
@@ -133,10 +132,6 @@ interface FftSpectrogramProps {
   rangeDB: number;
   fftSize: number;
   colormap: ColormapName;
-  /** Spec-area pixel height, resolved from a `HeightPreset` (Compacto /
-   *  Cómodo / Alto). Parent applies the narrow-viewport mobile cap before
-   *  passing this in. */
-  height?: HeightPreset;
   /** Discrete time-axis zoom; 1× = base width, 8× = inner is 8× viewport. */
   zoomLevel?: ZoomLevel;
   /** When true, the viewport auto-scrolls to keep the playhead visible
@@ -144,9 +139,9 @@ interface FftSpectrogramProps {
    *  the next seek / playSelection. */
   followPlayback?: boolean;
   /** Monotonic counter; increment in the parent whenever the detection set
-   *  mutates so `assignLanes()` + visible-window memo can invalidate without
-   *  taking a dependency on the `boxes` array reference (which can change
-   *  every render). */
+   *  mutates so derived memoised state can invalidate without taking a
+   *  dependency on the `boxes` array reference (which can change every
+   *  render). */
   detectionsVersion?: number;
   /** Monotonic counter; increment to retrigger the pulse animation on the
    *  currently-selected box (used by card-click in the sidebar). */
@@ -163,9 +158,9 @@ interface FftSpectrogramProps {
   /** Fires on viewport scroll (rAF-batched). The parent recomputes the
    *  popover anchor against this `scrollLeft`. */
   onScrollChange?: (scrollLeft: number) => void;
-  /** Fires when the spectrogram itself wants to step the zoom (wheel or
-   *  imperative method). Parent updates the settings; the spectrogram
-   *  applies a pending cursor anchor in an effect on `zoomLevel`. */
+  /** Fires when the spectrogram itself wants to step the zoom (wheel
+   *  gesture). Parent updates the settings; the spectrogram applies a
+   *  pending cursor anchor in an effect on `zoomLevel`. */
   onZoomChange?: (next: ZoomLevel) => void;
 }
 
@@ -232,7 +227,6 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
       rangeDB,
       fftSize,
       colormap,
-      height = "comodo",
       zoomLevel = 1,
       followPlayback = true,
       detectionsVersion = 0,
@@ -248,15 +242,10 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
       onZoomChange,
     } = props;
 
-    // Resolve the height preset to pixels. All canvas sizing, layout, and
-    // coordinate math reads this — never the raw constant.
-    const specHeight = SPEC_HEIGHT_PRESETS[height];
-
     const containerRef = useRef<HTMLDivElement>(null);
     const scrollViewportRef = useRef<HTMLDivElement>(null);
     const specCanvasRef = useRef<HTMLCanvasElement>(null);
     const freqAxisRef = useRef<HTMLCanvasElement>(null);
-    const timeAxisRef = useRef<HTMLCanvasElement>(null);
     const playheadRef = useRef<HTMLDivElement>(null);
     const audioRef = useRef<HTMLAudioElement>(null);
     const offscreenRef = useRef<HTMLCanvasElement | null>(null);
@@ -267,7 +256,7 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
     const suppressNextClickRef = useRef(false);
 
     // Ref counter (not boolean) — robust against overlapping programmatic
-    // scrolls (e.g. card-click during a smooth scroll). Per Kieran review.
+    // scrolls (e.g. card-click during a smooth scroll).
     const programmaticScrollDepth = useRef(0);
     // Set when the user manually scrolls during playback; cleared on the next
     // seek / playSelection / play. While set, follow-mode auto-scroll is
@@ -284,10 +273,15 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
     const [decoded, setDecoded] = useState<DecodedAudio | null>(null);
     const [magnitudes, setMagnitudes] = useState<Magnitudes | null>(null);
     const [viewportWidth, setViewportWidth] = useState(0);
+    // Dynamic spec area height: tracked from the scroll viewport's actual
+    // `clientHeight`. The component fills whatever vertical space its parent
+    // gives it; no preset toggle.
+    const [specHeight, setSpecHeight] = useState(0);
     const [scrollLeft, setScrollLeft] = useState(0);
     const [hoverBoxId, setHoverBoxId] = useState<number | null>(null);
     const [previewRect, setPreviewRect] = useState<BoxRect | null>(null);
     const [dragOverride, setDragOverride] = useState<{ boxId: number; rect: BoxRect } | null>(null);
+    const [isPanning, setIsPanning] = useState(false);
     const dragRef = useRef<DragState>({ kind: "idle" });
 
     // Inner-container width is the viewport width × zoom level. SVG `viewBox`
@@ -315,7 +309,6 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
     // ---- Decode pipeline ----------------------------------------------------
     useEffect(() => {
       let cancelled = false;
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setStage("fetching");
       setError(null);
       setDecoded(null);
@@ -373,13 +366,12 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
     }, [decoded, fftSize]);
 
     // ---- Render to spec canvas ---------------------------------------------
-    // The spec canvas internal bitmap is sized to the *viewport* width (DPR-
-    // scaled) — we then CSS-stretch it across the full inner width via the
-    // `width: 100%` style. Beyond ~4× this loses pixel fidelity; documented
-    // tradeoff (`docs/plans/.../zoom-density-plan.md` Cross-cutting → CSS
-    // scaling vs FFT recompute).
+    // The spec canvas's bitmap is sized to the *inner* width (DPR-scaled).
+    // We CSS-stretch via `width: 100%`. Beyond ~4× this loses pixel fidelity;
+    // documented tradeoff.
     useEffect(() => {
-      if (!magnitudes || !specCanvasRef.current || specSize.width === 0) return;
+      if (!magnitudes || !specCanvasRef.current || specSize.width === 0 || specSize.height === 0)
+        return;
 
       const displayMaxBin = Math.min(
         magnitudes.binCount,
@@ -423,7 +415,7 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
     // ---- Frequency axis -----------------------------------------------------
     useEffect(() => {
       const canvas = freqAxisRef.current;
-      if (!canvas) return;
+      if (!canvas || specHeight === 0) return;
       sizeCanvas(canvas, FREQ_AXIS_WIDTH, specHeight);
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
@@ -451,49 +443,18 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
       }
     }, [displayMaxHz, specHeight]);
 
-    // ---- Time axis ----------------------------------------------------------
-    // Sized to the full inner width and re-draws on zoom. Tick density
-    // targets ~80 px between labels at every zoom level so the axis stays
-    // readable.
-    useEffect(() => {
-      const canvas = timeAxisRef.current;
-      if (!canvas || innerWidth === 0 || duration === 0) return;
-      sizeCanvas(canvas, innerWidth, TIME_AXIS_HEIGHT);
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-      ctx.clearRect(0, 0, innerWidth, TIME_AXIS_HEIGHT);
-      ctx.fillStyle = "#0a0a0a";
-      ctx.fillRect(0, 0, innerWidth, TIME_AXIS_HEIGHT);
-      ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
-      ctx.fillStyle = "#d4d4d8";
-      ctx.strokeStyle = "#3f3f46";
-      ctx.lineWidth = 1;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-
-      const secPerPx = duration / innerWidth;
-      const step = pickTickStep(secPerPx, 80, TIME_TICK_STEPS);
-      for (let t = 0; t <= duration + 0.001; t += step) {
-        const x = (t / duration) * innerWidth;
-        if (x < 12 || x > innerWidth - 12) continue;
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, 4);
-        ctx.stroke();
-        ctx.fillText(formatSeconds(t), x, TIME_AXIS_HEIGHT / 2 + 2);
-      }
-    }, [duration, innerWidth]);
-
     // ---- Resize observer ----------------------------------------------------
-    // Watches the scroll viewport (NOT the outer container) for its
-    // `clientWidth`. The freq-axis is outside the scroll viewport so its
-    // width never participates in this measurement.
+    // Watches the scroll viewport for both its `clientWidth` AND
+    // `clientHeight`. Both flow into state so the render-to-canvas effect
+    // re-fires on either dimension change. Fixes the "must refresh to see
+    // the spectrogram after height changes" bug from the prior shipping.
     useEffect(() => {
       const viewport = scrollViewportRef.current;
       if (!viewport) return;
 
       const apply = () => {
         const cssW = Math.max(0, viewport.clientWidth);
+        const cssH = Math.max(0, viewport.clientHeight);
         const newInner = cssW * zoomLevel;
         // Preserve the centered time region across resize. Computed from the
         // pre-resize state read directly from the DOM.
@@ -505,13 +466,13 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
             ? ((prevScroll + prevViewport / 2) / prevInner) * duration
             : 0;
 
-        if (specCanvasRef.current) sizeCanvas(specCanvasRef.current, newInner, specHeight);
-        if (timeAxisRef.current) sizeCanvas(timeAxisRef.current, newInner, TIME_AXIS_HEIGHT);
+        if (specCanvasRef.current) sizeCanvas(specCanvasRef.current, newInner, cssH);
         setViewportWidth(cssW);
+        setSpecHeight(cssH);
 
-        if (duration > 0 && prevInner > 0 && newInner > 0) {
-          // Schedule scroll restore after the inner container width updates
-          // (next frame). Counts as programmatic.
+        if (duration > 0 && prevInner > 0 && newInner > 0 && cssW !== prevViewport) {
+          // Only restore scroll if the viewport WIDTH changed — vertical-only
+          // resize shouldn't trigger a scroll snap.
           programmaticScrollDepth.current++;
           requestAnimationFrame(() => {
             const v = scrollViewportRef.current;
@@ -538,9 +499,7 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
       const ro = new ResizeObserver(apply);
       ro.observe(viewport);
       return () => ro.disconnect();
-      // specHeight + zoomLevel are part of deps so we re-allocate on both.
-      // `duration` deliberately omitted — resize math reads it live above.
-    }, [specHeight, zoomLevel, duration]);
+    }, [zoomLevel, duration]);
 
     // ---- Apply pending cursor-anchored scroll after zoom change ------------
     useEffect(() => {
@@ -565,7 +524,7 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
       });
     }, [zoomLevel, duration]);
 
-    // ---- Surface measurements + scroll to parent ---------------------------
+    // ---- Surface measurements to parent ------------------------------------
     useEffect(() => {
       onMeasurementsChange?.({
         viewportWidth,
@@ -726,7 +685,7 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
       };
     }, [duration, innerWidth, followPlayback, onTimeUpdate, onPlayPause]);
 
-    // ---- Internal scroll-to helpers ----------------------------------------
+    // ---- Internal scroll-to helper -----------------------------------------
     const scrollToTimeInternal = useCallback(
       (time: number) => {
         const v = scrollViewportRef.current;
@@ -751,24 +710,6 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
         });
       },
       [duration],
-    );
-
-    const queueViewportCenterZoom = useCallback(
-      (direction: 1 | -1) => {
-        const v = scrollViewportRef.current;
-        if (!v) return;
-        const next = stepZoom(zoomLevel, direction);
-        if (next === zoomLevel) return;
-        const anchorPx = v.clientWidth / 2;
-        const time = viewportToTime(
-          v.scrollLeft + anchorPx,
-          v.scrollWidth,
-          duration,
-        );
-        pendingZoomAnchor.current = { time, anchorPx };
-        onZoomChange?.(next);
-      },
-      [zoomLevel, duration, onZoomChange],
     );
 
     // ---- Imperative ref ----------------------------------------------------
@@ -845,40 +786,8 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
         getDuration: () => audioRef.current?.duration ?? 0,
         isPlaying: () => !!audioRef.current && !audioRef.current.paused,
         scrollToTime: scrollToTimeInternal,
-        zoomIn: () => queueViewportCenterZoom(1),
-        zoomOut: () => queueViewportCenterZoom(-1),
-        zoomReset: () => {
-          if (zoomLevel === 1) return;
-          // Anchor the center time so it stays visible after zooming out.
-          const v = scrollViewportRef.current;
-          if (v) {
-            const anchorPx = v.clientWidth / 2;
-            const time = viewportToTime(
-              v.scrollLeft + anchorPx,
-              v.scrollWidth,
-              duration,
-            );
-            pendingZoomAnchor.current = { time, anchorPx };
-          }
-          onZoomChange?.(1);
-        },
-        scrollBy: (direction: -1 | 1) => {
-          const v = scrollViewportRef.current;
-          if (!v) return;
-          programmaticScrollDepth.current++;
-          v.scrollBy({
-            left: direction * v.clientWidth * SCROLL_STEP_FRACTION,
-            behavior: prefersReducedMotion() ? "auto" : "smooth",
-          });
-          requestAnimationFrame(() => {
-            programmaticScrollDepth.current = Math.max(
-              0,
-              programmaticScrollDepth.current - 1,
-            );
-          });
-        },
       }),
-      [scrollToTimeInternal, queueViewportCenterZoom, zoomLevel, duration, onZoomChange],
+      [scrollToTimeInternal],
     );
 
     // ---- Coordinate helpers (CSS px ↔ time/freq/normalized) ----------------
@@ -907,15 +816,19 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
     }, []);
 
     // ---- Pointer event handlers --------------------------------------------
+    // Precedence (top to bottom; first match wins):
+    //   1. resize handle → "resizing"
+    //   2. existing box → "moving"
+    //   3. Shift held + editable + onDrawComplete provided → "drawing-new"
+    //   4. empty area → "panning"
     const handleSvgPointerDown = useCallback(
       (e: React.PointerEvent<SVGSVGElement>) => {
-        if (!editable) return;
         const target = e.target as SVGElement;
-        const handleEl = target.closest("[data-handle]");
+        const handleEl = editable ? target.closest("[data-handle]") : null;
         const boxEl = target.closest("[data-box-id]");
         const { nx, ny } = eventToNorm(e.clientX, e.clientY);
 
-        if (handleEl) {
+        if (handleEl && editable) {
           const boxId = Number(handleEl.getAttribute("data-box-id"));
           const handle = handleEl.getAttribute("data-handle") as ResizeHandle;
           const original = boxes.find((b) => b.id === boxId);
@@ -952,7 +865,7 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
           return;
         }
 
-        if (onDrawCompleteRef.current) {
+        if (e.shiftKey && editable && onDrawCompleteRef.current) {
           dragRef.current = {
             kind: "drawing-new",
             startNX: nx,
@@ -962,7 +875,18 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
             hasDragged: false,
           };
           (e.target as Element).setPointerCapture(e.pointerId);
+          return;
         }
+
+        // Default: pan the viewport.
+        const v = scrollViewportRef.current;
+        dragRef.current = {
+          kind: "panning",
+          startClientX: e.clientX,
+          startScrollLeft: v?.scrollLeft ?? 0,
+          hasDragged: false,
+        };
+        (e.target as Element).setPointerCapture(e.pointerId);
       },
       [editable, boxes, eventToNorm]
     );
@@ -971,6 +895,25 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
       (e: React.PointerEvent<SVGSVGElement>) => {
         const drag = dragRef.current;
         if (drag.kind === "idle") return;
+
+        if (drag.kind === "panning") {
+          const dx = e.clientX - drag.startClientX;
+          if (!drag.hasDragged && Math.abs(dx) > DRAG_THRESHOLD_PX) {
+            drag.hasDragged = true;
+            setIsPanning(true);
+          }
+          if (drag.hasDragged) {
+            const v = scrollViewportRef.current;
+            if (v) {
+              // Don't bump programmaticScrollDepth — user-driven pan SHOULD
+              // pause follow-mode (handled by the existing scroll listener
+              // when depth === 0).
+              v.scrollLeft = drag.startScrollLeft - dx;
+            }
+          }
+          return;
+        }
+
         const { nx, ny } = eventToNorm(e.clientX, e.clientY);
 
         if (drag.kind === "drawing-new") {
@@ -1040,6 +983,17 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
           (e.target as Element).releasePointerCapture(e.pointerId);
         } catch {}
 
+        if (drag.kind === "panning") {
+          setIsPanning(false);
+          // If we actually panned, suppress the impending click (otherwise
+          // it would seek). A bare click without drag falls through to the
+          // existing seek-on-click handler.
+          if (drag.hasDragged) {
+            suppressNextClickRef.current = true;
+          }
+          return;
+        }
+
         if (drag.kind === "drawing-new") {
           setPreviewRect(null);
           if (!drag.hasDragged) return;
@@ -1090,6 +1044,7 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
       dragRef.current = { kind: "idle" };
       setPreviewRect(null);
       setDragOverride(null);
+      setIsPanning(false);
     }, []);
 
     const handleSvgClick = useCallback(
@@ -1111,10 +1066,9 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
       [eventToNorm, nxToTime, duration]
     );
 
-    const handleTimeAxisClick = useCallback(
-      (e: React.MouseEvent<HTMLCanvasElement>) => {
-        const rect = e.currentTarget.getBoundingClientRect();
-        const t = ((e.clientX - rect.left) / rect.width) * duration;
+    // Click on a time-overlay label seeks to that time.
+    const handleTimeOverlayClick = useCallback(
+      (t: number) => {
         const a = audioRef.current;
         if (!a) return;
         loopRef.current = false;
@@ -1141,24 +1095,7 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
       );
     }, [boxes, dragOverride]);
 
-    // ---- Lane assignment (Phase 4) -----------------------------------------
-    // Keyed on detectionsVersion (NOT on the boxes array reference) per the
-    // memoization contract in spectrogram-layout.ts. Logs once per dense
-    // group so we can spot pathological detection-density files.
-    const lanes = useMemo(() => {
-      const result = assignLanes(renderedBoxes);
-      const denseGroups = new Set<number>();
-      for (const v of result.values()) {
-        if (v.mode === "dense" && !denseGroups.has(v.groupSize)) {
-          denseGroups.add(v.groupSize);
-          console.warn("[spectrogram] dense lane fallback", { groupSize: v.groupSize });
-        }
-      }
-      return result;
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [detectionsVersion, dragOverride]);
-
-    // ---- SVG box virtualization (Phase 2) ----------------------------------
+    // ---- SVG box virtualization --------------------------------------------
     // Filter to detections whose time range intersects the visible window
     // (plus 1 viewport of padding on each side). Big perf win at zoom 4×/8×.
     const visibleBoxes = useMemo(() => {
@@ -1169,12 +1106,62 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
       );
     }, [renderedBoxes, scrollLeft, viewportWidth, innerWidth, duration]);
 
+    // ---- Label lane assignment ---------------------------------------------
+    // Stagger label rows vertically so overlapping labels stay readable.
+    // Memoised on `detectionsVersion` (counter) PLUS the scroll/zoom-dependent
+    // visible box set, since label widths depend on `wPx` which depends on
+    // zoom + visible window. (No collapsing for the lane decision — we use a
+    // simple estimated label width per the spec plan.)
+    const labelLanes = useMemo(() => {
+      if (innerWidth === 0) return new Map<number, number>();
+      const intervals = visibleBoxes
+        .filter((b) => b.displayLabel)
+        .map((b) => {
+          const xPx = timeToNX(b.startTime) * innerWidth;
+          const wPx = Math.max(0, timeToNX(b.endTime) * innerWidth - xPx);
+          const baseWPx = wPx / zoomLevel;
+          const isSelected = selectedBoxId === b.id;
+          const collapseMode = decideLabelCollapse(baseWPx, zoomLevel, isSelected);
+          // Estimated label width for collision purposes. Caps at 160 px so
+          // one huge label doesn't push everything down.
+          const labelWidthPx =
+            collapseMode === "collapsed"
+              ? 18
+              : Math.min(160, Math.max(70, wPx + 4));
+          return { id: b.id, leftPx: xPx, rightPx: xPx + labelWidthPx };
+        });
+      return assignLabelLanes(intervals);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [detectionsVersion, visibleBoxes, innerWidth, zoomLevel, selectedBoxId]);
+
+    // ---- Time-axis ticks for the top overlay -------------------------------
+    const timeTicks = useMemo<number[]>(() => {
+      if (innerWidth === 0 || duration === 0) return [];
+      const secPerPx = duration / innerWidth;
+      const step = pickTickStep(secPerPx, 80, TIME_TICK_STEPS);
+      const ticks: number[] = [];
+      for (let t = step; t <= duration - step / 2; t += step) {
+        ticks.push(t);
+      }
+      return ticks;
+    }, [duration, innerWidth]);
+
+    // ---- Render -------------------------------------------------------------
+    const showLeftFade = zoomLevel > 1 && scrollLeft > 4;
+    const showRightFade =
+      zoomLevel > 1 && innerWidth - scrollLeft - viewportWidth > 4;
+
+    // Cursor over empty area advertises the pan gesture.
+    const svgCursor = isPanning
+      ? "grabbing"
+      : editable
+        ? "grab"
+        : "grab";
+
     return (
-      <div ref={containerRef} className="relative flex w-full bg-zinc-950 select-none">
-        {/* Pulse keyframes — scoped here to keep the animation co-located.
-            A plain `<style>` element (no styled-jsx dependency) works on
-            both the SSR and client passes; the keyframe is namespaced
-            with the `fcat-spec-pulse` prefix to avoid collisions. */}
+      <div ref={containerRef} className="relative flex w-full h-full bg-zinc-950 select-none">
+        {/* Spectrogram-scoped styles: pulse keyframes + visible-scrollbar
+            theming. Plain <style> (no styled-jsx) so it works on SSR + client. */}
         <style
           dangerouslySetInnerHTML={{
             __html: `
@@ -1186,6 +1173,23 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
               @media (prefers-reduced-motion: reduce) {
                 .fcat-spec-pulse { animation: none !important; }
               }
+              .fcat-spec-scrollbar::-webkit-scrollbar {
+                height: 12px;
+              }
+              .fcat-spec-scrollbar::-webkit-scrollbar-track {
+                background: rgba(255,255,255,0.04);
+              }
+              .fcat-spec-scrollbar::-webkit-scrollbar-thumb {
+                background: rgba(255,255,255,0.35);
+                border-radius: 6px;
+              }
+              .fcat-spec-scrollbar::-webkit-scrollbar-thumb:hover {
+                background: rgba(255,255,255,0.55);
+              }
+              .fcat-spec-scrollbar {
+                scrollbar-width: thin;
+                scrollbar-color: rgba(255,255,255,0.35) rgba(255,255,255,0.04);
+              }
             `,
           }}
         />
@@ -1195,305 +1199,367 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
 
         {/* Left: frequency axis (stays outside the scrollable viewport so it
             remains fixed at the left edge regardless of horizontal scroll). */}
-        <div style={{ width: FREQ_AXIS_WIDTH, height: specHeight }} className="shrink-0">
+        <div style={{ width: FREQ_AXIS_WIDTH }} className="shrink-0 h-full">
           <canvas ref={freqAxisRef} />
         </div>
 
-        {/* Right: scroll viewport containing spec area + time axis */}
-        <div
-          ref={scrollViewportRef}
-          className="flex-1 min-w-0 overflow-x-auto overflow-y-hidden"
-          style={{ scrollBehavior: prefersReducedMotion() ? "auto" : "smooth" }}
-        >
+        {/* Right: scroll viewport containing the spec body */}
+        <div className="relative flex-1 min-w-0 h-full">
           <div
-            className="relative"
-            style={{ width: innerWidth || "100%", height: specHeight }}
+            ref={scrollViewportRef}
+            className="fcat-spec-scrollbar h-full overflow-x-auto overflow-y-hidden"
           >
-            <canvas
-              ref={specCanvasRef}
-              className="absolute inset-0"
-              style={{ pointerEvents: "none", width: "100%", height: "100%" }}
-            />
+            <div
+              className="relative h-full"
+              style={{ width: innerWidth || "100%" }}
+            >
+              <canvas
+                ref={specCanvasRef}
+                className="absolute inset-0"
+                style={{ pointerEvents: "none", width: "100%", height: "100%" }}
+              />
 
-            {/* Loading / error overlay */}
-            {(stage === "fetching" || stage === "computing") && (
-              <div className="absolute inset-0 flex items-center justify-center bg-zinc-950/60 text-zinc-200 text-sm pointer-events-none">
-                <Loader2 className="h-5 w-5 animate-spin mr-2" />
-                <span>
-                  {stage === "fetching" ? "Descargando audio…" : "Calculando espectrograma…"}
-                </span>
-              </div>
-            )}
-            {stage === "error" && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-950/80 text-sm gap-3">
-                <p className="text-red-400 max-w-md text-center px-4">{error}</p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    setStage("idle");
-                    setError(null);
-                    setDecoded(null);
-                    setMagnitudes(null);
-                    setStage("fetching");
-                    decodeAudio(audioUrl)
-                      .then((d) => {
-                        setDecoded(d);
-                        onReady?.({ duration: d.duration, sampleRate: d.sampleRate });
-                        setStage("computing");
-                      })
-                      .catch(() => {
-                        setStage("error");
-                        setError("Audio no se pudo decodificar. Intenta de nuevo o salta a otro archivo.");
-                      });
-                  }}
+              {/* Loading / error overlay */}
+              {(stage === "fetching" || stage === "computing") && (
+                <div className="absolute inset-0 flex items-center justify-center bg-zinc-950/60 text-zinc-200 text-sm pointer-events-none">
+                  <Loader2 className="h-5 w-5 animate-spin mr-2" />
+                  <span>
+                    {stage === "fetching" ? "Descargando audio…" : "Calculando espectrograma…"}
+                  </span>
+                </div>
+              )}
+              {stage === "error" && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-950/80 text-sm gap-3">
+                  <p className="text-red-400 max-w-md text-center px-4">{error}</p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setStage("idle");
+                      setError(null);
+                      setDecoded(null);
+                      setMagnitudes(null);
+                      setStage("fetching");
+                      decodeAudio(audioUrl)
+                        .then((d) => {
+                          setDecoded(d);
+                          onReady?.({ duration: d.duration, sampleRate: d.sampleRate });
+                          setStage("computing");
+                        })
+                        .catch(() => {
+                          setStage("error");
+                          setError("Audio no se pudo decodificar. Intenta de nuevo o salta a otro archivo.");
+                        });
+                    }}
+                  >
+                    Reintentar
+                  </Button>
+                </div>
+              )}
+
+              {/* SVG overlay (boxes + drag preview + time guide lines) */}
+              {stage === "ready" && innerWidth > 0 && specHeight > 0 && (
+                <svg
+                  id="fft-spec-svg"
+                  className="absolute inset-0 w-full h-full"
+                  style={{ cursor: svgCursor }}
+                  viewBox="0 0 1 1"
+                  preserveAspectRatio="none"
+                  onPointerDown={handleSvgPointerDown}
+                  onPointerMove={handleSvgPointerMove}
+                  onPointerUp={handleSvgPointerUp}
+                  onPointerCancel={handleSvgPointerCancel}
+                  onClick={handleSvgClick}
                 >
-                  Reintentar
-                </Button>
-              </div>
-            )}
-
-            {/* SVG overlay (boxes + drag preview) */}
-            {stage === "ready" && innerWidth > 0 && (
-              <svg
-                id="fft-spec-svg"
-                className={`absolute inset-0 w-full h-full ${
-                  editable ? "cursor-crosshair" : "cursor-pointer"
-                }`}
-                viewBox="0 0 1 1"
-                preserveAspectRatio="none"
-                onPointerDown={handleSvgPointerDown}
-                onPointerMove={handleSvgPointerMove}
-                onPointerUp={handleSvgPointerUp}
-                onPointerCancel={handleSvgPointerCancel}
-                onClick={handleSvgClick}
-              >
-                {visibleBoxes.map((box) => {
-                  const isSelected = selectedBoxId === box.id;
-                  const isHovered = hoverBoxId === box.id && !isSelected;
-                  const isLegacyFull =
-                    box.minFreq === 0 && (box.maxFreq >= 15000 - 1 || box.maxFreq >= nyquist - 1);
-                  const status = box.verificationStatus ?? "unverified";
-                  const isVerified = status === "verified";
-                  const isRejected = status === "rejected";
-                  const color = getSpeciesColor(box.species);
-                  const lane = lanes.get(box.id) ?? { mode: "full" as const };
-
-                  const x = timeToNX(box.startTime);
-                  const w = Math.max(0.0005, timeToNX(box.endTime) - x);
-
-                  // Compute y/h based on lane assignment. `lanes` mode slices
-                  // the box's freq range into vertical bands.
-                  let yTop = hzToNY(box.maxFreq);
-                  let yBot = hzToNY(box.minFreq);
-                  if (lane.mode === "lanes") {
-                    const fullSpan = yBot - yTop;
-                    const laneSpan = fullSpan / lane.laneCount;
-                    yTop = yTop + lane.laneIndex * laneSpan;
-                    yBot = yTop + laneSpan;
-                  }
-                  const h = Math.max(0.0005, yBot - yTop);
-
-                  const fillOpacity = isSelected
-                    ? 0.3
-                    : isRejected
-                      ? 0.05
-                      : isVerified
-                        ? 0.28
-                        : isLegacyFull && lane.mode === "full"
-                          ? 0.1
-                          : 0.15;
-                  const strokeOpacity = isRejected
-                    ? 0.35
-                    : isLegacyFull && lane.mode === "full" && !isSelected
-                      ? 0.6
-                      : 1;
-
-                  return (
-                    <g
-                      key={box.id}
-                      data-box-id={box.id}
-                      onPointerEnter={() => setHoverBoxId(box.id)}
-                      onPointerLeave={() => setHoverBoxId(null)}
-                      style={{ cursor: editable ? "grab" : "pointer" }}
-                    >
-                      <rect
-                        x={x}
-                        y={yTop}
-                        width={w}
-                        height={h}
-                        fill={color}
-                        fillOpacity={fillOpacity}
-                        stroke={color}
-                        strokeOpacity={strokeOpacity}
-                        strokeWidth={isSelected ? 2.5 : isHovered ? 2 : 1.5}
-                        strokeDasharray={isLegacyFull && lane.mode === "full" ? "4 3" : undefined}
+                  {/* Vertical time guide lines at each major tick. Drawn first
+                      so detection boxes/labels render on top. */}
+                  {timeTicks.map((t) => {
+                    const x = timeToNX(t);
+                    return (
+                      <line
+                        key={`tick-${t}`}
+                        x1={x}
+                        x2={x}
+                        y1={0}
+                        y2={1}
+                        stroke="rgba(255,255,255,0.18)"
+                        strokeWidth={1}
                         vectorEffect="non-scaling-stroke"
+                        pointerEvents="none"
                       />
+                    );
+                  })}
 
-                      {isSelected && pulseKey > 0 && (
+                  {visibleBoxes.map((box) => {
+                    const isSelected = selectedBoxId === box.id;
+                    const isHovered = hoverBoxId === box.id && !isSelected;
+                    const isLegacyFull =
+                      box.minFreq === 0 && (box.maxFreq >= 15000 - 1 || box.maxFreq >= nyquist - 1);
+                    const status = box.verificationStatus ?? "unverified";
+                    const isVerified = status === "verified";
+                    const isRejected = status === "rejected";
+                    const color = getSpeciesColor(box.species);
+
+                    const x = timeToNX(box.startTime);
+                    const w = Math.max(0.0005, timeToNX(box.endTime) - x);
+                    const yTop = hzToNY(box.maxFreq);
+                    const yBot = hzToNY(box.minFreq);
+                    const h = Math.max(0.0005, yBot - yTop);
+
+                    const fillOpacity = isSelected
+                      ? 0.3
+                      : isRejected
+                        ? 0.05
+                        : isVerified
+                          ? 0.28
+                          : isLegacyFull
+                            ? 0.1
+                            : 0.15;
+                    const strokeOpacity = isRejected
+                      ? 0.35
+                      : isLegacyFull && !isSelected
+                        ? 0.6
+                        : 1;
+
+                    return (
+                      <g
+                        key={box.id}
+                        data-box-id={box.id}
+                        onPointerEnter={() => setHoverBoxId(box.id)}
+                        onPointerLeave={() => setHoverBoxId(null)}
+                        style={{ cursor: editable ? "grab" : "pointer" }}
+                      >
                         <rect
-                          key={`pulse-${pulseKey}-${box.id}`}
-                          className="fcat-spec-pulse"
                           x={x}
                           y={yTop}
                           width={w}
                           height={h}
-                          fill="none"
+                          fill={color}
+                          fillOpacity={fillOpacity}
                           stroke={color}
-                          strokeWidth={3}
+                          strokeOpacity={strokeOpacity}
+                          strokeWidth={isSelected ? 2.5 : isHovered ? 2 : 1.5}
+                          strokeDasharray={isLegacyFull ? "4 3" : undefined}
                           vectorEffect="non-scaling-stroke"
-                          pointerEvents="none"
+                        />
+
+                        {isSelected && pulseKey > 0 && (
+                          <rect
+                            key={`pulse-${pulseKey}-${box.id}`}
+                            className="fcat-spec-pulse"
+                            x={x}
+                            y={yTop}
+                            width={w}
+                            height={h}
+                            fill="none"
+                            stroke={color}
+                            strokeWidth={3}
+                            vectorEffect="non-scaling-stroke"
+                            pointerEvents="none"
+                            style={{
+                              transformOrigin: `${(x + w / 2) * 100}% ${(yTop + h / 2) * 100}%`,
+                              transformBox: "fill-box",
+                              animation: prefersReducedMotion()
+                                ? "none"
+                                : "fcat-spec-pulse 500ms ease-out forwards",
+                            }}
+                          />
+                        )}
+
+                        {isSelected && editable && (
+                          <ResizeHandles
+                            x={x}
+                            y={yTop}
+                            w={w}
+                            h={h}
+                            boxId={box.id}
+                            specWidthPx={specSize.width}
+                            specHeightPx={specSize.height}
+                          />
+                        )}
+                      </g>
+                    );
+                  })}
+
+                  {/* Live preview rect during draw-new */}
+                  {previewRect && (
+                    <rect
+                      x={timeToNX(previewRect.startTime)}
+                      y={hzToNY(previewRect.maxFreq)}
+                      width={timeToNX(previewRect.endTime) - timeToNX(previewRect.startTime)}
+                      height={hzToNY(previewRect.minFreq) - hzToNY(previewRect.maxFreq)}
+                      fill="rgba(34, 197, 94, 0.2)"
+                      stroke="rgba(34, 197, 94, 0.9)"
+                      strokeWidth={1.5}
+                      strokeDasharray="4 3"
+                      vectorEffect="non-scaling-stroke"
+                      pointerEvents="none"
+                    />
+                  )}
+                </svg>
+              )}
+
+              {/* Top time-label overlay — sits inside the scrolling inner
+                  container so labels scroll with the data. Click a label
+                  to seek to that time. */}
+              {stage === "ready" && innerWidth > 0 && duration > 0 && (
+                <div
+                  className="absolute top-0 left-0 right-0 pointer-events-none"
+                  style={{
+                    height: TIME_OVERLAY_HEIGHT,
+                    background: "rgba(10,10,10,0.55)",
+                  }}
+                >
+                  {timeTicks.map((t) => (
+                    <div
+                      key={`label-${t}`}
+                      onClick={() => handleTimeOverlayClick(t)}
+                      className="absolute text-[10px] leading-none text-zinc-200 cursor-pointer pointer-events-auto px-1"
+                      style={{
+                        left: (t / duration) * innerWidth,
+                        top: 3,
+                        transform: "translateX(-50%)",
+                      }}
+                    >
+                      {formatSeconds(t)}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Box labels — HTML overlay. Switches between collapsed letter
+                  chips (low effective width) and full-name pills (high zoom or
+                  selected) via `decideLabelCollapse`. Vertically staggered
+                  via `assignLabelLanes` so overlapping labels stay readable. */}
+              {stage === "ready" && innerWidth > 0 && specHeight > 0 && (
+                <div className="absolute inset-0 pointer-events-none">
+                  {visibleBoxes.map((box) => {
+                    if (!box.displayLabel) return null;
+                    const status = box.verificationStatus ?? "unverified";
+                    const isSelected = selectedBoxId === box.id;
+                    if (status === "rejected" && !isSelected) return null;
+                    const color = getSpeciesColor(box.species);
+
+                    const xPx = timeToNX(box.startTime) * innerWidth;
+                    const yTopPx = hzToNY(box.maxFreq) * specHeight;
+                    const yBotPx = hzToNY(box.minFreq) * specHeight;
+                    const wPx = Math.max(0, timeToNX(box.endTime) * innerWidth - xPx);
+                    const baseWPx = wPx / zoomLevel;
+                    const collapseMode = decideLabelCollapse(baseWPx, zoomLevel, isSelected);
+
+                    // Lane stagger: stack labels above the box top edge,
+                    // moving downward by `(LABEL_ROW_HEIGHT + GAP) * lane`.
+                    // Capped at MAX_LABEL_LANES so far-out lanes fall back
+                    // to the natural row with reduced opacity.
+                    const rawLane = labelLanes.get(box.id) ?? 0;
+                    const lane = Math.min(rawLane, MAX_LABEL_LANES);
+                    const isOverflowLane = rawLane > MAX_LABEL_LANES;
+                    const offsetDown = lane * (LABEL_ROW_HEIGHT + LABEL_ROW_GAP);
+                    // Default to above-the-box. If there isn't enough room
+                    // above, anchor below the bottom edge instead.
+                    const baseAbove = yTopPx - LABEL_ROW_HEIGHT;
+                    const labelAbove = baseAbove - offsetDown >= TIME_OVERLAY_HEIGHT;
+                    const top = labelAbove
+                      ? baseAbove - offsetDown
+                      : Math.min(yBotPx + offsetDown, specHeight - LABEL_ROW_HEIGHT);
+
+                    const opacity = isOverflowLane ? 0.6 : isSelected ? 1 : 0.95;
+                    const tooltip = `${box.displayLabel} · ${box.startTime.toFixed(1)}s–${box.endTime.toFixed(1)}s · ${(box.minFreq / 1000).toFixed(1)}–${(box.maxFreq / 1000).toFixed(1)} kHz`;
+
+                    if (collapseMode === "collapsed") {
+                      return (
+                        <div
+                          key={box.id}
+                          aria-label={box.displayLabel}
+                          title={tooltip}
+                          className="absolute font-semibold flex items-center justify-center"
                           style={{
-                            transformOrigin: `${(x + w / 2) * 100}% ${(yTop + h / 2) * 100}%`,
-                            transformBox: "fill-box",
-                            animation: prefersReducedMotion()
-                              ? "none"
-                              : "fcat-spec-pulse 500ms ease-out forwards",
+                            left: xPx,
+                            top,
+                            width: 14,
+                            height: 14,
+                            background: color,
+                            color: "white",
+                            fontSize: 10,
+                            borderRadius: 3,
+                            opacity,
+                            zIndex: isSelected ? 2 : 1,
                           }}
-                        />
-                      )}
+                        >
+                          {speciesInitial(box.displayLabel)}
+                        </div>
+                      );
+                    }
 
-                      {isSelected && editable && (
-                        <ResizeHandles
-                          x={x}
-                          y={yTop}
-                          w={w}
-                          h={h}
-                          boxId={box.id}
-                          specWidthPx={specSize.width}
-                          specHeightPx={specSize.height}
-                        />
-                      )}
-                    </g>
-                  );
-                })}
-
-                {/* Live preview rect during draw-new */}
-                {previewRect && (
-                  <rect
-                    x={timeToNX(previewRect.startTime)}
-                    y={hzToNY(previewRect.maxFreq)}
-                    width={timeToNX(previewRect.endTime) - timeToNX(previewRect.startTime)}
-                    height={hzToNY(previewRect.minFreq) - hzToNY(previewRect.maxFreq)}
-                    fill="rgba(34, 197, 94, 0.2)"
-                    stroke="rgba(34, 197, 94, 0.9)"
-                    strokeWidth={1.5}
-                    strokeDasharray="4 3"
-                    vectorEffect="non-scaling-stroke"
-                    pointerEvents="none"
-                  />
-                )}
-              </svg>
-            )}
-
-            {/* Box labels — HTML overlay. Switches between collapsed letter
-                chips (low effective width) and full-name pills (high zoom or
-                selected) via `decideLabelCollapse`. */}
-            {stage === "ready" && innerWidth > 0 && (
-              <div className="absolute inset-0 pointer-events-none">
-                {visibleBoxes.map((box) => {
-                  if (!box.displayLabel) return null;
-                  const status = box.verificationStatus ?? "unverified";
-                  const isSelected = selectedBoxId === box.id;
-                  if (status === "rejected" && !isSelected) return null;
-                  const color = getSpeciesColor(box.species);
-                  const lane = lanes.get(box.id) ?? { mode: "full" as const };
-
-                  const xPx = timeToNX(box.startTime) * innerWidth;
-                  let yTopPx = hzToNY(box.maxFreq) * specHeight;
-                  if (lane.mode === "lanes") {
-                    const fullSpan = hzToNY(box.minFreq) * specHeight - yTopPx;
-                    yTopPx = yTopPx + lane.laneIndex * (fullSpan / lane.laneCount);
-                  }
-                  const wPx = Math.max(0, timeToNX(box.endTime) * innerWidth - xPx);
-                  // Use base (zoom=1) width to decide collapse so the
-                  // threshold tracks effective rendered width.
-                  const baseWPx = wPx / zoomLevel;
-                  const collapseMode = decideLabelCollapse(baseWPx, zoomLevel, isSelected);
-                  const labelAbove = yTopPx >= 18;
-                  const top = labelAbove ? Math.max(0, yTopPx - 18) : yTopPx;
-
-                  const tooltip = `${box.displayLabel} · ${box.startTime.toFixed(1)}s–${box.endTime.toFixed(1)}s · ${(box.minFreq / 1000).toFixed(1)}–${(box.maxFreq / 1000).toFixed(1)} kHz`;
-
-                  if (collapseMode === "collapsed") {
+                    const expandedMax = innerWidth - xPx;
+                    const maxWidth = Math.min(
+                      isSelected ? expandedMax : Math.max(wPx + 4, 70),
+                      expandedMax,
+                    );
                     return (
                       <div
                         key={box.id}
-                        aria-label={box.displayLabel}
-                        title={tooltip}
-                        className="absolute font-semibold flex items-center justify-center"
+                        className="absolute font-semibold leading-none whitespace-nowrap overflow-hidden text-ellipsis"
                         style={{
                           left: xPx,
                           top,
-                          width: 14,
-                          height: 14,
+                          maxWidth,
+                          height: LABEL_ROW_HEIGHT,
+                          lineHeight: `${LABEL_ROW_HEIGHT}px`,
                           background: color,
                           color: "white",
-                          fontSize: 10,
+                          fontSize: 11,
+                          padding: "0 6px",
                           borderRadius: 3,
-                          opacity: 0.95,
+                          opacity,
                           zIndex: isSelected ? 2 : 1,
+                          transition: "max-width 180ms ease",
                         }}
+                        title={tooltip}
                       >
-                        {speciesInitial(box.displayLabel)}
+                        {box.displayLabel}
                       </div>
                     );
-                  }
+                  })}
+                </div>
+              )}
 
-                  const expandedMax = innerWidth - xPx;
-                  const maxWidth = Math.min(
-                    isSelected ? expandedMax : Math.max(wPx + 4, 70),
-                    expandedMax,
-                  );
-                  return (
-                    <div
-                      key={box.id}
-                      className="absolute font-semibold leading-none whitespace-nowrap overflow-hidden text-ellipsis"
-                      style={{
-                        left: xPx,
-                        top,
-                        maxWidth,
-                        height: 18,
-                        lineHeight: "18px",
-                        background: color,
-                        color: "white",
-                        fontSize: 11,
-                        padding: "0 6px",
-                        borderRadius: 3,
-                        opacity: 0.92,
-                        zIndex: isSelected ? 2 : 1,
-                        transition: "max-width 180ms ease",
-                      }}
-                      title={tooltip}
-                    >
-                      {box.displayLabel}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
-            {/* Playhead */}
-            <div
-              ref={playheadRef}
-              className="absolute top-0 bottom-0 pointer-events-none"
-              style={{
-                width: 2,
-                marginLeft: -1,
-                background: "rgba(255,255,255,0.85)",
-                boxShadow: "0 0 4px rgba(0,0,0,0.6)",
-                transform: "translateX(0)",
-              }}
-            />
+              {/* Playhead */}
+              <div
+                ref={playheadRef}
+                className="absolute top-0 bottom-0 pointer-events-none"
+                style={{
+                  width: 2,
+                  marginLeft: -1,
+                  background: "rgba(255,255,255,0.85)",
+                  boxShadow: "0 0 4px rgba(0,0,0,0.6)",
+                  transform: "translateX(0)",
+                }}
+              />
+            </div>
           </div>
 
-          {/* Time axis (inside the scroll viewport so it widens with zoom) */}
-          <canvas
-            ref={timeAxisRef}
-            onClick={handleTimeAxisClick}
-            className="cursor-pointer block"
-          />
+          {/* Edge fade gradients — purely visual hint that there's more
+              content beyond the viewport. Outside the scroll viewport so
+              they stay anchored to the visible edges, not scrolled. */}
+          {showLeftFade && (
+            <div
+              className="absolute top-0 bottom-0 left-0 w-8 pointer-events-none"
+              style={{
+                background:
+                  "linear-gradient(to right, rgba(0,0,0,0.55), transparent)",
+              }}
+            />
+          )}
+          {showRightFade && (
+            <div
+              className="absolute top-0 bottom-0 right-0 w-8 pointer-events-none"
+              style={{
+                background:
+                  "linear-gradient(to left, rgba(0,0,0,0.55), transparent)",
+              }}
+            />
+          )}
         </div>
       </div>
     );
@@ -1589,7 +1655,3 @@ function ResizeHandles({ x, y, w, h, boxId, specWidthPx, specHeightPx }: ResizeH
     </g>
   );
 }
-
-// Re-export the LaneAssignment type so consumers don't need to dive into
-// `spectrogram-layout` for it.
-export type { LaneAssignment };

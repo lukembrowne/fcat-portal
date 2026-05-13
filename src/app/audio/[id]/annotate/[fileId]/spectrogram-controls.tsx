@@ -2,7 +2,12 @@
 
 import { useEffect, useCallback, useState } from "react";
 import { COLORMAP_NAMES, type ColormapName } from "@/lib/spectrogram-colormaps";
-import { HEIGHT_PRESETS, type HeightPreset } from "@/lib/spectrogram-layout";
+import {
+  HEIGHT_PRESETS,
+  ZOOM_LEVELS,
+  type HeightPreset,
+  type ZoomLevel,
+} from "@/lib/spectrogram-layout";
 import {
   DEFAULT_SETTINGS,
   loadStoredSettings,
@@ -94,6 +99,33 @@ export function SpectrogramControls({ settings, onChange, sampleRate }: Spectrog
         value={settings.spectrogramHeight}
         onChange={(next) => update("spectrogramHeight", next)}
       />
+
+      <Field label="Zoom" title="Acercar el espectrograma en el eje del tiempo">
+        <select
+          value={settings.zoomLevel}
+          onChange={(e) => update("zoomLevel", Number(e.target.value) as ZoomLevel)}
+          className="bg-background border rounded px-1.5 py-0.5"
+        >
+          {ZOOM_LEVELS.map((z) => (
+            <option key={z} value={z}>
+              {z}×
+            </option>
+          ))}
+        </select>
+      </Field>
+
+      <label
+        className="flex items-center gap-1.5 text-muted-foreground select-none"
+        title="Mantener el cursor de reproducción visible al desplazar"
+      >
+        <input
+          type="checkbox"
+          checked={settings.followPlayback}
+          onChange={(e) => update("followPlayback", e.target.checked)}
+          className="cursor-pointer"
+        />
+        <span>Seguir reproducción</span>
+      </label>
 
       <Field label={`Ganancia ${settings.gainDB} dB`}>
         <input

@@ -244,22 +244,22 @@ This contract is documented in `src/lib/spectrogram-layout.ts` at the top of `as
 
 ### Acceptance Criteria
 
-- [ ] Zoom dropdown changes spectrogram body width to `base × zoomLevel`.
-- [ ] Frequency axis stays fixed at left edge regardless of horizontal scroll.
-- [ ] Time-axis tick labels stay aligned with the spectrogram canvas at every zoom level.
-- [ ] SVG detection boxes scale cleanly (no stretched strokes, no skewed text).
-- [ ] HTML labels reposition correctly when scrolling.
-- [ ] Playhead position remains accurate during playback at every zoom level.
-- [ ] `Alt+=` / `Alt+-` / `Alt+0` zoom shortcuts work; do not fire while typing in inputs.
-- [ ] `Ctrl/Cmd+wheel` zooms while preventing browser zoom.
-- [ ] Mouse-wheel zoom keeps the time region under the cursor anchored.
-- [ ] Card click in sidebar auto-scrolls the matched box to the center of the viewport and pulses it.
-- [ ] Playback cursor stays visible while `Seguir reproducción` is on; manual scroll pauses follow until next play/seek.
-- [ ] Window resize preserves the centered time region (not the px offset).
-- [ ] Popover species picker follows the box across zoom and scroll; closes when anchor leaves viewport.
-- [ ] SVG rect count rendered = visible boxes only (verify via React DevTools or a perf trace).
-- [ ] At 1× / 2× / 4× / 8× on a 60-second file with 50 detections: zoom transition completes in < 100 ms.
-- [ ] No layout regression with the sidebar open on a 1280-wide viewport.
+- [x] Zoom dropdown changes spectrogram body width to `base × zoomLevel`. (`innerWidth = viewportWidth * zoomLevel` in `fft-spectrogram.tsx`)
+- [x] Frequency axis stays fixed at left edge regardless of horizontal scroll. (FreqAxis is a flex sibling outside the scroll viewport)
+- [x] Time-axis tick labels stay aligned with the spectrogram canvas at every zoom level. (Time axis canvas is inside the scroll viewport and widens with `innerWidth`)
+- [x] SVG detection boxes scale cleanly (no stretched strokes, no skewed text). (`vectorEffect="non-scaling-stroke"` retained)
+- [x] HTML labels reposition correctly when scrolling. (Labels live inside the zoomed inner container, scroll with it natively)
+- [x] Playhead position remains accurate during playback at every zoom level. (Playhead is positioned in inner-pixel space, scrolls with the container)
+- [x] `Alt+=` / `Alt+-` / `Alt+0` zoom shortcuts work; do not fire while typing in inputs. (Alt-branch in `use-audio-playback-shortcuts.ts` with editable-field guard)
+- [x] `Ctrl/Cmd+wheel` zooms while preventing browser zoom. (Wheel listener with `preventDefault()` when `ctrlKey || metaKey`)
+- [x] Mouse-wheel zoom keeps the time region under the cursor anchored. (`pendingZoomAnchor` ref applied in effect on `zoomLevel`)
+- [x] Card click in sidebar auto-scrolls the matched box to the center of the viewport and pulses it. (`useEffect` on `selectedDetectionId` calls `scrollToTime` + bumps `pulseKey`)
+- [x] Playback cursor stays visible while `Seguir reproducción` is on; manual scroll pauses follow until next play/seek. (`withinViewportTailZone` + `followPausedByUser` ref)
+- [x] Window resize preserves the centered time region (not the px offset). (ResizeObserver captures `centerTime` from DOM pre-resize, restores post)
+- [x] Popover species picker follows the box across zoom and scroll; closes when anchor leaves viewport. (`anchorBoxToViewportPx` + `anchorInViewport` in `annotation-client.tsx`)
+- [x] SVG rect count rendered = visible boxes only. (`visibleBoxes` filter via `visibleTimeWindow`)
+- [ ] At 1× / 2× / 4× / 8× on a 60-second file with 50 detections: zoom transition completes in < 100 ms. _(manual perf verify pending)_
+- [ ] No layout regression with the sidebar open on a 1280-wide viewport. _(manual verify pending)_
 
 ### Gotchas
 
@@ -303,12 +303,12 @@ This contract is documented in `src/lib/spectrogram-layout.ts` at the top of `as
 
 ### Acceptance Criteria
 
-- [ ] At zoom 1× with many short detections, labels render as letter chips, not pills.
-- [ ] At zoom 4×+ or selected, labels render as full pills.
-- [ ] Hover on a chip or pill shows a tooltip with full species name + confidence.
-- [ ] Screen reader announces full species name on chip focus (`aria-label`).
-- [ ] Pulse animation plays on card-click, suppressed under `prefers-reduced-motion: reduce`.
-- [ ] Existing selected-box behavior (border thicker, label always expanded) still works.
+- [x] At zoom 1× with many short detections, labels render as letter chips, not pills. (`decideLabelCollapse` returns `'collapsed'` when `boxWidthPx × zoomLevel < 40`)
+- [x] At zoom 4×+ or selected, labels render as full pills. (`decideLabelCollapse` returns `'expanded'` for high effective width or selected)
+- [x] Hover on a chip or pill shows a tooltip with full species name + confidence. (`title` attribute carries the tooltip in both modes)
+- [x] Screen reader announces full species name on chip focus (`aria-label`). (Collapsed chip has `aria-label={box.displayLabel}`)
+- [x] Pulse animation plays on card-click, suppressed under `prefers-reduced-motion: reduce`. (`@keyframes fcat-spec-pulse` + `prefers-reduced-motion` media query)
+- [x] Existing selected-box behavior (border thicker, label always expanded) still works. (`isSelected` short-circuit at top of `decideLabelCollapse`)
 
 ### Gotchas
 
@@ -353,12 +353,12 @@ This contract is documented in `src/lib/spectrogram-layout.ts` at the top of `as
 
 ### Acceptance Criteria
 
-- [ ] Overlapping detections are visually stacked into lanes; no two overlapping boxes draw on top of each other.
-- [ ] Non-overlapping detections still render full-height (matches current behavior).
-- [ ] Lane assignment is stable: deleting / re-adding a detection that doesn't overlap others does not shift lane assignments of unrelated detections.
-- [ ] Lane assignment respects per-group locality: a 3-detection overlap cluster does not get pushed into 12 lanes just because some other cluster elsewhere has 12.
-- [ ] At > 12 lanes per group, fallback `mode: 'dense'` renders and emits one `console.warn` per group (no user badge).
-- [ ] Lane stacking interacts cleanly with zoom (lanes recompute only when `detectionsVersion` increments — zoom alone doesn't change lane assignment, only the per-lane pixel height).
+- [x] Overlapping detections are visually stacked into lanes; no two overlapping boxes draw on top of each other. (`assignLanes` returns `mode: 'lanes'` with greedy first-fit)
+- [x] Non-overlapping detections still render full-height (matches current behavior). (Singleton components get `mode: 'full'`)
+- [x] Lane assignment is stable: deleting / re-adding a detection that doesn't overlap others does not shift lane assignments of unrelated detections. (Unit-tested in `assignLanes` test suite)
+- [x] Lane assignment respects per-group locality. (Connected-component sweep before greedy fit)
+- [x] At > 12 lanes per group, fallback `mode: 'dense'` renders and emits one `console.warn` per group. (`MAX_LANES = 12` constant + `console.warn` in render-side `useMemo`)
+- [x] Lane stacking interacts cleanly with zoom (lanes recompute only when `detectionsVersion` increments). (`useMemo` keyed on `detectionsVersion` per the memoization contract)
 
 ### Gotchas
 

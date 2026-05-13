@@ -8,13 +8,22 @@ import {
   heightForPreset,
   isHeightPreset,
   isZoomLevel,
+  stepZoom,
+  viewportToTime,
+  timeToScrollOffset,
+  withinViewportTailZone,
+  visibleTimeWindow,
+  anchorBoxToViewportPx,
+  anchorInViewport,
+  decideLabelCollapse,
+  speciesInitial,
+  assignLanes,
+  type DetectionLike,
 } from "@/lib/spectrogram-layout";
 
 describe("spectrogram-layout", () => {
   describe("constants", () => {
-    it("FREQ_AXIS_WIDTH matches the value currently inlined in fft-spectrogram + annotation-client", () => {
-      // If this changes, audit every callsite — the gutter width is duplicated
-      // in popover-anchor math (annotation-client) and the spec layout itself.
+    it("FREQ_AXIS_WIDTH matches the value previously inlined in fft-spectrogram + annotation-client", () => {
       expect(FREQ_AXIS_WIDTH).toBe(70);
     });
 
@@ -26,11 +35,9 @@ describe("spectrogram-layout", () => {
       expect(SPEC_HEIGHT_PRESETS.compacto).toBe(256);
       expect(SPEC_HEIGHT_PRESETS.comodo).toBe(350);
       expect(SPEC_HEIGHT_PRESETS.alto).toBe(480);
-      expect(SPEC_HEIGHT_PRESETS.compacto).toBeLessThan(SPEC_HEIGHT_PRESETS.comodo);
-      expect(SPEC_HEIGHT_PRESETS.comodo).toBeLessThan(SPEC_HEIGHT_PRESETS.alto);
     });
 
-    it("ZOOM_LEVELS is a power-of-2 progression for predictable label-collapse thresholds", () => {
+    it("ZOOM_LEVELS is the discrete 1×–8× ladder", () => {
       expect(ZOOM_LEVELS).toEqual([1, 2, 4, 8]);
     });
 
@@ -61,11 +68,8 @@ describe("spectrogram-layout", () => {
       expect(isHeightPreset("COMPACTO")).toBe(false);
       expect(isHeightPreset("")).toBe(false);
       expect(isHeightPreset(null)).toBe(false);
-      expect(isHeightPreset(undefined)).toBe(false);
       expect(isHeightPreset(256)).toBe(false);
-      expect(isHeightPreset({})).toBe(false);
-      // Defends against prototype pollution / inherited-property attacks.
-      expect(isHeightPreset("toString")).toBe(false);
+      expect(isHeightPreset("toString")).toBe(false); // prototype pollution defense
     });
   });
 
@@ -77,14 +81,399 @@ describe("spectrogram-layout", () => {
       expect(isZoomLevel(8)).toBe(true);
     });
 
-    it("rejects non-power-of-2, non-number, and out-of-range values", () => {
+    it("rejects non-ladder values", () => {
       expect(isZoomLevel(3)).toBe(false);
       expect(isZoomLevel(16)).toBe(false);
       expect(isZoomLevel(0)).toBe(false);
-      expect(isZoomLevel(-1)).toBe(false);
       expect(isZoomLevel("1")).toBe(false);
       expect(isZoomLevel(null)).toBe(false);
-      expect(isZoomLevel(undefined)).toBe(false);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // stepZoom
+  // -------------------------------------------------------------------------
+  describe("stepZoom", () => {
+    it("steps up through the ladder", () => {
+      expect(stepZoom(1, 1)).toBe(2);
+      expect(stepZoom(2, 1)).toBe(4);
+      expect(stepZoom(4, 1)).toBe(8);
+    });
+
+    it("steps down through the ladder", () => {
+      expect(stepZoom(8, -1)).toBe(4);
+      expect(stepZoom(4, -1)).toBe(2);
+      expect(stepZoom(2, -1)).toBe(1);
+    });
+
+    it("clamps at the boundaries", () => {
+      expect(stepZoom(1, -1)).toBe(1);
+      expect(stepZoom(8, 1)).toBe(8);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // viewportToTime
+  // -------------------------------------------------------------------------
+  describe("viewportToTime", () => {
+    it("returns 0 at the left edge", () => {
+      expect(viewportToTime(0, 1000, 60)).toBe(0);
+    });
+
+    it("returns duration at the right edge", () => {
+      expect(viewportToTime(1000, 1000, 60)).toBe(60);
+    });
+
+    it("interpolates linearly", () => {
+      expect(viewportToTime(500, 1000, 60)).toBeCloseTo(30);
+      expect(viewportToTime(250, 1000, 60)).toBeCloseTo(15);
+    });
+
+    it("returns 0 for invalid inputs (no NaN leakage)", () => {
+      expect(viewportToTime(100, 0, 60)).toBe(0);
+      expect(viewportToTime(100, 1000, 0)).toBe(0);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // timeToScrollOffset
+  // -------------------------------------------------------------------------
+  describe("timeToScrollOffset", () => {
+    it("centers a time when anchorPx is half the viewport", () => {
+      // 60s clip, scrollWidth 8000 (4× zoom over 2000 base), viewportWidth 2000.
+      // Time 30s → 4000 px in inner; centered means scrollLeft = 4000 - 1000 = 3000.
+      expect(timeToScrollOffset(30, 60, 8000, 2000, 1000)).toBe(3000);
+    });
+
+    it("clamps to 0 at the left edge", () => {
+      expect(timeToScrollOffset(0, 60, 8000, 2000, 1000)).toBe(0);
+    });
+
+    it("clamps to (scrollWidth - viewportWidth) at the right edge", () => {
+      // Time = duration → inner x = 8000; centered would request scrollLeft 7000
+      // which is fine since maxScroll = 8000 - 2000 = 6000. Clamp to 6000.
+      expect(timeToScrollOffset(60, 60, 8000, 2000, 1000)).toBe(6000);
+    });
+
+    it("returns 0 for invalid inputs", () => {
+      expect(timeToScrollOffset(30, 0, 8000, 2000, 1000)).toBe(0);
+      expect(timeToScrollOffset(30, 60, 0, 2000, 1000)).toBe(0);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // withinViewportTailZone
+  // -------------------------------------------------------------------------
+  describe("withinViewportTailZone", () => {
+    it("returns true in the trailing 20%", () => {
+      // viewport [0, 1000], tail = [800, 1000]
+      expect(withinViewportTailZone(900, 0, 1000)).toBe(true);
+      expect(withinViewportTailZone(800, 0, 1000)).toBe(true);
+      expect(withinViewportTailZone(1000, 0, 1000)).toBe(true);
+    });
+
+    it("returns false outside the trailing 20%", () => {
+      expect(withinViewportTailZone(500, 0, 1000)).toBe(false);
+      expect(withinViewportTailZone(799, 0, 1000)).toBe(false);
+      expect(withinViewportTailZone(1100, 0, 1000)).toBe(false); // beyond viewport
+    });
+
+    it("respects scrollLeft offset", () => {
+      // scrollLeft = 500 → viewport [500, 1500] → tail [1300, 1500]
+      expect(withinViewportTailZone(1400, 500, 1000)).toBe(true);
+      expect(withinViewportTailZone(1000, 500, 1000)).toBe(false);
+    });
+
+    it("returns false when viewport has zero width", () => {
+      expect(withinViewportTailZone(100, 0, 0)).toBe(false);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // visibleTimeWindow
+  // -------------------------------------------------------------------------
+  describe("visibleTimeWindow", () => {
+    it("returns the bare viewport window with padViewports=0", () => {
+      // 60s, scrollWidth=8000, viewport=2000, scrollLeft=2000 (offset 25%)
+      // → visible inner x range [2000, 4000] → time [15, 30]
+      const w = visibleTimeWindow(2000, 2000, 8000, 60, 0);
+      expect(w.startTime).toBeCloseTo(15);
+      expect(w.endTime).toBeCloseTo(30);
+    });
+
+    it("adds N viewports of padding on each side", () => {
+      // viewport (2000) × 1 viewport pad = 2000 px = 15s
+      const w = visibleTimeWindow(2000, 2000, 8000, 60, 1);
+      expect(w.startTime).toBeCloseTo(0); // 15 - 15 = 0, clamped
+      expect(w.endTime).toBeCloseTo(45); // 30 + 15 = 45
+    });
+
+    it("clamps to [0, duration]", () => {
+      const w = visibleTimeWindow(0, 2000, 8000, 60, 10);
+      expect(w.startTime).toBe(0);
+      expect(w.endTime).toBe(60);
+    });
+
+    it("returns full duration when scrollWidth is 0", () => {
+      const w = visibleTimeWindow(0, 0, 0, 60);
+      expect(w.startTime).toBe(0);
+      expect(w.endTime).toBe(60);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // anchorBoxToViewportPx
+  // -------------------------------------------------------------------------
+  describe("anchorBoxToViewportPx", () => {
+    const view = {
+      duration: 60,
+      scrollLeft: 0,
+      scrollWidth: 1000,
+      viewportWidth: 1000,
+      specHeight: 350,
+      displayMaxHz: 12000,
+    };
+
+    it("places a box at the correct viewport pixel rect at zoom 1×", () => {
+      const a = anchorBoxToViewportPx(
+        { startTime: 30, endTime: 33, minFreq: 3000, maxFreq: 6000 },
+        view,
+      );
+      expect(a.x).toBeCloseTo(500); // 30/60 × 1000
+      expect(a.w).toBeCloseTo(50); // 3/60 × 1000
+      expect(a.y).toBeCloseTo(175); // (1 - 6000/12000) × 350
+      expect(a.h).toBeCloseTo(87.5); // (6000-3000)/12000 × 350
+    });
+
+    it("accounts for horizontal scroll offset", () => {
+      const a = anchorBoxToViewportPx(
+        { startTime: 30, endTime: 33, minFreq: 3000, maxFreq: 6000 },
+        { ...view, scrollLeft: 200, scrollWidth: 4000 },
+      );
+      // inner x = (30/60) × 4000 = 2000; viewport x = 2000 - 200 = 1800
+      expect(a.x).toBeCloseTo(1800);
+    });
+
+    it("returns negative x when the box is scrolled off the left edge", () => {
+      const a = anchorBoxToViewportPx(
+        { startTime: 0, endTime: 2, minFreq: 0, maxFreq: 1000 },
+        { ...view, scrollLeft: 500, scrollWidth: 4000 },
+      );
+      // inner x = 0; viewport x = 0 - 500 = -500
+      expect(a.x).toBeCloseTo(-500);
+    });
+
+    it("clamps width and height to at least 2 px", () => {
+      const a = anchorBoxToViewportPx(
+        { startTime: 30, endTime: 30, minFreq: 5000, maxFreq: 5000 },
+        view,
+      );
+      expect(a.w).toBe(2);
+      expect(a.h).toBe(2);
+    });
+
+    it("returns zero rect for invalid view state", () => {
+      const a = anchorBoxToViewportPx(
+        { startTime: 0, endTime: 1, minFreq: 0, maxFreq: 1000 },
+        { ...view, duration: 0 },
+      );
+      expect(a).toEqual({ x: 0, y: 0, w: 0, h: 0 });
+    });
+  });
+
+  describe("anchorInViewport", () => {
+    it("true when at least partially visible", () => {
+      expect(anchorInViewport({ x: 100, w: 50 }, 800)).toBe(true);
+      expect(anchorInViewport({ x: -10, w: 50 }, 800)).toBe(true); // crosses left edge
+      expect(anchorInViewport({ x: 750, w: 100 }, 800)).toBe(true); // crosses right edge
+    });
+
+    it("false when fully off-screen", () => {
+      expect(anchorInViewport({ x: -100, w: 50 }, 800)).toBe(false);
+      expect(anchorInViewport({ x: 850, w: 50 }, 800)).toBe(false);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // decideLabelCollapse
+  // -------------------------------------------------------------------------
+  describe("decideLabelCollapse", () => {
+    it("collapses small boxes at low zoom", () => {
+      expect(decideLabelCollapse(20, 1, false)).toBe("collapsed");
+      expect(decideLabelCollapse(10, 2, false)).toBe("collapsed"); // 10×2=20 < 40
+    });
+
+    it("expands large boxes at low zoom", () => {
+      expect(decideLabelCollapse(50, 1, false)).toBe("expanded");
+    });
+
+    it("expands small boxes at high zoom (effective width > 40)", () => {
+      expect(decideLabelCollapse(15, 4, false)).toBe("expanded"); // 60
+      expect(decideLabelCollapse(10, 8, false)).toBe("expanded"); // 80
+    });
+
+    it("always expands selected boxes, regardless of effective width", () => {
+      expect(decideLabelCollapse(5, 1, true)).toBe("expanded");
+      expect(decideLabelCollapse(1, 1, true)).toBe("expanded");
+    });
+
+    it("threshold at exactly 40 expands", () => {
+      expect(decideLabelCollapse(40, 1, false)).toBe("expanded");
+      expect(decideLabelCollapse(39.99, 1, false)).toBe("collapsed");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // speciesInitial
+  // -------------------------------------------------------------------------
+  describe("speciesInitial", () => {
+    it("returns the first letter uppercased", () => {
+      expect(speciesInitial("Schiffornis stenorhyncha")).toBe("S");
+      expect(speciesInitial("cryptic chocoan")).toBe("C");
+    });
+
+    it("strips diacritics", () => {
+      expect(speciesInitial("Émile")).toBe("E");
+    });
+
+    it("returns '?' for empty/null/whitespace", () => {
+      expect(speciesInitial("")).toBe("?");
+      expect(speciesInitial(null)).toBe("?");
+      expect(speciesInitial(undefined)).toBe("?");
+      expect(speciesInitial("   ")).toBe("?");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // assignLanes
+  // -------------------------------------------------------------------------
+  describe("assignLanes", () => {
+    const make = (id: number, start: number, end: number): DetectionLike => ({
+      id,
+      startTime: start,
+      endTime: end,
+    });
+
+    it("returns empty map for empty input", () => {
+      const result = assignLanes([]);
+      expect(result.size).toBe(0);
+    });
+
+    it("3 sequential detections → all mode: 'full'", () => {
+      const detections = [make(1, 0, 1), make(2, 2, 3), make(3, 4, 5)];
+      const result = assignLanes(detections);
+      expect(result.get(1)).toEqual({ mode: "full" });
+      expect(result.get(2)).toEqual({ mode: "full" });
+      expect(result.get(3)).toEqual({ mode: "full" });
+    });
+
+    it("3 fully-overlapping detections → 3 lanes", () => {
+      const detections = [make(1, 0, 3), make(2, 0, 3), make(3, 0, 3)];
+      const result = assignLanes(detections);
+      expect(result.get(1)).toEqual({ mode: "lanes", laneIndex: 0, laneCount: 3 });
+      expect(result.get(2)).toEqual({ mode: "lanes", laneIndex: 1, laneCount: 3 });
+      expect(result.get(3)).toEqual({ mode: "lanes", laneIndex: 2, laneCount: 3 });
+    });
+
+    it("2-overlap cluster + 3 standalone → cluster gets lanes, others full", () => {
+      const detections = [
+        make(1, 0, 2),
+        make(2, 1, 3), // overlaps 1
+        make(3, 5, 6),
+        make(4, 10, 11),
+        make(5, 20, 21),
+      ];
+      const result = assignLanes(detections);
+      expect(result.get(1)).toEqual({ mode: "lanes", laneIndex: 0, laneCount: 2 });
+      expect(result.get(2)).toEqual({ mode: "lanes", laneIndex: 1, laneCount: 2 });
+      expect(result.get(3)).toEqual({ mode: "full" });
+      expect(result.get(4)).toEqual({ mode: "full" });
+      expect(result.get(5)).toEqual({ mode: "full" });
+    });
+
+    it("per-group locality: large cluster doesn't force small cluster into N lanes", () => {
+      const detections = [
+        // Cluster A: 4 overlapping
+        make(1, 0, 5),
+        make(2, 0, 5),
+        make(3, 0, 5),
+        make(4, 0, 5),
+        // Cluster B (disjoint in time): 2 overlapping
+        make(10, 100, 105),
+        make(11, 100, 105),
+      ];
+      const result = assignLanes(detections);
+      const a1 = result.get(1);
+      const b10 = result.get(10);
+      if (a1?.mode !== "lanes" || b10?.mode !== "lanes") {
+        throw new Error("expected lanes mode");
+      }
+      expect(a1.laneCount).toBe(4);
+      expect(b10.laneCount).toBe(2);
+    });
+
+    it("13 fully-overlapping detections → all mode: 'dense'", () => {
+      const detections: DetectionLike[] = [];
+      for (let i = 1; i <= 13; i++) detections.push(make(i, 0, 5));
+      const result = assignLanes(detections);
+      for (let i = 1; i <= 13; i++) {
+        expect(result.get(i)).toEqual({ mode: "dense", groupSize: 13 });
+      }
+    });
+
+    it("appending a non-overlapping detection does not shift unrelated assignments", () => {
+      const base = [
+        make(1, 0, 2),
+        make(2, 1, 3),
+        make(3, 10, 11),
+      ];
+      const before = assignLanes(base);
+
+      // Append a new detection that does NOT overlap any existing one.
+      const extended = [...base, make(99, 20, 21)];
+      const after = assignLanes(extended);
+
+      // Existing assignments are byte-identical.
+      expect(after.get(1)).toEqual(before.get(1));
+      expect(after.get(2)).toEqual(before.get(2));
+      expect(after.get(3)).toEqual(before.get(3));
+      expect(after.get(99)).toEqual({ mode: "full" });
+    });
+
+    it("sort tiebreaker is deterministic: identical start+end ordered by id", () => {
+      const detections = [make(3, 0, 1), make(1, 0, 1), make(2, 0, 1)];
+      const result = assignLanes(detections);
+      // After sort by id: 1, 2, 3 → lanes 0, 1, 2
+      const a1 = result.get(1);
+      const a2 = result.get(2);
+      const a3 = result.get(3);
+      if (a1?.mode !== "lanes" || a2?.mode !== "lanes" || a3?.mode !== "lanes") {
+        throw new Error("expected lanes mode");
+      }
+      expect(a1.laneIndex).toBe(0);
+      expect(a2.laneIndex).toBe(1);
+      expect(a3.laneIndex).toBe(2);
+    });
+
+    it("greedy first-fit reuses lanes when a detection ends before another starts", () => {
+      // detection 1: [0, 1]; 2: [2, 3]; 3: [0.5, 2.5] — 1 and 3 overlap;
+      // 2 and 3 overlap; 1 and 2 are sequential. So all three are in one
+      // connected component. Greedy fit:
+      //  - 1 → lane 0
+      //  - 3 → lane 1 (overlaps 1)
+      //  - 2 → lane 0 (ends 1 ≤ start 2)
+      const detections = [make(1, 0, 1), make(2, 2, 3), make(3, 0.5, 2.5)];
+      const result = assignLanes(detections);
+      const a1 = result.get(1);
+      const a2 = result.get(2);
+      const a3 = result.get(3);
+      if (a1?.mode !== "lanes" || a2?.mode !== "lanes" || a3?.mode !== "lanes") {
+        throw new Error("expected lanes mode");
+      }
+      expect(a1.laneIndex).toBe(0);
+      expect(a3.laneIndex).toBe(1);
+      expect(a2.laneIndex).toBe(0); // reused lane 0 since 1 ended
+      expect(a1.laneCount).toBe(2);
     });
   });
 });

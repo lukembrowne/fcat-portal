@@ -25,6 +25,16 @@ import {
   TIME_AXIS_HEIGHT,
   SPEC_HEIGHT_PRESETS,
   type HeightPreset,
+  type ZoomLevel,
+  stepZoom,
+  viewportToTime,
+  timeToScrollOffset,
+  withinViewportTailZone,
+  visibleTimeWindow,
+  decideLabelCollapse,
+  speciesInitial,
+  assignLanes,
+  type LaneAssignment,
 } from "@/lib/spectrogram-layout";
 import { Button } from "@/components/ui/button";
 
@@ -34,6 +44,7 @@ const HANDLE_PX = 8;
 const HANDLE_HIT_PX = 18;
 const TIME_TICK_STEPS = [0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300];
 const FREQ_TICK_STEPS = [50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000];
+const SCROLL_STEP_FRACTION = 0.25;
 
 type LoadStage = "idle" | "fetching" | "computing" | "ready" | "error";
 type ResizeHandle = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
@@ -92,6 +103,24 @@ export interface SpectrogramMethods {
   isLooping: () => boolean;
   getDuration: () => number;
   isPlaying: () => boolean;
+  /** Smooth-scroll the viewport so `time` lands at the centre. Respects
+   *  `prefers-reduced-motion`. */
+  scrollToTime: (time: number) => void;
+  /** Step zoom up / down / reset (with cursor anchor at viewport centre). */
+  zoomIn: () => void;
+  zoomOut: () => void;
+  zoomReset: () => void;
+  /** Scroll by ±25% of the viewport width. */
+  scrollBy: (direction: -1 | 1) => void;
+}
+
+export interface SpecMeasurement {
+  /** Width of the scroll-viewport (excluding freq-axis gutter). */
+  viewportWidth: number;
+  /** Total inner-container width = baseWidth × zoomLevel. */
+  scrollWidth: number;
+  /** Current spec-area pixel height (resolved from `HeightPreset`). */
+  specHeight: number;
 }
 
 interface FftSpectrogramProps {
@@ -106,19 +135,38 @@ interface FftSpectrogramProps {
   colormap: ColormapName;
   /** Spec-area pixel height, resolved from a `HeightPreset` (Compacto /
    *  Cómodo / Alto). Parent applies the narrow-viewport mobile cap before
-   *  passing this in. Defaults to `"comodo"` so callers that don't yet wire
-   *  up the toggle still get the new default. */
+   *  passing this in. */
   height?: HeightPreset;
+  /** Discrete time-axis zoom; 1× = base width, 8× = inner is 8× viewport. */
+  zoomLevel?: ZoomLevel;
+  /** When true, the viewport auto-scrolls to keep the playhead visible
+   *  during playback. User-initiated scroll temporarily pauses follow until
+   *  the next seek / playSelection. */
+  followPlayback?: boolean;
+  /** Monotonic counter; increment in the parent whenever the detection set
+   *  mutates so `assignLanes()` + visible-window memo can invalidate without
+   *  taking a dependency on the `boxes` array reference (which can change
+   *  every render). */
+  detectionsVersion?: number;
+  /** Monotonic counter; increment to retrigger the pulse animation on the
+   *  currently-selected box (used by card-click in the sidebar). */
+  pulseKey?: number;
   onBoxClick?: (box: AudioBoxData) => void;
   onDrawComplete?: (box: BoxRect) => void;
   onBoxResized?: (boxId: number, box: BoxRect) => void;
   onReady?: (meta: { duration: number; sampleRate: number }) => void;
   onTimeUpdate?: (currentTime: number) => void;
   onPlayPause?: (playing: boolean) => void;
-  /** Fires whenever the spec area is laid out or the container resizes.
-   *  The parent uses this with `displayMaxHz` and the selected box's
-   *  time/freq rect to position an absolute popover anchor over the box. */
-  onSpecSizeChange?: (size: { width: number; height: number }) => void;
+  /** Fires on layout / resize / zoom change. The parent uses this with
+   *  `onScrollChange` to compute popover anchor positions. */
+  onMeasurementsChange?: (m: SpecMeasurement) => void;
+  /** Fires on viewport scroll (rAF-batched). The parent recomputes the
+   *  popover anchor against this `scrollLeft`. */
+  onScrollChange?: (scrollLeft: number) => void;
+  /** Fires when the spectrogram itself wants to step the zoom (wheel or
+   *  imperative method). Parent updates the settings; the spectrogram
+   *  applies a pending cursor anchor in an effect on `zoomLevel`. */
+  onZoomChange?: (next: ZoomLevel) => void;
 }
 
 interface BoxRect {
@@ -167,6 +215,11 @@ function normalizeRect(a: number, b: number) {
   return [Math.min(a, b), Math.max(a, b)] as const;
 }
 
+function prefersReducedMotion(): boolean {
+  if (typeof window === "undefined" || !window.matchMedia) return false;
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
 export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps>(
   function FftSpectrogram(props, ref) {
     const {
@@ -180,13 +233,19 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
       fftSize,
       colormap,
       height = "comodo",
+      zoomLevel = 1,
+      followPlayback = true,
+      detectionsVersion = 0,
+      pulseKey = 0,
       onBoxClick,
       onDrawComplete,
       onBoxResized,
       onReady,
       onTimeUpdate,
       onPlayPause,
-      onSpecSizeChange,
+      onMeasurementsChange,
+      onScrollChange,
+      onZoomChange,
     } = props;
 
     // Resolve the height preset to pixels. All canvas sizing, layout, and
@@ -194,6 +253,7 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
     const specHeight = SPEC_HEIGHT_PRESETS[height];
 
     const containerRef = useRef<HTMLDivElement>(null);
+    const scrollViewportRef = useRef<HTMLDivElement>(null);
     const specCanvasRef = useRef<HTMLCanvasElement>(null);
     const freqAxisRef = useRef<HTMLCanvasElement>(null);
     const timeAxisRef = useRef<HTMLCanvasElement>(null);
@@ -206,15 +266,37 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
     const loopRef = useRef(false);
     const suppressNextClickRef = useRef(false);
 
+    // Ref counter (not boolean) — robust against overlapping programmatic
+    // scrolls (e.g. card-click during a smooth scroll). Per Kieran review.
+    const programmaticScrollDepth = useRef(0);
+    // Set when the user manually scrolls during playback; cleared on the next
+    // seek / playSelection / play. While set, follow-mode auto-scroll is
+    // paused.
+    const followPausedByUser = useRef(false);
+    // Anchor stashed at zoom-request time. Applied in an effect on
+    // `zoomLevel` so the same time stays under the same viewport x.
+    const pendingZoomAnchor = useRef<{ time: number; anchorPx: number } | null>(
+      null,
+    );
+
     const [stage, setStage] = useState<LoadStage>("idle");
     const [error, setError] = useState<string | null>(null);
     const [decoded, setDecoded] = useState<DecodedAudio | null>(null);
     const [magnitudes, setMagnitudes] = useState<Magnitudes | null>(null);
-    const [specSize, setSpecSize] = useState({ width: 0, height: specHeight });
+    const [viewportWidth, setViewportWidth] = useState(0);
+    const [scrollLeft, setScrollLeft] = useState(0);
     const [hoverBoxId, setHoverBoxId] = useState<number | null>(null);
     const [previewRect, setPreviewRect] = useState<BoxRect | null>(null);
     const [dragOverride, setDragOverride] = useState<{ boxId: number; rect: BoxRect } | null>(null);
     const dragRef = useRef<DragState>({ kind: "idle" });
+
+    // Inner-container width is the viewport width × zoom level. SVG `viewBox`
+    // and label positioning both work in inner-pixel space.
+    const innerWidth = viewportWidth * zoomLevel;
+    const specSize = useMemo(
+      () => ({ width: innerWidth, height: specHeight }),
+      [innerWidth, specHeight],
+    );
 
     // Latest callback refs to avoid stale closures in pointer handlers.
     const onDrawCompleteRef = useRef(onDrawComplete);
@@ -233,9 +315,6 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
     // ---- Decode pipeline ----------------------------------------------------
     useEffect(() => {
       let cancelled = false;
-      // Reset upfront so users don't see the previous file's spectrogram
-      // while the new one loads. The React 19 rule against setState-in-effect
-      // is overly cautious for this common async-loading pattern.
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setStage("fetching");
       setError(null);
@@ -265,9 +344,7 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
     useEffect(() => {
       if (!decoded) return;
       let cancelled = false;
-      // stage was already set to "computing" by the decode .then()
 
-      // Defer to the next tick so the spinner can render.
       const id = setTimeout(() => {
         if (cancelled) return;
         try {
@@ -296,6 +373,11 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
     }, [decoded, fftSize]);
 
     // ---- Render to spec canvas ---------------------------------------------
+    // The spec canvas internal bitmap is sized to the *viewport* width (DPR-
+    // scaled) — we then CSS-stretch it across the full inner width via the
+    // `width: 100%` style. Beyond ~4× this loses pixel fidelity; documented
+    // tradeoff (`docs/plans/.../zoom-density-plan.md` Cross-cutting → CSS
+    // scaling vs FFT recompute).
     useEffect(() => {
       if (!magnitudes || !specCanvasRef.current || specSize.width === 0) return;
 
@@ -342,9 +424,6 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
     useEffect(() => {
       const canvas = freqAxisRef.current;
       if (!canvas) return;
-      // Own the sizing here so the bitmap and DPR transform are fresh on every
-      // run — including the post-mount run after the resize observer first
-      // publishes a non-zero specSize.
       sizeCanvas(canvas, FREQ_AXIS_WIDTH, specHeight);
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
@@ -370,17 +449,21 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
         ctx.stroke();
         ctx.fillText(formatHz(hz), FREQ_AXIS_WIDTH - 6, y);
       }
-    }, [displayMaxHz, specSize.height]);
+    }, [displayMaxHz, specHeight]);
 
     // ---- Time axis ----------------------------------------------------------
+    // Sized to the full inner width and re-draws on zoom. Tick density
+    // targets ~80 px between labels at every zoom level so the axis stays
+    // readable.
     useEffect(() => {
       const canvas = timeAxisRef.current;
-      if (!canvas || specSize.width === 0 || duration === 0) return;
+      if (!canvas || innerWidth === 0 || duration === 0) return;
+      sizeCanvas(canvas, innerWidth, TIME_AXIS_HEIGHT);
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
-      ctx.clearRect(0, 0, specSize.width, TIME_AXIS_HEIGHT);
+      ctx.clearRect(0, 0, innerWidth, TIME_AXIS_HEIGHT);
       ctx.fillStyle = "#0a0a0a";
-      ctx.fillRect(0, 0, specSize.width, TIME_AXIS_HEIGHT);
+      ctx.fillRect(0, 0, innerWidth, TIME_AXIS_HEIGHT);
       ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
       ctx.fillStyle = "#d4d4d8";
       ctx.strokeStyle = "#3f3f46";
@@ -388,45 +471,161 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
 
-      const secPerPx = duration / specSize.width;
+      const secPerPx = duration / innerWidth;
       const step = pickTickStep(secPerPx, 80, TIME_TICK_STEPS);
       for (let t = 0; t <= duration + 0.001; t += step) {
-        const x = (t / duration) * specSize.width;
-        if (x < 12 || x > specSize.width - 12) continue;
+        const x = (t / duration) * innerWidth;
+        if (x < 12 || x > innerWidth - 12) continue;
         ctx.beginPath();
         ctx.moveTo(x, 0);
         ctx.lineTo(x, 4);
         ctx.stroke();
         ctx.fillText(formatSeconds(t), x, TIME_AXIS_HEIGHT / 2 + 2);
       }
-    }, [duration, specSize.width]);
+    }, [duration, innerWidth]);
 
     // ---- Resize observer ----------------------------------------------------
+    // Watches the scroll viewport (NOT the outer container) for its
+    // `clientWidth`. The freq-axis is outside the scroll viewport so its
+    // width never participates in this measurement.
     useEffect(() => {
-      const container = containerRef.current;
-      if (!container) return;
+      const viewport = scrollViewportRef.current;
+      if (!viewport) return;
 
       const apply = () => {
-        const cssW = Math.max(0, container.clientWidth - FREQ_AXIS_WIDTH);
-        if (specCanvasRef.current) sizeCanvas(specCanvasRef.current, cssW, specHeight);
-        if (timeAxisRef.current) sizeCanvas(timeAxisRef.current, cssW, TIME_AXIS_HEIGHT);
-        // freq-axis canvas sizes itself in its own effect (depends on specSize.height)
-        setSpecSize({ width: cssW, height: specHeight });
+        const cssW = Math.max(0, viewport.clientWidth);
+        const newInner = cssW * zoomLevel;
+        // Preserve the centered time region across resize. Computed from the
+        // pre-resize state read directly from the DOM.
+        const prevInner = viewport.scrollWidth;
+        const prevScroll = viewport.scrollLeft;
+        const prevViewport = viewport.clientWidth;
+        const centerTime =
+          prevInner > 0 && duration > 0
+            ? ((prevScroll + prevViewport / 2) / prevInner) * duration
+            : 0;
+
+        if (specCanvasRef.current) sizeCanvas(specCanvasRef.current, newInner, specHeight);
+        if (timeAxisRef.current) sizeCanvas(timeAxisRef.current, newInner, TIME_AXIS_HEIGHT);
+        setViewportWidth(cssW);
+
+        if (duration > 0 && prevInner > 0 && newInner > 0) {
+          // Schedule scroll restore after the inner container width updates
+          // (next frame). Counts as programmatic.
+          programmaticScrollDepth.current++;
+          requestAnimationFrame(() => {
+            const v = scrollViewportRef.current;
+            if (v) {
+              v.scrollLeft = timeToScrollOffset(
+                centerTime,
+                duration,
+                v.scrollWidth,
+                v.clientWidth,
+                v.clientWidth / 2,
+              );
+            }
+            requestAnimationFrame(() => {
+              programmaticScrollDepth.current = Math.max(
+                0,
+                programmaticScrollDepth.current - 1,
+              );
+            });
+          });
+        }
       };
       apply();
 
       const ro = new ResizeObserver(apply);
-      ro.observe(container);
+      ro.observe(viewport);
       return () => ro.disconnect();
-      // `specHeight` is part of deps so the canvas re-allocates when the
-      // height preset changes (the ResizeObserver alone only fires on
-      // *container* width changes).
-    }, [specHeight]);
+      // specHeight + zoomLevel are part of deps so we re-allocate on both.
+      // `duration` deliberately omitted — resize math reads it live above.
+    }, [specHeight, zoomLevel, duration]);
 
-    // Surface spec area pixel size to the parent for popover anchor positioning.
+    // ---- Apply pending cursor-anchored scroll after zoom change ------------
     useEffect(() => {
-      onSpecSizeChange?.(specSize);
-    }, [specSize, onSpecSizeChange]);
+      const anchor = pendingZoomAnchor.current;
+      if (!anchor) return;
+      const v = scrollViewportRef.current;
+      if (!v || v.scrollWidth === 0) return;
+      pendingZoomAnchor.current = null;
+      programmaticScrollDepth.current++;
+      v.scrollLeft = timeToScrollOffset(
+        anchor.time,
+        duration,
+        v.scrollWidth,
+        v.clientWidth,
+        anchor.anchorPx,
+      );
+      requestAnimationFrame(() => {
+        programmaticScrollDepth.current = Math.max(
+          0,
+          programmaticScrollDepth.current - 1,
+        );
+      });
+    }, [zoomLevel, duration]);
+
+    // ---- Surface measurements + scroll to parent ---------------------------
+    useEffect(() => {
+      onMeasurementsChange?.({
+        viewportWidth,
+        scrollWidth: innerWidth,
+        specHeight,
+      });
+    }, [viewportWidth, innerWidth, specHeight, onMeasurementsChange]);
+
+    // ---- Scroll handler (rAF-batched) --------------------------------------
+    useEffect(() => {
+      const v = scrollViewportRef.current;
+      if (!v) return;
+      let rafScheduled = false;
+      const handler = () => {
+        if (rafScheduled) return;
+        rafScheduled = true;
+        requestAnimationFrame(() => {
+          rafScheduled = false;
+          const sl = v.scrollLeft;
+          setScrollLeft(sl);
+          onScrollChange?.(sl);
+          // User-initiated scroll during playback pauses follow.
+          if (programmaticScrollDepth.current === 0 && !audioRef.current?.paused) {
+            followPausedByUser.current = true;
+          }
+        });
+      };
+      v.addEventListener("scroll", handler, { passive: true });
+      return () => v.removeEventListener("scroll", handler);
+    }, [onScrollChange]);
+
+    // ---- Wheel zoom (Ctrl / Cmd + wheel; also trackpad pinch) -------------
+    useEffect(() => {
+      const v = scrollViewportRef.current;
+      if (!v) return;
+      let zoomQueued = false;
+      const handler = (e: WheelEvent) => {
+        if (!(e.ctrlKey || e.metaKey)) return;
+        e.preventDefault();
+        if (zoomQueued) return;
+        zoomQueued = true;
+        requestAnimationFrame(() => {
+          zoomQueued = false;
+        });
+        const direction: 1 | -1 = e.deltaY < 0 ? 1 : -1;
+        const next = stepZoom(zoomLevel, direction);
+        if (next === zoomLevel) return;
+        const rect = v.getBoundingClientRect();
+        const anchorPx = e.clientX - rect.left;
+        const time = viewportToTime(
+          v.scrollLeft + anchorPx,
+          v.scrollWidth,
+          duration,
+        );
+        pendingZoomAnchor.current = { time, anchorPx };
+        onZoomChange?.(next);
+      };
+      v.addEventListener("wheel", handler, { passive: false });
+      return () => v.removeEventListener("wheel", handler);
+    }, [zoomLevel, duration, onZoomChange]);
 
     // ---- Audio playback rAF -------------------------------------------------
     useEffect(() => {
@@ -446,15 +645,44 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
             selectionStartRef.current = null;
           }
         }
-        if (playheadRef.current && duration > 0 && specSize.width > 0) {
-          const x = (t / duration) * specSize.width;
+        if (playheadRef.current && duration > 0 && innerWidth > 0) {
+          const x = (t / duration) * innerWidth;
           playheadRef.current.style.transform = `translateX(${x}px)`;
+          // Follow-the-playhead. Auto-scroll only when in the tail zone and
+          // the user hasn't taken control of the viewport.
+          const v = scrollViewportRef.current;
+          if (
+            followPlayback &&
+            !followPausedByUser.current &&
+            v &&
+            withinViewportTailZone(x, v.scrollLeft, v.clientWidth)
+          ) {
+            programmaticScrollDepth.current++;
+            const target = timeToScrollOffset(
+              t,
+              duration,
+              v.scrollWidth,
+              v.clientWidth,
+              v.clientWidth / 2,
+            );
+            v.scrollTo({
+              left: target,
+              behavior: prefersReducedMotion() ? "auto" : "smooth",
+            });
+            requestAnimationFrame(() => {
+              programmaticScrollDepth.current = Math.max(
+                0,
+                programmaticScrollDepth.current - 1,
+              );
+            });
+          }
         }
         onTimeUpdate?.(t);
         rafRef.current = requestAnimationFrame(tick);
       };
 
       const onPlay = () => {
+        followPausedByUser.current = false;
         onPlayPause?.(true);
         rafRef.current = requestAnimationFrame(tick);
       };
@@ -474,8 +702,9 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
         }
       };
       const onSeeked = () => {
-        if (playheadRef.current && duration > 0 && specSize.width > 0) {
-          const x = (audio.currentTime / duration) * specSize.width;
+        followPausedByUser.current = false;
+        if (playheadRef.current && duration > 0 && innerWidth > 0) {
+          const x = (audio.currentTime / duration) * innerWidth;
           playheadRef.current.style.transform = `translateX(${x}px)`;
         }
         onTimeUpdate?.(audio.currentTime);
@@ -495,7 +724,52 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
           rafRef.current = null;
         }
       };
-    }, [duration, specSize.width, onTimeUpdate, onPlayPause]);
+    }, [duration, innerWidth, followPlayback, onTimeUpdate, onPlayPause]);
+
+    // ---- Internal scroll-to helpers ----------------------------------------
+    const scrollToTimeInternal = useCallback(
+      (time: number) => {
+        const v = scrollViewportRef.current;
+        if (!v || duration <= 0) return;
+        programmaticScrollDepth.current++;
+        const target = timeToScrollOffset(
+          time,
+          duration,
+          v.scrollWidth,
+          v.clientWidth,
+          v.clientWidth / 2,
+        );
+        v.scrollTo({
+          left: target,
+          behavior: prefersReducedMotion() ? "auto" : "smooth",
+        });
+        requestAnimationFrame(() => {
+          programmaticScrollDepth.current = Math.max(
+            0,
+            programmaticScrollDepth.current - 1,
+          );
+        });
+      },
+      [duration],
+    );
+
+    const queueViewportCenterZoom = useCallback(
+      (direction: 1 | -1) => {
+        const v = scrollViewportRef.current;
+        if (!v) return;
+        const next = stepZoom(zoomLevel, direction);
+        if (next === zoomLevel) return;
+        const anchorPx = v.clientWidth / 2;
+        const time = viewportToTime(
+          v.scrollLeft + anchorPx,
+          v.scrollWidth,
+          duration,
+        );
+        pendingZoomAnchor.current = { time, anchorPx };
+        onZoomChange?.(next);
+      },
+      [zoomLevel, duration, onZoomChange],
+    );
 
     // ---- Imperative ref ----------------------------------------------------
     useImperativeHandle(
@@ -554,8 +828,6 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
         loopSelection: async (startTime: number, endTime: number) => {
           const a = audioRef.current;
           if (!a) return;
-          // Clamp end slightly inside duration so the rAF wrap-around fires
-          // before the audio element auto-pauses on `ended`.
           const clampedEnd = Math.min(endTime, (a.duration || endTime) - 0.05);
           loopRef.current = true;
           a.currentTime = startTime;
@@ -572,8 +844,41 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
         isLooping: () => loopRef.current,
         getDuration: () => audioRef.current?.duration ?? 0,
         isPlaying: () => !!audioRef.current && !audioRef.current.paused,
+        scrollToTime: scrollToTimeInternal,
+        zoomIn: () => queueViewportCenterZoom(1),
+        zoomOut: () => queueViewportCenterZoom(-1),
+        zoomReset: () => {
+          if (zoomLevel === 1) return;
+          // Anchor the center time so it stays visible after zooming out.
+          const v = scrollViewportRef.current;
+          if (v) {
+            const anchorPx = v.clientWidth / 2;
+            const time = viewportToTime(
+              v.scrollLeft + anchorPx,
+              v.scrollWidth,
+              duration,
+            );
+            pendingZoomAnchor.current = { time, anchorPx };
+          }
+          onZoomChange?.(1);
+        },
+        scrollBy: (direction: -1 | 1) => {
+          const v = scrollViewportRef.current;
+          if (!v) return;
+          programmaticScrollDepth.current++;
+          v.scrollBy({
+            left: direction * v.clientWidth * SCROLL_STEP_FRACTION,
+            behavior: prefersReducedMotion() ? "auto" : "smooth",
+          });
+          requestAnimationFrame(() => {
+            programmaticScrollDepth.current = Math.max(
+              0,
+              programmaticScrollDepth.current - 1,
+            );
+          });
+        },
       }),
-      []
+      [scrollToTimeInternal, queueViewportCenterZoom, zoomLevel, duration, onZoomChange],
     );
 
     // ---- Coordinate helpers (CSS px ↔ time/freq/normalized) ----------------
@@ -704,7 +1009,6 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
             const endTime = clamp(drag.original.endTime + dt, 0, duration);
             const minFreq = clamp(drag.original.minFreq + dHz, 0, nyquist);
             const maxFreq = clamp(drag.original.maxFreq + dHz, 0, nyquist);
-            // Preserve width/height: skip update if clamping squashed dimensions
             const widthPreserved = endTime - startTime > 0.01;
             const heightPreserved = maxFreq - minFreq > 1;
             if (widthPreserved && heightPreserved) {
@@ -738,7 +1042,7 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
 
         if (drag.kind === "drawing-new") {
           setPreviewRect(null);
-          if (!drag.hasDragged) return; // bare click → onClick handler will seek
+          if (!drag.hasDragged) return;
           suppressNextClickRef.current = true;
           const [x0, x1] = normalizeRect(drag.startNX, drag.currentNX);
           const [y0, y1] = normalizeRect(drag.startNY, drag.currentNY);
@@ -756,7 +1060,6 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
 
         if (drag.kind === "moving") {
           if (!drag.hasDragged) {
-            // Click without drag → toggle selection
             onBoxClickRef.current?.(drag.original);
             setDragOverride(null);
             return;
@@ -789,7 +1092,6 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
       setDragOverride(null);
     }, []);
 
-    // ---- Click on spec → seek ---------------------------------------------
     const handleSvgClick = useCallback(
       (e: React.MouseEvent<SVGSVGElement>) => {
         if (suppressNextClickRef.current) {
@@ -801,7 +1103,6 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
         const { nx } = eventToNorm(e.clientX, e.clientY);
         const a = audioRef.current;
         if (!a) return;
-        // Manual seek cancels any active loop.
         loopRef.current = false;
         selectionEndRef.current = null;
         selectionStartRef.current = null;
@@ -810,7 +1111,6 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
       [eventToNorm, nxToTime, duration]
     );
 
-    // ---- Time axis click → seek -------------------------------------------
     const handleTimeAxisClick = useCallback(
       (e: React.MouseEvent<HTMLCanvasElement>) => {
         const rect = e.currentTarget.getBoundingClientRect();
@@ -825,7 +1125,7 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
       [duration]
     );
 
-    // ---- Render boxes (with dragOverride) ----------------------------------
+    // ---- Render boxes (with dragOverride applied) --------------------------
     const renderedBoxes = useMemo(() => {
       if (!dragOverride) return boxes;
       return boxes.map((b) =>
@@ -841,26 +1141,78 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
       );
     }, [boxes, dragOverride]);
 
+    // ---- Lane assignment (Phase 4) -----------------------------------------
+    // Keyed on detectionsVersion (NOT on the boxes array reference) per the
+    // memoization contract in spectrogram-layout.ts. Logs once per dense
+    // group so we can spot pathological detection-density files.
+    const lanes = useMemo(() => {
+      const result = assignLanes(renderedBoxes);
+      const denseGroups = new Set<number>();
+      for (const v of result.values()) {
+        if (v.mode === "dense" && !denseGroups.has(v.groupSize)) {
+          denseGroups.add(v.groupSize);
+          console.warn("[spectrogram] dense lane fallback", { groupSize: v.groupSize });
+        }
+      }
+      return result;
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [detectionsVersion, dragOverride]);
+
+    // ---- SVG box virtualization (Phase 2) ----------------------------------
+    // Filter to detections whose time range intersects the visible window
+    // (plus 1 viewport of padding on each side). Big perf win at zoom 4×/8×.
+    const visibleBoxes = useMemo(() => {
+      if (innerWidth === 0 || duration === 0) return renderedBoxes;
+      const win = visibleTimeWindow(scrollLeft, viewportWidth, innerWidth, duration);
+      return renderedBoxes.filter(
+        (b) => b.endTime >= win.startTime && b.startTime <= win.endTime,
+      );
+    }, [renderedBoxes, scrollLeft, viewportWidth, innerWidth, duration]);
+
     return (
       <div ref={containerRef} className="relative flex w-full bg-zinc-950 select-none">
+        {/* Pulse keyframes — scoped here to keep the animation co-located.
+            A plain `<style>` element (no styled-jsx dependency) works on
+            both the SSR and client passes; the keyframe is namespaced
+            with the `fcat-spec-pulse` prefix to avoid collisions. */}
+        <style
+          dangerouslySetInnerHTML={{
+            __html: `
+              @keyframes fcat-spec-pulse {
+                0% { opacity: 0.9; transform: scale(1); }
+                60% { opacity: 0.5; transform: scale(1.06); }
+                100% { opacity: 0; transform: scale(1.12); }
+              }
+              @media (prefers-reduced-motion: reduce) {
+                .fcat-spec-pulse { animation: none !important; }
+              }
+            `,
+          }}
+        />
+
         {/* Hidden audio element */}
         <audio ref={audioRef} src={audioUrl} preload="auto" />
 
-        {/* Left: frequency axis */}
+        {/* Left: frequency axis (stays outside the scrollable viewport so it
+            remains fixed at the left edge regardless of horizontal scroll). */}
         <div style={{ width: FREQ_AXIS_WIDTH, height: specHeight }} className="shrink-0">
           <canvas ref={freqAxisRef} />
         </div>
 
-        {/* Right: spec area + time axis */}
-        <div className="flex-1 min-w-0 flex flex-col">
+        {/* Right: scroll viewport containing spec area + time axis */}
+        <div
+          ref={scrollViewportRef}
+          className="flex-1 min-w-0 overflow-x-auto overflow-y-hidden"
+          style={{ scrollBehavior: prefersReducedMotion() ? "auto" : "smooth" }}
+        >
           <div
             className="relative"
-            style={{ height: specHeight, width: specSize.width || "100%" }}
+            style={{ width: innerWidth || "100%", height: specHeight }}
           >
             <canvas
               ref={specCanvasRef}
               className="absolute inset-0"
-              style={{ pointerEvents: "none" }}
+              style={{ pointerEvents: "none", width: "100%", height: "100%" }}
             />
 
             {/* Loading / error overlay */}
@@ -883,7 +1235,6 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
                     setError(null);
                     setDecoded(null);
                     setMagnitudes(null);
-                    // re-run decode by toggling state
                     setStage("fetching");
                     decodeAudio(audioUrl)
                       .then((d) => {
@@ -903,7 +1254,7 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
             )}
 
             {/* SVG overlay (boxes + drag preview) */}
-            {stage === "ready" && specSize.width > 0 && (
+            {stage === "ready" && innerWidth > 0 && (
               <svg
                 id="fft-spec-svg"
                 className={`absolute inset-0 w-full h-full ${
@@ -917,7 +1268,7 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
                 onPointerCancel={handleSvgPointerCancel}
                 onClick={handleSvgClick}
               >
-                {renderedBoxes.map((box) => {
+                {visibleBoxes.map((box) => {
                   const isSelected = selectedBoxId === box.id;
                   const isHovered = hoverBoxId === box.id && !isSelected;
                   const isLegacyFull =
@@ -926,11 +1277,21 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
                   const isVerified = status === "verified";
                   const isRejected = status === "rejected";
                   const color = getSpeciesColor(box.species);
+                  const lane = lanes.get(box.id) ?? { mode: "full" as const };
 
                   const x = timeToNX(box.startTime);
                   const w = Math.max(0.0005, timeToNX(box.endTime) - x);
-                  const yTop = hzToNY(box.maxFreq);
-                  const yBot = hzToNY(box.minFreq);
+
+                  // Compute y/h based on lane assignment. `lanes` mode slices
+                  // the box's freq range into vertical bands.
+                  let yTop = hzToNY(box.maxFreq);
+                  let yBot = hzToNY(box.minFreq);
+                  if (lane.mode === "lanes") {
+                    const fullSpan = yBot - yTop;
+                    const laneSpan = fullSpan / lane.laneCount;
+                    yTop = yTop + lane.laneIndex * laneSpan;
+                    yBot = yTop + laneSpan;
+                  }
                   const h = Math.max(0.0005, yBot - yTop);
 
                   const fillOpacity = isSelected
@@ -939,12 +1300,12 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
                       ? 0.05
                       : isVerified
                         ? 0.28
-                        : isLegacyFull
+                        : isLegacyFull && lane.mode === "full"
                           ? 0.1
                           : 0.15;
                   const strokeOpacity = isRejected
                     ? 0.35
-                    : isLegacyFull && !isSelected
+                    : isLegacyFull && lane.mode === "full" && !isSelected
                       ? 0.6
                       : 1;
 
@@ -966,9 +1327,32 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
                         stroke={color}
                         strokeOpacity={strokeOpacity}
                         strokeWidth={isSelected ? 2.5 : isHovered ? 2 : 1.5}
-                        strokeDasharray={isLegacyFull ? "4 3" : undefined}
+                        strokeDasharray={isLegacyFull && lane.mode === "full" ? "4 3" : undefined}
                         vectorEffect="non-scaling-stroke"
                       />
+
+                      {isSelected && pulseKey > 0 && (
+                        <rect
+                          key={`pulse-${pulseKey}-${box.id}`}
+                          className="fcat-spec-pulse"
+                          x={x}
+                          y={yTop}
+                          width={w}
+                          height={h}
+                          fill="none"
+                          stroke={color}
+                          strokeWidth={3}
+                          vectorEffect="non-scaling-stroke"
+                          pointerEvents="none"
+                          style={{
+                            transformOrigin: `${(x + w / 2) * 100}% ${(yTop + h / 2) * 100}%`,
+                            transformBox: "fill-box",
+                            animation: prefersReducedMotion()
+                              ? "none"
+                              : "fcat-spec-pulse 500ms ease-out forwards",
+                          }}
+                        />
+                      )}
 
                       {isSelected && editable && (
                         <ResizeHandles
@@ -1003,26 +1387,64 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
               </svg>
             )}
 
-            {/* Box labels — HTML overlay, decoupled from the SVG's stretched
-                viewBox so text isn't horizontally distorted. */}
-            {stage === "ready" && specSize.width > 0 && (
+            {/* Box labels — HTML overlay. Switches between collapsed letter
+                chips (low effective width) and full-name pills (high zoom or
+                selected) via `decideLabelCollapse`. */}
+            {stage === "ready" && innerWidth > 0 && (
               <div className="absolute inset-0 pointer-events-none">
-                {renderedBoxes.map((box) => {
+                {visibleBoxes.map((box) => {
                   if (!box.displayLabel) return null;
                   const status = box.verificationStatus ?? "unverified";
                   const isSelected = selectedBoxId === box.id;
                   if (status === "rejected" && !isSelected) return null;
                   const color = getSpeciesColor(box.species);
-                  const xPx = timeToNX(box.startTime) * specSize.width;
-                  const yTopPx = hzToNY(box.maxFreq) * specSize.height;
-                  const wPx = Math.max(0, timeToNX(box.endTime) * specSize.width - xPx);
+                  const lane = lanes.get(box.id) ?? { mode: "full" as const };
+
+                  const xPx = timeToNX(box.startTime) * innerWidth;
+                  let yTopPx = hzToNY(box.maxFreq) * specHeight;
+                  if (lane.mode === "lanes") {
+                    const fullSpan = hzToNY(box.minFreq) * specHeight - yTopPx;
+                    yTopPx = yTopPx + lane.laneIndex * (fullSpan / lane.laneCount);
+                  }
+                  const wPx = Math.max(0, timeToNX(box.endTime) * innerWidth - xPx);
+                  // Use base (zoom=1) width to decide collapse so the
+                  // threshold tracks effective rendered width.
+                  const baseWPx = wPx / zoomLevel;
+                  const collapseMode = decideLabelCollapse(baseWPx, zoomLevel, isSelected);
                   const labelAbove = yTopPx >= 18;
                   const top = labelAbove ? Math.max(0, yTopPx - 18) : yTopPx;
-                  const collapsedMax = Math.max(wPx + 4, 70);
-                  const expandedMax = specSize.width - xPx;
+
+                  const tooltip = `${box.displayLabel} · ${box.startTime.toFixed(1)}s–${box.endTime.toFixed(1)}s · ${(box.minFreq / 1000).toFixed(1)}–${(box.maxFreq / 1000).toFixed(1)} kHz`;
+
+                  if (collapseMode === "collapsed") {
+                    return (
+                      <div
+                        key={box.id}
+                        aria-label={box.displayLabel}
+                        title={tooltip}
+                        className="absolute font-semibold flex items-center justify-center"
+                        style={{
+                          left: xPx,
+                          top,
+                          width: 14,
+                          height: 14,
+                          background: color,
+                          color: "white",
+                          fontSize: 10,
+                          borderRadius: 3,
+                          opacity: 0.95,
+                          zIndex: isSelected ? 2 : 1,
+                        }}
+                      >
+                        {speciesInitial(box.displayLabel)}
+                      </div>
+                    );
+                  }
+
+                  const expandedMax = innerWidth - xPx;
                   const maxWidth = Math.min(
-                    isSelected ? expandedMax : collapsedMax,
-                    expandedMax
+                    isSelected ? expandedMax : Math.max(wPx + 4, 70),
+                    expandedMax,
                   );
                   return (
                     <div
@@ -1043,7 +1465,7 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
                         zIndex: isSelected ? 2 : 1,
                         transition: "max-width 180ms ease",
                       }}
-                      title={`${box.displayLabel} · ${box.startTime.toFixed(1)}s–${box.endTime.toFixed(1)}s · ${(box.minFreq / 1000).toFixed(1)}–${(box.maxFreq / 1000).toFixed(1)} kHz`}
+                      title={tooltip}
                     >
                       {box.displayLabel}
                     </div>
@@ -1066,11 +1488,11 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
             />
           </div>
 
-          {/* Time axis */}
+          {/* Time axis (inside the scroll viewport so it widens with zoom) */}
           <canvas
             ref={timeAxisRef}
             onClick={handleTimeAxisClick}
-            className="cursor-pointer"
+            className="cursor-pointer block"
           />
         </div>
       </div>
@@ -1141,7 +1563,6 @@ function ResizeHandles({ x, y, w, h, boxId, specWidthPx, specHeightPx }: ResizeH
         const cy = y + h * d.ny;
         return (
           <g key={d.name} style={{ cursor: d.cursor }}>
-            {/* invisible larger hit target */}
             <rect
               x={cx - hitHalfW}
               y={cy - hitHalfH}
@@ -1151,7 +1572,6 @@ function ResizeHandles({ x, y, w, h, boxId, specWidthPx, specHeightPx }: ResizeH
               data-handle={d.name}
               data-box-id={boxId}
             />
-            {/* visible handle */}
             <rect
               x={cx - halfW}
               y={cy - halfH}
@@ -1169,3 +1589,7 @@ function ResizeHandles({ x, y, w, h, boxId, specWidthPx, specHeightPx }: ResizeH
     </g>
   );
 }
+
+// Re-export the LaneAssignment type so consumers don't need to dive into
+// `spectrogram-layout` for it.
+export type { LaneAssignment };

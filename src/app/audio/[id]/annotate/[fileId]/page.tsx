@@ -192,6 +192,7 @@ export default async function AudioAnnotatePage({ params, searchParams }: PagePr
         totalFiles={fileIds.length}
         recordingDate={recordingTs?.date ?? null}
         recordingTime={recordingTs?.time ?? null}
+        showAll={showAllMode}
       />
     </div>
   );

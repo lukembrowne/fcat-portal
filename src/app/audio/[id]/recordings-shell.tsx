@@ -10,6 +10,7 @@ import { CollapsibleSection } from "@/components/collapsible-section";
 import { AudioActionsMenu } from "./audio-actions-menu";
 import { AudioMetadataSection } from "./audio-metadata-section";
 import { AudioQaSection } from "./audio-qa-section";
+import { ConfidenceThresholdSlider } from "@/components/audio/confidence-threshold-slider";
 import type { AudioFileRow } from "../actions";
 import {
   buildCells,
@@ -181,6 +182,12 @@ export function RecordingsShell({
             )}
           </div>
         </div>
+
+        {hasBirdnetDetections && (
+          <div className="mt-2">
+            <ConfidenceThresholdSlider className="max-w-md" />
+          </div>
+        )}
 
         <div className="mt-2 border-t pt-2">
           <CollapsibleSection title="Detalles" defaultOpen={false}>

@@ -24,6 +24,7 @@ import {
   cycleColormap,
   type SpectrogramSettings,
 } from "./spectrogram-controls";
+import { AnnotationFilterBar } from "@/components/audio/annotation-filter-bar";
 import {
   FREQ_AXIS_WIDTH,
   anchorBoxToViewportPx,
@@ -77,6 +78,7 @@ interface AudioAnnotationClientProps {
   totalFiles: number;
   recordingDate?: string | null;
   recordingTime?: string | null;
+  showAll: boolean;
 }
 
 function formatTime(seconds: number): string {
@@ -134,6 +136,7 @@ export function AudioAnnotationClient({
   totalFiles,
   recordingDate,
   recordingTime,
+  showAll,
 }: AudioAnnotationClientProps) {
   const router = useRouter();
   const [selectedDetectionId, setSelectedDetectionId] = useState<number | null>(
@@ -571,6 +574,11 @@ export function AudioAnnotationClient({
             sampleRate={sampleRate}
           />
         )}
+
+        {/* Confidence threshold + show-all toggle */}
+        <div className="px-4 py-2 border-b shrink-0">
+          <AnnotationFilterBar showAll={showAll} />
+        </div>
 
         {/* Spectrogram display — client-side FFT renderer.
             Fills the remaining vertical space between the controls bar and

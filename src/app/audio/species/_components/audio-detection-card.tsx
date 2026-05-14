@@ -156,31 +156,29 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
       const cl = clipLengthRef.current;
       if (canvas && analyser && byteData && cl > 0) {
         analyser.getByteFrequencyData(byteData);
-        // DEBUG: log first tick + every 30th, with stats that tell us where the
-        // chain is breaking. byteMax=0 means analyser is dead (no signal flowing
-        // through the tap). canvas.width=0 means the backing store is unsized.
         const n = tickCountRef.current;
+        const result = paintColumn(
+          canvas,
+          byteData,
+          el.currentTime,
+          startRef.current,
+          cl,
+        );
+        // DEBUG: flat-string log so Chrome doesn't truncate fields. The
+        // critical comparison is `rel` (should be in [0,1] for paint to
+        // happen) vs `start` vs `cur`. paintResult tells us if paintColumn
+        // actually drew or returned early.
         if (n === 0 || n % 30 === 0) {
           let byteMax = 0;
-          let byteSum = 0;
           for (let i = 0; i < byteData.length; i++) {
-            const v = byteData[i];
-            byteSum += v;
-            if (v > byteMax) byteMax = v;
+            if (byteData[i] > byteMax) byteMax = byteData[i];
           }
-          dlog(`tick #${n}`, {
-            byteMax,
-            byteAvg: Math.round(byteSum / byteData.length),
-            currentTime: +el.currentTime.toFixed(2),
-            ctxState: audioCtxRef.current?.state,
-            canvasW: canvas.width,
-            canvasH: canvas.height,
-            clientW: canvas.clientWidth,
-            xRatio: +((el.currentTime - startRef.current) / cl).toFixed(3),
-          });
+          const rel = (el.currentTime - startRef.current) / cl;
+          dlog(
+            `tick #${n} cur=${el.currentTime.toFixed(2)} start=${startRef.current.toFixed(2)} end=${endRef.current.toFixed(2)} clip=${cl.toFixed(2)} rel=${rel.toFixed(3)} byteMax=${byteMax} canvasW=${canvas.width} canvasH=${canvas.height} clientW=${canvas.clientWidth} paint=${result}`,
+          );
         }
         tickCountRef.current = n + 1;
-        paintColumn(canvas, byteData, el.currentTime, startRef.current, cl);
       } else if (tickCountRef.current === 0) {
         // DEBUG: missing one of the required refs on first tick
         dlog("tick missing refs", {
@@ -507,19 +505,23 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
 // Paint a 1-column slice at the playhead's x-position. The byteData is the
 // AnalyserNode's latest FFT frame; we map low frequencies to the bottom of
 // the canvas (musical convention) and apply the viridis LUT.
+// Returns a status string for DEBUG diagnostics.
 function paintColumn(
   canvas: HTMLCanvasElement,
   byteData: Uint8Array<ArrayBuffer>,
   currentTime: number,
   start: number,
   clipLength: number,
-) {
+): string {
   const ctx = canvas.getContext("2d");
-  if (!ctx) return;
+  if (!ctx) return "no-ctx";
   const width = canvas.width;
   const height = canvas.height;
+  if (width === 0 || height === 0) return "zero-size";
   const rel = (currentTime - start) / clipLength;
-  if (!Number.isFinite(rel) || rel < 0 || rel > 1) return;
+  if (!Number.isFinite(rel)) return "rel-nan";
+  if (rel < 0) return "rel-neg";
+  if (rel > 1) return "rel-over";
   const x = Math.floor(rel * (width - 1));
 
   const lut = COLORMAPS.viridis;
@@ -544,4 +546,5 @@ function paintColumn(
     }
   }
   ctx.putImageData(img, x, 0);
+  return `ok@${x}`;
 }

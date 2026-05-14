@@ -18,7 +18,7 @@ import {
 } from "@/lib/schedule-utils";
 import { createHash } from "crypto";
 import { db } from "@/db";
-import { activityLog } from "@/db/schema";
+import { recordEvent } from "@/lib/system-events";
 
 // ─── Helpers ─────────────────────────────────────────────────
 
@@ -141,12 +141,14 @@ export async function commitBulkShift(shiftAmount: number, useSlots: boolean, ex
 
     await saveSchedule(newRows);
 
-    await db.insert(activityLog).values({
-      userEmail: user.email,
-      action: "schedule_shift",
+    await recordEvent({
+      source: "biochoco-tools",
+      eventType: "schedule_shift",
+      summary: `Cronograma desplazado por ${shiftAmount} ${useSlots ? "ranura(s)" : "día(s)"} (${changes.length} cambio${changes.length === 1 ? "" : "s"})`,
+      actorEmail: user.email,
       projectId: "biochoco",
       targetType: "schedule",
-      details: JSON.stringify({ shiftAmount, useSlots, changesCount: changes.length }),
+      details: { shiftAmount, useSlots, changesCount: changes.length },
     });
 
     revalidatePath("/biochoco");
@@ -192,12 +194,14 @@ export async function commitDateSwap(id1: string, id2: string, expectedHash: str
     const result = swapDeploymentDates(schedule, id1, id2);
     await saveSchedule(result.rows);
 
-    await db.insert(activityLog).values({
-      userEmail: user.email,
-      action: "schedule_swap",
+    await recordEvent({
+      source: "biochoco-tools",
+      eventType: "schedule_swap",
+      summary: `Fechas intercambiadas entre ${id1} y ${id2}`,
+      actorEmail: user.email,
       projectId: "biochoco",
       targetType: "schedule",
-      details: JSON.stringify({ id1, id2, changesCount: result.changes.length }),
+      details: { id1, id2, changesCount: result.changes.length },
     });
 
     revalidatePath("/biochoco");
@@ -267,12 +271,15 @@ export async function commitAddSite(siteId: string, siteName: string, habitatTyp
     const result = addSiteToSchedule(schedule, { siteId, siteName, habitatType });
     await saveSchedule(result.rows);
 
-    await db.insert(activityLog).values({
-      userEmail: user.email,
-      action: "schedule_add_site",
+    await recordEvent({
+      source: "biochoco-tools",
+      eventType: "schedule_add_site",
+      summary: `Sitio ${siteId} agregado (${result.newDeployments.length} despliegue${result.newDeployments.length === 1 ? "" : "s"})`,
+      actorEmail: user.email,
       projectId: "biochoco",
       targetType: "schedule",
-      details: JSON.stringify({ siteId, deploymentsAdded: result.newDeployments.length }),
+      targetId: siteId,
+      details: { siteId, siteName, habitatType, deploymentsAdded: result.newDeployments.length },
     });
 
     revalidatePath("/biochoco");
@@ -393,12 +400,14 @@ export async function commitSyncOdk(deploymentIds: string[]): Promise<ActionResu
 
     await updateScheduleRows(sheetUpdates);
 
-    await db.insert(activityLog).values({
-      userEmail: user.email,
-      action: "schedule_sync_odk",
+    await recordEvent({
+      source: "biochoco-tools",
+      eventType: "schedule_sync_odk",
+      summary: `Cronograma sincronizado con ODK (${updates.length} actualización${updates.length === 1 ? "" : "es"})`,
+      actorEmail: user.email,
       projectId: "biochoco",
       targetType: "schedule",
-      details: JSON.stringify({ updatesCount: updates.length }),
+      details: { updatesCount: updates.length },
     });
 
     revalidatePath("/biochoco");

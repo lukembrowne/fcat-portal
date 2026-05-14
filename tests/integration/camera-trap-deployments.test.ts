@@ -235,11 +235,11 @@ describe("deleteDeployments", () => {
   it("logs activity on deletion", async () => {
     await actions.deleteDeployments([seed.deployment.id]);
 
-    const logs = db.select().from(schema.activityLog).all();
-    const deleteLog = logs.find((l) => l.action === "delete_deployments");
-    expect(deleteLog).toBeDefined();
-    expect(deleteLog!.userEmail).toBe(testUser.email);
-    const details = JSON.parse(deleteLog!.details!);
+    const events = db.select().from(schema.systemEvents).all();
+    const deleteEvent = events.find((e) => e.eventType === "delete_deployments");
+    expect(deleteEvent).toBeDefined();
+    expect(deleteEvent!.actorEmail).toBe(testUser.email);
+    const details = JSON.parse(deleteEvent!.details!);
     expect(details.count).toBe(1);
     expect(details.names).toContain("TEST-DEPLOY-001");
   });

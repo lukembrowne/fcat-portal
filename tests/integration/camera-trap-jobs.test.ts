@@ -1157,11 +1157,11 @@ describe("deleteJob", () => {
   it("logs activity on deletion", async () => {
     await actions.deleteJob(seed.job.id);
 
-    const logs = db.select().from(schema.activityLog).all();
-    const deleteLog = logs.find((l) => l.action === "delete_job");
-    expect(deleteLog).toBeDefined();
-    expect(deleteLog!.userEmail).toBe(testUser.email);
-    expect(deleteLog!.targetId).toBe(String(seed.job.id));
+    const events = db.select().from(schema.systemEvents).all();
+    const deleteEvent = events.find((e) => e.eventType === "delete_job");
+    expect(deleteEvent).toBeDefined();
+    expect(deleteEvent!.actorEmail).toBe(testUser.email);
+    expect(deleteEvent!.targetId).toBe(String(seed.job.id));
   });
 
   it("returns error for non-existent job", async () => {

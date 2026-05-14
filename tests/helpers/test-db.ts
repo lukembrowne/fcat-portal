@@ -232,6 +232,21 @@ const CAMERA_TRAP_DDL = `
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
+  CREATE TABLE system_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    occurred_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    event_type TEXT NOT NULL,
+    source TEXT NOT NULL,
+    severity TEXT NOT NULL DEFAULT 'info',
+    actor_email TEXT,
+    project_id TEXT,
+    target_type TEXT,
+    target_id TEXT,
+    summary TEXT NOT NULL,
+    duration_ms INTEGER,
+    details TEXT
+  );
+
   CREATE TABLE audio_files (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     deployment_id INTEGER NOT NULL REFERENCES biochoco_deployments(id) ON DELETE CASCADE,

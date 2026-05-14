@@ -2,7 +2,7 @@
 
 import { useRef, useState, useEffect } from "react";
 import Link from "next/link";
-import { Play, Pause, ExternalLink } from "lucide-react";
+import { Play, Pause, ExternalLink, Loader2 } from "lucide-react";
 import type { AudioDetectionRow } from "@/app/audio/species/actions";
 
 const PADDING_SECONDS = 3;
@@ -35,12 +35,13 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
   );
   const clipLength = end - start;
 
-  // Stream URL with Media Fragment URI hash. The stream API takes the Google
-  // Drive file ID (audio_files.driveFileId), NOT the integer DB id — passing
-  // the DB id 404s and the play button silently fails.
+  // Stream URL — the stream API takes the Google Drive file ID
+  // (audio_files.driveFileId), NOT the integer DB id. We intentionally do NOT
+  // append a Media Fragment hash (#t=...) because browser support is
+  // inconsistent and we seek explicitly before play.
   const streamSrc = `/api/audio/stream?fileId=${encodeURIComponent(
     detection.driveFileId
-  )}#t=${start.toFixed(2)},${end.toFixed(2)}`;
+  )}`;
 
   // Inline timeupdate fallback — pauses at `end` even on browsers that don't
   // constrain the trailing edge of Media Fragment URI on <audio>.
@@ -71,6 +72,8 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
     };
   }, [start, end, clipLength]);
 
+  const [loading, setLoading] = useState(false);
+
   const toggle = async () => {
     const el = audioRef.current;
     if (!el) return;
@@ -79,24 +82,46 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
       setPlaying(false);
       return;
     }
-    // Browsers vary on Media Fragment seek; explicitly set currentTime once
-    // metadata is ready. If already loaded, set directly.
-    if (el.readyState >= 1) {
-      if (el.currentTime < start || el.currentTime >= end) el.currentTime = start;
-    } else {
-      el.addEventListener(
-        "loadedmetadata",
-        () => {
-          el.currentTime = start;
-        },
-        { once: true }
-      );
+
+    // Wait for metadata BEFORE seek/play, otherwise el.play() may fire while
+    // currentTime is still 0 (start of the recording, not start of the clip).
+    // The browser then streams minutes of pre-roll before reaching the
+    // detection window and the progress bar stays at 0 the whole time.
+    if (el.readyState < 1 /* HAVE_METADATA */) {
+      setLoading(true);
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const onLoaded = () => {
+            el.removeEventListener("error", onErr);
+            resolve();
+          };
+          const onErr = () => {
+            el.removeEventListener("loadedmetadata", onLoaded);
+            reject(new Error("audio load failed"));
+          };
+          el.addEventListener("loadedmetadata", onLoaded, { once: true });
+          el.addEventListener("error", onErr, { once: true });
+          el.load();
+        });
+      } catch {
+        setLoading(false);
+        setPlaying(false);
+        return;
+      }
+      setLoading(false);
     }
+
+    // Always seek into the clip window before play. The window can be far
+    // into the recording (e.g., 1200s) so without this the user hears the
+    // beginning of the file.
+    if (el.currentTime < start || el.currentTime >= end) {
+      el.currentTime = start;
+    }
+
     try {
       await el.play();
       setPlaying(true);
     } catch {
-      // Autoplay blocked or load failed — leave state as paused.
       setPlaying(false);
     }
   };
@@ -137,10 +162,13 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
         <button
           type="button"
           onClick={toggle}
+          disabled={loading}
           aria-label={playing ? "Pausar" : "Reproducir"}
-          className="w-9 h-9 rounded-full bg-foreground text-background flex items-center justify-center shrink-0 hover:opacity-90"
+          className="w-9 h-9 rounded-full bg-foreground text-background flex items-center justify-center shrink-0 hover:opacity-90 disabled:opacity-60 disabled:cursor-progress"
         >
-          {playing ? (
+          {loading ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : playing ? (
             <Pause className="w-4 h-4" />
           ) : (
             <Play className="w-4 h-4 translate-x-[1px]" />
@@ -155,9 +183,9 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
           </div>
           <div className="mt-1 flex justify-between text-[10px] text-muted-foreground tabular-nums">
             <span>
-              {(detection.startTime).toFixed(1)}s → {detection.endTime.toFixed(1)}s
+              {detection.startTime.toFixed(1)}s → {detection.endTime.toFixed(1)}s
               <span className="ml-1 opacity-70">
-                (±{PADDING_SECONDS}s)
+                (clip {clipLength.toFixed(1)}s, ±{PADDING_SECONDS}s)
               </span>
             </span>
             <span>Confianza {formatConfidence(detection.confidence)}</span>

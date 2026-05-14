@@ -24,6 +24,36 @@ const DB_PATH = process.env.DB_PATH || "data/portal.db";
 const dbPath = path.isAbsolute(DB_PATH) ? DB_PATH : path.join(process.cwd(), DB_PATH);
 const backupDir = path.join(path.dirname(dbPath), "backups");
 
+/**
+ * Insert a `system_events` row into the main DB. Mirrors `recordEvent` in
+ * src/lib/system-events.ts but uses raw SQL because this script runs as plain
+ * Node (no TS, no Drizzle). Best-effort: any failure logs to stderr and
+ * returns — never throws.
+ */
+function recordEventSql({ source, eventType, summary, severity, durationMs, details }) {
+  try {
+    const writer = new Database(dbPath);
+    writer.pragma("busy_timeout = 5000");
+    writer
+      .prepare(
+        `INSERT INTO system_events
+           (event_type, source, severity, actor_email, summary, duration_ms, details)
+         VALUES (?, ?, ?, NULL, ?, ?, ?)`,
+      )
+      .run(
+        eventType,
+        source,
+        severity ?? "info",
+        summary,
+        durationMs ?? null,
+        details ? JSON.stringify(details) : null,
+      );
+    writer.close();
+  } catch (e) {
+    console.error(`[backup] Failed to record system_event: ${e.message}`);
+  }
+}
+
 async function main() {
   // Ensure backup directory exists
   fs.mkdirSync(backupDir, { recursive: true });
@@ -36,6 +66,7 @@ async function main() {
 
   // Generate backup filename with Eastern time timestamp
   const now = new Date();
+  const startTime = Date.now();
   const timestamp = now
     .toLocaleString("sv-SE", { timeZone: "America/New_York" })
     .replace(/[:.]/g, "-")
@@ -45,12 +76,14 @@ async function main() {
 
   // Perform backup using SQLite's online backup API
   console.log(`[backup] Starting backup: ${backupFilename}`);
+  let sizeBytes = 0;
   try {
     const source = new Database(dbPath, { readonly: true });
     await source.backup(backupPath);
     source.close();
 
     const stat = fs.statSync(backupPath);
+    sizeBytes = stat.size;
     console.log(`[backup] Backup complete: ${(stat.size / 1024 / 1024).toFixed(1)}MB`);
 
     // Verify backup integrity
@@ -61,6 +94,14 @@ async function main() {
     if (integrity[0]?.integrity_check !== "ok") {
       console.error("[backup] WARNING: Backup failed integrity check!");
       fs.unlinkSync(backupPath);
+      recordEventSql({
+        source: "cron",
+        eventType: "cron_db_backup",
+        severity: "error",
+        summary: `Respaldo falló verificación de integridad: ${backupFilename}`,
+        durationMs: Date.now() - startTime,
+        details: { backupFilename, reason: "integrity_check_failed" },
+      });
       process.exit(1);
     }
     console.log("[backup] Integrity check: ok");
@@ -68,11 +109,28 @@ async function main() {
     console.error(`[backup] Backup failed: ${e.message}`);
     // Clean up partial backup
     if (fs.existsSync(backupPath)) fs.unlinkSync(backupPath);
+    recordEventSql({
+      source: "cron",
+      eventType: "cron_db_backup",
+      severity: "error",
+      summary: `Respaldo falló: ${e.message}`,
+      durationMs: Date.now() - startTime,
+      details: { backupFilename, error: e.message },
+    });
     process.exit(1);
   }
 
   // Run retention cleanup
   cleanupOldBackups();
+
+  recordEventSql({
+    source: "cron",
+    eventType: "cron_db_backup",
+    severity: "success",
+    summary: `Respaldo completado: ${backupFilename} (${(sizeBytes / 1024 / 1024).toFixed(1)} MB)`,
+    durationMs: Date.now() - startTime,
+    details: { backupFilename, sizeBytes },
+  });
 }
 
 function cleanupOldBackups() {

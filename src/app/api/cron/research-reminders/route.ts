@@ -6,6 +6,7 @@ import { researchApplications, researchReports } from "@/db/schema";
 import { verifyCronSecret } from "@/lib/cron-auth";
 import { sendReportReminder } from "@/lib/research-applications/emails";
 import { log } from "@/lib/log";
+import { recordEvent } from "@/lib/system-events";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +22,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const startTime = Date.now();
   const siteUrl =
     process.env.NEXT_PUBLIC_SITE_URL ?? "https://portal.fcat-ecuador.org";
   const now = new Date();
@@ -137,6 +139,16 @@ export async function POST(request: NextRequest) {
     { sent30, sent0, sentOverdue },
     `[research-reminders] Sent ${total} reminders`
   );
+
+  await recordEvent({
+    source: "cron",
+    eventType: "cron_research_reminders",
+    severity: "success",
+    actorEmail: null,
+    summary: `Recordatorios de informes enviados · T-30: ${sent30}, T-0: ${sent0}, vencidos: ${sentOverdue}`,
+    durationMs: Date.now() - startTime,
+    details: { total, sent30, sent0, sentOverdue, today },
+  });
 
   return NextResponse.json({
     ok: true,

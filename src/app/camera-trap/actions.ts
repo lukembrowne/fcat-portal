@@ -14,7 +14,6 @@ import {
   species,
   cameraTrapProjects,
   cameraTrapModels,
-  activityLog,
   shareTokens,
   IMAGE_TIMESTAMP_ORDER,
 } from "@/db/schema";
@@ -32,6 +31,7 @@ import {
 import { uploadFramesToDrive, trashFile } from "@/lib/drive-client";
 import { extractFrames, cancelFrameExtraction } from "@/lib/frame-extractor";
 import { requirePermission } from "@/lib/auth";
+import { recordEvent } from "@/lib/system-events";
 import {
   getUserCameraTrapProjects,
   ctProjectFilter,
@@ -1127,13 +1127,16 @@ export async function deleteJob(
         .where(eq(deployments.id, job.deploymentId!));
     }
 
-    await db.insert(activityLog).values({
-      userEmail: user.email,
-      action: "delete_job",
+    await recordEvent({
+      source: "camera-trap",
+      eventType: "delete_job",
+      summary: `Trabajo ${jobId} eliminado`,
+      severity: "warn",
+      actorEmail: user.email,
       projectId: "camera-trap",
       targetType: "job",
-      targetId: String(jobId),
-      details: JSON.stringify({ deploymentId: job.deploymentId }),
+      targetId: jobId,
+      details: { deploymentId: job.deploymentId },
     });
 
     revalidatePath("/camera-trap/results");
@@ -1315,12 +1318,15 @@ export async function deleteJobs(
       }
     }
 
-    await db.insert(activityLog).values({
-      userEmail: user.email,
-      action: "delete_jobs",
+    await recordEvent({
+      source: "camera-trap",
+      eventType: "delete_jobs",
+      summary: `${jobIds.length} trabajo${jobIds.length === 1 ? "" : "s"} eliminado${jobIds.length === 1 ? "" : "s"}`,
+      severity: "warn",
+      actorEmail: user.email,
       projectId: "camera-trap",
       targetType: "job",
-      details: JSON.stringify({ jobIds, count: jobIds.length }),
+      details: { jobIds, count: jobIds.length },
     });
 
     revalidatePath("/camera-trap/results");
@@ -1894,12 +1900,15 @@ export async function deleteDeployments(
       .delete(deployments)
       .where(inArray(deployments.id, ids));
 
-    await db.insert(activityLog).values({
-      userEmail: user.email,
-      action: "delete_deployments",
+    await recordEvent({
+      source: "camera-trap",
+      eventType: "delete_deployments",
+      summary: `${ids.length} despliegue${ids.length === 1 ? "" : "s"} eliminado${ids.length === 1 ? "" : "s"}`,
+      severity: "warn",
+      actorEmail: user.email,
       projectId: "camera-trap",
       targetType: "deployment",
-      details: JSON.stringify({ count: ids.length, names: toDelete.map(d => d.name) }),
+      details: { count: ids.length, names: toDelete.map(d => d.name) },
     });
 
     revalidatePath(CAMERA_TRAP_PATH);
@@ -2010,19 +2019,21 @@ export async function deleteImagesFromDrive(
         .where(eq(deployments.id, depId));
     }
 
-    // Activity log
-    await db.insert(activityLog).values({
-      userEmail: user.email,
-      action: "delete_images_drive",
+    await recordEvent({
+      source: "camera-trap",
+      eventType: "delete_images_drive",
+      summary: `${deleted} imagen${deleted === 1 ? "" : "es"} eliminada${deleted === 1 ? "" : "s"} de Drive (${failed} fallo${failed === 1 ? "" : "s"})`,
+      severity: failed > 0 ? "warn" : "info",
+      actorEmail: user.email,
       projectId: "camera-trap",
       targetType: "image",
-      details: JSON.stringify({
+      details: {
         deleted,
         failed,
         skippedWithDetections: imageIdsWithDetections.size,
         deploymentIds,
         imageIds: safeImages.map((img) => img.id),
-      }),
+      },
     });
 
     revalidatePath(CAMERA_TRAP_PATH);
@@ -2373,19 +2384,15 @@ export async function bulkDeleteBlankImages(
       "[BulkDeleteBlanks] Complete"
     );
 
-    // Activity log
-    await db.insert(activityLog).values({
-      userEmail: user.email,
-      action: "bulk_delete_blanks",
+    await recordEvent({
+      source: "camera-trap",
+      eventType: "bulk_delete_blanks",
+      summary: `Eliminación masiva de blanks · ${deleted} ok, ${failed} fallo${failed === 1 ? "" : "s"}, ${skipped} omitido${skipped === 1 ? "" : "s"}`,
+      severity: failed > 0 ? "warn" : "info",
+      actorEmail: user.email,
       projectId: "camera-trap",
       targetType: "image",
-      details: JSON.stringify({
-        jobId,
-        scope,
-        deleted,
-        failed,
-        skipped,
-      }),
+      details: { jobId, scope, deleted, failed, skipped },
     });
 
     revalidatePath(CAMERA_TRAP_PATH);
@@ -4488,19 +4495,18 @@ export async function updateSpecies(
           .where(eq(audioIdentifications.correctedSpecies, old.scientificName))
           .run();
 
-        tx.insert(activityLog).values({
-          userEmail: user.email,
-          action: "rename_species",
-          projectId: "camera-trap",
-          targetType: "species",
-          targetId: String(id),
-          details: JSON.stringify({
-            oldName: old.scientificName,
-            newName,
-          }),
-        }).run();
-
         return updated;
+      });
+
+      await recordEvent({
+        source: "camera-trap",
+        eventType: "rename_species",
+        summary: `Especie renombrada: ${old.scientificName} → ${newName}`,
+        actorEmail: user.email,
+        projectId: "camera-trap",
+        targetType: "species",
+        targetId: id,
+        details: { oldName: old.scientificName, newName },
       });
 
       revalidatePath("/camera-trap/species/manage");
@@ -4554,13 +4560,16 @@ export async function deleteSpecies(id: number): Promise<ActionResult> {
 
     await db.delete(species).where(eq(species.id, id));
 
-    await db.insert(activityLog).values({
-      userEmail: user.email,
-      action: "delete_species",
+    await recordEvent({
+      source: "camera-trap",
+      eventType: "delete_species",
+      summary: `Especie eliminada: ${sp.scientificName}`,
+      severity: "warn",
+      actorEmail: user.email,
       projectId: "camera-trap",
       targetType: "species",
-      targetId: String(id),
-      details: JSON.stringify({ scientificName: sp.scientificName, commonName: sp.commonName }),
+      targetId: id,
+      details: { scientificName: sp.scientificName, commonName: sp.commonName },
     });
 
     revalidatePath("/camera-trap/species/manage");
@@ -4692,16 +4701,16 @@ export async function deleteDetection(
     // Hard delete — CASCADE will remove the identification row
     await db.delete(detections).where(eq(detections.id, detectionId));
 
-    await db.insert(activityLog).values({
-      userEmail: user.email,
-      action: "delete_detection",
+    await recordEvent({
+      source: "camera-trap",
+      eventType: "delete_detection",
+      summary: `Detección ${detectionId} eliminada (${det.filename})`,
+      severity: "warn",
+      actorEmail: user.email,
       projectId: "camera-trap",
       targetType: "detection",
-      targetId: String(detectionId),
-      details: JSON.stringify({
-        imageId: det.imageId,
-        filename: det.filename,
-      }),
+      targetId: detectionId,
+      details: { imageId: det.imageId, filename: det.filename },
     });
 
     revalidatePath(CAMERA_TRAP_PATH);
@@ -5181,13 +5190,15 @@ export async function applySetupTagDate(
       })
       .where(eq(deployments.id, deploymentId));
 
-    await db.insert(activityLog).values({
-      userEmail: user.email,
-      action: "apply_setup_tag_date",
+    await recordEvent({
+      source: "camera-trap",
+      eventType: "apply_setup_tag_date",
+      summary: `Fecha de etiqueta aplicada al despliegue ${deploymentId} · ${field}`,
+      actorEmail: user.email,
       projectId: "camera-trap",
       targetType: "deployment",
-      targetId: String(deploymentId),
-      details: JSON.stringify({ field, value }),
+      targetId: deploymentId,
+      details: { field, value },
     });
 
     revalidatePath(CAMERA_TRAP_PATH);
@@ -5421,13 +5432,15 @@ export async function createShareLink(
       })
       .returning();
 
-    await db.insert(activityLog).values({
-      userEmail: user.email,
-      action: "create_share_link",
+    await recordEvent({
+      source: "camera-trap",
+      eventType: "create_share_link",
+      summary: `Enlace público creado para despliegue ${deploymentId}`,
+      actorEmail: user.email,
       projectId: "camera-trap",
       targetType: "deployment",
-      targetId: String(deploymentId),
-      details: JSON.stringify({ tokenId: result.id, label: result.label }),
+      targetId: deploymentId,
+      details: { tokenId: result.id, label: result.label },
     });
 
     const url = `${process.env.NEXT_PUBLIC_BASE_URL || "https://portal.fcat-ecuador.org"}/public/share/${token}`;
@@ -5464,13 +5477,15 @@ export async function revokeShareLink(
       .set({ revokedAt: new Date() })
       .where(eq(shareTokens.id, tokenId));
 
-    await db.insert(activityLog).values({
-      userEmail: user.email,
-      action: "revoke_share_link",
+    await recordEvent({
+      source: "camera-trap",
+      eventType: "revoke_share_link",
+      summary: `Enlace público revocado en despliegue ${existing.deploymentId}`,
+      actorEmail: user.email,
       projectId: "camera-trap",
       targetType: "deployment",
-      targetId: String(existing.deploymentId),
-      details: JSON.stringify({ tokenId, label: existing.label }),
+      targetId: existing.deploymentId,
+      details: { tokenId, label: existing.label },
     });
 
     revalidatePath(`/camera-trap/${existing.deploymentId}`);

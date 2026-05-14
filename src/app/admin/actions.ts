@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { users, userPermissions, projects, cameraTrapProjects, cameraTrapProjectAccess, deployments } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import { requireAdmin } from "@/lib/auth";
+import { recordEvent } from "@/lib/system-events";
 import { revalidatePath } from "next/cache";
 import fs from "fs/promises";
 import path from "path";
@@ -49,7 +50,7 @@ export async function addUser(
   name: string | null,
   isExternal: boolean
 ): Promise<ActionResult> {
-  await requireAdmin();
+  const admin = await requireAdmin();
 
   const normalizedEmail = email.toLowerCase().trim();
 
@@ -71,6 +72,16 @@ export async function addUser(
       await writeAllowedEmailsFile();
     }
 
+    await recordEvent({
+      source: "admin",
+      eventType: "user_added",
+      summary: `Usuario agregado: ${normalizedEmail}${isExternal ? " (externo)" : ""}`,
+      actorEmail: admin.email,
+      targetType: "user",
+      targetId: normalizedEmail,
+      details: { email: normalizedEmail, name, isExternal },
+    });
+
     revalidatePath("/admin");
     return { success: true, data: undefined };
   } catch (error) {
@@ -82,7 +93,7 @@ export async function addUser(
 }
 
 export async function removeUser(email: string): Promise<ActionResult> {
-  await requireAdmin();
+  const admin = await requireAdmin();
 
   try {
     const [existing] = await db
@@ -96,6 +107,17 @@ export async function removeUser(email: string): Promise<ActionResult> {
     if (existing?.isExternal) {
       await writeAllowedEmailsFile();
     }
+
+    await recordEvent({
+      source: "admin",
+      eventType: "user_removed",
+      summary: `Usuario eliminado: ${email}`,
+      severity: "warn",
+      actorEmail: admin.email,
+      targetType: "user",
+      targetId: email,
+      details: { email, wasExternal: existing?.isExternal ?? false },
+    });
 
     revalidatePath("/admin");
     return { success: true, data: undefined };
@@ -116,7 +138,7 @@ export async function setPermission(
   projectId: string,
   role: string
 ): Promise<ActionResult> {
-  await requireAdmin();
+  const admin = await requireAdmin();
 
   try {
     // Upsert: insert or update the role
@@ -129,6 +151,8 @@ export async function setPermission(
           eq(userPermissions.projectId, projectId)
         )
       );
+
+    const previousRole = existing[0]?.role ?? null;
 
     if (existing.length > 0) {
       await db
@@ -148,6 +172,19 @@ export async function setPermission(
       });
     }
 
+    await recordEvent({
+      source: "admin",
+      eventType: previousRole ? "permission_changed" : "permission_granted",
+      summary: previousRole
+        ? `Permiso actualizado · ${email} en ${projectId}: ${previousRole} → ${role}`
+        : `Permiso otorgado · ${email} en ${projectId}: ${role}`,
+      actorEmail: admin.email,
+      projectId,
+      targetType: "user",
+      targetId: email,
+      details: { email, projectId, from: previousRole, to: role },
+    });
+
     revalidatePath("/admin");
     return { success: true, data: undefined };
   } catch (error) {
@@ -162,9 +199,19 @@ export async function removePermission(
   email: string,
   projectId: string
 ): Promise<ActionResult> {
-  await requireAdmin();
+  const admin = await requireAdmin();
 
   try {
+    const [existing] = await db
+      .select({ role: userPermissions.role })
+      .from(userPermissions)
+      .where(
+        and(
+          eq(userPermissions.userEmail, email),
+          eq(userPermissions.projectId, projectId)
+        )
+      );
+
     await db
       .delete(userPermissions)
       .where(
@@ -173,6 +220,18 @@ export async function removePermission(
           eq(userPermissions.projectId, projectId)
         )
       );
+
+    await recordEvent({
+      source: "admin",
+      eventType: "permission_revoked",
+      summary: `Permiso revocado · ${email} en ${projectId}${existing ? ` (era ${existing.role})` : ""}`,
+      severity: "warn",
+      actorEmail: admin.email,
+      projectId,
+      targetType: "user",
+      targetId: email,
+      details: { email, projectId, previousRole: existing?.role ?? null },
+    });
 
     revalidatePath("/admin");
     return { success: true, data: undefined };
@@ -237,7 +296,7 @@ export async function createCameraTrapProject(
   name: string,
   driveFolderId?: string
 ): Promise<ActionResult<{ id: number; name: string; driveFolderId: string | null }>> {
-  await requireAdmin();
+  const admin = await requireAdmin();
 
   const trimmedName = name.trim();
   if (!trimmedName) {
@@ -252,6 +311,17 @@ export async function createCameraTrapProject(
         driveFolderId: driveFolderId?.trim() || null,
       })
       .returning();
+
+    await recordEvent({
+      source: "admin",
+      eventType: "ct_project_created",
+      summary: `Proyecto CT creado: ${trimmedName}`,
+      actorEmail: admin.email,
+      projectId: "camera-trap",
+      targetType: "ct_project",
+      targetId: created.id,
+      details: { name: trimmedName, driveFolderId: created.driveFolderId },
+    });
 
     revalidatePath("/admin");
     return { success: true, data: created };
@@ -270,7 +340,7 @@ export async function updateCameraTrapProject(
   id: number,
   data: { name?: string; driveFolderId?: string | null }
 ): Promise<ActionResult<void>> {
-  await requireAdmin();
+  const admin = await requireAdmin();
 
   try {
     const updates: Record<string, unknown> = {};
@@ -292,6 +362,17 @@ export async function updateCameraTrapProject(
       .set(updates)
       .where(eq(cameraTrapProjects.id, id));
 
+    await recordEvent({
+      source: "admin",
+      eventType: "ct_project_updated",
+      summary: `Proyecto CT ${id} actualizado · campos: ${Object.keys(updates).join(", ")}`,
+      actorEmail: admin.email,
+      projectId: "camera-trap",
+      targetType: "ct_project",
+      targetId: id,
+      details: { id, updates },
+    });
+
     revalidatePath("/admin");
     revalidatePath("/camera-trap");
     return { success: true, data: undefined };
@@ -307,7 +388,7 @@ export async function updateCameraTrapProject(
 }
 
 export async function deleteCameraTrapProject(id: number): Promise<ActionResult<void>> {
-  await requireAdmin();
+  const admin = await requireAdmin();
 
   try {
     // Check for deployments assigned to this project
@@ -328,7 +409,24 @@ export async function deleteCameraTrapProject(id: number): Promise<ActionResult<
       };
     }
 
+    const [existing] = await db
+      .select({ name: cameraTrapProjects.name })
+      .from(cameraTrapProjects)
+      .where(eq(cameraTrapProjects.id, id));
+
     await db.delete(cameraTrapProjects).where(eq(cameraTrapProjects.id, id));
+
+    await recordEvent({
+      source: "admin",
+      eventType: "ct_project_deleted",
+      summary: `Proyecto CT eliminado: ${existing?.name ?? `id ${id}`}`,
+      severity: "warn",
+      actorEmail: admin.email,
+      projectId: "camera-trap",
+      targetType: "ct_project",
+      targetId: id,
+      details: { id, name: existing?.name ?? null },
+    });
 
     revalidatePath("/admin");
     return { success: true, data: undefined };
@@ -363,9 +461,16 @@ export async function setCameraTrapProjectAccess(
   email: string,
   projectIds: number[]
 ): Promise<ActionResult<void>> {
-  await requireAdmin();
+  const admin = await requireAdmin();
 
   try {
+    // Capture previous access so the event details can show the diff.
+    const previous = await db
+      .select({ id: cameraTrapProjectAccess.cameraTrapProjectId })
+      .from(cameraTrapProjectAccess)
+      .where(eq(cameraTrapProjectAccess.userEmail, email));
+    const previousIds = previous.map((r) => r.id).sort((a, b) => a - b);
+
     // Delete all existing access for this user
     await db
       .delete(cameraTrapProjectAccess)
@@ -380,6 +485,18 @@ export async function setCameraTrapProjectAccess(
         }))
       );
     }
+
+    const sortedNext = [...projectIds].sort((a, b) => a - b);
+    await recordEvent({
+      source: "admin",
+      eventType: "ct_project_access_set",
+      summary: `Acceso CT actualizado para ${email}: ${previousIds.length} → ${sortedNext.length} proyecto(s)`,
+      actorEmail: admin.email,
+      projectId: "camera-trap",
+      targetType: "user",
+      targetId: email,
+      details: { email, from: previousIds, to: sortedNext },
+    });
 
     revalidatePath("/admin");
     revalidatePath("/camera-trap");

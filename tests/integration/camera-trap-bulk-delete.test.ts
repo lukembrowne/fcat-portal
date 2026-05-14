@@ -462,19 +462,19 @@ describe("bulkDeleteBlankImages", () => {
       unverifiedDetections: false,
     });
 
-    const logs = db
+    const events = db
       .select()
-      .from(schema.activityLog)
+      .from(schema.systemEvents)
       .all();
 
-    const deleteLog = logs.find(
-      (l) => l.action === "bulk_delete_blanks"
+    const deleteEvent = events.find(
+      (e) => e.eventType === "bulk_delete_blanks"
     );
-    expect(deleteLog).toBeDefined();
-    expect(deleteLog!.userEmail).toBe(testUser.email);
-    expect(deleteLog!.projectId).toBe("camera-trap");
+    expect(deleteEvent).toBeDefined();
+    expect(deleteEvent!.actorEmail).toBe(testUser.email);
+    expect(deleteEvent!.projectId).toBe("camera-trap");
 
-    const details = JSON.parse(deleteLog!.details!);
+    const details = JSON.parse(deleteEvent!.details!);
     expect(details.jobId).toBe(seed.job.id);
     expect(details.deleted).toBe(2);
     expect(details.scope).toEqual({ confirmedBlank: true, noDetections: false, unverifiedDetections: false });

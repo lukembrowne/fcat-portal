@@ -1,7 +1,8 @@
 "use server";
 
 import { db } from "@/db";
-import { deployments, images, cameraTrapProjects, activityLog, processingJobs } from "@/db/schema";
+import { deployments, images, cameraTrapProjects, processingJobs } from "@/db/schema";
+import { recordEvent } from "@/lib/system-events";
 import { eq, and, inArray, sql, count } from "drizzle-orm";
 import {
   listDeploymentFolders,
@@ -632,14 +633,16 @@ async function compressJobInternal(
       })
       .where(eq(processingJobs.id, jobId));
 
-    // Activity log
-    await db.insert(activityLog).values({
-      userEmail,
-      action: "compress_images",
+    await recordEvent({
+      source: "camera-trap",
+      eventType: "compress_images",
+      summary: `Imágenes comprimidas en despliegue ${deploymentId} · ${result.compressed} ok, ${result.failed} fallo${result.failed === 1 ? "" : "s"}`,
+      severity: result.failed > 0 ? "warn" : "success",
+      actorEmail: userEmail,
       projectId: "camera-trap",
       targetType: "deployment",
-      targetId: String(deploymentId),
-      details: JSON.stringify({ compressed: result.compressed, skipped, failed: result.failed, savedBytes: result.savedBytes }),
+      targetId: deploymentId,
+      details: { compressed: result.compressed, skipped, failed: result.failed, savedBytes: result.savedBytes },
     });
 
     log.info(
@@ -904,13 +907,16 @@ async function revertJobInternal(
       })
       .where(eq(processingJobs.id, jobId));
 
-    await db.insert(activityLog).values({
-      userEmail,
-      action: "revert_compression",
+    await recordEvent({
+      source: "camera-trap",
+      eventType: "revert_compression",
+      summary: `Compresión revertida en despliegue ${deploymentId} · ${reverted} ok, ${failed} fallo${failed === 1 ? "" : "s"}`,
+      severity: failed > 0 ? "warn" : "success",
+      actorEmail: userEmail,
       projectId: "camera-trap",
       targetType: "deployment",
-      targetId: String(deploymentId),
-      details: JSON.stringify({ reverted, failed }),
+      targetId: deploymentId,
+      details: { reverted, failed },
     });
 
     log.info(

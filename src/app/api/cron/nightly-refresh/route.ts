@@ -22,6 +22,7 @@ import { verifyCronSecret } from "@/lib/cron-auth";
 import { and, inArray, isNotNull, eq, gte, sql, count } from "drizzle-orm";
 import { Resend } from "resend";
 import { log } from "@/lib/log";
+import { recordEvent } from "@/lib/system-events";
 import {
   awaitJobTerminal,
   runDriveSyncWorker,
@@ -180,6 +181,15 @@ export async function POST(request: Request) {
 
     if (!terminal) {
       log.error({ jobId }, "[nightly] Worker did not finish within timeout");
+      await recordEvent({
+        source: "cron",
+        eventType: "cron_nightly_refresh",
+        severity: "error",
+        actorEmail: null,
+        summary: `Tiempo de espera agotado para drive_sync (job ${jobId})`,
+        durationMs: Date.now() - startTime,
+        details: { jobId, reason: "drive_sync_timeout", timeoutMs: CT_SYNC_TIMEOUT_MS },
+      });
       return Response.json(
         {
           error: "drive_sync timeout",
@@ -369,7 +379,8 @@ export async function POST(request: Request) {
     }
 
     const errorCount = terminal.failedImages;
-    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    const elapsedMs = Date.now() - startTime;
+    const elapsed = (elapsedMs / 1000).toFixed(1);
     const totalSize = snapshot.totalCameraSizeBytes + snapshot.totalAudioSizeBytes + snapshot.totalIbuttonSizeBytes;
     log.info(
       {
@@ -382,6 +393,28 @@ export async function POST(request: Request) {
       "[nightly] Done",
     );
 
+    const ok = terminal.status === "completed" && errorCount === 0;
+    await recordEvent({
+      source: "cron",
+      eventType: "cron_nightly_refresh",
+      severity: ok ? "success" : "warn",
+      actorEmail: null,
+      summary: ok
+        ? `Refresco nocturno completado · ${results.length} instalaciones · ${formatBytes(totalSize)}`
+        : `Refresco nocturno con problemas · ${errorCount} fallo${errorCount === 1 ? "" : "s"} de ${results.length} instalaciones`,
+      durationMs: elapsedMs,
+      details: {
+        jobId,
+        driveSyncStatus: terminal.status,
+        deployments: results.length,
+        errors: errorCount,
+        totalCameras: snapshot.totalCameras,
+        totalAudio: snapshot.totalAudio,
+        totalIbutton: snapshot.totalIbutton,
+        totalSizeBytes: totalSize,
+      },
+    });
+
     return Response.json({
       ok: terminal.status === "completed",
       jobId,
@@ -393,6 +426,14 @@ export async function POST(request: Request) {
     });
   } catch (err) {
     log.error({ err }, "[nightly] Fatal error");
+    await recordEvent({
+      source: "cron",
+      eventType: "cron_nightly_refresh",
+      severity: "error",
+      actorEmail: null,
+      summary: `Refresco nocturno falló: ${err instanceof Error ? err.message : "error desconocido"}`,
+      details: { error: err instanceof Error ? err.message : String(err) },
+    });
     return Response.json(
       { error: err instanceof Error ? err.message : "Unknown error" },
       { status: 500 }

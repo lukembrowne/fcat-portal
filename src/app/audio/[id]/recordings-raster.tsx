@@ -273,11 +273,16 @@ function Tooltip({
           {hover.cell.detectionCount} detecciones
         </div>
       )}
+      {hover.cell.speciesCount > 0 && metricKey !== "speciesCount" && (
+        <div className="text-muted-foreground">
+          {hover.cell.speciesCount} {hover.cell.speciesCount === 1 ? "especie" : "especies"}
+        </div>
+      )}
     </div>
   );
 }
 
 function formatMetric(key: RasterMetricKey, value: number): string {
-  if (key === "detectionCount") return value.toLocaleString();
+  if (key === "detectionCount" || key === "speciesCount") return value.toLocaleString();
   return value.toFixed(3);
 }

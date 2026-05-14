@@ -14,7 +14,7 @@
 import type { AudioFileRow } from "@/app/audio/actions";
 import type { AcousticIndexKey } from "@/lib/acoustic-indices";
 
-export type RasterMetricKey = "detectionCount" | AcousticIndexKey;
+export type RasterMetricKey = "detectionCount" | "speciesCount" | AcousticIndexKey;
 
 export interface RasterCell {
   fileId: number;
@@ -24,6 +24,7 @@ export interface RasterCell {
   dayIndex: number;          // 0..N-1 (oldest day = 0)
   minuteOfDay: number;       // 0..1439
   detectionCount: number;
+  speciesCount: number;
   metricValue: number | null;
 }
 
@@ -42,6 +43,8 @@ function readMetric(file: AudioFileRow, key: RasterMetricKey): number | null {
   switch (key) {
     case "detectionCount":
       return file.detectionCount;
+    case "speciesCount":
+      return file.speciesCount;
     case "soundscapeSaturation":
       return file.soundscapeSaturation;
     case "acousticComplexityIndex":
@@ -125,6 +128,7 @@ export function buildCells(
     dayIndex: dayIndex.get(recordedDate)!,
     minuteOfDay: minutesFromTime(recordedTime),
     detectionCount: file.detectionCount,
+    speciesCount: file.speciesCount,
     metricValue: readMetric(file, metricKey),
   }));
 
@@ -180,6 +184,7 @@ export function metricToFill(
 /** Spanish labels for the metric selector. */
 export const RASTER_METRIC_LABELS: Record<RasterMetricKey, string> = {
   detectionCount: "Detecciones (BirdNET)",
+  speciesCount: "Especies detectadas",
   soundscapeSaturation: "Saturación del paisaje sonoro",
   acousticComplexityIndex: "Índice de complejidad acústica (ACI)",
   frequencyEntropy: "Entropía de frecuencia",
@@ -190,6 +195,7 @@ export const RASTER_METRIC_LABELS: Record<RasterMetricKey, string> = {
 /** All metric keys, in display order. */
 export const RASTER_METRIC_KEYS: readonly RasterMetricKey[] = [
   "detectionCount",
+  "speciesCount",
   "soundscapeSaturation",
   "acousticComplexityIndex",
   "frequencyEntropy",

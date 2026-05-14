@@ -107,6 +107,7 @@ export interface AudioFileRow {
   format: string | null;
   playable: boolean;
   detectionCount: number;
+  speciesCount: number;
   // Parsed once server-side from the filename. Local Ecuador time (UTC-5).
   recordedDate: string | null;
   recordedTime: string | null;
@@ -310,6 +311,13 @@ export async function fetchAudioFiles(
       playable: audioFiles.playable,
       detectionCount: sql<number>`(
         SELECT COUNT(*) FROM audio_identifications
+        INNER JOIN audio_detections ON audio_detections.id = audio_identifications.audio_detection_id
+        WHERE audio_detections.audio_file_id = ${audioFiles.id}
+        AND ${visible}
+      )`,
+      speciesCount: sql<number>`(
+        SELECT COUNT(DISTINCT COALESCE(audio_identifications.corrected_species, audio_identifications.species))
+        FROM audio_identifications
         INNER JOIN audio_detections ON audio_detections.id = audio_identifications.audio_detection_id
         WHERE audio_detections.audio_file_id = ${audioFiles.id}
         AND ${visible}

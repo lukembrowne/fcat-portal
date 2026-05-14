@@ -104,6 +104,7 @@ export function RecordingsShell({
   const availableMetrics = useMemo(() => {
     const available: Record<RasterMetricKey, boolean> = {
       detectionCount: true,
+      speciesCount: true,
       soundscapeSaturation: false,
       acousticComplexityIndex: false,
       frequencyEntropy: false,
@@ -280,7 +281,7 @@ function RasterLegend({
 }) {
   const [lo, hi] = domain;
   const noSignal = hi === 0;
-  const format = metricKey === "detectionCount"
+  const format = metricKey === "detectionCount" || metricKey === "speciesCount"
     ? (n: number) => n.toLocaleString()
     : (n: number) => n.toFixed(2);
 

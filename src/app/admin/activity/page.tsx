@@ -1,6 +1,7 @@
 import { requireAdmin } from "@/lib/auth";
 import { EVENT_SOURCES, EVENT_SEVERITIES } from "@/db/schema";
-import { listEvents } from "./actions";
+import { listEvents, type SortColumn, type SortDirection } from "./actions";
+import { SortIcon } from "@/components/sort-icon";
 
 export const dynamic = "force-dynamic";
 
@@ -35,6 +36,54 @@ function asString(value: string | string[] | undefined): string | undefined {
   return value;
 }
 
+type ActivityFilterParams = {
+  source?: string;
+  eventType?: string;
+  severity?: string;
+  actorEmail?: string;
+  from?: string;
+  to?: string;
+  q?: string;
+};
+
+function SortableHeader({
+  column,
+  label,
+  currentSort,
+  currentDir,
+  filters,
+}: {
+  column: SortColumn;
+  label: string;
+  currentSort: SortColumn;
+  currentDir: SortDirection;
+  filters: ActivityFilterParams;
+}) {
+  const isActive = currentSort === column;
+  const nextDir = isActive && currentDir === "desc" ? "asc" : "desc";
+  const sp = new URLSearchParams();
+  if (filters.source) sp.set("source", filters.source);
+  if (filters.eventType) sp.set("eventType", filters.eventType);
+  if (filters.severity) sp.set("severity", filters.severity);
+  if (filters.actorEmail) sp.set("actorEmail", filters.actorEmail);
+  if (filters.from) sp.set("from", filters.from);
+  if (filters.to) sp.set("to", filters.to);
+  if (filters.q) sp.set("q", filters.q);
+  sp.set("sortBy", column);
+  sp.set("sortDir", nextDir);
+  return (
+    <th className="px-3 py-2 font-medium">
+      <a
+        href={`/admin/activity?${sp.toString()}`}
+        className="inline-flex items-center gap-1 hover:text-foreground transition-colors"
+      >
+        {label}
+        <SortIcon direction={isActive ? currentDir : false} />
+      </a>
+    </th>
+  );
+}
+
 function formatTimestamp(iso: string): string {
   const d = new Date(iso);
   return d.toLocaleString("es-EC", {
@@ -66,6 +115,10 @@ export default async function AdminActivityPage({
   await requireAdmin();
   const params = await searchParams;
 
+  const sortBy = (asString(params.sortBy) ?? "occurredAt") as SortColumn;
+  const sortDir: SortDirection =
+    asString(params.sortDir) === "asc" ? "asc" : "desc";
+
   const filters = {
     source: asString(params.source),
     eventType: asString(params.eventType),
@@ -75,6 +128,8 @@ export default async function AdminActivityPage({
     to: asString(params.to),
     q: asString(params.q),
     page: params.page ? parseInt(asString(params.page) ?? "1", 10) || 1 : 1,
+    sortBy,
+    sortDir,
   };
 
   const result = await listEvents(filters);
@@ -91,6 +146,8 @@ export default async function AdminActivityPage({
     if (filters.from) sp.set("from", filters.from);
     if (filters.to) sp.set("to", filters.to);
     if (filters.q) sp.set("q", filters.q);
+    if (sortBy !== "occurredAt") sp.set("sortBy", sortBy);
+    if (sortDir !== "desc") sp.set("sortDir", sortDir);
     if (page > 1) sp.set("page", String(page));
     const qs = sp.toString();
     return qs ? `?${qs}` : "";
@@ -228,13 +285,13 @@ export default async function AdminActivityPage({
         <table className="w-full text-sm">
           <thead className="bg-muted/40 text-left">
             <tr>
-              <th className="px-3 py-2 font-medium">Cuándo</th>
-              <th className="px-3 py-2 font-medium">Severidad</th>
-              <th className="px-3 py-2 font-medium">Origen</th>
-              <th className="px-3 py-2 font-medium">Tipo</th>
-              <th className="px-3 py-2 font-medium">Resumen</th>
-              <th className="px-3 py-2 font-medium">Actor</th>
-              <th className="px-3 py-2 font-medium">Duración</th>
+              <SortableHeader column="occurredAt" label="Cuándo" currentSort={sortBy} currentDir={sortDir} filters={filters} />
+              <SortableHeader column="severity" label="Severidad" currentSort={sortBy} currentDir={sortDir} filters={filters} />
+              <SortableHeader column="source" label="Origen" currentSort={sortBy} currentDir={sortDir} filters={filters} />
+              <SortableHeader column="eventType" label="Tipo" currentSort={sortBy} currentDir={sortDir} filters={filters} />
+              <SortableHeader column="summary" label="Resumen" currentSort={sortBy} currentDir={sortDir} filters={filters} />
+              <SortableHeader column="actorEmail" label="Actor" currentSort={sortBy} currentDir={sortDir} filters={filters} />
+              <SortableHeader column="durationMs" label="Duración" currentSort={sortBy} currentDir={sortDir} filters={filters} />
               <th className="px-3 py-2 font-medium">Detalles</th>
             </tr>
           </thead>

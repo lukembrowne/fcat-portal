@@ -9,7 +9,20 @@ import {
   type EventSeverity,
 } from "@/db/schema";
 import { requireAdmin } from "@/lib/auth";
-import { and, desc, eq, gte, like, lte, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gte, like, lte, sql, type SQL } from "drizzle-orm";
+
+const SORTABLE_COLUMNS = {
+  occurredAt: systemEvents.occurredAt,
+  severity: systemEvents.severity,
+  source: systemEvents.source,
+  eventType: systemEvents.eventType,
+  summary: systemEvents.summary,
+  actorEmail: systemEvents.actorEmail,
+  durationMs: systemEvents.durationMs,
+} as const;
+
+export type SortColumn = keyof typeof SORTABLE_COLUMNS;
+export type SortDirection = "asc" | "desc";
 
 export type EventRow = {
   id: number;
@@ -35,6 +48,8 @@ export type ListEventsFilters = {
   to?: string;   // YYYY-MM-DD
   q?: string;
   page?: number;
+  sortBy?: string;
+  sortDir?: string;
 };
 
 export type ListEventsResult = {
@@ -90,12 +105,22 @@ export async function listEvents(
 
   const condition = where.length > 0 ? and(...where) : undefined;
 
+  const sortBy = filters.sortBy as SortColumn | undefined;
+  const sortColumn =
+    sortBy && sortBy in SORTABLE_COLUMNS
+      ? SORTABLE_COLUMNS[sortBy]
+      : systemEvents.occurredAt;
+  const sortDir: SortDirection = filters.sortDir === "asc" ? "asc" : "desc";
+  const orderFn = sortDir === "asc" ? asc : desc;
+  // Stable tiebreaker on id keeps pagination deterministic.
+  const idTiebreaker = sortDir === "asc" ? asc(systemEvents.id) : desc(systemEvents.id);
+
   const [rows, totalResult] = await Promise.all([
     db
       .select()
       .from(systemEvents)
       .where(condition)
-      .orderBy(desc(systemEvents.occurredAt), desc(systemEvents.id))
+      .orderBy(orderFn(sortColumn), idTiebreaker)
       .limit(PAGE_SIZE + 1) // +1 to peek next-page existence
       .offset(offset),
     db

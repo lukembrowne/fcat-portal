@@ -101,6 +101,7 @@ When fixing database queries, always check for edge cases where records have NUL
 
 - After implementing any UI changes, verify there are no layout regressions (empty space, overflow, alignment shifts) before considering the task complete. Test the component in its full context, not in isolation.
 - After implementing any state mutation (deletion, confirmation toggle, processing completion), always ensure the relevant UI caches are invalidated and the UI updates optimistically or refreshes automatically. Check both the immediate component AND related components (e.g., tables, sidebars, history panels) that display derived data.
+- **Tables are sortable by default.** Any new data table (or substantial edit to an existing one) must support per-column sorting using the shared `SortIcon` from `@/components/sort-icon`. For SSR/Server Component tables, follow the URL-param pattern in `src/app/research-applications/page.tsx` and `src/app/admin/activity/page.tsx` (`?sortBy=<col>&sortDir=asc|desc`, with a `SORTABLE_COLUMNS` map in the action). For Client Component tables, follow the local-state pattern in `src/app/finance/expenses/expense-table.tsx`. Preserve sort params across pagination and filter changes, and use a stable id tiebreaker in the `orderBy`.
 
 ## Git Workflow
 

@@ -4,8 +4,12 @@ import { useRef, useState, useEffect } from "react";
 import Link from "next/link";
 import { Play, Pause, ExternalLink, Loader2 } from "lucide-react";
 import type { AudioDetectionRow } from "@/app/audio/species/actions";
+import { COLORMAPS } from "@/lib/spectrogram-colormaps";
 
 const PADDING_SECONDS = 3;
+const SPEC_HEIGHT = 56;
+const FFT_SIZE = 512; // 256 frequency bins; ~5.8 ms time window @ 44.1 kHz
+const DISPLAY_BIN_FRACTION = 0.85; // bird vocalizations live below ~17 kHz at 44.1 kHz
 
 interface AudioDetectionCardProps {
   detection: AudioDetectionRow;
@@ -24,8 +28,14 @@ function formatConfidence(c: number | null): string {
 
 export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
+  const byteDataRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
+
   const [playing, setPlaying] = useState(false);
-  const [progress, setProgress] = useState(0); // 0..1 within the clip window
+  const [loading, setLoading] = useState(false);
 
   const duration = detection.duration ?? Number.POSITIVE_INFINITY;
   const start = Math.max(0, detection.startTime - PADDING_SECONDS);
@@ -36,19 +46,31 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
   const clipLength = end - start;
 
   // Stream URL — the stream API takes the Google Drive file ID
-  // (audio_files.driveFileId), NOT the integer DB id. We intentionally do NOT
-  // append a Media Fragment hash (#t=...) because browser support is
-  // inconsistent and we seek explicitly before play.
+  // (audio_files.driveFileId), NOT the integer DB id.
   const streamSrc = `/api/audio/stream?fileId=${encodeURIComponent(
     detection.driveFileId
   )}`;
 
-  // Drive the progress bar from requestAnimationFrame instead of the audio
-  // element's `timeupdate` event. timeupdate fires at the browser's
-  // discretion (often 200-400ms, sometimes skipping entirely while the
-  // element fetches byte ranges for streamed audio), which made the bar look
-  // stuck or jumpy. rAF gives a smooth 60fps poll of currentTime, and we
-  // only spin it up between play→pause/ended.
+  // Wire up the canvas backing store at the right pixel density. Done once
+  // on mount; resize observer not needed because the card width is stable.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssWidth = canvas.clientWidth;
+    canvas.width = Math.max(1, Math.floor(cssWidth * dpr));
+    canvas.height = Math.max(1, Math.floor(SPEC_HEIGHT * dpr));
+    const ctx = canvas.getContext("2d");
+    if (ctx) {
+      ctx.fillStyle = "rgb(20, 20, 28)"; // dark backdrop matches viridis low end
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+  }, []);
+
+  // rAF-driven spectrogram paint loop. Tap the analyser for the latest FFT
+  // frame, paint a 1-column slice at the playhead's x-position, repeat.
+  // currentTime accuracy variability doesn't matter visually — the column
+  // appears where the audio actually IS in the clip window.
   useEffect(() => {
     const el = audioRef.current;
     if (!el) return;
@@ -64,16 +86,22 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
 
     const tick = () => {
       if (!running) return;
+
       if (Number.isFinite(end) && el.currentTime >= end) {
         el.pause();
         setPlaying(false);
-        setProgress(0);
         stop();
         return;
       }
-      const ratio =
-        clipLength > 0 ? (el.currentTime - start) / clipLength : 0;
-      setProgress(Math.max(0, Math.min(1, ratio)));
+
+      const canvas = canvasRef.current;
+      const analyser = analyserRef.current;
+      const byteData = byteDataRef.current;
+      if (canvas && analyser && byteData && clipLength > 0) {
+        analyser.getByteFrequencyData(byteData);
+        paintColumn(canvas, byteData, el.currentTime, start, clipLength);
+      }
+
       rafId = requestAnimationFrame(tick);
     };
 
@@ -86,7 +114,6 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
     const onEnded = () => {
       stop();
       setPlaying(false);
-      setProgress(0);
     };
 
     el.addEventListener("play", onPlay);
@@ -100,7 +127,48 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
     };
   }, [start, end, clipLength]);
 
-  const [loading, setLoading] = useState(false);
+  // Tear down AudioContext on unmount. Browsers cap simultaneous contexts at
+  // ~6 in Chrome, so leaking these across navigations would eventually break.
+  useEffect(() => {
+    return () => {
+      audioCtxRef.current?.close().catch(() => {});
+    };
+  }, []);
+
+  const ensureAudioGraph = () => {
+    const el = audioRef.current;
+    if (!el) return false;
+    if (audioCtxRef.current) return true;
+    try {
+      const Ctor =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext })
+          .webkitAudioContext;
+      const ctx = new Ctor();
+      const source = ctx.createMediaElementSource(el);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = FFT_SIZE;
+      analyser.smoothingTimeConstant = 0.4;
+      source.connect(analyser);
+      analyser.connect(ctx.destination);
+      audioCtxRef.current = ctx;
+      analyserRef.current = analyser;
+      sourceNodeRef.current = source;
+      byteDataRef.current = new Uint8Array(analyser.frequencyBinCount);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const clearCanvas = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.fillStyle = "rgb(20, 20, 28)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  };
 
   const toggle = async () => {
     const el = audioRef.current;
@@ -112,9 +180,8 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
     }
 
     // Wait for metadata BEFORE seek/play, otherwise el.play() may fire while
-    // currentTime is still 0 (start of the recording, not start of the clip).
-    // The browser then streams minutes of pre-roll before reaching the
-    // detection window and the progress bar stays at 0 the whole time.
+    // currentTime is still 0 and the recording streams from the beginning
+    // instead of from the clip window.
     if (el.readyState < 1 /* HAVE_METADATA */) {
       setLoading(true);
       try {
@@ -139,16 +206,14 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
       setLoading(false);
     }
 
-    // Clamp seek target inside the actual file duration. The cached
-    // audio_files.duration can disagree with the decoded duration; trust the
-    // element which now has metadata.
+    // Clamp seek target inside the actual file duration (cached duration
+    // can disagree with the decoded duration).
     const elDur = Number.isFinite(el.duration) ? el.duration : Infinity;
     const seekTarget = Math.min(start, Math.max(0, elDur - 0.05));
 
-    // Always seek into the clip window before play, and AWAIT the seek. For
-    // detections deep in a long recording the byte range covering `start` is
-    // not downloaded yet — calling play() before the seek completes either
-    // rejects silently or stalls indefinitely with the progress bar frozen.
+    // Seek into the clip window and AWAIT completion before play. For
+    // detections deep into a long recording, the byte range covering
+    // `start` is not downloaded at metadata time.
     if (Math.abs(el.currentTime - seekTarget) > 0.05) {
       setLoading(true);
       try {
@@ -171,6 +236,23 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
         return;
       }
       setLoading(false);
+    }
+
+    // Build the Web Audio graph on first play (user-gesture context).
+    if (!ensureAudioGraph()) {
+      setPlaying(false);
+      return;
+    }
+    try {
+      await audioCtxRef.current!.resume();
+    } catch {
+      // continue — most browsers don't require resume after gesture
+    }
+
+    // If we're starting fresh from the clip start, wipe any old paint so the
+    // canvas reflects only this playthrough.
+    if (Math.abs(el.currentTime - start) < 0.1) {
+      clearCanvas();
     }
 
     try {
@@ -230,12 +312,11 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
           )}
         </button>
         <div className="flex-1 min-w-0">
-          <div className="h-1.5 rounded-full bg-muted overflow-hidden">
-            <div
-              className="h-full bg-foreground"
-              style={{ width: `${progress * 100}%` }}
-            />
-          </div>
+          <canvas
+            ref={canvasRef}
+            style={{ width: "100%", height: `${SPEC_HEIGHT}px` }}
+            className="rounded bg-[rgb(20,20,28)] block"
+          />
           <div className="mt-1 flex justify-between text-[10px] text-muted-foreground tabular-nums">
             <span>
               {detection.startTime.toFixed(1)}s → {detection.endTime.toFixed(1)}s
@@ -248,7 +329,7 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
         </div>
       </div>
 
-      <audio ref={audioRef} src={streamSrc} preload="none" />
+      <audio ref={audioRef} src={streamSrc} preload="none" crossOrigin="anonymous" />
 
       <div className="flex items-center justify-between text-xs">
         <span className="text-muted-foreground truncate" title={detection.filename}>
@@ -265,4 +346,46 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
       </div>
     </div>
   );
+}
+
+// Paint a 1-column slice at the playhead's x-position. The byteData is the
+// AnalyserNode's latest FFT frame; we map low frequencies to the bottom of
+// the canvas (musical convention) and apply the viridis LUT.
+function paintColumn(
+  canvas: HTMLCanvasElement,
+  byteData: Uint8Array<ArrayBuffer>,
+  currentTime: number,
+  start: number,
+  clipLength: number,
+) {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  const width = canvas.width;
+  const height = canvas.height;
+  const rel = (currentTime - start) / clipLength;
+  if (!Number.isFinite(rel) || rel < 0 || rel > 1) return;
+  const x = Math.floor(rel * (width - 1));
+
+  const lut = COLORMAPS.viridis;
+  const displayBins = Math.floor(byteData.length * DISPLAY_BIN_FRACTION);
+  const colWidth = Math.max(1, Math.ceil(width / 200)); // ~200 columns total
+
+  const img = ctx.createImageData(colWidth, height);
+  for (let y = 0; y < height; y++) {
+    // y=0 is top; map to highest displayed bin → flip so low freq is at bottom.
+    const binFloat = (1 - y / height) * (displayBins - 1);
+    const binIdx = Math.min(displayBins - 1, Math.max(0, Math.floor(binFloat)));
+    const v = byteData[binIdx];
+    const r = lut[v * 3];
+    const g = lut[v * 3 + 1];
+    const b = lut[v * 3 + 2];
+    for (let dx = 0; dx < colWidth; dx++) {
+      const idx = (y * colWidth + dx) * 4;
+      img.data[idx] = r;
+      img.data[idx + 1] = g;
+      img.data[idx + 2] = b;
+      img.data[idx + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, x, 0);
 }

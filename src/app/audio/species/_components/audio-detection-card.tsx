@@ -52,7 +52,9 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
       if (!Number.isFinite(end)) return;
       if (el.currentTime >= end) {
         el.pause();
-        el.currentTime = start; // reset to clip start so play resumes the window
+        // Do NOT seek back to start here — the next click handles seek
+        // (with await) before play. Seeking here without await leaves the
+        // element in mid-seek state if the user clicks play again immediately.
         setPlaying(false);
         setProgress(0);
         return;
@@ -111,11 +113,38 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
       setLoading(false);
     }
 
-    // Always seek into the clip window before play. The window can be far
-    // into the recording (e.g., 1200s) so without this the user hears the
-    // beginning of the file.
-    if (el.currentTime < start || el.currentTime >= end) {
-      el.currentTime = start;
+    // Clamp seek target inside the actual file duration. The cached
+    // audio_files.duration can disagree with the decoded duration; trust the
+    // element which now has metadata.
+    const elDur = Number.isFinite(el.duration) ? el.duration : Infinity;
+    const seekTarget = Math.min(start, Math.max(0, elDur - 0.05));
+
+    // Always seek into the clip window before play, and AWAIT the seek. For
+    // detections deep in a long recording the byte range covering `start` is
+    // not downloaded yet — calling play() before the seek completes either
+    // rejects silently or stalls indefinitely with the progress bar frozen.
+    if (Math.abs(el.currentTime - seekTarget) > 0.05) {
+      setLoading(true);
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const onSeeked = () => {
+            el.removeEventListener("error", onErr);
+            resolve();
+          };
+          const onErr = () => {
+            el.removeEventListener("seeked", onSeeked);
+            reject(new Error("seek failed"));
+          };
+          el.addEventListener("seeked", onSeeked, { once: true });
+          el.addEventListener("error", onErr, { once: true });
+          el.currentTime = seekTarget;
+        });
+      } catch {
+        setLoading(false);
+        setPlaying(false);
+        return;
+      }
+      setLoading(false);
     }
 
     try {

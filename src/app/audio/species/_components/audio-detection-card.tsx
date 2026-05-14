@@ -51,21 +51,10 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
     detection.driveFileId
   )}`;
 
-  // Wire up the canvas backing store at the right pixel density. Done once
-  // on mount; resize observer not needed because the card width is stable.
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const dpr = window.devicePixelRatio || 1;
-    const cssWidth = canvas.clientWidth;
-    canvas.width = Math.max(1, Math.floor(cssWidth * dpr));
-    canvas.height = Math.max(1, Math.floor(SPEC_HEIGHT * dpr));
-    const ctx = canvas.getContext("2d");
-    if (ctx) {
-      ctx.fillStyle = "rgb(20, 20, 28)"; // dark backdrop matches viridis low end
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-    }
-  }, []);
+  // Canvas backing-store sizing is deferred to first play (see resizeCanvas
+  // below). Mount-time sizing was unreliable: cards inside a collapsed
+  // <details> ("Sin ubicación") have clientWidth=0 at mount, so the canvas
+  // never had a paintable surface and the spectrogram silently no-op'd.
 
   // rAF-driven spectrogram paint loop. Tap the analyser for the latest FFT
   // frame, paint a 1-column slice at the playhead's x-position, repeat.
@@ -161,14 +150,31 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
     }
   };
 
-  const clearCanvas = () => {
+  // Match backing store to current CSS-pixel size and DPR. Safe to call on
+  // every play — if dimensions haven't changed, this is a no-op visually
+  // (we only clear when sizing changes or the caller asks).
+  const resizeCanvas = (clearAfter: boolean) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.fillStyle = "rgb(20, 20, 28)";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const dpr = window.devicePixelRatio || 1;
+    const cssWidth = canvas.clientWidth;
+    const wantedW = Math.max(1, Math.floor(cssWidth * dpr));
+    const wantedH = Math.max(1, Math.floor(SPEC_HEIGHT * dpr));
+    const sizeChanged = canvas.width !== wantedW || canvas.height !== wantedH;
+    if (sizeChanged) {
+      canvas.width = wantedW;
+      canvas.height = wantedH;
+    }
+    if (sizeChanged || clearAfter) {
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        ctx.fillStyle = "rgb(20, 20, 28)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+    }
   };
+
+  const clearCanvas = () => resizeCanvas(true);
 
   const toggle = async () => {
     const el = audioRef.current;
@@ -248,6 +254,12 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
     } catch {
       // continue — most browsers don't require resume after gesture
     }
+
+    // Ensure the canvas backing store matches its live CSS-pixel size before
+    // painting starts. This is the right moment because the play button was
+    // just clicked — the canvas is guaranteed visible and laid out, even if
+    // it was inside a <details> collapsed at mount.
+    resizeCanvas(false);
 
     // If we're starting fresh from the clip start, wipe any old paint so the
     // canvas reflects only this playthrough.
@@ -329,7 +341,7 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
         </div>
       </div>
 
-      <audio ref={audioRef} src={streamSrc} preload="none" crossOrigin="anonymous" />
+      <audio ref={audioRef} src={streamSrc} preload="none" />
 
       <div className="flex items-center justify-between text-xs">
         <span className="text-muted-foreground truncate" title={detection.filename}>

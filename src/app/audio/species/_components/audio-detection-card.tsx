@@ -35,10 +35,12 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
   );
   const clipLength = end - start;
 
-  // Stream URL with Media Fragment URI hash. Honors HTTP Range on the server.
-  const streamSrc = `/api/audio/stream?fileId=${detection.audioFileId}#t=${start.toFixed(
-    2
-  )},${end.toFixed(2)}`;
+  // Stream URL with Media Fragment URI hash. The stream API takes the Google
+  // Drive file ID (audio_files.driveFileId), NOT the integer DB id — passing
+  // the DB id 404s and the play button silently fails.
+  const streamSrc = `/api/audio/stream?fileId=${encodeURIComponent(
+    detection.driveFileId
+  )}#t=${start.toFixed(2)},${end.toFixed(2)}`;
 
   // Inline timeupdate fallback — pauses at `end` even on browsers that don't
   // constrain the trailing edge of Media Fragment URI on <audio>.

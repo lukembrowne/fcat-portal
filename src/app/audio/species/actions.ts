@@ -52,6 +52,7 @@ const PAGE_SIZE = 24;
 export interface AudioDetectionRow {
   detectionId: number;
   audioFileId: number;
+  driveFileId: string;
   deploymentId: number;
   filename: string;
   startTime: number;
@@ -302,6 +303,7 @@ export async function getAudioSpeciesSitePage(
     .select({
       detectionId: audioDetections.id,
       audioFileId: audioFiles.id,
+      driveFileId: audioFiles.driveFileId,
       deploymentId: audioFiles.deploymentId,
       filename: audioFiles.filename,
       duration: audioFiles.duration,
@@ -331,11 +333,16 @@ export async function getAudioSpeciesSitePage(
     .limit(PAGE_SIZE)
     .offset(offset);
 
-  const items: AudioDetectionRow[] = rows.map((r) => {
+  // Drop rows lacking a driveFileId — they cannot be streamed (the audio
+  // stream API resolves files by their Google Drive ID).
+  const items: AudioDetectionRow[] = rows
+    .filter((r): r is typeof r & { driveFileId: string } => r.driveFileId != null)
+    .map((r) => {
     const ts = parseRecordingTimestamp(r.filename);
     return {
       detectionId: r.detectionId,
       audioFileId: r.audioFileId,
+      driveFileId: r.driveFileId,
       deploymentId: r.deploymentId,
       filename: r.filename,
       startTime: r.startTime,

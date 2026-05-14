@@ -79,6 +79,9 @@ interface AudioAnnotationClientProps {
   recordingDate?: string | null;
   recordingTime?: string | null;
   showAll: boolean;
+  /** Optional initial seek position (seconds), passed via `?seek=`. Applied
+   *  once after the spectrogram reports duration. */
+  initialSeek?: number | null;
 }
 
 function formatTime(seconds: number): string {
@@ -137,6 +140,7 @@ export function AudioAnnotationClient({
   recordingDate,
   recordingTime,
   showAll,
+  initialSeek,
 }: AudioAnnotationClientProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -366,12 +370,25 @@ export function AudioAnnotationClient({
     toast.success("Todas verificadas en este archivo");
   }, [detections, selectedDetectionId]);
 
+  const initialSeekAppliedRef = useRef(false);
   const handleSpectrogramReady = useCallback(
     (meta: { duration: number; sampleRate: number }) => {
       setDuration(meta.duration);
       setSampleRate(meta.sampleRate);
+      // URL `?seek=` wins on first navigation only — applied once after the
+      // spectrogram reports duration so we can clamp the value.
+      if (
+        initialSeek != null &&
+        Number.isFinite(initialSeek) &&
+        !initialSeekAppliedRef.current
+      ) {
+        initialSeekAppliedRef.current = true;
+        const clamped = Math.min(Math.max(initialSeek, 0), meta.duration);
+        spectrogramRef.current?.seek(clamped);
+        spectrogramRef.current?.scrollToTime(clamped);
+      }
     },
-    []
+    [initialSeek]
   );
 
   const handleBoxResized = useCallback(

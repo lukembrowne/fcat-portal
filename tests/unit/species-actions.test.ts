@@ -16,16 +16,27 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const FILE_PATH = join(
+const CAMERA_FILE = join(
   process.cwd(),
   "src/app/camera-trap/species/actions.ts"
 );
-const SOURCE = readFileSync(FILE_PATH, "utf-8");
+const AUDIO_FILE = join(
+  process.cwd(),
+  "src/app/audio/species/actions.ts"
+);
+const SOURCE = readFileSync(CAMERA_FILE, "utf-8");
+const AUDIO_SOURCE = readFileSync(AUDIO_FILE, "utf-8");
 
 const PUBLIC_ACTIONS = [
   "getCameraTrapSpeciesIndex",
   "getCameraTrapSpeciesDetail",
   "getCameraTrapSpeciesSitePage",
+];
+
+const AUDIO_ACTIONS = [
+  "getAudioSpeciesIndex",
+  "getAudioSpeciesDetail",
+  "getAudioSpeciesSitePage",
 ];
 
 function extractActionBody(source: string, name: string): string {
@@ -57,5 +68,33 @@ describe("camera-trap species actions — security invariants", () => {
   it("imports the effective-species helper (no ad-hoc CASE WHEN)", () => {
     expect(SOURCE).toMatch(/from "@\/db\/effective-species"/);
     expect(SOURCE).toMatch(/aggregateCameraTrapBySpecies/);
+  });
+});
+
+describe("audio species actions — security invariants", () => {
+  for (const name of AUDIO_ACTIONS) {
+    it(`${name} calls requirePermission("grabaciones", "viewer")`, () => {
+      const body = extractActionBody(AUDIO_SOURCE, name);
+      expect(body).toMatch(/requirePermission\("grabaciones", "viewer"\)/);
+    });
+
+    it(`${name} calls getUserCameraTrapProjects`, () => {
+      const body = extractActionBody(AUDIO_SOURCE, name);
+      expect(body).toMatch(/getUserCameraTrapProjects/);
+    });
+
+    it(`${name} applies the confidence filter`, () => {
+      const body = extractActionBody(AUDIO_SOURCE, name);
+      expect(body).toMatch(/parseThresholdParam|applyConfidenceFilter|threshold/);
+    });
+  }
+
+  it("imports the URL whitelist parsers", () => {
+    expect(AUDIO_SOURCE).toMatch(/from "@\/lib\/species-search-params"/);
+  });
+
+  it("imports the audio aggregator helpers", () => {
+    expect(AUDIO_SOURCE).toMatch(/aggregateAudioBySpecies/);
+    expect(AUDIO_SOURCE).toMatch(/aggregateAudioSpeciesSites/);
   });
 });

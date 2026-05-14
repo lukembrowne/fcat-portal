@@ -8,9 +8,10 @@ import {
   type VerificationStatus,
 } from "@/lib/species-search-params";
 import type { ProjectOption } from "@/app/camera-trap/species/actions";
+import { ConfidenceThresholdSlider } from "@/components/audio/confidence-threshold-slider";
 
 interface SpeciesFilterBarProps {
-  /** Reserved for audio mode in Phase 3 (will gate a confidence slider). */
+  /** "audio" enables the BirdNET confidence slider. */
   mode?: "camera-trap" | "audio";
   projects: ProjectOption[];
   selectedStatuses: VerificationStatus[];
@@ -25,6 +26,7 @@ const STATUS_LABELS: Record<VerificationStatus, string> = {
 };
 
 export function SpeciesFilterBar({
+  mode = "camera-trap",
   projects,
   selectedStatuses,
   selectedProjectId,
@@ -123,6 +125,12 @@ export function SpeciesFilterBar({
               </option>
             ))}
           </select>
+        </div>
+      )}
+
+      {mode === "audio" && (
+        <div className="flex items-center min-w-[260px] flex-1 max-w-md">
+          <ConfidenceThresholdSlider variant="compact" />
         </div>
       )}
     </div>

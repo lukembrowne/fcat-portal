@@ -22,13 +22,13 @@ import {
 
 interface PageProps {
   params: Promise<{ id: string; fileId: string }>;
-  searchParams: Promise<{ conf?: string; showAll?: string }>;
+  searchParams: Promise<{ conf?: string; showAll?: string; seek?: string }>;
 }
 
 export default async function AudioAnnotatePage({ params, searchParams }: PageProps) {
   const user = await requirePermission("grabaciones", "viewer");
   const { id, fileId } = await params;
-  const { conf, showAll } = await searchParams;
+  const { conf, showAll, seek } = await searchParams;
   const deploymentId = parseInt(id, 10);
   const audioFileId = parseInt(fileId, 10);
 
@@ -36,6 +36,10 @@ export default async function AudioAnnotatePage({ params, searchParams }: PagePr
 
   const threshold = parseThresholdParam(conf);
   const showAllMode = showAll === "1";
+  const initialSeek = (() => {
+    const n = Number.parseFloat(seek ?? "");
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  })();
 
   await requireDeploymentAccess(user, deploymentId);
 
@@ -193,6 +197,7 @@ export default async function AudioAnnotatePage({ params, searchParams }: PagePr
         recordingDate={recordingTs?.date ?? null}
         recordingTime={recordingTs?.time ?? null}
         showAll={showAllMode}
+        initialSeek={initialSeek}
       />
     </div>
   );

@@ -715,6 +715,22 @@ for (const m of migrations) {
 const postMigrationIndexes = [
   `CREATE INDEX IF NOT EXISTS idx_biochoco_images_starred ON biochoco_images(starred) WHERE starred = 1`,
   `CREATE INDEX IF NOT EXISTS idx_audio_detections_job ON audio_detections(job_id)`,
+
+  // Species detection browser — partial indexes for effective-species aggregation.
+  // Split the active vs. corrected branches so each gets a sargable predicate
+  // hitting its own small index. See src/db/effective-species.ts.
+  `CREATE INDEX IF NOT EXISTS idx_bio_id_species_active
+    ON biochoco_identifications(species, detection_id)
+    WHERE verification_status IN ('unverified','verified')`,
+  `CREATE INDEX IF NOT EXISTS idx_bio_id_corrected
+    ON biochoco_identifications(corrected_species, detection_id)
+    WHERE verification_status = 'corrected'`,
+  `CREATE INDEX IF NOT EXISTS idx_audio_id_species_active
+    ON audio_identifications(species, audio_detection_id)
+    WHERE verification_status IN ('unverified','verified')`,
+  `CREATE INDEX IF NOT EXISTS idx_audio_id_corrected
+    ON audio_identifications(corrected_species, audio_detection_id)
+    WHERE verification_status = 'corrected'`,
 ];
 for (const idx of postMigrationIndexes) {
   db.exec(idx);

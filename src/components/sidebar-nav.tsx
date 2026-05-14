@@ -151,7 +151,7 @@ export function SidebarNav({ user }: SidebarNavProps) {
       { label: "Destacadas", href: "/camera-trap/favorites" },
     ];
     if (isCameraTrapEditor) {
-      cameraTrapChildren.push({ label: "Especies", href: "/camera-trap/species" });
+      cameraTrapChildren.push({ label: "Administrar especies", href: "/camera-trap/species/manage" });
       cameraTrapChildren.push({ label: "Trabajos de ML", href: "/camera-trap/results" });
     }
     if (isCameraTrapAdmin) {

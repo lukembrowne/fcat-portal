@@ -11,6 +11,28 @@ const SPEC_HEIGHT = 56;
 const FFT_SIZE = 512; // 256 frequency bins; ~5.8 ms time window @ 44.1 kHz
 const DISPLAY_BIN_FRACTION = 0.85; // bird vocalizations live below ~17 kHz at 44.1 kHz
 
+// Module-level singleton. Chrome caps active AudioContexts at ~6 per page;
+// one-per-card breaks after a handful of plays (the 7th card's context is
+// created but silently inert, so the spectrogram never paints). One shared
+// context can host any number of MediaElementAudioSourceNodes.
+let sharedAudioContext: AudioContext | null = null;
+
+function getSharedAudioContext(): AudioContext | null {
+  if (sharedAudioContext && sharedAudioContext.state !== "closed") {
+    return sharedAudioContext;
+  }
+  try {
+    const Ctor =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext })
+        .webkitAudioContext;
+    sharedAudioContext = new Ctor();
+    return sharedAudioContext;
+  } catch {
+    return null;
+  }
+}
+
 interface AudioDetectionCardProps {
   detection: AudioDetectionRow;
 }
@@ -116,11 +138,21 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
     };
   }, [start, end, clipLength]);
 
-  // Tear down AudioContext on unmount. Browsers cap simultaneous contexts at
-  // ~6 in Chrome, so leaking these across navigations would eventually break.
+  // Disconnect this card's nodes on unmount. Do NOT close the shared context —
+  // other cards may still be using it. The source/analyser become orphaned
+  // when the <audio> element is removed; disconnecting helps GC.
   useEffect(() => {
     return () => {
-      audioCtxRef.current?.close().catch(() => {});
+      try {
+        sourceNodeRef.current?.disconnect();
+      } catch {
+        /* already disconnected */
+      }
+      try {
+        analyserRef.current?.disconnect();
+      } catch {
+        /* already disconnected */
+      }
     };
   }, []);
 
@@ -128,12 +160,9 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
     const el = audioRef.current;
     if (!el) return false;
     if (audioCtxRef.current) return true;
+    const ctx = getSharedAudioContext();
+    if (!ctx) return false;
     try {
-      const Ctor =
-        window.AudioContext ||
-        (window as unknown as { webkitAudioContext: typeof AudioContext })
-          .webkitAudioContext;
-      const ctx = new Ctor();
       const source = ctx.createMediaElementSource(el);
       const analyser = ctx.createAnalyser();
       analyser.fftSize = FFT_SIZE;

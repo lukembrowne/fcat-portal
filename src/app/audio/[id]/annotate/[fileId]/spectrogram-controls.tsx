@@ -23,9 +23,13 @@ interface SpectrogramControlsProps {
   onChange: (next: SpectrogramSettings) => void;
   /** Used to compute the Nyquist preset label; null until audio decoded. */
   sampleRate: number | null;
+  /** Rendered at the end of the controls row — used to slot in the
+   *  confidence-threshold slider + "show all" toggle without nesting flex
+   *  containers. */
+  trailing?: React.ReactNode;
 }
 
-export function SpectrogramControls({ settings, onChange, sampleRate }: SpectrogramControlsProps) {
+export function SpectrogramControls({ settings, onChange, sampleRate, trailing }: SpectrogramControlsProps) {
   // Persist on every change. saveStoredSettings is a silent no-op when
   // localStorage is unavailable (SSR, private-mode Safari, quota exceeded).
   useEffect(() => {
@@ -134,6 +138,8 @@ export function SpectrogramControls({ settings, onChange, sampleRate }: Spectrog
           className="w-24"
         />
       </Field>
+
+      {trailing}
     </div>
   );
 }

@@ -31,8 +31,10 @@ export function AnnotationFilterBar({ showAll }: { showAll: boolean }) {
     router.push(query ? `${pathname}?${query}` : pathname);
   }, [pathname, router, searchParams, showAll]);
 
+  // Renders as a Fragment so the slider + toggle slot inline into the parent
+  // toolbar's flex row (alongside Ganancia, Rango, etc).
   return (
-    <div className="flex flex-wrap items-center gap-3">
+    <>
       <ConfidenceThresholdSlider variant="compact" disabled={showAll} />
       <Button
         type="button"
@@ -40,10 +42,11 @@ export function AnnotationFilterBar({ showAll }: { showAll: boolean }) {
         size="sm"
         onClick={toggleShowAll}
         aria-pressed={showAll}
+        className="h-7"
       >
-        {showAll ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
-        {showAll ? "Ocultar < umbral" : "Mostrar todas las detecciones"}
+        {showAll ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+        {showAll ? "Ocultar < umbral" : "Mostrar todas"}
       </Button>
-    </div>
+    </>
   );
 }

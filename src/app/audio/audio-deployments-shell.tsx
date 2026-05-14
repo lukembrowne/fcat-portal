@@ -482,6 +482,8 @@ export function AudioDeploymentsShell({
         )}
 
         <div className="ml-auto flex flex-wrap items-center gap-3">
+          <ConfidenceThresholdSlider variant="compact" />
+
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
@@ -505,11 +507,6 @@ export function AudioDeploymentsShell({
             />
           </div>
         </div>
-      </div>
-
-      {/* Confidence-threshold filter applies across every deployment row's counts. */}
-      <div className="mb-3 max-w-md">
-        <ConfidenceThresholdSlider />
       </div>
 
       {/* Sync message — brief banner; live progress lives in the floating widget */}

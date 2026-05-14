@@ -582,19 +582,16 @@ export function AudioAnnotationClient({
           </div>
         )}
 
-        {/* Spectrogram controls toolbar */}
+        {/* Spectrogram controls toolbar — also hosts the confidence
+            threshold slider and "show all" toggle, slotted inline at the end. */}
         {audioStreamUrl && (
           <SpectrogramControls
             settings={settings}
             onChange={setSettings}
             sampleRate={sampleRate}
+            trailing={<AnnotationFilterBar showAll={showAll} />}
           />
         )}
-
-        {/* Confidence threshold + show-all toggle */}
-        <div className="px-4 py-2 border-b shrink-0">
-          <AnnotationFilterBar showAll={showAll} />
-        </div>
 
         {/* Spectrogram display — client-side FFT renderer.
             Fills the remaining vertical space between the controls bar and

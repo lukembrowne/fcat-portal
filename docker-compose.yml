@@ -23,6 +23,7 @@ services:
       - ALLOWED_EMAILS_PATH=data/allowed_external_emails.txt
       - RESEND_API_KEY=${RESEND_API_KEY:-}
       - NIGHTLY_REPORT_EMAILS=${NIGHTLY_REPORT_EMAILS:-}
+      - PORTAL_UPDATES_EMAILS=${PORTAL_UPDATES_EMAILS:-}
       - RESEND_FROM_EMAIL=${RESEND_FROM_EMAIL:-portal@fcat-ecuador.org}
       - CRON_SECRET=${CRON_SECRET:-}
       - TZ=America/New_York

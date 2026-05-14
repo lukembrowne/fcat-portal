@@ -405,6 +405,25 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
         readyState: el.readyState,
         ctxState: audioCtxRef.current?.state,
       }); // DEBUG:
+
+      // Streamed-audio seek recovery. Chrome fires `seeked` for ranged-fetch
+      // audio even when the seek didn't actually move `currentTime` (the
+      // bytes covering `seekTarget` weren't fetched at metadata time). We
+      // trust `seeked`, proceed to play, and the audio plays from t=0 while
+      // the spectrogram (correctly) waits for the clip window. Re-issue the
+      // seek now that play() is actively requesting bytes; the audio engine
+      // can satisfy seeks once it's pulling data. This causes a brief audible
+      // click of the start of the file before snapping to the clip, which is
+      // far better than minutes of unrelated audio.
+      if (Math.abs(el.currentTime - seekTarget) > 0.5) {
+        dlog(
+          `toggle: post-play seek recovery cur=${el.currentTime.toFixed(
+            2,
+          )} -> ${seekTarget.toFixed(2)}`,
+        ); // DEBUG:
+        el.currentTime = seekTarget;
+      }
+
       setPlaying(true);
       // Start the spectrogram loop right here — don't wait for the audio
       // element's `play` event, whose timing relative to this promise is

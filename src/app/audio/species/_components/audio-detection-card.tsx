@@ -66,6 +66,13 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
   const byteDataRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
   const rafIdRef = useRef(0);
   const tickCountRef = useRef(0); // DEBUG: counts rAF ticks for sampled logging
+  // Snapshot of el.currentTime when playback starts. Painting elapsed time
+  // (currentTime - playbackStart) instead of file time decouples the
+  // spectrogram from whether the seek-to-clip-window actually moved the
+  // playhead. If seek worked: user hears + sees clip window. If seek didn't:
+  // user hears + sees file from t=0. Either way, audio and visuals stay in
+  // sync because both come from the same playback source.
+  const playbackStartRef = useRef(0);
 
   const [playing, setPlaying] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -143,8 +150,13 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
         rafIdRef.current = 0;
         return;
       }
-      const endVal = endRef.current;
-      if (Number.isFinite(endVal) && el.currentTime >= endVal) {
+      const cl = clipLengthRef.current;
+      const elapsed = el.currentTime - playbackStartRef.current;
+      // End condition: elapsed time within the playback has reached the
+      // clip-window length. This works whether or not the seek-to-start
+      // actually moved currentTime — we measure how long playback has been
+      // running, not where in the file we are.
+      if (cl > 0 && elapsed >= cl) {
         el.pause();
         setPlaying(false);
         rafIdRef.current = 0;
@@ -153,29 +165,21 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
       const canvas = canvasRef.current;
       const analyser = analyserRef.current;
       const byteData = byteDataRef.current;
-      const cl = clipLengthRef.current;
       if (canvas && analyser && byteData && cl > 0) {
         analyser.getByteFrequencyData(byteData);
         const n = tickCountRef.current;
-        const result = paintColumn(
-          canvas,
-          byteData,
-          el.currentTime,
-          startRef.current,
-          cl,
-        );
-        // DEBUG: flat-string log so Chrome doesn't truncate fields. The
-        // critical comparison is `rel` (should be in [0,1] for paint to
-        // happen) vs `start` vs `cur`. paintResult tells us if paintColumn
-        // actually drew or returned early.
+        const rel = elapsed / cl;
+        const result = paintColumn(canvas, byteData, rel);
+        // DEBUG: flat-string log so Chrome doesn't truncate fields. With the
+        // elapsed-based mapping, `rel` always advances from 0 to 1 as audio
+        // plays, regardless of whether the file-position seek worked.
         if (n === 0 || n % 30 === 0) {
           let byteMax = 0;
           for (let i = 0; i < byteData.length; i++) {
             if (byteData[i] > byteMax) byteMax = byteData[i];
           }
-          const rel = (el.currentTime - startRef.current) / cl;
           dlog(
-            `tick #${n} cur=${el.currentTime.toFixed(2)} start=${startRef.current.toFixed(2)} end=${endRef.current.toFixed(2)} clip=${cl.toFixed(2)} rel=${rel.toFixed(3)} byteMax=${byteMax} canvasW=${canvas.width} canvasH=${canvas.height} clientW=${canvas.clientWidth} paint=${result}`,
+            `tick #${n} cur=${el.currentTime.toFixed(2)} pbStart=${playbackStartRef.current.toFixed(2)} elapsed=${elapsed.toFixed(2)} clip=${cl.toFixed(2)} rel=${rel.toFixed(3)} byteMax=${byteMax} canvasW=${canvas.width} clientW=${canvas.clientWidth} paint=${result}`,
           );
         }
         tickCountRef.current = n + 1;
@@ -399,31 +403,18 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
 
     try {
       await el.play();
+      // Snapshot where the audio actually IS now. Elapsed playback time
+      // (computed against this snapshot in the rAF tick) drives the
+      // spectrogram, so it stays in sync with what the user hears whether
+      // the seek-to-clip-window succeeded (snapshot ≈ start) or silently
+      // failed for streamed FLAC without seek tables (snapshot ≈ 0).
+      playbackStartRef.current = el.currentTime;
       dlog("toggle: el.play() resolved", {
         paused: el.paused,
         currentTime: +el.currentTime.toFixed(2),
         readyState: el.readyState,
         ctxState: audioCtxRef.current?.state,
       }); // DEBUG:
-
-      // Streamed-audio seek recovery. Chrome fires `seeked` for ranged-fetch
-      // audio even when the seek didn't actually move `currentTime` (the
-      // bytes covering `seekTarget` weren't fetched at metadata time). We
-      // trust `seeked`, proceed to play, and the audio plays from t=0 while
-      // the spectrogram (correctly) waits for the clip window. Re-issue the
-      // seek now that play() is actively requesting bytes; the audio engine
-      // can satisfy seeks once it's pulling data. This causes a brief audible
-      // click of the start of the file before snapping to the clip, which is
-      // far better than minutes of unrelated audio.
-      if (Math.abs(el.currentTime - seekTarget) > 0.5) {
-        dlog(
-          `toggle: post-play seek recovery cur=${el.currentTime.toFixed(
-            2,
-          )} -> ${seekTarget.toFixed(2)}`,
-        ); // DEBUG:
-        el.currentTime = seekTarget;
-      }
-
       setPlaying(true);
       // Start the spectrogram loop right here — don't wait for the audio
       // element's `play` event, whose timing relative to this promise is
@@ -521,23 +512,21 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
   );
 }
 
-// Paint a 1-column slice at the playhead's x-position. The byteData is the
-// AnalyserNode's latest FFT frame; we map low frequencies to the bottom of
-// the canvas (musical convention) and apply the viridis LUT.
+// Paint a 1-column slice at the playhead's x-position. `rel` is the playhead
+// position within the clip window, 0..1. The byteData is the AnalyserNode's
+// latest FFT frame; we map low frequencies to the bottom of the canvas
+// (musical convention) and apply the viridis LUT.
 // Returns a status string for DEBUG diagnostics.
 function paintColumn(
   canvas: HTMLCanvasElement,
   byteData: Uint8Array<ArrayBuffer>,
-  currentTime: number,
-  start: number,
-  clipLength: number,
+  rel: number,
 ): string {
   const ctx = canvas.getContext("2d");
   if (!ctx) return "no-ctx";
   const width = canvas.width;
   const height = canvas.height;
   if (width === 0 || height === 0) return "zero-size";
-  const rel = (currentTime - start) / clipLength;
   if (!Number.isFinite(rel)) return "rel-nan";
   if (rel < 0) return "rel-neg";
   if (rel > 1) return "rel-over";

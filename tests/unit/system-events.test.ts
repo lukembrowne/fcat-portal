@@ -298,6 +298,31 @@ describe("buildJobCompletionEvent", () => {
     expect(evt.details).toEqual({});
   });
 
+  it.each([
+    { status: "completed" as const, severity: "success" as const },
+    { status: "failed" as const, severity: "error" as const },
+    { status: "cancelled" as const, severity: "warn" as const },
+  ])(
+    "BirdNET $status job round-trips to a system_events row with severity=$severity",
+    async ({ status, severity }) => {
+      const job = makeJob({ status, jobType: JOB_TYPES.BIRDNET });
+      await recordEvent(buildJobCompletionEvent(job));
+
+      const rows = testDbRef
+        .current!.select()
+        .from(schema.systemEvents)
+        .all();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        source: "audio",
+        eventType: `audio_birdnet.${status}`,
+        severity,
+        targetType: "processing_job",
+        targetId: "1",
+      });
+    },
+  );
+
   it("round-trips through recordEvent to produce one valid system_events row", async () => {
     const job = makeJob({
       status: "completed",

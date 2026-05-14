@@ -20,7 +20,11 @@ import {
 } from "@/lib/camera-trap-auth";
 import { revalidatePath } from "next/cache";
 import type { ActionResult } from "@/lib/types";
-import { recordEvent, buildJobCompletionEvent } from "@/lib/system-events";
+import {
+  recordEvent,
+  buildJobCompletionEvent,
+  type JobCompletionExtras,
+} from "@/lib/system-events";
 import os from "os";
 import path from "path";
 import { promises as fs } from "fs";
@@ -1041,6 +1045,19 @@ async function processAcousticIndicesJob(jobId: number): Promise<void> {
               : ""),
         })
         .where(eq(processingJobs.id, jobId));
+
+      const [completedJob] = await db
+        .select()
+        .from(processingJobs)
+        .where(eq(processingJobs.id, jobId));
+      if (completedJob) {
+        await recordEvent(
+          buildJobCompletionEvent(completedJob, {
+            totalSkipped: result.totalSkipped,
+          }),
+        );
+      }
+
       log.info(
         {
           jobId,
@@ -1069,6 +1086,14 @@ async function processAcousticIndicesJob(jobId: number): Promise<void> {
         statusMessage: "Fallido",
       })
       .where(eq(processingJobs.id, jobId));
+
+    const [failedJob] = await db
+      .select()
+      .from(processingJobs)
+      .where(eq(processingJobs.id, jobId));
+    if (failedJob) {
+      await recordEvent(buildJobCompletionEvent(failedJob));
+    }
   }
 }
 
@@ -1107,6 +1132,14 @@ async function cancelAcousticIndicesJob(
       statusMessage: null,
     })
     .where(eq(processingJobs.id, jobId));
+
+  const [cancelledJob] = await db
+    .select()
+    .from(processingJobs)
+    .where(eq(processingJobs.id, jobId));
+  if (cancelledJob) {
+    await recordEvent(buildJobCompletionEvent(cancelledJob));
+  }
 
   if (job.deploymentId != null) {
     revalidatePath(`/audio/${job.deploymentId}`);
@@ -1266,6 +1299,22 @@ async function processAudioAnalysisJob(
     actorEmail?: string;
   }
 ): Promise<void> {
+  // Local idempotency for the activity-log event: the function has a
+  // mid-compression-cancel return path, a success path, and a catch block —
+  // any code between the success DB update and the function exit (the three
+  // revalidatePath calls) could throw and trip the catch, which would emit a
+  // second event. The flag keeps it to one per invocation.
+  let eventEmitted = false;
+  const emitTerminalEvent = async (extras?: JobCompletionExtras) => {
+    if (eventEmitted) return;
+    eventEmitted = true;
+    const [latest] = await db
+      .select()
+      .from(processingJobs)
+      .where(eq(processingJobs.id, jobId));
+    if (latest) await recordEvent(buildJobCompletionEvent(latest, extras));
+  };
+
   try {
     await db
       .update(processingJobs)
@@ -1327,6 +1376,7 @@ async function processAudioAnalysisJob(
             statusMessage: "Cancelado durante la compresión",
           })
           .where(eq(processingJobs.id, jobId));
+        await emitTerminalEvent({ cancelledPhase: "compression" });
         log.info(
           { jobId, deploymentId, phaseResult },
           "[audio-analysis] Cancelled during compression phase"
@@ -1656,6 +1706,12 @@ async function processAudioAnalysisJob(
       })
       .where(eq(processingJobs.id, jobId));
 
+    await emitTerminalEvent({
+      totalDetections: opts.includeBirdnet ? totalDetections : undefined,
+      speciesCount: opts.includeBirdnet ? totalSpecies : undefined,
+      totalIndices: opts.includeIndices ? totalIndices : undefined,
+    });
+
     log.info(
       {
         jobId,
@@ -1684,6 +1740,7 @@ async function processAudioAnalysisJob(
         statusMessage: "Fallido",
       })
       .where(eq(processingJobs.id, jobId));
+    await emitTerminalEvent();
   }
 }
 
@@ -1723,6 +1780,14 @@ async function cancelAudioAnalysisJob(
       statusMessage: null,
     })
     .where(eq(processingJobs.id, jobId));
+
+  const [cancelledJob] = await db
+    .select()
+    .from(processingJobs)
+    .where(eq(processingJobs.id, jobId));
+  if (cancelledJob) {
+    await recordEvent(buildJobCompletionEvent(cancelledJob));
+  }
 
   revalidatePath(`/audio/${job.deploymentId}`);
   revalidatePath("/audio/indices");

@@ -38,6 +38,11 @@ import { ensureAudioCached } from "@/lib/audio-cache";
 import { runFlacEncoding, type FlacEncodeResult } from "@/lib/flac-runner";
 import { log } from "@/lib/log";
 import type { ActionResult } from "@/lib/types";
+import {
+  recordEvent,
+  buildJobCompletionEvent,
+  type JobCompletionExtras,
+} from "@/lib/system-events";
 
 const FLAC_BATCH_SIZE = parseInt(
   process.env.FLAC_COMPRESSION_BATCH_SIZE || "5",
@@ -260,6 +265,15 @@ export async function cancelAudioCompressionJob(opts: {
     .update(processingJobs)
     .set({ status: "cancelled", statusMessage: "Cancelado por el usuario" })
     .where(eq(processingJobs.id, opts.jobId));
+
+  const [cancelledJob] = await db
+    .select()
+    .from(processingJobs)
+    .where(eq(processingJobs.id, opts.jobId));
+  if (cancelledJob) {
+    await recordEvent(buildJobCompletionEvent(cancelledJob));
+  }
+
   log.info({ jobId: opts.jobId, actorEmail: opts.actorEmail }, "[flac] cancelled");
   return { success: true, data: undefined };
 }
@@ -769,6 +783,21 @@ export async function processFlacCompressionJob(
   dryRun = false,
 ): Promise<void> {
   const startTime = Date.now();
+
+  // Local idempotency: cancelFlacCompressionJob (above) may flip status to
+  // cancelled mid-run, after which the success-path DB update below would
+  // overwrite it. The flag ensures only the first terminal event wins.
+  let eventEmitted = false;
+  const emitTerminalEvent = async (extras?: JobCompletionExtras) => {
+    if (eventEmitted) return;
+    eventEmitted = true;
+    const [latest] = await db
+      .select()
+      .from(processingJobs)
+      .where(eq(processingJobs.id, jobId));
+    if (latest) await recordEvent(buildJobCompletionEvent(latest, extras));
+  };
+
   try {
     await db
       .update(processingJobs)
@@ -794,6 +823,14 @@ export async function processFlacCompressionJob(
         statusMessage: completionMsg,
       })
       .where(eq(processingJobs.id, jobId));
+
+    await emitTerminalEvent({
+      compressed: result.processed,
+      skipped: result.skipped,
+      failed: result.failed,
+      savedBytes: result.savedBytes,
+      dryRun,
+    });
 
     await db.insert(activityLog).values({
       userEmail: actorEmail,
@@ -840,6 +877,7 @@ export async function processFlacCompressionJob(
         statusMessage: "Error en compresión de audio",
       })
       .where(eq(processingJobs.id, jobId));
+    await emitTerminalEvent();
   }
 }
 
@@ -933,6 +971,19 @@ async function processAudioRevertJob(
   const startTime = Date.now();
   let reverted = 0;
   let failed = 0;
+
+  // Local idempotency: cancelFlacCompressionJob may flip status mid-run; the
+  // catch-block status update would then overwrite. Flag guarantees one event.
+  let eventEmitted = false;
+  const emitTerminalEvent = async (extras?: JobCompletionExtras) => {
+    if (eventEmitted) return;
+    eventEmitted = true;
+    const [latest] = await db
+      .select()
+      .from(processingJobs)
+      .where(eq(processingJobs.id, jobId));
+    if (latest) await recordEvent(buildJobCompletionEvent(latest, extras));
+  };
 
   try {
     await db
@@ -1050,6 +1101,8 @@ async function processAudioRevertJob(
       })
       .where(eq(processingJobs.id, jobId));
 
+    await emitTerminalEvent({ reverted, failed });
+
     await db.insert(activityLog).values({
       userEmail: actorEmail,
       action: "audio_revert_compression",
@@ -1075,5 +1128,6 @@ async function processAudioRevertJob(
         statusMessage: "Error en reversión",
       })
       .where(eq(processingJobs.id, jobId));
+    await emitTerminalEvent();
   }
 }

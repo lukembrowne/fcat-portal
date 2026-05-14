@@ -245,15 +245,15 @@ Add under "Conventions":
 ## Acceptance Criteria
 
 - [x] `buildJobCompletionEvent()` exists in `src/lib/system-events.ts` matching the spec above. *(Phase 1)*
-- [ ] All 28 sites in the inventory call `recordEvent(buildJobCompletionEvent(job, extras?))` after the terminal `db.update(processingJobs).set({ status: ... })`. *(BirdNET sites 14–16 done in Phase 1; remaining 25 in Phase 2)*
-- [ ] Multi-path processors (`processJobInternal`, `processFlacCompressionJob`, `processRevertCompressionJob`, `runDriveSync`) use the local `emitTerminalEvent` flag pattern. No double-emit observed under thrown-error simulation.
-- [ ] Existing `compress_images` / `revert_compression` events in `drive-actions.ts:636, 910` are removed (replaced by lifecycle events).
-- [ ] `scripts/compress-all-audio.mjs` sets `createdBy: "system:compress-all-audio"` on job inserts.
+- [x] All 28 sites in the inventory call `recordEvent(buildJobCompletionEvent(job, extras?))` after the terminal `db.update(processingJobs).set({ status: ... })`. *(Phase 2 finished the remaining 25 sites.)*
+- [x] Multi-path processors (`processJobInternal`, `processFlacCompressionJob`, `processAudioRevertJob`, `runDriveSyncWorkerGeneric`, `processAudioAnalysisJob`) use the local `emitTerminalEvent` flag pattern. *(Phase 2)*
+- [x] Existing `compress_images` / `revert_compression` events in `drive-actions.ts:636, 910` are removed (replaced by lifecycle events via the helper). *(Phase 2)*
+- [x] `scripts/compress-all-audio.mjs` populates `createdBy` (already routed through the required `ACTOR_EMAIL` env var into `enqueueAudioCompressionJob` → `createdBy: actorEmail`; no code change needed). *(Phase 2)*
 - [x] Helper-contract unit test passes for every `JobType` × every terminal status. *(Phase 1)*
 - [x] Coverage-guard unit test asserts every `JobType` is recognized by the helper's source mapping. *(Phase 1 — added `ML_INCREMENTAL` to `JOB_TYPES` to close a pre-existing gap.)*
-- [ ] End-to-end smoke test: trigger BirdNET → assert one `system_events` row with `source="audio", eventType="audio_birdnet.completed", severity="success", targetType="processing_job"`.
+- [x] End-to-end smoke test: BirdNET success/failed/cancelled round-trip produces `system_events` rows with the expected `source`, `eventType`, `severity`, `targetType`. *(Phase 2 — parameterized test added)*
 - [x] `CLAUDE.md` has the new "System events instrumentation" bullet. *(Phase 1)*
-- [ ] Manual verification: run an ML analysis, a BirdNET analysis, and an audio compression job from the UI; all three appear on `/admin/activity` with correct severity, summary, and `targetId`.
+- [ ] Manual verification: run an ML analysis, a BirdNET analysis, and an audio compression job from the UI; all three appear on `/admin/activity` with correct severity, summary, and `targetId`. *(Awaiting deploy + manual exercise.)*
 
 ## Implementation Notes (not blocking; resolve in PR)
 

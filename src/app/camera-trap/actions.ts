@@ -31,7 +31,11 @@ import {
 import { uploadFramesToDrive, trashFile } from "@/lib/drive-client";
 import { extractFrames, cancelFrameExtraction } from "@/lib/frame-extractor";
 import { requirePermission } from "@/lib/auth";
-import { recordEvent } from "@/lib/system-events";
+import {
+  recordEvent,
+  buildJobCompletionEvent,
+  type JobCompletionExtras,
+} from "@/lib/system-events";
 import {
   getUserCameraTrapProjects,
   ctProjectFilter,
@@ -286,6 +290,24 @@ async function processJobInternal(
 ): Promise<ActionResult<{ job: ProcessingJob }>> {
   let cacheDir: string | undefined;
 
+  // Local idempotency for the activity-log event. processJobInternal has FIVE
+  // internal terminal-transition sites (pre-flight fail, empty-deployment
+  // complete, ML-unavailable fail, primary ML success/fail, outer-catch fail).
+  // The window between the primary success update and the outer catch is the
+  // dangerous one: `safeRevalidate`, `processNextInQueue`, or the re-fetch
+  // there could throw and trip the catch, which would emit a second event.
+  // The flag closes that window structurally.
+  let eventEmitted = false;
+  const emitTerminalEvent = async (extras?: JobCompletionExtras) => {
+    if (eventEmitted) return;
+    eventEmitted = true;
+    const [latest] = await db
+      .select()
+      .from(processingJobs)
+      .where(eq(processingJobs.id, jobId));
+    if (latest) await recordEvent(buildJobCompletionEvent(latest, extras));
+  };
+
   try {
     const [job] = await db
       .select()
@@ -409,6 +431,7 @@ async function processJobInternal(
             completedAt: new Date(),
           })
           .where(eq(processingJobs.id, jobId));
+        await emitTerminalEvent();
 
         await db
           .update(deployments)
@@ -719,6 +742,7 @@ async function processJobInternal(
           statusMessage: null,
         })
         .where(eq(processingJobs.id, jobId));
+      await emitTerminalEvent();
 
       await db
         .update(deployments)
@@ -758,6 +782,7 @@ async function processJobInternal(
           completedAt: new Date(),
         })
         .where(eq(processingJobs.id, jobId));
+      await emitTerminalEvent();
 
       // Incremental jobs don't downgrade the deployment status on failure —
       // the prior state (processed/verified) is still accurate because no
@@ -828,6 +853,11 @@ async function processJobInternal(
       })
       .where(eq(processingJobs.id, jobId));
 
+    await emitTerminalEvent({
+      totalProcessed: mlResult.totalProcessed,
+      totalDetections: mlResult.totalDetections,
+    });
+
     // For incremental jobs on success: flip to "processed" (per the chosen
     // status policy — any deployment with newly added images can no longer
     // claim to be fully verified). For incremental jobs on failure: leave
@@ -875,6 +905,7 @@ async function processJobInternal(
         completedAt: new Date(),
       })
       .where(eq(processingJobs.id, jobId));
+    await emitTerminalEvent();
 
     // Revert deployment status from "processing" to "scanned" — but not for
     // incremental jobs, which never flipped the deployment to "processing"
@@ -999,6 +1030,14 @@ export async function cancelJob(
       .update(processingJobs)
       .set({ status: "cancelled", completedAt: new Date(), statusMessage: null })
       .where(eq(processingJobs.id, jobId));
+
+    const [cancelledJob] = await db
+      .select()
+      .from(processingJobs)
+      .where(eq(processingJobs.id, jobId));
+    if (cancelledJob) {
+      await recordEvent(buildJobCompletionEvent(cancelledJob));
+    }
 
     // If a previous completed job exists, restore deployment to "processed";
     // otherwise revert to "scanned"
@@ -2910,6 +2949,16 @@ export async function cancelQueue(): Promise<ActionResult<{ cancelled: number }>
         .update(processingJobs)
         .set({ status: "cancelled", completedAt: new Date(), statusMessage: null })
         .where(inArray(processingJobs.id, pendingJobs.map((j) => j.id)));
+
+      // One activity-log event per cancelled jobId — bulk cancel still fans
+      // out to N rows so the audit page shows each one.
+      const cancelledRows = await db
+        .select()
+        .from(processingJobs)
+        .where(inArray(processingJobs.id, pendingJobs.map((j) => j.id)));
+      for (const row of cancelledRows) {
+        await recordEvent(buildJobCompletionEvent(row));
+      }
 
       // Revert deployment statuses (drive_sync jobs have no deployment — skip)
       const depIds = [

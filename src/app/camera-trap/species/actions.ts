@@ -38,7 +38,7 @@ import {
   parsePositiveInt,
   type VerificationStatus,
 } from "@/lib/species-search-params";
-import { resolveSpeciesFromSlug } from "@/lib/species-slug";
+import { resolveSpeciesFromSlug } from "@/lib/species-slug-server";
 import type { ActionResult } from "@/lib/types";
 import type { Species } from "@/db/schema";
 import type { ImageGridItem } from "@/components/image-grid";

@@ -34,7 +34,7 @@ import {
   parsePositiveInt,
   type VerificationStatus,
 } from "@/lib/species-search-params";
-import { resolveSpeciesFromSlug } from "@/lib/species-slug";
+import { resolveSpeciesFromSlug } from "@/lib/species-slug-server";
 import {
   applyConfidenceFilter,
   parseThresholdParam,

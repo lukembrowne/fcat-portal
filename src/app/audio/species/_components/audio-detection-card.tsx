@@ -19,8 +19,6 @@ let sharedAudioContext: AudioContext | null = null;
 
 function getSharedAudioContext(): AudioContext | null {
   if (sharedAudioContext && sharedAudioContext.state !== "closed") {
-    // DEBUG:
-    console.debug("[spec ctx] reuse", { state: sharedAudioContext.state });
     return sharedAudioContext;
   }
   try {
@@ -29,15 +27,8 @@ function getSharedAudioContext(): AudioContext | null {
       (window as unknown as { webkitAudioContext: typeof AudioContext })
         .webkitAudioContext;
     sharedAudioContext = new Ctor();
-    // DEBUG:
-    console.debug("[spec ctx] new", {
-      state: sharedAudioContext.state,
-      sampleRate: sharedAudioContext.sampleRate,
-    });
     return sharedAudioContext;
-  } catch (err) {
-    // DEBUG:
-    console.warn("[spec ctx] create failed", err);
+  } catch {
     return null;
   }
 }
@@ -65,24 +56,17 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
   const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
   const byteDataRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
   const rafIdRef = useRef(0);
-  const tickCountRef = useRef(0); // DEBUG: counts rAF ticks for sampled logging
   // Snapshot of el.currentTime when playback starts. Painting elapsed time
   // (currentTime - playbackStart) instead of file time decouples the
   // spectrogram from whether the seek-to-clip-window actually moved the
-  // playhead. If seek worked: user hears + sees clip window. If seek didn't:
-  // user hears + sees file from t=0. Either way, audio and visuals stay in
-  // sync because both come from the same playback source.
+  // playhead. If seek worked: user hears + sees clip window. If seek didn't
+  // (streamed FLAC without seek tables — Chrome ignores el.currentTime
+  // assignment silently): user hears + sees file from t=0. Either way audio
+  // and visuals stay in sync because both come from the same playback source.
   const playbackStartRef = useRef(0);
 
   const [playing, setPlaying] = useState(false);
   const [loading, setLoading] = useState(false);
-
-  // DEBUG: tagged logger so you can filter the console by `[spec <id>]`.
-  const tag = `[spec ${detection.detectionId}]`;
-  const dlog = (msg: string, data?: unknown) => {
-    if (data !== undefined) console.debug(tag, msg, data);
-    else console.debug(tag, msg);
-  };
 
   const duration = detection.duration ?? Number.POSITIVE_INFINITY;
   const start = Math.max(0, detection.startTime - PADDING_SECONDS);
@@ -92,17 +76,12 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
   );
   const clipLength = end - start;
 
-  // Refs for the latest clip-window values so the rAF tick (which is started
-  // from a user gesture, not from this effect) always reads current values
-  // without re-creating the loop when the detection row's numbers shift.
-  const startRef = useRef(start);
-  const endRef = useRef(end);
+  // Ref for the rAF tick (started from a user gesture, not this effect) so
+  // it always reads the current value without re-creating the loop.
   const clipLengthRef = useRef(clipLength);
   useEffect(() => {
-    startRef.current = start;
-    endRef.current = end;
     clipLengthRef.current = clipLength;
-  }, [start, end, clipLength]);
+  }, [clipLength]);
 
   // Stream URL — the stream API takes the Google Drive file ID
   // (audio_files.driveFileId), NOT the integer DB id.
@@ -134,28 +113,17 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
   // separate event listeners for teardown.
   const startRaf = useCallback(() => {
     stopRaf();
-    tickCountRef.current = 0; // DEBUG:
-    dlog("startRaf"); // DEBUG:
     const tick = () => {
       const el = audioRef.current;
       if (!el || el.paused || el.ended) {
-        // DEBUG: tell us why we stopped on the very first tick
-        if (tickCountRef.current === 0) {
-          dlog("tick stopped before paint", {
-            hasEl: !!el,
-            paused: el?.paused,
-            ended: el?.ended,
-          });
-        }
         rafIdRef.current = 0;
         return;
       }
       const cl = clipLengthRef.current;
       const elapsed = el.currentTime - playbackStartRef.current;
       // End condition: elapsed time within the playback has reached the
-      // clip-window length. This works whether or not the seek-to-start
-      // actually moved currentTime — we measure how long playback has been
-      // running, not where in the file we are.
+      // clip-window length. Works whether or not the seek-to-start moved
+      // currentTime — we measure how long playback has been running.
       if (cl > 0 && elapsed >= cl) {
         el.pause();
         setPlaying(false);
@@ -167,37 +135,11 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
       const byteData = byteDataRef.current;
       if (canvas && analyser && byteData && cl > 0) {
         analyser.getByteFrequencyData(byteData);
-        const n = tickCountRef.current;
-        const rel = elapsed / cl;
-        const result = paintColumn(canvas, byteData, rel);
-        // DEBUG: flat-string log so Chrome doesn't truncate fields. With the
-        // elapsed-based mapping, `rel` always advances from 0 to 1 as audio
-        // plays, regardless of whether the file-position seek worked.
-        if (n === 0 || n % 30 === 0) {
-          let byteMax = 0;
-          for (let i = 0; i < byteData.length; i++) {
-            if (byteData[i] > byteMax) byteMax = byteData[i];
-          }
-          dlog(
-            `tick #${n} cur=${el.currentTime.toFixed(2)} pbStart=${playbackStartRef.current.toFixed(2)} elapsed=${elapsed.toFixed(2)} clip=${cl.toFixed(2)} rel=${rel.toFixed(3)} byteMax=${byteMax} canvasW=${canvas.width} clientW=${canvas.clientWidth} paint=${result}`,
-          );
-        }
-        tickCountRef.current = n + 1;
-      } else if (tickCountRef.current === 0) {
-        // DEBUG: missing one of the required refs on first tick
-        dlog("tick missing refs", {
-          hasCanvas: !!canvas,
-          hasAnalyser: !!analyser,
-          hasByteData: !!byteData,
-          cl,
-        });
-        tickCountRef.current = 1;
+        paintColumn(canvas, byteData, elapsed / cl);
       }
       rafIdRef.current = requestAnimationFrame(tick);
     };
     rafIdRef.current = requestAnimationFrame(tick);
-    // dlog is a fresh fn each render but only used for DEBUG logging.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stopRaf]);
 
   // Keep `playing` in sync when the user pauses/ends audio outside our control
@@ -241,21 +183,10 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
 
   const ensureAudioGraph = () => {
     const el = audioRef.current;
-    if (!el) {
-      dlog("ensureAudioGraph: no audio el"); // DEBUG:
-      return false;
-    }
-    if (audioCtxRef.current) {
-      dlog("ensureAudioGraph: cached", {
-        ctxState: audioCtxRef.current.state,
-      }); // DEBUG:
-      return true;
-    }
+    if (!el) return false;
+    if (audioCtxRef.current) return true;
     const ctx = getSharedAudioContext();
-    if (!ctx) {
-      dlog("ensureAudioGraph: no ctx"); // DEBUG:
-      return false;
-    }
+    if (!ctx) return false;
     try {
       const source = ctx.createMediaElementSource(el);
       const analyser = ctx.createAnalyser();
@@ -267,13 +198,8 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
       analyserRef.current = analyser;
       sourceNodeRef.current = source;
       byteDataRef.current = new Uint8Array(analyser.frequencyBinCount);
-      dlog("ensureAudioGraph: built fresh graph", {
-        ctxState: ctx.state,
-        bins: analyser.frequencyBinCount,
-      }); // DEBUG:
       return true;
-    } catch (err) {
-      dlog("ensureAudioGraph: createMediaElementSource threw", err); // DEBUG:
+    } catch {
       return false;
     }
   };
@@ -374,19 +300,13 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
 
     // Build the Web Audio graph on first play (user-gesture context).
     if (!ensureAudioGraph()) {
-      dlog("toggle: ensureAudioGraph failed"); // DEBUG:
       setPlaying(false);
       return;
     }
     try {
-      const beforeState = audioCtxRef.current!.state; // DEBUG:
       await audioCtxRef.current!.resume();
-      dlog("toggle: ctx.resume", {
-        before: beforeState,
-        after: audioCtxRef.current!.state,
-      }); // DEBUG:
-    } catch (err) {
-      dlog("toggle: ctx.resume threw", err); // DEBUG:
+    } catch {
+      // continue — most browsers don't require resume after gesture
     }
 
     // Ensure the canvas backing store matches its live CSS-pixel size before
@@ -409,20 +329,13 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
       // the seek-to-clip-window succeeded (snapshot ≈ start) or silently
       // failed for streamed FLAC without seek tables (snapshot ≈ 0).
       playbackStartRef.current = el.currentTime;
-      dlog("toggle: el.play() resolved", {
-        paused: el.paused,
-        currentTime: +el.currentTime.toFixed(2),
-        readyState: el.readyState,
-        ctxState: audioCtxRef.current?.state,
-      }); // DEBUG:
       setPlaying(true);
       // Start the spectrogram loop right here — don't wait for the audio
       // element's `play` event, whose timing relative to this promise is
       // browser-dependent and has been observed to skip the listener after
       // SPA navigation.
       startRaf();
-    } catch (err) {
-      dlog("toggle: el.play() threw", err); // DEBUG:
+    } catch {
       setPlaying(false);
     }
   };
@@ -516,20 +429,17 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
 // position within the clip window, 0..1. The byteData is the AnalyserNode's
 // latest FFT frame; we map low frequencies to the bottom of the canvas
 // (musical convention) and apply the viridis LUT.
-// Returns a status string for DEBUG diagnostics.
 function paintColumn(
   canvas: HTMLCanvasElement,
   byteData: Uint8Array<ArrayBuffer>,
   rel: number,
-): string {
+): void {
   const ctx = canvas.getContext("2d");
-  if (!ctx) return "no-ctx";
+  if (!ctx) return;
   const width = canvas.width;
   const height = canvas.height;
-  if (width === 0 || height === 0) return "zero-size";
-  if (!Number.isFinite(rel)) return "rel-nan";
-  if (rel < 0) return "rel-neg";
-  if (rel > 1) return "rel-over";
+  if (width === 0 || height === 0) return;
+  if (!Number.isFinite(rel) || rel < 0 || rel > 1) return;
   const x = Math.floor(rel * (width - 1));
 
   const lut = COLORMAPS.viridis;
@@ -554,5 +464,4 @@ function paintColumn(
     }
   }
   ctx.putImageData(img, x, 0);
-  return `ok@${x}`;
 }

@@ -20,6 +20,7 @@ import {
 } from "@/lib/camera-trap-auth";
 import { revalidatePath } from "next/cache";
 import type { ActionResult } from "@/lib/types";
+import { recordEvent, buildJobCompletionEvent } from "@/lib/system-events";
 import os from "os";
 import path from "path";
 import { promises as fs } from "fs";
@@ -635,6 +636,19 @@ async function processBirdNETJob(jobId: number): Promise<void> {
         })
         .where(eq(processingJobs.id, jobId));
 
+      const [completedJob] = await db
+        .select()
+        .from(processingJobs)
+        .where(eq(processingJobs.id, jobId));
+      if (completedJob) {
+        await recordEvent(
+          buildJobCompletionEvent(completedJob, {
+            totalDetections: result.totalDetections,
+            speciesCount: species,
+          }),
+        );
+      }
+
       log.info(
         { jobId, detections: result.totalDetections, species, processed: result.totalProcessed },
         "[birdnet] Job completed successfully"
@@ -656,6 +670,14 @@ async function processBirdNETJob(jobId: number): Promise<void> {
         statusMessage: "Fallido",
       })
       .where(eq(processingJobs.id, jobId));
+
+    const [failedJob] = await db
+      .select()
+      .from(processingJobs)
+      .where(eq(processingJobs.id, jobId));
+    if (failedJob) {
+      await recordEvent(buildJobCompletionEvent(failedJob));
+    }
   }
 }
 
@@ -706,6 +728,14 @@ export async function cancelBirdNETJob(
       statusMessage: null,
     })
     .where(eq(processingJobs.id, jobId));
+
+  const [cancelledJob] = await db
+    .select()
+    .from(processingJobs)
+    .where(eq(processingJobs.id, jobId));
+  if (cancelledJob) {
+    await recordEvent(buildJobCompletionEvent(cancelledJob));
+  }
 
   revalidatePath(`/audio/${deploymentId}`);
   return { success: true, data: undefined };

@@ -27,6 +27,7 @@ Internal web application for FCAT staff and collaborators. Domain: `portal.fcat-
 - **FormData**: No `as string` casts on `FormData.get()` — always type-check properly.
 - **DB singleton**: Module-level variable (not `globalThis` only in dev).
 - **Permissions**: `requirePermission(projectId, minRole)` for read/write actions. `requireAdmin()` for admin actions.
+- **System events instrumentation**: Any server action, background job, cron, or admin-facing mutation should consider calling `recordEvent()` (from `@/lib/system-events`). Default **yes** for: terminal transitions on `processing_jobs` (use `buildJobCompletionEvent(job)` after the DB update), destructive user actions, admin/permission changes, bulk data uploads, cron job completions, external sync runs. Default **no** for: high-frequency per-row reads/writes (verification clicks, autosaves, status-message ticks) — emit one event at the end of the batch/loop instead. New job types must extend `JOB_LABELS` and `AUDIO_JOB_TYPES` in `src/lib/system-events.ts`; the coverage-guard unit test will fail otherwise.
 
 ## Commands
 

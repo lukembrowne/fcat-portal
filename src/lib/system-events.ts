@@ -4,7 +4,9 @@ import {
   systemEvents,
   type EventSeverity,
   type EventSource,
+  type ProcessingJob,
 } from "@/db/schema";
+import { JOB_TYPES, type JobType } from "@/lib/job-types";
 import { log } from "@/lib/log";
 
 /**
@@ -51,4 +53,109 @@ export async function recordEvent(input: RecordEventInput): Promise<void> {
   } catch (err) {
     log.warn({ err, input }, "recordEvent_failed");
   }
+}
+
+// ---------------------------------------------------------------------------
+// Job lifecycle helper
+//
+// Encodes the source / severity / eventType / projectId / summary mapping for
+// `processing_jobs` terminal transitions in one place so the 28 lifecycle
+// sites stay consistent. Pure function on an already-written row — does NOT
+// touch the DB. The plan rejected a state-machine wrapper around job
+// transitions; this is the payload counterpart, not that wrapper.
+//
+// Adding a new job type requires extending JOB_LABELS (and AUDIO_JOB_TYPES if
+// it lives under the audio source) — the coverage-guard test will fail if you
+// don't.
+// ---------------------------------------------------------------------------
+
+type TerminalOutcome = "completed" | "failed" | "cancelled";
+
+const AUDIO_JOB_TYPES = new Set<JobType>([
+  JOB_TYPES.BIRDNET,
+  JOB_TYPES.ACOUSTIC_INDICES,
+  JOB_TYPES.AUDIO_ANALYSIS,
+  JOB_TYPES.AUDIO_SYNC,
+  JOB_TYPES.AUDIO_COMPRESSION,
+  JOB_TYPES.REVERT_AUDIO_COMPRESSION,
+]);
+
+export const JOB_LABELS: Record<JobType, string> = {
+  ml: "ML",
+  ml_incremental: "ML incremental",
+  drive_sync: "Sincronización Drive",
+  compression: "Compresión de imágenes",
+  revert_compression: "Reversión de compresión",
+  birdnet: "BirdNET",
+  acoustic_indices: "Índices acústicos",
+  audio_analysis: "Análisis de audio",
+  audio_sync: "Sincronización de audio",
+  audio_compression: "Compresión FLAC",
+  revert_audio_compression: "Reversión de compresión FLAC",
+};
+
+const OUTCOME_VERBS: Record<TerminalOutcome, string> = {
+  completed: "completado",
+  failed: "fallido",
+  cancelled: "cancelado",
+};
+
+export type JobCompletionExtras = Record<string, unknown>;
+
+export function buildJobCompletionEvent(
+  job: ProcessingJob,
+  extras?: JobCompletionExtras,
+): RecordEventInput {
+  const outcome: TerminalOutcome =
+    job.status === "completed"
+      ? "completed"
+      : job.status === "failed"
+        ? "failed"
+        : "cancelled";
+
+  const jobType = job.jobType as JobType;
+  const source: EventSource = AUDIO_JOB_TYPES.has(jobType)
+    ? "audio"
+    : "camera-trap";
+
+  const severity: EventSeverity =
+    outcome === "completed"
+      ? "success"
+      : outcome === "failed"
+        ? "error"
+        : "warn";
+
+  const durationMs = job.startedAt
+    ? Date.now() - job.startedAt.getTime()
+    : null;
+
+  const projectId = job.cameraTrapProjectId
+    ? `camera-trap:${job.cameraTrapProjectId}`
+    : source === "audio"
+      ? "grabaciones"
+      : "camera-trap";
+
+  const scope = job.deploymentId
+    ? `Instalación ${job.deploymentId}`
+    : job.cameraTrapProjectId
+      ? `Proyecto ${job.cameraTrapProjectId}`
+      : "Todos los proyectos";
+
+  const label = JOB_LABELS[jobType] ?? job.jobType;
+
+  return {
+    source,
+    eventType: `${source}_${job.jobType}.${outcome}`,
+    severity,
+    summary: `${label} ${OUTCOME_VERBS[outcome]} · ${scope}`,
+    actorEmail: job.createdBy ?? null,
+    projectId,
+    targetType: "processing_job",
+    targetId: job.id,
+    durationMs,
+    details: {
+      ...(job.errorMessage ? { errorMessage: job.errorMessage } : {}),
+      ...(extras ?? {}),
+    },
+  };
 }

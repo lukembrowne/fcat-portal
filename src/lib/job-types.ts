@@ -9,6 +9,7 @@
 
 export const JOB_TYPES = {
   ML: "ml",
+  ML_INCREMENTAL: "ml_incremental",
   BIRDNET: "birdnet",
   ACOUSTIC_INDICES: "acoustic_indices",
   AUDIO_ANALYSIS: "audio_analysis",

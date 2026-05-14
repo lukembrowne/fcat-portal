@@ -57,14 +57,11 @@ function ThresholdInfoPopover() {
           Este puntaje no es una probabilidad: el umbral que separa
           detecciones confiables del ruido varía mucho entre especies.
         </p>
-        <p className="mb-2">
+        <p>
           El valor predeterminado de <strong>0,70</strong> filtra el ruido
           más obvio sin descartar especies bien reconocidas como tucanes
           y guacamayos. Bájelo para explorar detecciones marginales o
           súbalo para análisis de alta precisión.
-        </p>
-        <p className="text-muted-foreground">
-          Wood &amp; Kahl (2024); Tebbutt et al. (2026).
         </p>
       </PopoverContent>
     </Popover>

@@ -43,33 +43,59 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
     detection.driveFileId
   )}`;
 
-  // Inline timeupdate fallback — pauses at `end` even on browsers that don't
-  // constrain the trailing edge of Media Fragment URI on <audio>.
+  // Drive the progress bar from requestAnimationFrame instead of the audio
+  // element's `timeupdate` event. timeupdate fires at the browser's
+  // discretion (often 200-400ms, sometimes skipping entirely while the
+  // element fetches byte ranges for streamed audio), which made the bar look
+  // stuck or jumpy. rAF gives a smooth 60fps poll of currentTime, and we
+  // only spin it up between play→pause/ended.
   useEffect(() => {
     const el = audioRef.current;
     if (!el) return;
-    const onTime = () => {
-      if (!Number.isFinite(end)) return;
-      if (el.currentTime >= end) {
+
+    let rafId = 0;
+    let running = false;
+
+    const stop = () => {
+      running = false;
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = 0;
+    };
+
+    const tick = () => {
+      if (!running) return;
+      if (Number.isFinite(end) && el.currentTime >= end) {
         el.pause();
-        // Do NOT seek back to start here — the next click handles seek
-        // (with await) before play. Seeking here without await leaves the
-        // element in mid-seek state if the user clicks play again immediately.
         setPlaying(false);
         setProgress(0);
+        stop();
         return;
       }
-      const ratio = (el.currentTime - start) / clipLength;
+      const ratio =
+        clipLength > 0 ? (el.currentTime - start) / clipLength : 0;
       setProgress(Math.max(0, Math.min(1, ratio)));
+      rafId = requestAnimationFrame(tick);
     };
+
+    const onPlay = () => {
+      if (running) return;
+      running = true;
+      rafId = requestAnimationFrame(tick);
+    };
+    const onPause = () => stop();
     const onEnded = () => {
+      stop();
       setPlaying(false);
       setProgress(0);
     };
-    el.addEventListener("timeupdate", onTime);
+
+    el.addEventListener("play", onPlay);
+    el.addEventListener("pause", onPause);
     el.addEventListener("ended", onEnded);
     return () => {
-      el.removeEventListener("timeupdate", onTime);
+      stop();
+      el.removeEventListener("play", onPlay);
+      el.removeEventListener("pause", onPause);
       el.removeEventListener("ended", onEnded);
     };
   }, [start, end, clipLength]);
@@ -206,7 +232,7 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
         <div className="flex-1 min-w-0">
           <div className="h-1.5 rounded-full bg-muted overflow-hidden">
             <div
-              className="h-full bg-foreground transition-[width] duration-100"
+              className="h-full bg-foreground"
               style={{ width: `${progress * 100}%` }}
             />
           </div>

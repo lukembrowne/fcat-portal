@@ -19,6 +19,8 @@ let sharedAudioContext: AudioContext | null = null;
 
 function getSharedAudioContext(): AudioContext | null {
   if (sharedAudioContext && sharedAudioContext.state !== "closed") {
+    // DEBUG:
+    console.debug("[spec ctx] reuse", { state: sharedAudioContext.state });
     return sharedAudioContext;
   }
   try {
@@ -27,8 +29,15 @@ function getSharedAudioContext(): AudioContext | null {
       (window as unknown as { webkitAudioContext: typeof AudioContext })
         .webkitAudioContext;
     sharedAudioContext = new Ctor();
+    // DEBUG:
+    console.debug("[spec ctx] new", {
+      state: sharedAudioContext.state,
+      sampleRate: sharedAudioContext.sampleRate,
+    });
     return sharedAudioContext;
-  } catch {
+  } catch (err) {
+    // DEBUG:
+    console.warn("[spec ctx] create failed", err);
     return null;
   }
 }
@@ -56,9 +65,17 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
   const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
   const byteDataRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
   const rafIdRef = useRef(0);
+  const tickCountRef = useRef(0); // DEBUG: counts rAF ticks for sampled logging
 
   const [playing, setPlaying] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  // DEBUG: tagged logger so you can filter the console by `[spec <id>]`.
+  const tag = `[spec ${detection.detectionId}]`;
+  const dlog = (msg: string, data?: unknown) => {
+    if (data !== undefined) console.debug(tag, msg, data);
+    else console.debug(tag, msg);
+  };
 
   const duration = detection.duration ?? Number.POSITIVE_INFINITY;
   const start = Math.max(0, detection.startTime - PADDING_SECONDS);
@@ -110,9 +127,19 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
   // separate event listeners for teardown.
   const startRaf = useCallback(() => {
     stopRaf();
+    tickCountRef.current = 0; // DEBUG:
+    dlog("startRaf"); // DEBUG:
     const tick = () => {
       const el = audioRef.current;
       if (!el || el.paused || el.ended) {
+        // DEBUG: tell us why we stopped on the very first tick
+        if (tickCountRef.current === 0) {
+          dlog("tick stopped before paint", {
+            hasEl: !!el,
+            paused: el?.paused,
+            ended: el?.ended,
+          });
+        }
         rafIdRef.current = 0;
         return;
       }
@@ -129,11 +156,46 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
       const cl = clipLengthRef.current;
       if (canvas && analyser && byteData && cl > 0) {
         analyser.getByteFrequencyData(byteData);
+        // DEBUG: log first tick + every 30th, with stats that tell us where the
+        // chain is breaking. byteMax=0 means analyser is dead (no signal flowing
+        // through the tap). canvas.width=0 means the backing store is unsized.
+        const n = tickCountRef.current;
+        if (n === 0 || n % 30 === 0) {
+          let byteMax = 0;
+          let byteSum = 0;
+          for (let i = 0; i < byteData.length; i++) {
+            const v = byteData[i];
+            byteSum += v;
+            if (v > byteMax) byteMax = v;
+          }
+          dlog(`tick #${n}`, {
+            byteMax,
+            byteAvg: Math.round(byteSum / byteData.length),
+            currentTime: +el.currentTime.toFixed(2),
+            ctxState: audioCtxRef.current?.state,
+            canvasW: canvas.width,
+            canvasH: canvas.height,
+            clientW: canvas.clientWidth,
+            xRatio: +((el.currentTime - startRef.current) / cl).toFixed(3),
+          });
+        }
+        tickCountRef.current = n + 1;
         paintColumn(canvas, byteData, el.currentTime, startRef.current, cl);
+      } else if (tickCountRef.current === 0) {
+        // DEBUG: missing one of the required refs on first tick
+        dlog("tick missing refs", {
+          hasCanvas: !!canvas,
+          hasAnalyser: !!analyser,
+          hasByteData: !!byteData,
+          cl,
+        });
+        tickCountRef.current = 1;
       }
       rafIdRef.current = requestAnimationFrame(tick);
     };
     rafIdRef.current = requestAnimationFrame(tick);
+    // dlog is a fresh fn each render but only used for DEBUG logging.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stopRaf]);
 
   // Keep `playing` in sync when the user pauses/ends audio outside our control
@@ -177,10 +239,21 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
 
   const ensureAudioGraph = () => {
     const el = audioRef.current;
-    if (!el) return false;
-    if (audioCtxRef.current) return true;
+    if (!el) {
+      dlog("ensureAudioGraph: no audio el"); // DEBUG:
+      return false;
+    }
+    if (audioCtxRef.current) {
+      dlog("ensureAudioGraph: cached", {
+        ctxState: audioCtxRef.current.state,
+      }); // DEBUG:
+      return true;
+    }
     const ctx = getSharedAudioContext();
-    if (!ctx) return false;
+    if (!ctx) {
+      dlog("ensureAudioGraph: no ctx"); // DEBUG:
+      return false;
+    }
     try {
       const source = ctx.createMediaElementSource(el);
       const analyser = ctx.createAnalyser();
@@ -192,8 +265,13 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
       analyserRef.current = analyser;
       sourceNodeRef.current = source;
       byteDataRef.current = new Uint8Array(analyser.frequencyBinCount);
+      dlog("ensureAudioGraph: built fresh graph", {
+        ctxState: ctx.state,
+        bins: analyser.frequencyBinCount,
+      }); // DEBUG:
       return true;
-    } catch {
+    } catch (err) {
+      dlog("ensureAudioGraph: createMediaElementSource threw", err); // DEBUG:
       return false;
     }
   };
@@ -294,13 +372,19 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
 
     // Build the Web Audio graph on first play (user-gesture context).
     if (!ensureAudioGraph()) {
+      dlog("toggle: ensureAudioGraph failed"); // DEBUG:
       setPlaying(false);
       return;
     }
     try {
+      const beforeState = audioCtxRef.current!.state; // DEBUG:
       await audioCtxRef.current!.resume();
-    } catch {
-      // continue — most browsers don't require resume after gesture
+      dlog("toggle: ctx.resume", {
+        before: beforeState,
+        after: audioCtxRef.current!.state,
+      }); // DEBUG:
+    } catch (err) {
+      dlog("toggle: ctx.resume threw", err); // DEBUG:
     }
 
     // Ensure the canvas backing store matches its live CSS-pixel size before
@@ -317,13 +401,20 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
 
     try {
       await el.play();
+      dlog("toggle: el.play() resolved", {
+        paused: el.paused,
+        currentTime: +el.currentTime.toFixed(2),
+        readyState: el.readyState,
+        ctxState: audioCtxRef.current?.state,
+      }); // DEBUG:
       setPlaying(true);
       // Start the spectrogram loop right here — don't wait for the audio
       // element's `play` event, whose timing relative to this promise is
       // browser-dependent and has been observed to skip the listener after
       // SPA navigation.
       startRaf();
-    } catch {
+    } catch (err) {
+      dlog("toggle: el.play() threw", err); // DEBUG:
       setPlaying(false);
     }
   };

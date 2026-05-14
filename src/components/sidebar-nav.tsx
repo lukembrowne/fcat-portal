@@ -149,6 +149,7 @@ export function SidebarNav({ user }: SidebarNavProps) {
     const cameraTrapChildren: NavItem[] = [
       { label: "Instalaciones", href: "/camera-trap" },
       { label: "Destacadas", href: "/camera-trap/favorites" },
+      { label: "Explorar por especie", href: "/camera-trap/species" },
     ];
     if (isCameraTrapEditor) {
       cameraTrapChildren.push({ label: "Administrar especies", href: "/camera-trap/species/manage" });

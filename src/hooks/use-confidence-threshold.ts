@@ -55,6 +55,24 @@ export function useConfidenceThreshold(): readonly [number, (next: number) => vo
     }
   }, [urlValue]);
 
+  // Hydrate-to-URL on first mount: if the URL has no `conf` param but
+  // localStorage holds a non-default value, push that value to the URL.
+  // Without this, server-side filtering (which only sees the URL) silently
+  // uses the default while the slider visually shows the persisted value —
+  // the user thinks they've filtered to 0.95 but the page returns 0.7 data.
+  const didSyncFromStorageRef = useRef(false);
+  useEffect(() => {
+    if (didSyncFromStorageRef.current) return;
+    didSyncFromStorageRef.current = true;
+    if (urlValue !== null) return;
+    if (threshold === DEFAULT_CONFIDENCE_THRESHOLD) return;
+    const params = new URLSearchParams(searchParams.toString());
+    params.set(CONFIDENCE_URL_PARAM, formatThreshold(threshold));
+    router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+    // Run once: depends on first-mount values, not subsequent changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const setThreshold = useCallback(

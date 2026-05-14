@@ -195,6 +195,25 @@ const statements = [
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
   )`,
 
+  // System Events (unified activity log across cron, admin, ingestion, jobs)
+  `CREATE TABLE IF NOT EXISTS system_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    occurred_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    event_type TEXT NOT NULL,
+    source TEXT NOT NULL CHECK(source IN ('admin','audio','biochoco-tools','biochoco-resultados','camera-trap','climate','cron','finance','odk')),
+    severity TEXT NOT NULL DEFAULT 'info' CHECK(severity IN ('info','success','warn','error')),
+    actor_email TEXT,
+    project_id TEXT,
+    target_type TEXT,
+    target_id TEXT,
+    summary TEXT NOT NULL,
+    duration_ms INTEGER,
+    details TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_system_events_occurred_at ON system_events(occurred_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_system_events_source ON system_events(source)`,
+  `CREATE INDEX IF NOT EXISTS idx_system_events_event_type ON system_events(event_type)`,
+
   // Finance — Transactions
   `CREATE TABLE IF NOT EXISTS finance_transactions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

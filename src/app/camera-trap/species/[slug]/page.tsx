@@ -187,6 +187,7 @@ export default async function CameraTrapSpeciesDetailPage({
                     <ImageGrid
                       images={sitePageData.data.items}
                       columns={4}
+                      basePath={`/camera-trap/${expandedSite.deploymentId}/preview`}
                     />
                     {sitePageData.data.totalPages > 1 && (
                       <Pagination
@@ -228,6 +229,7 @@ export default async function CameraTrapSpeciesDetailPage({
                         <ImageGrid
                           images={sitePageData.data.items}
                           columns={4}
+                          basePath={`/camera-trap/${expandedSite.deploymentId}/preview`}
                         />
                         {sitePageData.data.totalPages > 1 && (
                           <Pagination

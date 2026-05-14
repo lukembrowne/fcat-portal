@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useEffect } from "react";
+import { useRef, useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { Play, Pause, ExternalLink, Loader2 } from "lucide-react";
 import type { AudioDetectionRow } from "@/app/audio/species/actions";
@@ -55,6 +55,7 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
   const byteDataRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
+  const rafIdRef = useRef(0);
 
   const [playing, setPlaying] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -67,6 +68,18 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
   );
   const clipLength = end - start;
 
+  // Refs for the latest clip-window values so the rAF tick (which is started
+  // from a user gesture, not from this effect) always reads current values
+  // without re-creating the loop when the detection row's numbers shift.
+  const startRef = useRef(start);
+  const endRef = useRef(end);
+  const clipLengthRef = useRef(clipLength);
+  useEffect(() => {
+    startRef.current = start;
+    endRef.current = end;
+    clipLengthRef.current = clipLength;
+  }, [start, end, clipLength]);
+
   // Stream URL — the stream API takes the Google Drive file ID
   // (audio_files.driveFileId), NOT the integer DB id.
   const streamSrc = `/api/audio/stream?fileId=${encodeURIComponent(
@@ -78,65 +91,71 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
   // <details> ("Sin ubicación") have clientWidth=0 at mount, so the canvas
   // never had a paintable surface and the spectrogram silently no-op'd.
 
-  // rAF-driven spectrogram paint loop. Tap the analyser for the latest FFT
-  // frame, paint a 1-column slice at the playhead's x-position, repeat.
-  // currentTime accuracy variability doesn't matter visually — the column
-  // appears where the audio actually IS in the clip window.
-  useEffect(() => {
-    const el = audioRef.current;
-    if (!el) return;
+  const stopRaf = useCallback(() => {
+    if (rafIdRef.current) {
+      cancelAnimationFrame(rafIdRef.current);
+      rafIdRef.current = 0;
+    }
+  }, []);
 
-    let rafId = 0;
-    let running = false;
-
-    const stop = () => {
-      running = false;
-      if (rafId) cancelAnimationFrame(rafId);
-      rafId = 0;
-    };
-
+  // Self-driving rAF spectrogram loop. We kick it off DIRECTLY from toggle()
+  // after el.play() resolves, rather than wiring it to the audio element's
+  // `play` event. Earlier the event-listener path occasionally orphaned the
+  // loop after SPA navigation — the listener was attached but the event timing
+  // relative to the awaited play() promise drifted, so the rAF never started
+  // and the spectrogram stayed dark even though audio was flowing. Calling
+  // startRaf() inline removes that timing dependency entirely.
+  //
+  // The tick self-stops when the audio is paused/ended, so we don't need
+  // separate event listeners for teardown.
+  const startRaf = useCallback(() => {
+    stopRaf();
     const tick = () => {
-      if (!running) return;
-
-      if (Number.isFinite(end) && el.currentTime >= end) {
-        el.pause();
-        setPlaying(false);
-        stop();
+      const el = audioRef.current;
+      if (!el || el.paused || el.ended) {
+        rafIdRef.current = 0;
         return;
       }
-
+      const endVal = endRef.current;
+      if (Number.isFinite(endVal) && el.currentTime >= endVal) {
+        el.pause();
+        setPlaying(false);
+        rafIdRef.current = 0;
+        return;
+      }
       const canvas = canvasRef.current;
       const analyser = analyserRef.current;
       const byteData = byteDataRef.current;
-      if (canvas && analyser && byteData && clipLength > 0) {
+      const cl = clipLengthRef.current;
+      if (canvas && analyser && byteData && cl > 0) {
         analyser.getByteFrequencyData(byteData);
-        paintColumn(canvas, byteData, el.currentTime, start, clipLength);
+        paintColumn(canvas, byteData, el.currentTime, startRef.current, cl);
       }
-
-      rafId = requestAnimationFrame(tick);
+      rafIdRef.current = requestAnimationFrame(tick);
     };
+    rafIdRef.current = requestAnimationFrame(tick);
+  }, [stopRaf]);
 
-    const onPlay = () => {
-      if (running) return;
-      running = true;
-      rafId = requestAnimationFrame(tick);
-    };
-    const onPause = () => stop();
+  // Keep `playing` in sync when the user pauses/ends audio outside our control
+  // (system controls, tab focus loss in some browsers, etc.).
+  useEffect(() => {
+    const el = audioRef.current;
+    if (!el) return;
+    const onPause = () => setPlaying(false);
     const onEnded = () => {
-      stop();
       setPlaying(false);
+      stopRaf();
     };
-
-    el.addEventListener("play", onPlay);
     el.addEventListener("pause", onPause);
     el.addEventListener("ended", onEnded);
     return () => {
-      stop();
-      el.removeEventListener("play", onPlay);
       el.removeEventListener("pause", onPause);
       el.removeEventListener("ended", onEnded);
     };
-  }, [start, end, clipLength]);
+  }, [stopRaf]);
+
+  // Stop the rAF on unmount.
+  useEffect(() => stopRaf, [stopRaf]);
 
   // Disconnect this card's nodes on unmount. Do NOT close the shared context —
   // other cards may still be using it. The source/analyser become orphaned
@@ -299,6 +318,11 @@ export function AudioDetectionCard({ detection }: AudioDetectionCardProps) {
     try {
       await el.play();
       setPlaying(true);
+      // Start the spectrogram loop right here — don't wait for the audio
+      // element's `play` event, whose timing relative to this promise is
+      // browser-dependent and has been observed to skip the listener after
+      // SPA navigation.
+      startRaf();
     } catch {
       setPlaying(false);
     }

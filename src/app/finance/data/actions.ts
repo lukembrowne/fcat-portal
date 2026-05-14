@@ -18,6 +18,7 @@ import { parseCategoryLinkExcel } from "../lib/parse-category-link";
 import { parseSueldosExcel } from "../lib/parse-sueldos";
 import { revalidatePath } from "next/cache";
 import { sql } from "drizzle-orm";
+import { recordEvent } from "@/lib/system-events";
 
 // --- LibroMayor upload ---
 
@@ -97,6 +98,16 @@ export async function commitLibroMayor(
     });
 
     db.run(sql`PRAGMA wal_checkpoint(PASSIVE)`);
+    await recordEvent({
+      source: "finance",
+      eventType: "finance_upload_libro_mayor",
+      summary: `Libro Mayor cargado: ${file.name} (${rows.length} fila${rows.length === 1 ? "" : "s"})`,
+      severity: "success",
+      actorEmail: user?.email ?? null,
+      projectId: "finance",
+      targetType: "finance_upload",
+      details: { fileName: file.name, rowCount: rows.length, fileType: "libro_mayor" },
+    });
     revalidatePath("/finance");
     return { success: true, data: { rowCount: rows.length } };
   } catch (e) {
@@ -147,6 +158,16 @@ export async function commitBudget(
     });
 
     db.run(sql`PRAGMA wal_checkpoint(PASSIVE)`);
+    await recordEvent({
+      source: "finance",
+      eventType: "finance_upload_budget",
+      summary: `Presupuesto ${budgetYear} cargado: ${file.name} (${items.length} item${items.length === 1 ? "" : "s"})`,
+      severity: "success",
+      actorEmail: user?.email ?? null,
+      projectId: "finance",
+      targetType: "finance_upload",
+      details: { fileName: file.name, rowCount: items.length, budgetYear, fileType: "budget" },
+    });
     revalidatePath("/finance");
     return { success: true, data: { itemCount: items.length } };
   } catch (e) {
@@ -194,6 +215,16 @@ export async function commitCategoryLink(
     });
 
     db.run(sql`PRAGMA wal_checkpoint(PASSIVE)`);
+    await recordEvent({
+      source: "finance",
+      eventType: "finance_upload_category_map",
+      summary: `Mapeo de categorías cargado: ${file.name} (${mappings.length} mapeo${mappings.length === 1 ? "" : "s"})`,
+      severity: "success",
+      actorEmail: user?.email ?? null,
+      projectId: "finance",
+      targetType: "finance_upload",
+      details: { fileName: file.name, rowCount: mappings.length, fileType: "category_map" },
+    });
     revalidatePath("/finance");
     return { success: true, data: { mappingCount: mappings.length } };
   } catch (e) {
@@ -248,6 +279,16 @@ export async function commitSueldos(
     });
 
     db.run(sql`PRAGMA wal_checkpoint(PASSIVE)`);
+    await recordEvent({
+      source: "finance",
+      eventType: "finance_upload_sueldos",
+      summary: `Sueldos cargados: ${file.name} (${grants.length} grant${grants.length === 1 ? "" : "s"}, ${totals.length} total${totals.length === 1 ? "" : "es"})`,
+      severity: "success",
+      actorEmail: user?.email ?? null,
+      projectId: "finance",
+      targetType: "finance_upload",
+      details: { fileName: file.name, grantCount: grants.length, totalCount: totals.length, fileType: "sueldos" },
+    });
     revalidatePath("/finance");
     return {
       success: true,

@@ -9,6 +9,7 @@ import { parseTOA5File, detectAnomalies } from "./parser";
 import type { Anomaly, ParsedRow } from "./parser";
 import { revalidatePath } from "next/cache";
 import { sql } from "drizzle-orm";
+import { recordEvent } from "@/lib/system-events";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 
@@ -184,6 +185,23 @@ export async function commitDatFile(
     });
 
     db.run(sql`PRAGMA wal_checkpoint(PASSIVE)`);
+    await recordEvent({
+      source: "climate",
+      eventType: `climate_upload_${result.resolution}`,
+      summary: `Datos climáticos ${result.resolution} cargados: ${file.name} (${result.rows.length} fila${result.rows.length === 1 ? "" : "s"})`,
+      severity: "success",
+      actorEmail: user.email,
+      projectId: "climate",
+      targetType: "climate_upload",
+      details: {
+        fileName: file.name,
+        resolution: result.resolution,
+        rowCount: result.rows.length,
+        dateRangeStart: result.dateRange?.start ?? null,
+        dateRangeEnd: result.dateRange?.end ?? null,
+        nullAnomalies,
+      },
+    });
     revalidatePath("/climate");
     return {
       success: true,

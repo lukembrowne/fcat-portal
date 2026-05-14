@@ -18,15 +18,17 @@ export interface SpeciesMapMarker {
   latitude: number;
   longitude: number;
   detectionCount: number;
+  /** Anchor link rendered in the popup. Pre-computed server-side so the
+   *  component receives plain data (no function props across the
+   *  Server→Client boundary). */
+  href: string;
 }
 
 interface Props {
   markers: SpeciesMapMarker[];
-  /** Anchor link path that the popup deeplinks to (e.g. "?site=42"). */
-  buildSiteHref: (deploymentId: number) => string;
 }
 
-export default function DeploymentMapInner({ markers, buildSiteHref }: Props) {
+export default function DeploymentMapInner({ markers }: Props) {
   const boundary = useReserveBoundary();
 
   const { center, maxCount } = useMemo(() => {
@@ -100,10 +102,7 @@ export default function DeploymentMapInner({ markers, buildSiteHref }: Props) {
                     <strong>Detecciones:</strong>{" "}
                     {m.detectionCount.toLocaleString("es-EC")}
                   </p>
-                  <a
-                    href={buildSiteHref(m.deploymentId)}
-                    className="text-sky-700 underline"
-                  >
+                  <a href={m.href} className="text-sky-700 underline">
                     Ver detecciones →
                   </a>
                 </div>

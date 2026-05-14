@@ -1,5 +1,4 @@
 import { notFound } from "next/navigation";
-import dynamic from "next/dynamic";
 import {
   getCameraTrapSpeciesDetail,
   getCameraTrapSpeciesSitePage,
@@ -8,6 +7,7 @@ import {
 import { SpeciesHeader } from "@/components/species/species-header";
 import { SpeciesFilterBar } from "@/components/species/species-filter-bar";
 import { SiteList } from "@/components/species/site-list";
+import { DeploymentMap } from "@/components/species/deployment-map";
 import { ImageGrid } from "@/components/image-grid";
 import {
   parsePositiveInt,
@@ -16,19 +16,6 @@ import {
 } from "@/lib/species-search-params";
 import Link from "next/link";
 import { speciesSlug } from "@/lib/species-slug";
-
-const DeploymentMap = dynamic(
-  () => import("@/components/species/deployment-map-inner"),
-  { ssr: false, loading: () => <MapPlaceholder /> }
-);
-
-function MapPlaceholder() {
-  return (
-    <div className="rounded-lg border bg-muted/30 h-[420px] flex items-center justify-center text-sm text-muted-foreground">
-      Cargando mapa...
-    </div>
-  );
-}
 
 interface PageProps {
   params: Promise<{ slug: string }>;
@@ -161,8 +148,8 @@ export default async function CameraTrapSpeciesDetailPage({
                   latitude: s.latitude!,
                   longitude: s.longitude!,
                   detectionCount: s.detectionCount,
+                  href: buildToggleHref(s.deploymentId),
                 }))}
-              buildSiteHref={(id) => buildToggleHref(id)}
             />
           )}
 

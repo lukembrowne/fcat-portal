@@ -1,5 +1,4 @@
 import { notFound } from "next/navigation";
-import dynamic from "next/dynamic";
 import Link from "next/link";
 import {
   getAudioSpeciesDetail,
@@ -9,6 +8,7 @@ import type { SiteSummary } from "@/app/camera-trap/species/actions";
 import { SpeciesHeader } from "@/components/species/species-header";
 import { SpeciesFilterBar } from "@/components/species/species-filter-bar";
 import { SiteList } from "@/components/species/site-list";
+import { DeploymentMap } from "@/components/species/deployment-map";
 import { AudioDetectionCard } from "@/app/audio/species/_components/audio-detection-card";
 import {
   parsePositiveInt,
@@ -16,19 +16,6 @@ import {
   parseStatuses,
 } from "@/lib/species-search-params";
 import { speciesSlug } from "@/lib/species-slug";
-
-const DeploymentMap = dynamic(
-  () => import("@/components/species/deployment-map-inner"),
-  { ssr: false, loading: () => <MapPlaceholder /> }
-);
-
-function MapPlaceholder() {
-  return (
-    <div className="rounded-lg border bg-muted/30 h-[420px] flex items-center justify-center text-sm text-muted-foreground">
-      Cargando mapa...
-    </div>
-  );
-}
 
 interface PageProps {
   params: Promise<{ slug: string }>;
@@ -159,8 +146,8 @@ export default async function AudioSpeciesDetailPage({
                   latitude: s.latitude!,
                   longitude: s.longitude!,
                   detectionCount: s.detectionCount,
+                  href: buildToggleHref(s.deploymentId),
                 }))}
-              buildSiteHref={(id) => buildToggleHref(id)}
             />
           )}
 

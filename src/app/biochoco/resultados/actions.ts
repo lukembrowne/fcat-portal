@@ -14,8 +14,8 @@ import {
   ibuttonReadings,
   cameraTrapProjects,
   siteShareTokens,
-  activityLog,
 } from "@/db/schema";
+import { recordEvent } from "@/lib/system-events";
 import { eq, and, sql, inArray, isNull, or, desc } from "drizzle-orm";
 import { fetchEntities, fetchSubmissions } from "@/lib/odk-client";
 import {
@@ -725,17 +725,19 @@ export async function createSiteShareLink(
         .all();
     });
 
-    await db.insert(activityLog).values({
-      userEmail: user.email,
-      action: "create_site_share_link",
+    await recordEvent({
+      source: "biochoco-resultados",
+      eventType: "create_site_share_link",
+      summary: `Enlace público creado para sitio ${siteId}`,
+      actorEmail: user.email,
       projectId: "biochoco",
       targetType: "biochoco_site",
       targetId: siteId,
-      details: JSON.stringify({
+      details: {
         tokenId: inserted.id,
         label: cleanLabel,
         deploymentCount: snapshot.deploymentIds.length,
-      }),
+      },
     });
 
     revalidatePath(`/biochoco/resultados/${siteId}`);
@@ -774,13 +776,15 @@ export async function revokeSiteShareLink(
       return { success: false, error: "No hay enlaces activos para revocar" };
     }
 
-    await db.insert(activityLog).values({
-      userEmail: user.email,
-      action: "revoke_site_share_link",
+    await recordEvent({
+      source: "biochoco-resultados",
+      eventType: "revoke_site_share_link",
+      summary: `Enlace público revocado para sitio ${siteId} (${result.length} token${result.length === 1 ? "" : "s"})`,
+      actorEmail: user.email,
       projectId: "biochoco",
       targetType: "biochoco_site",
       targetId: siteId,
-      details: JSON.stringify({ revokedTokenIds: result.map((r) => r.id) }),
+      details: { revokedTokenIds: result.map((r) => r.id) },
     });
 
     revalidatePath(`/biochoco/resultados/${siteId}`);

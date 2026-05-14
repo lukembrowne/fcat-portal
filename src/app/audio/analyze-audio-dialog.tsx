@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import {
   Dialog,
   DialogContent,
@@ -11,11 +11,12 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Loader2, AudioWaveform } from "lucide-react";
+import { Loader2, AudioWaveform, FileArchive } from "lucide-react";
 import {
   createAudioAnalysisJob,
   batchCreateAudioAnalysisJobs,
 } from "./actions";
+import { getAudioCompressionPreviewAction } from "./preview-actions";
 
 type Mode = "single" | "batch";
 
@@ -27,6 +28,15 @@ interface AnalyzeAudioDialogProps {
   /** Friendly subject — used in the title/description. */
   subjectLabel?: string;
   hasExistingBirdnet?: boolean;
+  /** Caller is an admin on `grabaciones`. Required for the compress option to show. */
+  canAdmin?: boolean;
+  /**
+   * Pre-aggregated count of uncompressed WAV files across `deploymentIds`.
+   * When > 0 AND `canAdmin`, the compression option becomes available. The
+   * server-side preview action provides the authoritative numbers shown
+   * under the checkbox.
+   */
+  uncompressedFileCount?: number;
   onComplete?: () => void;
 }
 
@@ -36,15 +46,50 @@ export function AnalyzeAudioDialog({
   deploymentIds,
   subjectLabel,
   hasExistingBirdnet = false,
+  canAdmin = false,
+  uncompressedFileCount = 0,
   onComplete,
 }: AnalyzeAudioDialogProps) {
   const mode: Mode = deploymentIds.length > 1 ? "batch" : "single";
   const [includeBirdnet, setIncludeBirdnet] = useState(true);
   const [includeIndices, setIncludeIndices] = useState(true);
+  const [compressFirst, setCompressFirst] = useState(false);
   const [running, startRunning] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
-  const canSubmit = includeBirdnet || includeIndices;
+  const compressionAvailable = canAdmin && uncompressedFileCount > 0;
+  const showCompressOption = compressionAvailable;
+
+  const [preview, setPreview] = useState<
+    | { count: number; totalSizeMB: number; estimatedSavedMB: number }
+    | null
+  >(null);
+  const [loadingPreview, setLoadingPreview] = useState(false);
+
+  // Fetch the compression preview (count / MB / estimated savings) when the
+  // checkbox is checked. Authoritative server-side query; cheap aggregate.
+  // Matches the pre-existing `useConfirmPreview` pattern in this codebase.
+  const shouldFetchPreview = open && showCompressOption && compressFirst;
+  useEffect(() => {
+    if (!shouldFetchPreview) return;
+    let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- matches useConfirmPreview pattern
+    setLoadingPreview(true);
+    getAudioCompressionPreviewAction(deploymentIds).then((result) => {
+      if (cancelled) return;
+      if (result.success) {
+        setPreview(result.data);
+      }
+      setLoadingPreview(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [shouldFetchPreview, deploymentIds]);
+
+  const previewToShow = shouldFetchPreview ? preview : null;
+
+  const canSubmit = includeBirdnet || includeIndices || compressFirst;
 
   const title =
     mode === "batch"
@@ -75,6 +120,7 @@ export function AnalyzeAudioDialog({
         const result = await batchCreateAudioAnalysisJobs(deploymentIds, {
           includeBirdnet,
           includeIndices,
+          compressFirst: compressFirst && compressionAvailable,
         });
         if (!result.success) {
           setError(result.error);
@@ -97,6 +143,7 @@ export function AnalyzeAudioDialog({
         deploymentId: deploymentIds[0],
         includeBirdnet,
         includeIndices,
+        compressFirst: compressFirst && compressionAvailable,
       });
       if (!result.success) {
         setError(result.error);
@@ -161,6 +208,48 @@ export function AnalyzeAudioDialog({
               </div>
             </div>
           </label>
+
+          {showCompressOption && (
+            <label className="flex items-start gap-3 cursor-pointer">
+              <Checkbox
+                checked={compressFirst}
+                onCheckedChange={(v) => setCompressFirst(v === true)}
+                className="mt-0.5"
+              />
+              <div className="flex-1">
+                <div className="text-sm font-medium flex items-center gap-1.5">
+                  <FileArchive className="h-3.5 w-3.5" />
+                  Comprimir a FLAC primero
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Reduce el tamaño en Drive antes del análisis. Sin pérdida —
+                  no afecta detecciones ni índices.
+                </div>
+                {compressFirst && (
+                  <div className="mt-1.5 text-xs">
+                    {loadingPreview ? (
+                      <span className="flex items-center gap-1.5 text-muted-foreground">
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                        Calculando ahorro...
+                      </span>
+                    ) : previewToShow ? (
+                      previewToShow.count > 0 ? (
+                        <span className="font-medium">
+                          {previewToShow.count} archivos WAV (
+                          {previewToShow.totalSizeMB} MB) · ahorro estimado{" "}
+                          <strong>~{previewToShow.estimatedSavedMB} MB</strong>
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground">
+                          No hay WAVs pendientes de comprimir.
+                        </span>
+                      )
+                    ) : null}
+                  </div>
+                )}
+              </div>
+            </label>
+          )}
         </div>
 
         {error && <p className="text-sm text-destructive">{error}</p>}

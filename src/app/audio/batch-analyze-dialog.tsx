@@ -7,6 +7,9 @@ interface BatchAnalyzeDialogProps {
   onOpenChange: (open: boolean) => void;
   selectedIds: number[];
   selectedCount: number;
+  /** Aggregated WAV count across selected deployments — gates compress option. */
+  uncompressedFileCount?: number;
+  canAdmin?: boolean;
   onComplete: () => void;
 }
 
@@ -19,6 +22,8 @@ export function BatchAnalyzeDialog({
   open,
   onOpenChange,
   selectedIds,
+  uncompressedFileCount = 0,
+  canAdmin = false,
   onComplete,
 }: BatchAnalyzeDialogProps) {
   return (
@@ -26,6 +31,8 @@ export function BatchAnalyzeDialog({
       open={open}
       onOpenChange={onOpenChange}
       deploymentIds={selectedIds}
+      canAdmin={canAdmin}
+      uncompressedFileCount={uncompressedFileCount}
       onComplete={onComplete}
     />
   );

@@ -60,6 +60,8 @@ import type { AudioProjectGroup } from "./page";
 import { AudioDeploymentRowActions } from "./audio-deployment-row-actions";
 import { BatchAnalyzeDialog } from "./batch-analyze-dialog";
 import { BatchClearAudioIndexDialog } from "./batch-clear-index-dialog";
+import { BatchCompressAudioDialog } from "./batch-compress-audio-dialog";
+import { ConfidenceThresholdSlider } from "@/components/audio/confidence-threshold-slider";
 
 interface AudioDeploymentsShellProps {
   groups: AudioProjectGroup[];
@@ -103,6 +105,7 @@ export function AudioDeploymentsShell({
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [batchEditOpen, setBatchEditOpen] = useState(false);
   const [batchAnalyzeOpen, setBatchAnalyzeOpen] = useState(false);
+  const [batchCompressOpen, setBatchCompressOpen] = useState(false);
   const [batchClearIndexOpen, setBatchClearIndexOpen] = useState(false);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
     () => new Set()
@@ -253,13 +256,14 @@ export function AudioDeploymentsShell({
           <AudioDeploymentRowActions
             deployment={row.original}
             canEdit={isEditor}
+            canAdmin={isAdmin}
           />
         ),
         enableSorting: false,
         enableGlobalFilter: false,
       },
     ],
-    [isEditor, rangeSelection]
+    [isEditor, isAdmin, rangeSelection]
   );
 
   const filteredData = useMemo(() => {
@@ -283,6 +287,10 @@ export function AudioDeploymentsShell({
 
   const selectedRows = table.getFilteredSelectedRowModel().rows;
   const selectedIds = selectedRows.map((r) => r.original.id);
+  const selectedUncompressedCount = selectedRows.reduce(
+    (sum, r) => sum + (r.original.uncompressedFileCount ?? 0),
+    0,
+  );
 
   const handleBatchRescan = () => {
     startRescan(async () => {
@@ -474,6 +482,8 @@ export function AudioDeploymentsShell({
         )}
 
         <div className="ml-auto flex flex-wrap items-center gap-3">
+          <ConfidenceThresholdSlider variant="compact" />
+
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
@@ -539,6 +549,15 @@ export function AudioDeploymentsShell({
                 )}
                 Re-escanear
               </Button>
+              {isAdmin && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setBatchCompressOpen(true)}
+                >
+                  Comprimir a FLAC
+                </Button>
+              )}
               {isAdmin && (
                 <Button
                   variant="destructive"
@@ -708,12 +727,23 @@ export function AudioDeploymentsShell({
             onOpenChange={setBatchAnalyzeOpen}
             selectedIds={selectedIds}
             selectedCount={selectedRows.length}
+            canAdmin={isAdmin}
+            uncompressedFileCount={selectedUncompressedCount}
             onComplete={() => setRowSelection({})}
           />
           {isAdmin && (
             <BatchClearAudioIndexDialog
               open={batchClearIndexOpen}
               onOpenChange={setBatchClearIndexOpen}
+              selectedIds={selectedIds}
+              selectedCount={selectedRows.length}
+              onComplete={() => setRowSelection({})}
+            />
+          )}
+          {isAdmin && (
+            <BatchCompressAudioDialog
+              open={batchCompressOpen}
+              onOpenChange={setBatchCompressOpen}
               selectedIds={selectedIds}
               selectedCount={selectedRows.length}
               onComplete={() => setRowSelection({})}

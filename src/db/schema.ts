@@ -492,6 +492,53 @@ export const activityLog = sqliteTable("activity_log", {
 });
 
 // ---------------------------------------------------------------------------
+// System Events (unified activity log across cron, admin, ingestion, etc.)
+// ---------------------------------------------------------------------------
+
+export const EVENT_SOURCES = [
+  "admin",
+  "audio",
+  "biochoco-tools",
+  "biochoco-resultados",
+  "camera-trap",
+  "climate",
+  "cron",
+  "finance",
+  "odk",
+] as const;
+export type EventSource = (typeof EVENT_SOURCES)[number];
+
+export const EVENT_SEVERITIES = ["info", "success", "warn", "error"] as const;
+export type EventSeverity = (typeof EVENT_SEVERITIES)[number];
+
+export const systemEvents = sqliteTable(
+  "system_events",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    occurredAt: integer("occurred_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+    eventType: text("event_type").notNull(),
+    source: text("source", { enum: EVENT_SOURCES }).notNull(),
+    severity: text("severity", { enum: EVENT_SEVERITIES })
+      .notNull()
+      .default("info"),
+    actorEmail: text("actor_email"),
+    projectId: text("project_id"),
+    targetType: text("target_type"),
+    targetId: text("target_id"),
+    summary: text("summary").notNull(),
+    durationMs: integer("duration_ms"),
+    details: text("details"),
+  },
+  (t) => [
+    index("idx_system_events_occurred_at").on(t.occurredAt),
+    index("idx_system_events_source").on(t.source),
+    index("idx_system_events_event_type").on(t.eventType),
+  ],
+);
+
+// ---------------------------------------------------------------------------
 // Finance — Transactions (from LibroMayor CSV)
 // ---------------------------------------------------------------------------
 
@@ -770,6 +817,12 @@ export const audioFiles = sqliteTable(
     sampleRate: integer("sample_rate"),
     cachePath: text("cache_path"),
     spectrogramPath: text("spectrogram_path"),
+    // FLAC compression tracking — set by the audio_compression job.
+    // `compressed=true` is also set for non_compressible WAVs (kept as-is, no Drive write).
+    // Only rows where `originalDriveRevisionId IS NOT NULL` are revertible.
+    compressed: integer("compressed", { mode: "boolean" }).notNull().default(false),
+    originalFileSize: integer("original_file_size"),
+    originalDriveRevisionId: text("original_drive_revision_id"),
     createdAt: integer("created_at", { mode: "timestamp" })
       .notNull()
       .default(sql`(unixepoch())`),

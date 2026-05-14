@@ -7,6 +7,7 @@ import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { touchAppState } from "@/lib/app-state";
 import { log } from "@/lib/log";
+import { recordEvent, buildJobCompletionEvent } from "@/lib/system-events";
 
 const DEFAULT_CONCURRENCY = 8;
 const MAX_CONCURRENCY = 32;
@@ -129,6 +130,21 @@ export async function runDriveSyncWorkerGeneric<TDeployment>(
       .where(eq(processingJobs.id, jobId));
   };
 
+  // Local idempotency for the activity-log event. `finalize` is called from
+  // multiple internal branches (discovery-cancel, early-complete, main exit),
+  // and the outer catch block performs its own terminal DB write — the flag
+  // ensures at most one event per worker invocation across all of them.
+  let eventEmitted = false;
+  const emitTerminalEvent = async () => {
+    if (eventEmitted) return;
+    eventEmitted = true;
+    const [latest] = await db
+      .select()
+      .from(processingJobs)
+      .where(eq(processingJobs.id, jobId));
+    if (latest) await recordEvent(buildJobCompletionEvent(latest));
+  };
+
   const finalize = async (
     status: "completed" | "cancelled" | "failed",
     message: string,
@@ -149,6 +165,7 @@ export async function runDriveSyncWorkerGeneric<TDeployment>(
         ...(failed != null ? { failedImages: failed } : {}),
       })
       .where(eq(processingJobs.id, jobId));
+    await emitTerminalEvent();
   };
 
   try {
@@ -323,6 +340,7 @@ export async function runDriveSyncWorkerGeneric<TDeployment>(
         statusMessage: "Error en sincronización",
       })
       .where(eq(processingJobs.id, jobId));
+    await emitTerminalEvent();
     safeRevalidate();
   }
 }

@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useCallback, useMemo, useRef, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useCallback, useEffect, useMemo, useRef, useTransition } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
 import { useNameDisplay, type NameDisplay } from "@/lib/species-display";
@@ -9,12 +9,13 @@ import { AnnotationToolsSidebar } from "@/components/annotation-tools-sidebar";
 import { AnnotationPickerPopover } from "@/components/annotation-picker-popover";
 import { Popover, PopoverAnchor } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
-import { Calendar, ChevronLeft, ChevronRight, Play, Pause, SkipBack, SkipForward } from "lucide-react";
+import { Calendar, ChevronLeft, ChevronRight, Download, Play, Pause, SkipBack, SkipForward } from "lucide-react";
 import type { Species } from "@/db/schema";
 import {
   FftSpectrogram,
   type AudioBoxData,
   type SpectrogramMethods,
+  type SpecMeasurement,
 } from "./fft-spectrogram";
 import {
   SpectrogramControls,
@@ -23,6 +24,12 @@ import {
   cycleColormap,
   type SpectrogramSettings,
 } from "./spectrogram-controls";
+import { AnnotationFilterBar } from "@/components/audio/annotation-filter-bar";
+import {
+  FREQ_AXIS_WIDTH,
+  anchorBoxToViewportPx,
+  anchorInViewport,
+} from "@/lib/spectrogram-layout";
 import { useAnnotationShortcuts } from "@/hooks/use-annotation-shortcuts";
 import { useAudioPlaybackShortcuts } from "@/hooks/use-audio-playback-shortcuts";
 import {
@@ -71,6 +78,10 @@ interface AudioAnnotationClientProps {
   totalFiles: number;
   recordingDate?: string | null;
   recordingTime?: string | null;
+  showAll: boolean;
+  /** Optional initial seek position (seconds), passed via `?seek=`. Applied
+   *  once after the spectrogram reports duration. */
+  initialSeek?: number | null;
 }
 
 function formatTime(seconds: number): string {
@@ -128,9 +139,33 @@ export function AudioAnnotationClient({
   totalFiles,
   recordingDate,
   recordingTime,
+  showAll,
+  initialSeek,
 }: AudioAnnotationClientProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
+
+  // Preserve filter context (?conf= / ?showAll=) when navigating between files.
+  const buildSiblingUrl = useCallback(
+    (targetFileId: number) => {
+      const params = new URLSearchParams();
+      const conf = searchParams.get("conf");
+      const showAllParam = searchParams.get("showAll");
+      if (conf) params.set("conf", conf);
+      if (showAllParam) params.set("showAll", showAllParam);
+      const qs = params.toString();
+      const base = `/audio/${deploymentId}/annotate/${targetFileId}`;
+      return qs ? `${base}?${qs}` : base;
+    },
+    [deploymentId, searchParams]
+  );
   const [selectedDetectionId, setSelectedDetectionId] = useState<number | null>(
+    null
+  );
+  // Cross-component hover: sidebar card → bbox halo. Distinct from
+  // `hoverBoxId` inside FftSpectrogram (direct SVG hover); the two are OR-ed
+  // on the spec side so either source highlights the same box.
+  const [hoveredDetectionId, setHoveredDetectionId] = useState<number | null>(
     null
   );
   const popoverSearchInputRef = useRef<HTMLInputElement>(null);
@@ -142,10 +177,16 @@ export function AudioAnnotationClient({
   const [duration, setDuration] = useState<number | null>(null);
   const [sampleRate, setSampleRate] = useState<number | null>(null);
   const [settings, setSettings] = useState<SpectrogramSettings>(() => loadStoredSettings());
-  const [specPx, setSpecPx] = useState<{ width: number; height: number }>({
-    width: 0,
-    height: 0,
+  const [measurements, setMeasurements] = useState<SpecMeasurement>({
+    viewportWidth: 0,
+    scrollWidth: 0,
+    specHeight: 0,
   });
+  const [scrollLeft, setScrollLeft] = useState(0);
+  // Bumped on every card-click to retrigger the pulse animation on the
+  // selected box. The actual id sits in `selectedDetectionId`; this counter
+  // is the React-friendly invalidator (per the plan, NOT a timestamp).
+  const [pulseKey, setPulseKey] = useState(0);
   const spectrogramRef = useRef<SpectrogramMethods>(null);
 
   // Project-wide hotkey slots (1-9), locked at page load to match camera-trap
@@ -287,6 +328,20 @@ export function AudioAnnotationClient({
     );
   }, [selectedDetection]);
 
+  // Sidebar card play-button: seek + unbounded play. Distinct from
+  // `handlePlaySelection` (the bottom "Reproducir selección" button + `p`
+  // shortcut), which uses `playSelection` to auto-stop at the detection
+  // end. Per user preference, the card button plays past the detection.
+  const handlePlayDetection = useCallback(
+    (id: number) => {
+      const det = detections.find((d) => d.id === id);
+      if (!det) return;
+      spectrogramRef.current?.seek(det.startTime);
+      void spectrogramRef.current?.play();
+    },
+    [detections]
+  );
+
   const handleToggleLoop = useCallback(() => {
     if (!selectedDetection) return;
     const spec = spectrogramRef.current;
@@ -315,12 +370,25 @@ export function AudioAnnotationClient({
     toast.success("Todas verificadas en este archivo");
   }, [detections, selectedDetectionId]);
 
+  const initialSeekAppliedRef = useRef(false);
   const handleSpectrogramReady = useCallback(
     (meta: { duration: number; sampleRate: number }) => {
       setDuration(meta.duration);
       setSampleRate(meta.sampleRate);
+      // URL `?seek=` wins on first navigation only — applied once after the
+      // spectrogram reports duration so we can clamp the value.
+      if (
+        initialSeek != null &&
+        Number.isFinite(initialSeek) &&
+        !initialSeekAppliedRef.current
+      ) {
+        initialSeekAppliedRef.current = true;
+        const clamped = Math.min(Math.max(initialSeek, 0), meta.duration);
+        spectrogramRef.current?.seek(clamped);
+        spectrogramRef.current?.scrollToTime(clamped);
+      }
     },
-    []
+    [initialSeek]
   );
 
   const handleBoxResized = useCallback(
@@ -361,12 +429,29 @@ export function AudioAnnotationClient({
     startTransition(async () => {
       const result = await verifyAllAudioAndAdvance(unverifiedIds, deploymentId, audioFileId);
       if (result.success && result.data.nextFileId) {
-        router.push(`/audio/${deploymentId}/annotate/${result.data.nextFileId}`);
+        router.push(buildSiblingUrl(result.data.nextFileId));
       } else {
         router.refresh();
       }
     });
-  }, [detections, deploymentId, audioFileId, router]);
+  }, [detections, deploymentId, audioFileId, router, buildSiblingUrl]);
+
+  // Auto-scroll the spectrogram to the selected box and trigger the pulse
+  // animation. Fires on every selection change (sidebar card click,
+  // keyboard hotkey, spectrogram box click). If the box is already in
+  // view, smooth-scroll is a no-op; the pulse still plays.
+  useEffect(() => {
+    if (selectedDetectionId == null) return;
+    const det = detections.find((d) => d.id === selectedDetectionId);
+    if (!det) return;
+    const center = (det.startTime + det.endTime) / 2;
+    spectrogramRef.current?.scrollToTime(center);
+    // Bump the pulse counter so the spectrogram retriggers the keyframe. The
+    // counter has no derived state — it's just a render token — so the
+    // set-state-in-effect rule is overly cautious here.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setPulseKey((k) => k + 1);
+  }, [selectedDetectionId, detections]);
 
   // Derived picker state. The popover opens whenever a detection is selected
   // (mirrors camera-trap's useAnnotationPicker gate without zoom/dialog state).
@@ -386,45 +471,46 @@ export function AudioAnnotationClient({
     ? detections.findIndex((d) => d.id === selectedDetectionId) + 1
     : 0;
 
-  // Anchor pixel rect for the popover. The spec area starts after the
-  // freq-axis gutter (70px), so the anchor div offsets by that to land on
-  // the spec canvas. Time/freq → pixel uses the same linear transform the
-  // spectrogram itself uses (timeToNX = t/duration, hzToNY = 1 - hz/maxHz).
-  const FREQ_AXIS_WIDTH = 70;
+  // Anchor pixel rect for the popover. Computed from the spec's current
+  // measurements + scroll offset via the pure `anchorBoxToViewportPx`
+  // helper (single source of truth — was duplicated here before Phase 2).
+  // Closes the popover when the anchor scrolls off the visible viewport.
   const anchorStyle = useMemo(() => {
     if (
       !selectedDetection ||
       !duration ||
       duration <= 0 ||
-      specPx.width <= 0 ||
-      specPx.height <= 0
+      measurements.viewportWidth <= 0 ||
+      measurements.specHeight <= 0
     ) {
       return null;
     }
-    const maxHz = settings.displayMaxHz;
-    const x = (selectedDetection.startTime / duration) * specPx.width;
-    const w =
-      ((selectedDetection.endTime - selectedDetection.startTime) / duration) *
-      specPx.width;
-    const yTop = (1 - selectedDetection.maxFreq / maxHz) * specPx.height;
-    const yBot = (1 - selectedDetection.minFreq / maxHz) * specPx.height;
+    const anchor = anchorBoxToViewportPx(selectedDetection, {
+      duration,
+      scrollLeft,
+      scrollWidth: measurements.scrollWidth,
+      viewportWidth: measurements.viewportWidth,
+      specHeight: measurements.specHeight,
+      displayMaxHz: settings.displayMaxHz,
+    });
+    if (!anchorInViewport(anchor, measurements.viewportWidth)) return null;
     return {
-      left: FREQ_AXIS_WIDTH + x,
-      top: yTop,
-      width: Math.max(2, w),
-      height: Math.max(2, yBot - yTop),
+      left: FREQ_AXIS_WIDTH + anchor.x,
+      top: anchor.y,
+      width: anchor.w,
+      height: anchor.h,
     };
-  }, [selectedDetection, duration, specPx, settings.displayMaxHz]);
+  }, [selectedDetection, duration, measurements, scrollLeft, settings.displayMaxHz]);
 
   // Keyboard shortcuts — split between shared chrome and audio playback.
   useAnnotationShortcuts({
     enabled: true,
     onQuickVerifyAll: handleQuickVerifyAll,
     onNext: () => {
-      if (nextFileId) router.push(`/audio/${deploymentId}/annotate/${nextFileId}`);
+      if (nextFileId) router.push(buildSiblingUrl(nextFileId));
     },
     onPrev: () => {
-      if (prevFileId) router.push(`/audio/${deploymentId}/annotate/${prevFileId}`);
+      if (prevFileId) router.push(buildSiblingUrl(prevFileId));
     },
     onSelectDetection: (index) => {
       if (index < detections.length) {
@@ -482,6 +568,8 @@ export function AudioAnnotationClient({
             onSelectDetection={(id) =>
               setSelectedDetectionId((prev) => (prev === id ? null : id))
             }
+            onHoverDetection={setHoveredDetectionId}
+            onPlayDetection={handlePlayDetection}
             onDeleteDetection={isEditor ? handleDeleteDetection : undefined}
             confirmedBlank={false}
             speciesList={speciesList}
@@ -511,31 +599,39 @@ export function AudioAnnotationClient({
           </div>
         )}
 
-        {/* Spectrogram controls toolbar */}
+        {/* Spectrogram controls toolbar — also hosts the confidence
+            threshold slider and "show all" toggle, slotted inline at the end. */}
         {audioStreamUrl && (
           <SpectrogramControls
             settings={settings}
             onChange={setSettings}
             sampleRate={sampleRate}
+            trailing={<AnnotationFilterBar showAll={showAll} />}
           />
         )}
 
         {/* Spectrogram display — client-side FFT renderer.
-            Wrapped in `relative` so the PopoverAnchor positions correctly
-            over the selected box. */}
-        <div ref={spectrogramContainerRef} className="shrink-0 relative">
+            Fills the remaining vertical space between the controls bar and
+            the playback controls. `relative` so the PopoverAnchor positions
+            correctly over the selected box. */}
+        <div ref={spectrogramContainerRef} className="flex-1 min-h-0 relative">
           {audioStreamUrl ? (
             <FftSpectrogram
               ref={spectrogramRef}
               audioUrl={audioStreamUrl}
               boxes={boxes}
               selectedBoxId={selectedDetectionId}
+              hoveredBoxId={hoveredDetectionId}
               editable={isEditor}
               displayMaxHz={settings.displayMaxHz}
               gainDB={settings.gainDB}
               rangeDB={settings.rangeDB}
               fftSize={settings.fftSize}
               colormap={settings.colormap}
+              zoomLevel={settings.zoomLevel}
+              followPlayback={settings.followPlayback}
+              detectionsVersion={detections.length}
+              pulseKey={pulseKey}
               onBoxClick={(box) =>
                 setSelectedDetectionId((prev) =>
                   prev === box.id ? null : box.id
@@ -546,7 +642,11 @@ export function AudioAnnotationClient({
               onReady={handleSpectrogramReady}
               onTimeUpdate={setCurrentTime}
               onPlayPause={setIsPlaying}
-              onSpecSizeChange={setSpecPx}
+              onMeasurementsChange={setMeasurements}
+              onScrollChange={setScrollLeft}
+              onZoomChange={(next) =>
+                setSettings((s) => ({ ...s, zoomLevel: next }))
+              }
             />
           ) : (
             <div className="flex items-center justify-center py-24">
@@ -609,6 +709,22 @@ export function AudioAnnotationClient({
                   {formatTime(currentTime)}
                   {duration != null ? ` / ${formatTime(duration)}` : ""}
                 </span>
+                {driveFileId && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    asChild
+                    title="Descargar archivo"
+                  >
+                    <a
+                      href={`/api/audio/stream?fileId=${encodeURIComponent(driveFileId)}&download=true`}
+                      download
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                    </a>
+                  </Button>
+                )}
               </>
             )}
           </div>
@@ -621,9 +737,7 @@ export function AudioAnnotationClient({
               asChild={!!prevFileId}
             >
               {prevFileId ? (
-                <Link
-                  href={`/audio/${deploymentId}/annotate/${prevFileId}`}
-                >
+                <Link href={buildSiblingUrl(prevFileId)}>
                   <ChevronLeft className="h-4 w-4 mr-1" />
                   Anterior
                 </Link>
@@ -641,9 +755,7 @@ export function AudioAnnotationClient({
               asChild={!!nextFileId}
             >
               {nextFileId ? (
-                <Link
-                  href={`/audio/${deploymentId}/annotate/${nextFileId}`}
-                >
+                <Link href={buildSiblingUrl(nextFileId)}>
                   Siguiente
                   <ChevronRight className="h-4 w-4 ml-1" />
                 </Link>

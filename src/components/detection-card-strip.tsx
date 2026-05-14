@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef } from "react";
 import { Badge } from "@/components/ui/badge";
-import { Trash2, CheckCircle2 } from "lucide-react";
+import { Trash2, CheckCircle2, Play } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { AnnotationDetection } from "@/types/annotation";
 import type { Species } from "@/db/schema";
@@ -31,6 +31,12 @@ interface DetectionCardStripProps {
   nameDisplay?: NameDisplay;
   speciesList?: Species[];
   orientation?: "horizontal" | "vertical";
+  /** Audio-only: fired on card mouse enter/leave so the spec can highlight
+   *  the corresponding bounding box. Camera-trap omits this prop. */
+  onHoverDetection?: (id: number | null) => void;
+  /** Audio-only: fired when the play icon on a card is clicked. Camera-trap
+   *  omits this prop, so the icon doesn't render. */
+  onPlayDetection?: (id: number) => void;
 }
 
 export function DetectionCardStrip({
@@ -43,6 +49,8 @@ export function DetectionCardStrip({
   nameDisplay = "scientific",
   speciesList = [],
   orientation = "horizontal",
+  onHoverDetection,
+  onPlayDetection,
 }: DetectionCardStripProps) {
   const isVertical = orientation === "vertical";
   const cardRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
@@ -176,6 +184,8 @@ export function DetectionCardStrip({
               else cardRefs.current.delete(det.id);
             }}
             onClick={() => onSelectDetection(det.id)}
+            onMouseEnter={onHoverDetection ? () => onHoverDetection(det.id) : undefined}
+            onMouseLeave={onHoverDetection ? () => onHoverDetection(null) : undefined}
             className={cn(
               "relative pl-3 pr-2 py-2 border rounded-lg text-left transition-all group overflow-hidden",
               isVertical ? "w-full" : "flex-shrink-0 w-40",
@@ -216,6 +226,21 @@ export function DetectionCardStrip({
                   {confidence}%
                 </span>
               ) : null}
+              {onPlayDetection && (
+                <div
+                  role="button"
+                  tabIndex={-1}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onPlayDetection(det.id);
+                  }}
+                  className="p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-accent hover:text-foreground transition-opacity flex-shrink-0 cursor-pointer"
+                  title="Reproducir detección"
+                  aria-label="Reproducir detección"
+                >
+                  <Play className="h-3 w-3" />
+                </div>
+              )}
               {onDeleteDetection && (
                 <div
                   role="button"

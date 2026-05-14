@@ -22,10 +22,10 @@ import {
   cameraTrapModels,
   cameraTrapTrainingDatasets,
   processingJobs,
-  activityLog,
   type CameraTrapModel,
 } from "@/db/schema";
 import { requireAdmin } from "@/lib/auth";
+import { recordEvent } from "@/lib/system-events";
 import type { ActionResult } from "@/lib/types";
 import { shutdownModelServer } from "@/lib/ml-runner";
 import { log } from "@/lib/log";
@@ -268,17 +268,20 @@ export async function registerModelFromDir(
         .get() as CameraTrapModel;
     });
 
-    await db.insert(activityLog).values({
-      userEmail: user.email,
-      action: "ct_model.register",
+    await recordEvent({
+      source: "camera-trap",
+      eventType: "ct_model.register",
+      summary: `Modelo CT registrado · ${inserted.version}`,
+      actorEmail: user.email,
+      projectId: "camera-trap",
       targetType: "camera_trap_model",
-      targetId: String(inserted.id),
-      details: JSON.stringify({
+      targetId: inserted.id,
+      details: {
         version: inserted.version,
         modelDir,
         trainingDatasetId,
         allowUntracked,
-      }),
+      },
     });
 
     return {
@@ -361,12 +364,16 @@ export async function setActiveModel(
       log.warn({ err }, "[ct-models] shutdownModelServer failed");
     }
 
-    await db.insert(activityLog).values({
-      userEmail: user.email,
-      action: "ct_model.activate",
+    await recordEvent({
+      source: "camera-trap",
+      eventType: "ct_model.activate",
+      summary: `Modelo CT activado · ${target[0].version}`,
+      severity: "success",
+      actorEmail: user.email,
+      projectId: "camera-trap",
       targetType: "camera_trap_model",
-      targetId: String(modelId),
-      details: JSON.stringify({ version: target[0].version }),
+      targetId: modelId,
+      details: { version: target[0].version },
     });
 
     return { success: true, data: { modelId } };
@@ -411,12 +418,16 @@ export async function deleteModel(
 
     await db.delete(cameraTrapModels).where(eq(cameraTrapModels.id, modelId));
 
-    await db.insert(activityLog).values({
-      userEmail: user.email,
-      action: "ct_model.delete",
+    await recordEvent({
+      source: "camera-trap",
+      eventType: "ct_model.delete",
+      summary: `Modelo CT eliminado · ${target[0].version}`,
+      severity: "warn",
+      actorEmail: user.email,
+      projectId: "camera-trap",
       targetType: "camera_trap_model",
-      targetId: String(modelId),
-      details: JSON.stringify({ version: target[0].version }),
+      targetId: modelId,
+      details: { version: target[0].version },
     });
 
     return { success: true, data: { modelId } };

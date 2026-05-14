@@ -1,7 +1,8 @@
 "use server";
 
 import { db } from "@/db";
-import { deployments, images, cameraTrapProjects, activityLog, processingJobs } from "@/db/schema";
+import { deployments, images, cameraTrapProjects, processingJobs } from "@/db/schema";
+import { recordEvent, buildJobCompletionEvent } from "@/lib/system-events";
 import { eq, and, inArray, sql, count } from "drizzle-orm";
 import {
   listDeploymentFolders,
@@ -632,15 +633,20 @@ async function compressJobInternal(
       })
       .where(eq(processingJobs.id, jobId));
 
-    // Activity log
-    await db.insert(activityLog).values({
-      userEmail,
-      action: "compress_images",
-      projectId: "camera-trap",
-      targetType: "deployment",
-      targetId: String(deploymentId),
-      details: JSON.stringify({ compressed: result.compressed, skipped, failed: result.failed, savedBytes: result.savedBytes }),
-    });
+    const [completedJob] = await db
+      .select()
+      .from(processingJobs)
+      .where(eq(processingJobs.id, jobId));
+    if (completedJob) {
+      await recordEvent(
+        buildJobCompletionEvent(completedJob, {
+          compressed: result.compressed,
+          skipped,
+          failed: result.failed,
+          savedBytes: result.savedBytes,
+        }),
+      );
+    }
 
     log.info(
       {
@@ -665,6 +671,14 @@ async function compressJobInternal(
         statusMessage: "Error en compresión",
       })
       .where(eq(processingJobs.id, jobId));
+
+    const [failedJob] = await db
+      .select()
+      .from(processingJobs)
+      .where(eq(processingJobs.id, jobId));
+    if (failedJob) {
+      await recordEvent(buildJobCompletionEvent(failedJob));
+    }
   }
 }
 
@@ -904,14 +918,15 @@ async function revertJobInternal(
       })
       .where(eq(processingJobs.id, jobId));
 
-    await db.insert(activityLog).values({
-      userEmail,
-      action: "revert_compression",
-      projectId: "camera-trap",
-      targetType: "deployment",
-      targetId: String(deploymentId),
-      details: JSON.stringify({ reverted, failed }),
-    });
+    const [completedJob] = await db
+      .select()
+      .from(processingJobs)
+      .where(eq(processingJobs.id, jobId));
+    if (completedJob) {
+      await recordEvent(
+        buildJobCompletionEvent(completedJob, { reverted, failed }),
+      );
+    }
 
     log.info(
       { deploymentId, reverted, failed, elapsedSec },
@@ -929,5 +944,13 @@ async function revertJobInternal(
         statusMessage: "Error en reversión",
       })
       .where(eq(processingJobs.id, jobId));
+
+    const [failedJob] = await db
+      .select()
+      .from(processingJobs)
+      .where(eq(processingJobs.id, jobId));
+    if (failedJob) {
+      await recordEvent(buildJobCompletionEvent(failedJob));
+    }
   }
 }

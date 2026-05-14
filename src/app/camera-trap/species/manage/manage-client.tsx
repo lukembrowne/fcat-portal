@@ -62,7 +62,7 @@ const RANK_LABELS: Record<string, { label: string; short: string; color: string 
   class: { label: "Clase", short: "cl.", color: "bg-gray-100 text-gray-800" },
 };
 
-interface SpeciesClientProps {
+interface ManageSpeciesClientProps {
   species: Species[];
 }
 
@@ -98,7 +98,7 @@ const RANK_ORDER: Record<string, number> = {
   class: 0, order: 1, family: 2, genus: 3, species: 4,
 };
 
-export function SpeciesClient({ species }: SpeciesClientProps) {
+export function ManageSpeciesClient({ species }: ManageSpeciesClientProps) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [addOpen, setAddOpen] = useState(false);

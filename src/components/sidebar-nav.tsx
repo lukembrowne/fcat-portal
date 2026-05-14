@@ -12,7 +12,7 @@ import { hasProjectAccess } from "@/lib/auth";
 import type { AuthUser } from "@/lib/types";
 import { SidebarShell } from "@/components/sidebar-shell";
 
-export type IconName = "home" | "tree-pine" | "leaf" | "camera" | "shield" | "dollar-sign" | "bar-chart-3" | "cloud-sun" | "clipboard-list" | "thermometer" | "audio-lines" | "scroll-text" | "file-text";
+export type IconName = "home" | "tree-pine" | "leaf" | "camera" | "shield" | "dollar-sign" | "bar-chart-3" | "cloud-sun" | "clipboard-list" | "thermometer" | "audio-lines" | "scroll-text" | "file-text" | "activity";
 
 export interface NavItem {
   label: string;
@@ -149,9 +149,10 @@ export function SidebarNav({ user }: SidebarNavProps) {
     const cameraTrapChildren: NavItem[] = [
       { label: "Instalaciones", href: "/camera-trap" },
       { label: "Destacadas", href: "/camera-trap/favorites" },
+      { label: "Explorar por especie", href: "/camera-trap/species" },
     ];
     if (isCameraTrapEditor) {
-      cameraTrapChildren.push({ label: "Especies", href: "/camera-trap/species" });
+      cameraTrapChildren.push({ label: "Administrar especies", href: "/camera-trap/species/manage" });
       cameraTrapChildren.push({ label: "Trabajos de ML", href: "/camera-trap/results" });
     }
     if (isCameraTrapAdmin) {
@@ -170,7 +171,10 @@ export function SidebarNav({ user }: SidebarNavProps) {
     analysisItems.push({
       label: "Grabaciones",
       icon: "audio-lines",
-      children: [{ label: "Instalaciones", href: "/audio" }],
+      children: [
+        { label: "Instalaciones", href: "/audio" },
+        { label: "Explorar por especie", href: "/audio/species" },
+      ],
     });
   }
 
@@ -210,6 +214,7 @@ export function SidebarNav({ user }: SidebarNavProps) {
 
   if (user.globalRole === "super_admin") {
     adminItems.push({ label: "Panel de Admin", href: "/admin", icon: "shield" });
+    adminItems.push({ label: "Actividad del sistema", href: "/admin/activity", icon: "activity" });
     adminItems.push({ label: "Registros del sistema", href: "/admin/logs", icon: "scroll-text" });
   }
 

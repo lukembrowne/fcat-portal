@@ -86,7 +86,11 @@ export async function GET() {
             ? "Índices acústicos"
             : job.jobType === "audio_analysis"
               ? "Análisis acústico"
-              : "Trabajo");
+              : job.jobType === "audio_compression"
+                ? "Compresión de audio (FLAC)"
+                : job.jobType === "revert_audio_compression"
+                  ? "Reversión de compresión de audio"
+                  : "Trabajo");
 
     return {
       jobId: job.id,

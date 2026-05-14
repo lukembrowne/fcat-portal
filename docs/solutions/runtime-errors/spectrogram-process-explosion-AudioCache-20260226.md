@@ -124,4 +124,4 @@ The client-side caps are defense-in-depth — even if the server has issues, the
 
 ## Related Issues
 
-No related issues documented yet.
+- `docs/solutions/integration-issues/audio-spectrogram-blank-canvas-AudioSpeciesBrowser-20260514.md` — client-side spectrogram failures in the species browser (Web Audio context cap, FLAC seek-table absence). Same domain (spectrograms) but different layer (browser instead of server).

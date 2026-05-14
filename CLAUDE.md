@@ -27,6 +27,7 @@ Internal web application for FCAT staff and collaborators. Domain: `portal.fcat-
 - **FormData**: No `as string` casts on `FormData.get()` — always type-check properly.
 - **DB singleton**: Module-level variable (not `globalThis` only in dev).
 - **Permissions**: `requirePermission(projectId, minRole)` for read/write actions. `requireAdmin()` for admin actions.
+- **System events instrumentation**: Any server action, background job, cron, or admin-facing mutation should consider calling `recordEvent()` (from `@/lib/system-events`). Default **yes** for: terminal transitions on `processing_jobs` (use `buildJobCompletionEvent(job)` after the DB update), destructive user actions, admin/permission changes, bulk data uploads, cron job completions, external sync runs. Default **no** for: high-frequency per-row reads/writes (verification clicks, autosaves, status-message ticks) — emit one event at the end of the batch/loop instead. New job types must extend `JOB_LABELS` and `AUDIO_JOB_TYPES` in `src/lib/system-events.ts`; the coverage-guard unit test will fail otherwise.
 
 ## Commands
 
@@ -100,10 +101,20 @@ When fixing database queries, always check for edge cases where records have NUL
 
 - After implementing any UI changes, verify there are no layout regressions (empty space, overflow, alignment shifts) before considering the task complete. Test the component in its full context, not in isolation.
 - After implementing any state mutation (deletion, confirmation toggle, processing completion), always ensure the relevant UI caches are invalidated and the UI updates optimistically or refreshes automatically. Check both the immediate component AND related components (e.g., tables, sidebars, history panels) that display derived data.
+- **Tables are sortable by default.** Any new data table (or substantial edit to an existing one) must support per-column sorting using the shared `SortIcon` from `@/components/sort-icon`. For SSR/Server Component tables, follow the URL-param pattern in `src/app/research-applications/page.tsx` and `src/app/admin/activity/page.tsx` (`?sortBy=<col>&sortDir=asc|desc`, with a `SORTABLE_COLUMNS` map in the action). For Client Component tables, follow the local-state pattern in `src/app/finance/expenses/expense-table.tsx`. Preserve sort params across pagination and filter changes, and use a stable id tiebreaker in the `orderBy`.
 
 ## Git Workflow
 
 - When committing changes, always check `git diff --cached` for unrelated modifications before finalizing. Use `git add -p` (patch staging) when the working tree contains changes from multiple features.
+
+## Audio module
+
+- Audio recordings may be `.wav` or `.flac` after the WAV→FLAC compression rollout. All downstream code (BirdNET, indices, stream route, filename parser, spectrogram) must be extension-agnostic. Compressed audio is bit-identical on decode — analyses produce identical results.
+- Compressing a deployment: admin → audio page → row action ("Comprimir a FLAC") OR selection toolbar. Uses the headless `src/lib/audio-compression-core.ts` (auth-agnostic; also callable from `scripts/compress-all-audio.mjs`).
+- Reverting: admin → audio page → row action ("Revertir compresión"). Restores from the pinned Drive revision (`audio_files.original_drive_revision_id`).
+- Single-flight per deployment: at most one of {birdnet, acoustic_indices, audio_analysis, audio_sync, audio_compression, revert_audio_compression} can be pending/processing at a time. Enforced by `findActiveAudioJob` in `src/lib/job-locks.ts`.
+- Global concurrency cap: only ONE `audio_compression` job runs at a time across all deployments. Batch-queued jobs wait their turn.
+- Feature flag: `AUDIO_COMPRESSION_ENABLED=true` must be set in production. Pre-replace WAV revisions are pinned with `keepForever=true` while `AUDIO_KEEP_WAV_REVISION_FOREVER` is unset or "true".
 
 ## Gotchas
 
@@ -113,3 +124,4 @@ When fixing database queries, always check for edge cases where records have NUL
 - Drizzle singleton: Use module-level `let db` with lazy init, not `globalThis` pattern
 - Proxy (was middleware): Keep header forwarding only, no DB imports
 - Next.js 16 renamed `middleware.ts` → `proxy.ts` and uses Node.js runtime
+- better-sqlite3 transactions are synchronous — never `db.transaction(async (tx) => ...)`. Same gotcha applies to the audio compression processor (uses sequential `await db.update(...)` calls).

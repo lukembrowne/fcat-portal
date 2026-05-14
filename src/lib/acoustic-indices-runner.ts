@@ -83,6 +83,14 @@ interface RunOptions {
   onResult: (result: AcousticIndicesResult) => Promise<void> | void;
   onSkip?: (skip: AcousticIndicesSkip) => Promise<void> | void;
   onProgress?: (index: number, total: number) => Promise<void> | void;
+  /**
+   * Global progress offset for chunked runs. The runner writes
+   * `processedImages = offset + chunkLocalIdx` and surfaces `statusMessage`
+   * using `(offset + idx) de grandTotal`, so the UI bar ticks smoothly
+   * across all chunks.
+   */
+  offset?: number;
+  grandTotal?: number;
 }
 
 interface NDJSONInfo {
@@ -135,6 +143,8 @@ export async function runAcousticIndicesAnalysis(
   const { jobId, files, onResult, onSkip, onProgress } = opts;
   const pythonPath = getMlPython();
   const total = files.length;
+  const globalOffset = opts.offset ?? 0;
+  const globalTotal = opts.grandTotal ?? total;
 
   log.info(
     { jobId, total, pythonPath },
@@ -187,8 +197,17 @@ export async function runAcousticIndicesAnalysis(
 
       try {
         if (msg.type === "info") {
-          log.info({ jobId, message: msg.message }, "[acoustic-indices] info");
           if (msg.config_hash) configHash = msg.config_hash;
+          // Skip Python's chunk-local "Progreso: X/Y" message — overwrites
+          // the global statusMessage written by the progress handler below.
+          if (msg.message.startsWith("Progreso:")) {
+            log.info(
+              { jobId, message: msg.message },
+              "[acoustic-indices] info (chunk-local)",
+            );
+            return;
+          }
+          log.info({ jobId, message: msg.message }, "[acoustic-indices] info");
           await db
             .update(processingJobs)
             .set({ statusMessage: msg.message })
@@ -216,11 +235,12 @@ export async function runAcousticIndicesAnalysis(
             );
             lastProgressLoggedAt = now;
           }
+          const globalIdx = globalOffset + msg.index;
           await db
             .update(processingJobs)
             .set({
-              processedImages: msg.index,
-              statusMessage: `Calculando índices acústicos... (${msg.index} de ${msg.total})`,
+              processedImages: globalIdx,
+              statusMessage: `Calculando índices acústicos... (${globalIdx} de ${globalTotal})`,
             })
             .where(eq(processingJobs.id, jobId));
           if (onProgress) await onProgress(msg.index, msg.total);

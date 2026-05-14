@@ -51,6 +51,15 @@ interface BirdNETConfig {
   totalFiles: number;
   sensitivity?: number;
   overlap?: number;
+  /**
+   * Global progress offset when called as one chunk of a larger run. The
+   * runner writes `processedImages = offset + chunkLocalIndex` and surfaces
+   * `statusMessage` using `(offset + idx) de grandTotal`, so the UI bar ticks
+   * smoothly from 0 to grandTotal across all chunks instead of regressing
+   * each chunk start.
+   */
+  offset?: number;
+  grandTotal?: number;
 }
 
 interface NDJSONProgress {
@@ -102,6 +111,9 @@ export async function runBirdNETAnalysis(
     "[birdnet] Starting analysis"
   );
 
+  const globalOffset = config.offset ?? 0;
+  const globalTotal = config.grandTotal ?? config.totalFiles;
+
   return new Promise<BirdNETRunResult>((resolve) => {
     const proc = spawn(pythonPath, [BIRDNET_SCRIPT], {
       stdio: ["pipe", "pipe", "pipe"],
@@ -146,6 +158,13 @@ export async function runBirdNETAnalysis(
         const msg: NDJSONMessage = JSON.parse(line);
 
         if (msg.type === "info") {
+          // Skip Python's chunk-local "Progreso: X/Y" message — it would
+          // overwrite the global-scoped statusMessage we write in the
+          // `progress` handler below.
+          if (msg.message.startsWith("Progreso:")) {
+            log.info({ message: msg.message }, "[birdnet] info (chunk-local)");
+            return;
+          }
           log.info({ message: msg.message }, "[birdnet] info");
           await db
             .update(processingJobs)
@@ -175,11 +194,12 @@ export async function runBirdNETAnalysis(
             );
             lastProgressLoggedAt = now;
           }
+          const globalIdx = globalOffset + msg.index;
           await db
             .update(processingJobs)
             .set({
-              processedImages: msg.index,
-              statusMessage: `Analizando audio... (${msg.index} de ${msg.total})`,
+              processedImages: globalIdx,
+              statusMessage: `Analizando audio... (${globalIdx} de ${globalTotal})`,
             })
             .where(eq(processingJobs.id, jobId));
           return;
@@ -234,11 +254,12 @@ export async function runBirdNETAnalysis(
             totalDetections++;
           }
 
+          const globalIdx = globalOffset + totalProcessed;
           await db
             .update(processingJobs)
             .set({
-              processedImages: totalProcessed,
-              statusMessage: `Analizando audio... (${totalProcessed} de ${config.totalFiles})`,
+              processedImages: globalIdx,
+              statusMessage: `Analizando audio... (${globalIdx} de ${globalTotal})`,
             })
             .where(eq(processingJobs.id, jobId));
           return;

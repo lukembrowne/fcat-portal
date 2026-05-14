@@ -389,11 +389,11 @@ describe("deleteDetection", () => {
     const detId = seed.detections[0].id;
     await actions.deleteDetection(detId);
 
-    const logs = db.select().from(schema.activityLog).all();
-    expect(logs).toHaveLength(1);
-    expect(logs[0].action).toBe("delete_detection");
-    expect(logs[0].userEmail).toBe(testUser.email);
-    expect(logs[0].targetId).toBe(String(detId));
+    const events = db.select().from(schema.systemEvents).all();
+    expect(events).toHaveLength(1);
+    expect(events[0].eventType).toBe("delete_detection");
+    expect(events[0].actorEmail).toBe(testUser.email);
+    expect(events[0].targetId).toBe(String(detId));
   });
 
   it("returns error for non-existent detection", async () => {
@@ -498,10 +498,10 @@ describe("species management", () => {
 
     await actions.deleteSpecies(created.data.id);
 
-    const logs = db.select().from(schema.activityLog).all();
-    const deleteLog = logs.find((l) => l.action === "delete_species");
-    expect(deleteLog).toBeDefined();
-    expect(deleteLog!.userEmail).toBe(testUser.email);
+    const events = db.select().from(schema.systemEvents).all();
+    const deleteEvent = events.find((e) => e.eventType === "delete_species");
+    expect(deleteEvent).toBeDefined();
+    expect(deleteEvent!.actorEmail).toBe(testUser.email);
   });
 
   it("updateSpecies cascades scientificName change to identifications", async () => {

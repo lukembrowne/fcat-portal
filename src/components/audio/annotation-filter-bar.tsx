@@ -32,14 +32,13 @@ export function AnnotationFilterBar({ showAll }: { showAll: boolean }) {
   }, [pathname, router, searchParams, showAll]);
 
   return (
-    <div className="flex flex-wrap items-stretch gap-2">
-      <ConfidenceThresholdSlider className="min-w-72 flex-1" disabled={showAll} />
+    <div className="flex flex-wrap items-center gap-3">
+      <ConfidenceThresholdSlider variant="compact" disabled={showAll} />
       <Button
         type="button"
         variant={showAll ? "default" : "outline"}
         size="sm"
         onClick={toggleShowAll}
-        className="self-center"
         aria-pressed={showAll}
       >
         {showAll ? <EyeOff className="size-4" /> : <Eye className="size-4" />}

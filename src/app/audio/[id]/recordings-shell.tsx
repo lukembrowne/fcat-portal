@@ -168,7 +168,8 @@ export function RecordingsShell({
               )}
             </div>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-3 shrink-0">
+            <ConfidenceThresholdSlider variant="compact" />
             {isEditor && (
               <AudioActionsMenu
                 deploymentId={deployment.id}
@@ -186,10 +187,6 @@ export function RecordingsShell({
               />
             )}
           </div>
-        </div>
-
-        <div className="mt-2">
-          <ConfidenceThresholdSlider className="max-w-md" />
         </div>
 
         <div className="mt-2 border-t pt-2">

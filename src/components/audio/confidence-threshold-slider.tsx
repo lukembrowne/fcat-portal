@@ -29,9 +29,53 @@ interface Props {
    * when the "Mostrar todas" toggle is active.
    */
   disabled?: boolean;
+  /**
+   * `card` (default) — full-width bordered card with label, slider, numeric
+   * input, and max-out hint. Use on standalone filter rows.
+   *
+   * `compact` — single-row label + slider + value, no border, no numeric
+   * input. Use when slotting the control inline with a page header.
+   */
+  variant?: "card" | "compact";
 }
 
-export function ConfidenceThresholdSlider({ className, disabled }: Props) {
+function ThresholdInfoPopover() {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label="Más información sobre el umbral de confianza"
+          className="text-muted-foreground hover:text-foreground"
+        >
+          <Info className="size-3.5" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent side="bottom" className="w-80 text-xs leading-relaxed">
+        <p className="mb-2">
+          BirdNET asigna a cada detección un puntaje entre 0,10 y 1,00.
+          Este puntaje no es una probabilidad: el umbral que separa
+          detecciones confiables del ruido varía mucho entre especies.
+        </p>
+        <p className="mb-2">
+          El valor predeterminado de <strong>0,70</strong> filtra el ruido
+          más obvio sin descartar especies bien reconocidas como tucanes
+          y guacamayos. Bájelo para explorar detecciones marginales o
+          súbalo para análisis de alta precisión.
+        </p>
+        <p className="text-muted-foreground">
+          Wood &amp; Kahl (2024); Tebbutt et al. (2026).
+        </p>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+export function ConfidenceThresholdSlider({
+  className,
+  disabled,
+  variant = "card",
+}: Props) {
   const [threshold, setThreshold] = useConfidenceThreshold();
   const [inputValue, setInputValue] = useState<string>(formatThreshold(threshold));
 
@@ -67,6 +111,56 @@ export function ConfidenceThresholdSlider({ className, disabled }: Props) {
   const isDefault = threshold === DEFAULT_CONFIDENCE_THRESHOLD;
   const isMaxedOut = threshold >= 1.0;
 
+  if (variant === "compact") {
+    return (
+      <div
+        className={cn(
+          "flex items-center gap-2 text-xs",
+          disabled && "opacity-60",
+          className
+        )}
+      >
+        <Label
+          htmlFor="confidence-threshold-input"
+          className="text-muted-foreground whitespace-nowrap"
+        >
+          Umbral
+        </Label>
+        <Slider
+          min={CONFIDENCE_MIN}
+          max={CONFIDENCE_MAX}
+          step={CONFIDENCE_STEP}
+          value={[threshold]}
+          onValueChange={onSliderChange}
+          disabled={disabled}
+          aria-label="Umbral de confianza"
+          aria-valuemin={CONFIDENCE_MIN}
+          aria-valuemax={CONFIDENCE_MAX}
+          aria-valuenow={threshold}
+          className="w-28"
+        />
+        <span
+          className="tabular-nums font-medium text-foreground w-9 text-right"
+          aria-live="polite"
+        >
+          {formatThreshold(threshold)}
+        </span>
+        <ThresholdInfoPopover />
+        {!isDefault && !disabled && (
+          <button
+            type="button"
+            onClick={reset}
+            className="text-muted-foreground hover:text-foreground"
+            aria-label="Restablecer al predeterminado (0,70)"
+            title="Restablecer (0,70)"
+          >
+            <RotateCcw className="size-3" />
+          </button>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div
       className={cn(
@@ -81,33 +175,7 @@ export function ConfidenceThresholdSlider({ className, disabled }: Props) {
         >
           Umbral de confianza
         </Label>
-        <Popover>
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              aria-label="Más información sobre el umbral de confianza"
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <Info className="size-3.5" />
-            </button>
-          </PopoverTrigger>
-          <PopoverContent side="bottom" className="w-80 text-xs leading-relaxed">
-            <p className="mb-2">
-              BirdNET asigna a cada detección un puntaje entre 0,10 y 1,00.
-              Este puntaje no es una probabilidad: el umbral que separa
-              detecciones confiables del ruido varía mucho entre especies.
-            </p>
-            <p className="mb-2">
-              El valor predeterminado de <strong>0,70</strong> filtra el ruido
-              más obvio sin descartar especies bien reconocidas como tucanes
-              y guacamayos. Bájelo para explorar detecciones marginales o
-              súbalo para análisis de alta precisión.
-            </p>
-            <p className="text-muted-foreground">
-              Wood &amp; Kahl (2024); Tebbutt et al. (2026).
-            </p>
-          </PopoverContent>
-        </Popover>
+        <ThresholdInfoPopover />
         {!isDefault && !disabled && (
           <button
             type="button"

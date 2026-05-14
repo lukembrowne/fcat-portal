@@ -1035,12 +1035,23 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
 
         if (drag.kind === "panning") {
           setIsPanning(false);
-          // If we actually panned, suppress the impending click (otherwise
-          // it would seek). A bare click without drag falls through to the
-          // existing seek-on-click handler.
-          if (drag.hasDragged) {
-            suppressNextClickRef.current = true;
+          if (!drag.hasDragged) {
+            // No drag — this gesture was a click. Seek playback to the
+            // clicked position. Handled inline here (not via a separate
+            // `click` event) because `setPointerCapture` makes click-event
+            // delivery to the SVG unreliable on some browsers.
+            const a = audioRef.current;
+            if (a) {
+              const { nx } = eventToNorm(e.clientX, e.clientY);
+              loopRef.current = false;
+              selectionEndRef.current = null;
+              selectionStartRef.current = null;
+              a.currentTime = clamp(nxToTime(nx), 0, duration);
+            }
           }
+          // Suppress the follow-up `click` event so it doesn't double-seek
+          // (drag case) or re-seek with stale state (no-drag case).
+          suppressNextClickRef.current = true;
           return;
         }
 
@@ -1087,7 +1098,7 @@ export const FftSpectrogram = forwardRef<SpectrogramMethods, FftSpectrogramProps
           return;
         }
       },
-      [dragOverride, specSize.width, specSize.height, nxToTime, nyToHz]
+      [dragOverride, specSize.width, specSize.height, nxToTime, nyToHz, eventToNorm, duration]
     );
 
     const handleSvgPointerCancel = useCallback(() => {

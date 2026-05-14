@@ -4417,7 +4417,7 @@ export async function createSpecies(data: {
       })
       .returning();
 
-    revalidatePath("/camera-trap/species");
+    revalidatePath("/camera-trap/species/manage");
     return { success: true, data: result };
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Error al crear especie";
@@ -4509,7 +4509,7 @@ export async function updateSpecies(
         details: { oldName: old.scientificName, newName },
       });
 
-      revalidatePath("/camera-trap/species");
+      revalidatePath("/camera-trap/species/manage");
       revalidatePath("/camera-trap/results");
       return { success: true, data: result };
     }
@@ -4521,7 +4521,7 @@ export async function updateSpecies(
       .where(eq(species.id, id))
       .returning();
 
-    revalidatePath("/camera-trap/species");
+    revalidatePath("/camera-trap/species/manage");
     return { success: true, data: result! };
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Error al actualizar especie";
@@ -4572,7 +4572,7 @@ export async function deleteSpecies(id: number): Promise<ActionResult> {
       details: { scientificName: sp.scientificName, commonName: sp.commonName },
     });
 
-    revalidatePath("/camera-trap/species");
+    revalidatePath("/camera-trap/species/manage");
     return { success: true, data: undefined };
   } catch (error) {
     return {

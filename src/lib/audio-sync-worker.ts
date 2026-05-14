@@ -1,8 +1,8 @@
 import "server-only";
 
 import { db } from "@/db";
-import { deployments, type Deployment } from "@/db/schema";
-import { and, eq, isNotNull } from "drizzle-orm";
+import { deployments, processingJobs, type Deployment } from "@/db/schema";
+import { and, eq, isNotNull, inArray } from "drizzle-orm";
 import { AUDIO_DRIVE_LAST_SYNC_KEY } from "@/lib/app-state-keys";
 import { JOB_TYPES } from "@/lib/job-types";
 import {
@@ -10,6 +10,7 @@ import {
   awaitJobTerminal,
 } from "@/lib/drive-sync-worker-core";
 import { scanDeploymentAudioInternal } from "@/lib/audio-sync-internals";
+import { log } from "@/lib/log";
 
 export { awaitJobTerminal };
 
@@ -52,6 +53,33 @@ export async function runAudioSyncWorker(jobId: number): Promise<void> {
 
     scanOne: async (dep) => {
       if (!dep.uploadAudioFolderId) return;
+
+      // Bidirectional mutex with audio_compression / revert_audio_compression:
+      // a sync pass would mid-job overwrite filename/mimeType on a Drive row
+      // the compressor has just renamed, blowing away the `compressed=true`
+      // bookkeeping. Skip this deployment for this cycle if it's busy.
+      const [activeCompression] = await db
+        .select({ id: processingJobs.id, jobType: processingJobs.jobType })
+        .from(processingJobs)
+        .where(
+          and(
+            eq(processingJobs.deploymentId, dep.id),
+            inArray(processingJobs.jobType, [
+              JOB_TYPES.AUDIO_COMPRESSION,
+              JOB_TYPES.REVERT_AUDIO_COMPRESSION,
+            ]),
+            inArray(processingJobs.status, ["pending", "processing"]),
+          ),
+        )
+        .limit(1);
+      if (activeCompression) {
+        log.info(
+          { deploymentId: dep.id, activeJobId: activeCompression.id },
+          "[audio-sync] Skipping deployment — active compression job in flight",
+        );
+        return;
+      }
+
       await scanDeploymentAudioInternal({
         id: dep.id,
         uploadAudioFolderId: dep.uploadAudioFolderId,

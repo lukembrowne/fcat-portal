@@ -7,22 +7,32 @@ import {
   processingJobs,
   audioDetections,
   audioIdentifications,
+  audioFiles,
 } from "@/db/schema";
-import { eq, and, sql, desc, inArray } from "drizzle-orm";
+import { eq, and, sql, desc, inArray, count as drizzleCount } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import { fetchAudioFiles } from "../actions";
 import { RecordingsShell } from "./recordings-shell";
+import {
+  applyConfidenceFilter,
+  parseThresholdParam,
+} from "@/lib/audio-confidence";
 
 export default async function AudioDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ conf?: string }>;
 }) {
   const user = await requirePermission("grabaciones", "viewer");
 
   const { id } = await params;
   const deploymentId = parseInt(id, 10);
   if (isNaN(deploymentId)) notFound();
+
+  const { conf } = await searchParams;
+  const threshold = parseThresholdParam(conf);
 
   await requireDeploymentAccess(user, deploymentId);
 
@@ -32,6 +42,12 @@ export default async function AudioDetailPage({
       (p) =>
         p.projectId === "grabaciones" &&
         (p.role === "editor" || p.role === "admin")
+    );
+
+  const isAdmin =
+    user.globalRole === "super_admin" ||
+    user.permissions.some(
+      (p) => p.projectId === "grabaciones" && p.role === "admin",
     );
 
   const [deployment] = await db
@@ -58,7 +74,7 @@ export default async function AudioDetailPage({
 
   if (!deployment) notFound();
 
-  const filesResult = await fetchAudioFiles(deploymentId);
+  const filesResult = await fetchAudioFiles(deploymentId, { threshold });
 
   // Check for active BirdNET job
   const [activeBirdnetJob] = await db
@@ -99,6 +115,50 @@ export default async function AudioDetailPage({
     )
     .limit(1);
 
+  // Check for active compression / revert job (drives menu-item disabled state)
+  const [activeCompressionJob] = await db
+    .select({ id: processingJobs.id })
+    .from(processingJobs)
+    .where(
+      and(
+        eq(processingJobs.deploymentId, deploymentId),
+        inArray(processingJobs.jobType, [
+          "audio_compression",
+          "revert_audio_compression",
+        ]),
+        inArray(processingJobs.status, ["pending", "processing"]),
+      ),
+    )
+    .limit(1);
+
+  // Aggregate WAV / revertible counts so the menu can hide actions that
+  // would no-op. Matches the per-row aggregation in `fetchAudioDeployments`.
+  const [uncompressedRow] = await db
+    .select({ cnt: drizzleCount() })
+    .from(audioFiles)
+    .where(
+      and(
+        eq(audioFiles.deploymentId, deploymentId),
+        eq(audioFiles.compressed, false),
+        sql`${audioFiles.driveFileId} IS NOT NULL`,
+        sql`lower(${audioFiles.filename}) LIKE '%.wav'`,
+      ),
+    );
+  const uncompressedFileCount = uncompressedRow?.cnt ?? 0;
+
+  const [revertibleRow] = await db
+    .select({ cnt: drizzleCount() })
+    .from(audioFiles)
+    .where(
+      and(
+        eq(audioFiles.deploymentId, deploymentId),
+        eq(audioFiles.compressed, true),
+        sql`${audioFiles.driveFileId} IS NOT NULL`,
+        sql`${audioFiles.originalDriveRevisionId} IS NOT NULL`,
+      ),
+    );
+  const revertibleFileCount = revertibleRow?.cnt ?? 0;
+
   // Get last completed BirdNET job stats
   const [lastBirdnetJob] = await db
     .select({
@@ -126,19 +186,20 @@ export default async function AudioDetailPage({
   } | null = null;
 
   if (lastBirdnetJob) {
+    const visible = applyConfidenceFilter(threshold);
     const [detStats] = await db
       .select({
         totalDetections: sql<number>`COUNT(DISTINCT ${audioDetections.id})`,
         totalSpecies: sql<number>`COUNT(DISTINCT ${audioIdentifications.species})`,
         verified: sql<number>`SUM(CASE WHEN ${audioIdentifications.verificationStatus} = 'verified' THEN 1 ELSE 0 END)`,
-        pending: sql<number>`SUM(CASE WHEN ${audioIdentifications.verificationStatus} = 'unverified' THEN 1 ELSE 0 END)`,
+        pending: sql<number>`SUM(CASE WHEN ${audioIdentifications.verificationStatus} = 'unverified' AND (${audioIdentifications.confidence} IS NULL OR ${audioIdentifications.confidence} >= ${threshold}) THEN 1 ELSE 0 END)`,
       })
       .from(audioDetections)
       .innerJoin(
         audioIdentifications,
         eq(audioIdentifications.audioDetectionId, audioDetections.id)
       )
-      .where(eq(audioDetections.jobId, lastBirdnetJob.id));
+      .where(and(eq(audioDetections.jobId, lastBirdnetJob.id), visible));
 
     if (detStats) {
       birdnetStats = {
@@ -180,12 +241,16 @@ export default async function AudioDetailPage({
       deployment={deployment}
       files={files}
       isEditor={isEditor}
+      isAdmin={isAdmin}
       displayStatus={displayStatus}
       isBirdnetProcessing={!!activeBirdnetJob}
       birdnetStats={birdnetStats}
       hasBirdnetDetections={hasBirdnetDetections}
       isAcousticIndicesProcessing={!!activeIndicesJob}
       isAudioAnalysisProcessing={!!activeAudioAnalysisJob}
+      isAudioCompressionProcessing={!!activeCompressionJob}
+      uncompressedFileCount={uncompressedFileCount}
+      revertibleFileCount={revertibleFileCount}
       reviewStats={reviewStats}
     />
   );

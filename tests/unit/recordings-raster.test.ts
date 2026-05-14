@@ -18,6 +18,7 @@ function makeFile(overrides: Partial<AudioFileRow>): AudioFileRow {
     format: null,
     playable: true,
     detectionCount: 0,
+    speciesCount: 0,
     recordedDate: "2026-02-09",
     recordedTime: "12:00:00",
     soundscapeSaturation: null,
@@ -124,6 +125,7 @@ describe("buildCells", () => {
   it("reads the right metric column for each metricKey", () => {
     const file = makeFile({
       detectionCount: 5,
+      speciesCount: 2,
       soundscapeSaturation: 0.42,
       acousticComplexityIndex: 1.23,
       frequencyEntropy: 0.91,
@@ -132,6 +134,7 @@ describe("buildCells", () => {
     });
     const keys: RasterMetricKey[] = [
       "detectionCount",
+      "speciesCount",
       "soundscapeSaturation",
       "acousticComplexityIndex",
       "frequencyEntropy",
@@ -140,6 +143,7 @@ describe("buildCells", () => {
     ];
     const expected: Record<RasterMetricKey, number | null> = {
       detectionCount: 5,
+      speciesCount: 2,
       soundscapeSaturation: 0.42,
       acousticComplexityIndex: 1.23,
       frequencyEntropy: 0.91,

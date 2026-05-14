@@ -149,9 +149,10 @@ export function SidebarNav({ user }: SidebarNavProps) {
     const cameraTrapChildren: NavItem[] = [
       { label: "Instalaciones", href: "/camera-trap" },
       { label: "Destacadas", href: "/camera-trap/favorites" },
+      { label: "Explorar por especie", href: "/camera-trap/species" },
     ];
     if (isCameraTrapEditor) {
-      cameraTrapChildren.push({ label: "Especies", href: "/camera-trap/species" });
+      cameraTrapChildren.push({ label: "Administrar especies", href: "/camera-trap/species/manage" });
       cameraTrapChildren.push({ label: "Trabajos de ML", href: "/camera-trap/results" });
     }
     if (isCameraTrapAdmin) {
@@ -172,6 +173,7 @@ export function SidebarNav({ user }: SidebarNavProps) {
       icon: "audio-lines",
       children: [
         { label: "Instalaciones", href: "/audio" },
+        { label: "Explorar por especie", href: "/audio/species" },
         { label: "Índices acústicos", href: "/audio/indices" },
       ],
     });

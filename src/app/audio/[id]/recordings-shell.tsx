@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/status-badge";
@@ -10,6 +10,7 @@ import { CollapsibleSection } from "@/components/collapsible-section";
 import { AudioActionsMenu } from "./audio-actions-menu";
 import { AudioMetadataSection } from "./audio-metadata-section";
 import { AudioQaSection } from "./audio-qa-section";
+import { ConfidenceThresholdSlider } from "@/components/audio/confidence-threshold-slider";
 import type { AudioFileRow } from "../actions";
 import {
   buildCells,
@@ -67,26 +68,35 @@ export function RecordingsShell({
   deployment,
   files,
   isEditor,
+  isAdmin = false,
   displayStatus = "unscanned",
   isBirdnetProcessing = false,
   birdnetStats = null,
   hasBirdnetDetections = false,
   isAcousticIndicesProcessing = false,
   isAudioAnalysisProcessing = false,
+  isAudioCompressionProcessing = false,
+  uncompressedFileCount = 0,
+  revertibleFileCount = 0,
   reviewStats = null,
 }: {
   deployment: DeploymentInfo;
   files: AudioFileRow[];
   isEditor: boolean;
+  isAdmin?: boolean;
   displayStatus?: string;
   isBirdnetProcessing?: boolean;
   birdnetStats?: BirdnetStats | null;
   hasBirdnetDetections?: boolean;
   isAcousticIndicesProcessing?: boolean;
   isAudioAnalysisProcessing?: boolean;
+  isAudioCompressionProcessing?: boolean;
+  uncompressedFileCount?: number;
+  revertibleFileCount?: number;
   reviewStats?: { verified: number; total: number } | null;
 }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [metricKey, setMetricKey] = useState<RasterMetricKey>("detectionCount");
 
   // Which acoustic-index metrics are available depends on whether any rows have
@@ -94,6 +104,7 @@ export function RecordingsShell({
   const availableMetrics = useMemo(() => {
     const available: Record<RasterMetricKey, boolean> = {
       detectionCount: true,
+      speciesCount: true,
       soundscapeSaturation: false,
       acousticComplexityIndex: false,
       frequencyEntropy: false,
@@ -121,7 +132,11 @@ export function RecordingsShell({
   }, [files, metricKey]);
 
   function handleClickCell(cell: RasterCell) {
-    router.push(`/audio/${deployment.id}/annotate/${cell.fileId}`);
+    // Preserve the current threshold (?conf=) when navigating to the
+    // annotation page so the filter context carries through.
+    const conf = searchParams.get("conf");
+    const qs = conf ? `?conf=${conf}` : "";
+    router.push(`/audio/${deployment.id}/annotate/${cell.fileId}${qs}`);
   }
 
   return (
@@ -154,15 +169,21 @@ export function RecordingsShell({
               )}
             </div>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-3 shrink-0">
+            <ConfidenceThresholdSlider variant="compact" />
             {isEditor && (
               <AudioActionsMenu
                 deploymentId={deployment.id}
+                deploymentName={deployment.name}
                 uploadAudioFolderId={deployment.uploadAudioFolderId}
                 isBirdnetProcessing={isBirdnetProcessing}
                 hasBirdnetDetections={hasBirdnetDetections}
                 isAcousticIndicesProcessing={isAcousticIndicesProcessing}
                 isAudioAnalysisProcessing={isAudioAnalysisProcessing}
+                isAudioCompressionProcessing={isAudioCompressionProcessing}
+                canAdmin={isAdmin}
+                uncompressedFileCount={uncompressedFileCount}
+                revertibleFileCount={revertibleFileCount}
                 hasFiles={files.length > 0}
               />
             )}
@@ -260,7 +281,7 @@ function RasterLegend({
 }) {
   const [lo, hi] = domain;
   const noSignal = hi === 0;
-  const format = metricKey === "detectionCount"
+  const format = metricKey === "detectionCount" || metricKey === "speciesCount"
     ? (n: number) => n.toLocaleString()
     : (n: number) => n.toFixed(2);
 

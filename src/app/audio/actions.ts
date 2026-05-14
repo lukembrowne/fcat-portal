@@ -10,6 +10,7 @@ import {
   acousticIndices,
   cameraTrapProjects,
   processingJobs,
+  activityLog,
 } from "@/db/schema";
 import { eq, sql, and, isNotNull, inArray, count as drizzleCount } from "drizzle-orm";
 import {
@@ -31,6 +32,15 @@ import {
 } from "@/lib/acoustic-indices-runner";
 import { scanDeploymentAudioInternal } from "@/lib/audio-sync-internals";
 import { JOB_TYPES } from "@/lib/job-types";
+import {
+  findActiveAudioJob,
+  countActiveAudioWorkWithCompression,
+} from "@/lib/job-locks";
+import {
+  enqueueAudioCompressionJob,
+  runAudioCompressionPhase,
+} from "@/lib/audio-compression-core";
+import type { AuthUser } from "@/lib/types";
 import { fetchEntities } from "@/lib/odk-client";
 import {
   BIOCHOCO_PROJECT_ID,
@@ -41,6 +51,11 @@ import { HABITAT_COLORS } from "@/app/biochoco/habitat/types";
 import { getHabitatName } from "@/app/biochoco/overview/types";
 import { DIEL_PERIODS, type DielPeriod } from "@/lib/acoustic-indices";
 import { parseRecordingTimestamp } from "@/lib/audio-filename";
+import {
+  DEFAULT_CONFIDENCE_THRESHOLD,
+  applyConfidenceFilter,
+  canonicalThreshold,
+} from "@/lib/audio-confidence";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -67,6 +82,14 @@ export interface AudioDeploymentRow {
   isBirdnetProcessing: boolean;
   excluded: boolean;
   displayStatus: string;
+  /** Number of audio_files where compressed=true AND filename LIKE %.flac (truly compressed). */
+  compressedFileCount: number;
+  /** Number of audio_files where compressed=false (still WAV). */
+  uncompressedFileCount: number;
+  /** Number of compressed files revertible via in-portal action (priorRev anchor present). */
+  revertibleFileCount: number;
+  /** True if any audio_compression / revert_audio_compression job is pending or processing for this deployment. */
+  isAudioCompressionProcessing: boolean;
 }
 
 export interface AudioProject {
@@ -84,6 +107,7 @@ export interface AudioFileRow {
   format: string | null;
   playable: boolean;
   detectionCount: number;
+  speciesCount: number;
   // Parsed once server-side from the filename. Local Ecuador time (UTC-5).
   recordedDate: string | null;
   recordedTime: string | null;
@@ -105,12 +129,16 @@ export interface AudioStats {
 // Queries
 // ---------------------------------------------------------------------------
 
-export async function fetchAudioDeployments(): Promise<
-  ActionResult<AudioDeploymentRow[]>
-> {
+export async function fetchAudioDeployments(
+  opts?: { threshold?: number }
+): Promise<ActionResult<AudioDeploymentRow[]>> {
   const user = await requirePermission("grabaciones", "viewer");
   const projects = await getUserCameraTrapProjects(user);
   const filter = ctProjectFilter(projects);
+  const threshold = canonicalThreshold(
+    opts?.threshold ?? DEFAULT_CONFIDENCE_THRESHOLD
+  );
+  const visible = applyConfidenceFilter(threshold);
 
   const rows = await db
     .select({
@@ -134,15 +162,18 @@ export async function fetchAudioDeployments(): Promise<
         WHERE audio_files.deployment_id = ${deployments.id}
       )`,
       totalDetections: sql<number>`(
-        SELECT COUNT(*) FROM audio_detections
+        SELECT COUNT(*) FROM audio_identifications
+        INNER JOIN audio_detections ON audio_detections.id = audio_identifications.audio_detection_id
         INNER JOIN audio_files ON audio_files.id = audio_detections.audio_file_id
         WHERE audio_files.deployment_id = ${deployments.id}
+        AND ${visible}
       )`,
       totalSpecies: sql<number>`(
         SELECT COUNT(DISTINCT audio_identifications.species) FROM audio_identifications
         INNER JOIN audio_detections ON audio_detections.id = audio_identifications.audio_detection_id
         INNER JOIN audio_files ON audio_files.id = audio_detections.audio_file_id
         WHERE audio_files.deployment_id = ${deployments.id}
+        AND ${visible}
       )`,
       verifiedCount: sql<number>`(
         SELECT COUNT(*) FROM audio_identifications
@@ -157,6 +188,7 @@ export async function fetchAudioDeployments(): Promise<
         INNER JOIN audio_files ON audio_files.id = audio_detections.audio_file_id
         WHERE audio_files.deployment_id = ${deployments.id}
         AND audio_identifications.verification_status = 'unverified'
+        AND (audio_identifications.confidence IS NULL OR audio_identifications.confidence >= ${threshold})
       )`,
       lastBirdnetAt: sql<Date | null>`(
         SELECT MAX(completed_at) FROM biochoco_processing_jobs
@@ -167,6 +199,32 @@ export async function fetchAudioDeployments(): Promise<
         SELECT COUNT(*) FROM biochoco_processing_jobs
         WHERE deployment_id = ${deployments.id}
         AND job_type IN ('birdnet', 'acoustic_indices', 'audio_analysis')
+        AND status IN ('pending', 'processing')
+      )`,
+      compressedFileCount: sql<number>`(
+        SELECT COUNT(*) FROM audio_files
+        WHERE audio_files.deployment_id = ${deployments.id}
+        AND audio_files.compressed = 1
+        AND lower(audio_files.filename) LIKE '%.flac'
+      )`,
+      uncompressedFileCount: sql<number>`(
+        SELECT COUNT(*) FROM audio_files
+        WHERE audio_files.deployment_id = ${deployments.id}
+        AND audio_files.compressed = 0
+        AND lower(audio_files.filename) LIKE '%.wav'
+        AND audio_files.drive_file_id IS NOT NULL
+      )`,
+      revertibleFileCount: sql<number>`(
+        SELECT COUNT(*) FROM audio_files
+        WHERE audio_files.deployment_id = ${deployments.id}
+        AND audio_files.compressed = 1
+        AND audio_files.original_drive_revision_id IS NOT NULL
+        AND audio_files.drive_file_id IS NOT NULL
+      )`,
+      isAudioCompressionProcessingRaw: sql<number>`(
+        SELECT COUNT(*) FROM biochoco_processing_jobs
+        WHERE deployment_id = ${deployments.id}
+        AND job_type IN ('audio_compression', 'revert_audio_compression')
         AND status IN ('pending', 'processing')
       )`,
     })
@@ -196,9 +254,11 @@ export async function fetchAudioDeployments(): Promise<
       displayStatus = "scanned";
     }
 
+    const { isAudioCompressionProcessingRaw, ...rest } = row;
     return {
-      ...row,
+      ...rest,
       isBirdnetProcessing: row.isBirdnetProcessing > 0,
+      isAudioCompressionProcessing: isAudioCompressionProcessingRaw > 0,
       displayStatus,
     };
   });
@@ -226,10 +286,16 @@ export async function fetchDistinctAudioProjects(): Promise<AudioProject[]> {
 }
 
 export async function fetchAudioFiles(
-  deploymentId: number
+  deploymentId: number,
+  opts?: { threshold?: number }
 ): Promise<ActionResult<AudioFileRow[]>> {
   const user = await requirePermission("grabaciones", "viewer");
   await requireDeploymentAccess(user, deploymentId);
+
+  const threshold = canonicalThreshold(
+    opts?.threshold ?? DEFAULT_CONFIDENCE_THRESHOLD
+  );
+  const visible = applyConfidenceFilter(threshold);
 
   // LEFT JOIN acoustic_indices (1:1 via uniqueIndex on audio_file_id) so files
   // without computed indices still return — index fields will be null.
@@ -243,7 +309,19 @@ export async function fetchAudioFiles(
       modifiedAt: audioFiles.modifiedAt,
       format: audioFiles.format,
       playable: audioFiles.playable,
-      detectionCount: sql<number>`(SELECT COUNT(*) FROM audio_detections WHERE audio_file_id = ${audioFiles.id})`,
+      detectionCount: sql<number>`(
+        SELECT COUNT(*) FROM audio_identifications
+        INNER JOIN audio_detections ON audio_detections.id = audio_identifications.audio_detection_id
+        WHERE audio_detections.audio_file_id = ${audioFiles.id}
+        AND ${visible}
+      )`,
+      speciesCount: sql<number>`(
+        SELECT COUNT(DISTINCT COALESCE(audio_identifications.corrected_species, audio_identifications.species))
+        FROM audio_identifications
+        INNER JOIN audio_detections ON audio_detections.id = audio_identifications.audio_detection_id
+        WHERE audio_detections.audio_file_id = ${audioFiles.id}
+        AND ${visible}
+      )`,
       soundscapeSaturation: acousticIndices.soundscapeSaturation,
       acousticComplexityIndex: acousticIndices.acousticComplexityIndex,
       frequencyEntropy: acousticIndices.frequencyEntropy,
@@ -549,7 +627,11 @@ async function processBirdNETJob(jobId: number): Promise<void> {
           status: "completed",
           completedAt: new Date(),
           processedImages: result.totalProcessed,
-          statusMessage: `${result.totalDetections} detecciones, ${species} especies`,
+          // Raw, unfiltered counts: BirdNET ran with minConf=0.1, so this is
+          // what the model produced before the read-time threshold filter is
+          // applied. The deployment dashboard reflects the user's threshold;
+          // these two numbers can disagree by design.
+          statusMessage: `${result.totalDetections} detecciones, ${species} especies (antes de filtrar por confianza)`,
         })
         .where(eq(processingJobs.id, jobId));
 
@@ -652,6 +734,14 @@ export async function cancelProcessingJob(
 
   if (job.jobType === JOB_TYPES.AUDIO_ANALYSIS) {
     return cancelAudioAnalysisJob(jobId);
+  }
+
+  if (
+    job.jobType === JOB_TYPES.AUDIO_COMPRESSION ||
+    job.jobType === JOB_TYPES.REVERT_AUDIO_COMPRESSION
+  ) {
+    const { cancelAudioCompressionJobAction } = await import("./compression-actions");
+    return cancelAudioCompressionJobAction(jobId);
   }
 
   // For camera trap jobs, delegate to camera-trap cancel
@@ -999,10 +1089,25 @@ async function cancelAcousticIndicesJob(
 // Combined audio analysis (BirdNET + acoustic indices, chunked)
 // ---------------------------------------------------------------------------
 
+function isGrabacionesAdmin(user: AuthUser): boolean {
+  if (user.globalRole === "super_admin") return true;
+  return user.permissions.some(
+    (p) => p.projectId === "grabaciones" && p.role === "admin",
+  );
+}
+
 interface CreateAudioAnalysisJobInput {
   deploymentId: number;
   includeBirdnet?: boolean;
   includeIndices?: boolean;
+  /**
+   * If true, run an embedded WAV→FLAC compression phase before BirdNET /
+   * indices. Admin-only — the flag is silently dropped for non-admin callers.
+   * If both `includeBirdnet` and `includeIndices` are false, this delegates to
+   * the standalone `enqueueAudioCompressionJob` path instead of creating an
+   * AUDIO_ANALYSIS row.
+   */
+  compressFirst?: boolean;
 }
 
 /**
@@ -1015,14 +1120,33 @@ interface CreateAudioAnalysisJobInput {
 export async function createAudioAnalysisJob(
   input: CreateAudioAnalysisJobInput
 ): Promise<ActionResult<{ jobId: number }>> {
-  const { deploymentId, includeBirdnet = true, includeIndices = true } = input;
+  const {
+    deploymentId,
+    includeBirdnet = true,
+    includeIndices = true,
+    compressFirst = false,
+  } = input;
 
-  if (!includeBirdnet && !includeIndices) {
+  if (!includeBirdnet && !includeIndices && !compressFirst) {
     return { success: false, error: "Selecciona al menos un análisis" };
   }
 
   const user = await requirePermission("grabaciones", "editor");
   await requireDeploymentAccess(user, deploymentId);
+
+  // Admin gate for the compression phase — silently drop for non-admins so
+  // the analyze dialog stays simple.
+  const userIsAdmin = isGrabacionesAdmin(user);
+  const wantCompress = compressFirst && userIsAdmin;
+
+  // Compress-only path: delegate to the standalone AUDIO_COMPRESSION job so
+  // the existing global cap, cancel UI, and revert anchor logic apply.
+  if (wantCompress && !includeBirdnet && !includeIndices) {
+    return enqueueAudioCompressionJob({
+      deploymentId,
+      actorEmail: user.email,
+    });
+  }
 
   const [fileRow] = await db
     .select({ count: sql<number>`COUNT(*)` })
@@ -1033,25 +1157,28 @@ export async function createAudioAnalysisJob(
     return { success: false, error: "No hay archivos de audio en esta instalación" };
   }
 
-  // Single-flight across all three audio analysis job types — a deployment
-  // can only have one of {birdnet, acoustic_indices, audio_analysis} in flight.
-  const [activeJob] = await db
-    .select({ id: processingJobs.id })
-    .from(processingJobs)
-    .where(
-      and(
-        eq(processingJobs.deploymentId, deploymentId),
-        inArray(processingJobs.jobType, [
-          JOB_TYPES.BIRDNET,
-          JOB_TYPES.ACOUSTIC_INDICES,
-          JOB_TYPES.AUDIO_ANALYSIS,
-        ]),
-        inArray(processingJobs.status, ["pending", "processing"])
-      )
-    )
-    .limit(1);
+  // Single-flight: only one audio job (analysis OR compression OR sync) per
+  // deployment in `pending`/`processing` at any time. See AUDIO_JOB_TYPES.
+  const activeJob = await findActiveAudioJob(deploymentId);
   if (activeJob) {
-    return { success: false, error: "Ya existe un análisis activo para esta instalación" };
+    return {
+      success: false,
+      error: "Ya existe un trabajo activo para esta instalación",
+    };
+  }
+
+  // Global cap when this job will run a compression phase — shared with the
+  // standalone AUDIO_COMPRESSION enqueue path so the FLAC encoder never has
+  // two concurrent runs.
+  if (wantCompress) {
+    const active = await countActiveAudioWorkWithCompression();
+    if (active >= 1) {
+      return {
+        success: false,
+        error:
+          "Ya hay una compresión de audio en curso. Espera a que termine antes de iniciar otra.",
+      };
+    }
   }
 
   if (includeBirdnet) {
@@ -1064,8 +1191,9 @@ export async function createAudioAnalysisJob(
     `);
   }
 
-  const phaseLabel =
-    includeBirdnet && includeIndices
+  const phaseLabel = wantCompress
+    ? "Preparando compresión + análisis..."
+    : includeBirdnet && includeIndices
       ? "Preparando análisis (BirdNET + índices)..."
       : includeBirdnet
         ? "Preparando análisis BirdNET..."
@@ -1080,10 +1208,16 @@ export async function createAudioAnalysisJob(
       status: "pending",
       createdBy: user.email,
       statusMessage: phaseLabel,
+      compressFirst: wantCompress,
     })
     .returning();
 
-  processAudioAnalysisJob(job.id, { includeBirdnet, includeIndices }).catch((err) => {
+  processAudioAnalysisJob(job.id, {
+    includeBirdnet,
+    includeIndices,
+    compressFirst: wantCompress,
+    actorEmail: user.email,
+  }).catch((err) => {
     log.error(
       { err, jobId: job.id },
       "[audio-analysis] Unhandled error in processAudioAnalysisJob"
@@ -1095,7 +1229,12 @@ export async function createAudioAnalysisJob(
 
 async function processAudioAnalysisJob(
   jobId: number,
-  opts: { includeBirdnet: boolean; includeIndices: boolean }
+  opts: {
+    includeBirdnet: boolean;
+    includeIndices: boolean;
+    compressFirst?: boolean;
+    actorEmail?: string;
+  }
 ): Promise<void> {
   try {
     await db
@@ -1112,6 +1251,59 @@ async function processAudioAnalysisJob(
       throw new Error(`Audio analysis job ${jobId} has null deploymentId`);
     }
     const deploymentId = job.deploymentId;
+
+    // Phase 0 — optional FLAC compression of any remaining WAVs in this
+    // deployment. Folded into this job (not a separate row) so the global
+    // single-flight encoder cap and the per-deployment lock both hold.
+    if (opts.compressFirst) {
+      log.info(
+        { jobId, deploymentId },
+        "[audio-analysis] Running embedded compression phase before analysis"
+      );
+      const phaseResult = await runAudioCompressionPhase({
+        jobId,
+        deploymentId,
+        // Promote freshly-encoded FLACs into the cache so the BirdNET /
+        // indices phases that follow don't re-download them from Drive.
+        keepCache: true,
+      });
+      if (opts.actorEmail) {
+        await db.insert(activityLog).values({
+          userEmail: opts.actorEmail,
+          action: "audio_compression",
+          projectId: "grabaciones",
+          targetType: "deployment",
+          targetId: String(deploymentId),
+          details: JSON.stringify({
+            compressed: phaseResult.processed,
+            skipped: phaseResult.skipped,
+            failed: phaseResult.failed,
+            savedBytes: phaseResult.savedBytes,
+            originalTotalBytes: phaseResult.originalTotalBytes,
+            compressedTotalBytes: phaseResult.compressedTotalBytes,
+            skipReasons: phaseResult.skipReasons,
+            embeddedInJobId: jobId,
+          }),
+        });
+      }
+      // If the user cancelled mid-compression, exit before kicking off the
+      // (much longer) ML phase.
+      if (phaseResult.cancelled) {
+        await db
+          .update(processingJobs)
+          .set({
+            status: "cancelled",
+            completedAt: new Date(),
+            statusMessage: "Cancelado durante la compresión",
+          })
+          .where(eq(processingJobs.id, jobId));
+        log.info(
+          { jobId, deploymentId, phaseResult },
+          "[audio-analysis] Cancelled during compression phase"
+        );
+        return;
+      }
+    }
 
     const [deployment] = await db
       .select({
@@ -1188,26 +1380,52 @@ async function processAudioAnalysisJob(
       const chunk = chunks[chunkIdx];
       const chunkLabel = totalChunks > 1 ? `Lote ${chunkIdx + 1}/${totalChunks} · ` : "";
 
-      // Phase 1 — download chunk to cache.
+      // Phase 1 — download chunk to cache. Run N concurrent downloads
+      // (capped by AUDIO_DOWNLOAD_CONCURRENCY, default 10) so a 1000-file
+      // chunk doesn't pay 1000× single-file Drive latency back-to-back.
+      // Drive's read quota (~10 req/s sustained) and droplet bandwidth are
+      // the natural ceilings; withRetry in drive-client handles transient 429s.
       const cachedFiles: Array<{ id: number; path: string; filename: string }> = [];
-      for (const file of chunk) {
-        try {
-          const cachePath = await ensureAudioCached(file.id);
-          cachedFiles.push({ id: file.id, path: cachePath, filename: file.filename });
-          globalDownloaded++;
-          await db
-            .update(processingJobs)
-            .set({
-              downloadedImages: globalDownloaded,
-              statusMessage: `${chunkLabel}descargando (${globalDownloaded}/${downloadTotal})...`,
-            })
-            .where(eq(processingJobs.id, jobId));
-        } catch (err) {
-          log.warn(
-            { err, fileId: file.id },
-            "[audio-analysis] Failed to cache audio file, skipping"
-          );
+      const downloadConcurrency = Math.max(
+        1,
+        parseInt(process.env.AUDIO_DOWNLOAD_CONCURRENCY ?? "10", 10) || 10,
+      );
+      for (let dlStart = 0; dlStart < chunk.length; dlStart += downloadConcurrency) {
+        const subBatch = chunk.slice(dlStart, dlStart + downloadConcurrency);
+        const results = await Promise.all(
+          subBatch.map(async (file) => {
+            try {
+              const cachePath = await ensureAudioCached(file.id);
+              return { ok: true as const, file, cachePath };
+            } catch (err) {
+              return { ok: false as const, file, err };
+            }
+          }),
+        );
+        for (const r of results) {
+          if (r.ok) {
+            cachedFiles.push({
+              id: r.file.id,
+              path: r.cachePath,
+              filename: r.file.filename,
+            });
+            globalDownloaded++;
+          } else {
+            log.warn(
+              { err: r.err, fileId: r.file.id },
+              "[audio-analysis] Failed to cache audio file, skipping",
+            );
+          }
         }
+        // Single DB progress write per sub-batch instead of per file —
+        // amortizes the SQLite round-trip across the parallel downloads.
+        await db
+          .update(processingJobs)
+          .set({
+            downloadedImages: globalDownloaded,
+            statusMessage: `${chunkLabel}descargando (${globalDownloaded}/${downloadTotal})...`,
+          })
+          .where(eq(processingJobs.id, jobId));
       }
 
       if (cachedFiles.length === 0) {
@@ -1270,6 +1488,10 @@ async function processAudioAnalysisJob(
             totalFiles: cachedFiles.length,
             sensitivity: 1.0,
             overlap: 1.0,
+            // Chunked-run progress so the UI bar ticks 0→downloadTotal smoothly
+            // across all chunks instead of regressing each chunk start.
+            offset: globalProcessed,
+            grandTotal: downloadTotal,
           },
           filenameToFileId
         );
@@ -1295,6 +1517,8 @@ async function processAudioAnalysisJob(
         const result = await runAcousticIndicesAnalysis({
           jobId,
           files: cachedFiles,
+          offset: globalProcessed,
+          grandTotal: downloadTotal,
           onResult: async (r: AcousticIndicesResult) => {
             const now = new Date();
             await db
@@ -1853,7 +2077,11 @@ export async function batchCreateBirdNETJobs(
  */
 export async function batchCreateAudioAnalysisJobs(
   ids: number[],
-  opts: { includeBirdnet?: boolean; includeIndices?: boolean } = {}
+  opts: {
+    includeBirdnet?: boolean;
+    includeIndices?: boolean;
+    compressFirst?: boolean;
+  } = {}
 ): Promise<
   ActionResult<{ enqueued: number; skipped: number; noFiles: number; errorMessages: string[] }>
 > {
@@ -1881,6 +2109,7 @@ export async function batchCreateAudioAnalysisJobs(
         deploymentId: id,
         includeBirdnet: opts.includeBirdnet,
         includeIndices: opts.includeIndices,
+        compressFirst: opts.compressFirst,
       });
       if (result.success) {
         enqueued++;

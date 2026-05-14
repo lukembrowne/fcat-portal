@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -16,32 +16,60 @@ import {
   AudioWaveform,
   ExternalLink,
   Loader2,
+  FileArchive,
+  FileDown,
+  Undo2,
 } from "lucide-react";
 import { scanDeploymentAudio } from "../actions";
 import { AnalyzeAudioDialog } from "../analyze-audio-dialog";
+import { CompressAudioConfirmDialog } from "../compress-audio-confirm-dialog";
+import { RevertAudioCompressionConfirmDialog } from "../revert-audio-compression-confirm-dialog";
+import {
+  formatThreshold,
+  parseThresholdParam,
+} from "@/lib/audio-confidence";
 
 interface AudioActionsMenuProps {
   deploymentId: number;
+  deploymentName?: string;
   uploadAudioFolderId: string | null;
   isBirdnetProcessing: boolean;
   hasBirdnetDetections: boolean;
   isAcousticIndicesProcessing: boolean;
   isAudioAnalysisProcessing?: boolean;
+  isAudioCompressionProcessing?: boolean;
+  /** Admin on `grabaciones` — gates compression menu items + analyze-dialog checkbox. */
+  canAdmin?: boolean;
+  uncompressedFileCount?: number;
+  revertibleFileCount?: number;
   hasFiles: boolean;
 }
 
 export function AudioActionsMenu({
   deploymentId,
+  deploymentName,
   uploadAudioFolderId,
   isBirdnetProcessing,
   hasBirdnetDetections,
   isAcousticIndicesProcessing,
   isAudioAnalysisProcessing = false,
+  isAudioCompressionProcessing = false,
+  canAdmin = false,
+  uncompressedFileCount = 0,
+  revertibleFileCount = 0,
   hasFiles,
 }: AudioActionsMenuProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [scanning, setScanning] = useState(false);
   const [analyzeOpen, setAnalyzeOpen] = useState(false);
+  const [compressTargetId, setCompressTargetId] = useState<number | null>(null);
+  const [revertTargetId, setRevertTargetId] = useState<number | null>(null);
+
+  const exportThreshold = parseThresholdParam(searchParams.get("conf"));
+  const exportUrl = `/api/audio/export?deployment=${deploymentId}&conf=${formatThreshold(
+    exportThreshold
+  )}`;
 
   const analyzing =
     isBirdnetProcessing || isAcousticIndicesProcessing || isAudioAnalysisProcessing;
@@ -104,6 +132,57 @@ export function AudioActionsMenu({
             </DropdownMenuItem>
           )}
 
+          {canAdmin && uncompressedFileCount > 0 && (
+            <DropdownMenuItem
+              onClick={() => setCompressTargetId(deploymentId)}
+              disabled={isAudioCompressionProcessing}
+            >
+              {isAudioCompressionProcessing ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <FileArchive className="h-4 w-4 mr-2" />
+              )}
+              <div>
+                <div>Comprimir a FLAC</div>
+                <div className="text-xs text-muted-foreground font-normal">
+                  {uncompressedFileCount} archivos WAV pendientes
+                </div>
+              </div>
+            </DropdownMenuItem>
+          )}
+
+          {canAdmin && revertibleFileCount > 0 && (
+            <DropdownMenuItem
+              onClick={() => setRevertTargetId(deploymentId)}
+              disabled={isAudioCompressionProcessing}
+            >
+              <Undo2 className="h-4 w-4 mr-2" />
+              <div>
+                <div>Revertir compresión</div>
+                <div className="text-xs text-muted-foreground font-normal">
+                  Restaurar {revertibleFileCount} WAVs desde Drive
+                </div>
+              </div>
+            </DropdownMenuItem>
+          )}
+
+          {hasBirdnetDetections && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem asChild>
+                <a href={exportUrl} download>
+                  <FileDown className="h-4 w-4 mr-2" />
+                  <div>
+                    <div>Exportar CSV</div>
+                    <div className="text-xs text-muted-foreground font-normal">
+                      Umbral {formatThreshold(exportThreshold)}
+                    </div>
+                  </div>
+                </a>
+              </DropdownMenuItem>
+            </>
+          )}
+
           {driveFolderUrl && (
             <>
               <DropdownMenuSeparator />
@@ -124,8 +203,23 @@ export function AudioActionsMenu({
         open={analyzeOpen}
         onOpenChange={setAnalyzeOpen}
         deploymentIds={[deploymentId]}
+        subjectLabel={deploymentName}
         hasExistingBirdnet={hasBirdnetDetections}
+        canAdmin={canAdmin}
+        uncompressedFileCount={uncompressedFileCount}
         onComplete={() => router.refresh()}
+      />
+
+      <CompressAudioConfirmDialog
+        deploymentId={compressTargetId}
+        onClose={() => setCompressTargetId(null)}
+        onStarted={() => router.refresh()}
+      />
+
+      <RevertAudioCompressionConfirmDialog
+        deploymentId={revertTargetId}
+        onClose={() => setRevertTargetId(null)}
+        onStarted={() => router.refresh()}
       />
     </>
   );

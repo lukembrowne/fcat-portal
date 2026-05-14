@@ -214,7 +214,7 @@ describe("fetchAudioFiles", () => {
     expect(result.data[0].recordedTime).toBeNull();
   });
 
-  it("computes detectionCount correctly after the LEFT JOIN", async () => {
+  it("computes detectionCount as identifications passing the confidence filter", async () => {
     const [file] = db
       .insert(schema.audioFiles)
       .values({
@@ -225,19 +225,40 @@ describe("fetchAudioFiles", () => {
       .returning()
       .all();
 
-    // Three detections on this file.
-    db.insert(schema.audioDetections)
+    const detections = db
+      .insert(schema.audioDetections)
       .values([
         { audioFileId: file.id, startTime: 0, endTime: 1, minFreq: 100, maxFreq: 8000 },
         { audioFileId: file.id, startTime: 2, endTime: 3, minFreq: 100, maxFreq: 8000 },
         { audioFileId: file.id, startTime: 4, endTime: 5, minFreq: 100, maxFreq: 8000 },
       ])
+      .returning()
+      .all();
+
+    // Three identifications: two pass the default 0.7 threshold, one is below.
+    db.insert(schema.audioIdentifications)
+      .values([
+        { audioDetectionId: detections[0].id, species: "A", confidence: 0.9, verificationStatus: "unverified" },
+        { audioDetectionId: detections[1].id, species: "B", confidence: 0.8, verificationStatus: "unverified" },
+        { audioDetectionId: detections[2].id, species: "C", confidence: 0.3, verificationStatus: "unverified" },
+      ])
       .run();
 
-    const result = await fetchAudioFiles(deploymentId);
-    expect(result.success).toBe(true);
-    if (!result.success) return;
+    const defaultResult = await fetchAudioFiles(deploymentId);
+    expect(defaultResult.success).toBe(true);
+    if (!defaultResult.success) return;
+    expect(defaultResult.data[0].detectionCount).toBe(2);
 
-    expect(result.data[0].detectionCount).toBe(3);
+    // Lower threshold lets the sub-0.7 identification through.
+    const permissive = await fetchAudioFiles(deploymentId, { threshold: 0.2 });
+    expect(permissive.success).toBe(true);
+    if (!permissive.success) return;
+    expect(permissive.data[0].detectionCount).toBe(3);
+
+    // Higher threshold drops both 0.8 and 0.9 only when above them.
+    const strict = await fetchAudioFiles(deploymentId, { threshold: 0.95 });
+    expect(strict.success).toBe(true);
+    if (!strict.success) return;
+    expect(strict.data[0].detectionCount).toBe(0);
   });
 });

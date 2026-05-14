@@ -105,6 +105,15 @@ When fixing database queries, always check for edge cases where records have NUL
 
 - When committing changes, always check `git diff --cached` for unrelated modifications before finalizing. Use `git add -p` (patch staging) when the working tree contains changes from multiple features.
 
+## Audio module
+
+- Audio recordings may be `.wav` or `.flac` after the WAV→FLAC compression rollout. All downstream code (BirdNET, indices, stream route, filename parser, spectrogram) must be extension-agnostic. Compressed audio is bit-identical on decode — analyses produce identical results.
+- Compressing a deployment: admin → audio page → row action ("Comprimir a FLAC") OR selection toolbar. Uses the headless `src/lib/audio-compression-core.ts` (auth-agnostic; also callable from `scripts/compress-all-audio.mjs`).
+- Reverting: admin → audio page → row action ("Revertir compresión"). Restores from the pinned Drive revision (`audio_files.original_drive_revision_id`).
+- Single-flight per deployment: at most one of {birdnet, acoustic_indices, audio_analysis, audio_sync, audio_compression, revert_audio_compression} can be pending/processing at a time. Enforced by `findActiveAudioJob` in `src/lib/job-locks.ts`.
+- Global concurrency cap: only ONE `audio_compression` job runs at a time across all deployments. Batch-queued jobs wait their turn.
+- Feature flag: `AUDIO_COMPRESSION_ENABLED=true` must be set in production. Pre-replace WAV revisions are pinned with `keepForever=true` while `AUDIO_KEEP_WAV_REVISION_FOREVER` is unset or "true".
+
 ## Gotchas
 
 - Server/Client Component imports: Don't import server-only modules in Client Components
@@ -113,3 +122,4 @@ When fixing database queries, always check for edge cases where records have NUL
 - Drizzle singleton: Use module-level `let db` with lazy init, not `globalThis` pattern
 - Proxy (was middleware): Keep header forwarding only, no DB imports
 - Next.js 16 renamed `middleware.ts` → `proxy.ts` and uses Node.js runtime
+- better-sqlite3 transactions are synchronous — never `db.transaction(async (tx) => ...)`. Same gotcha applies to the audio compression processor (uses sequential `await db.update(...)` calls).

@@ -2,64 +2,38 @@
 
 import { useEffect, useCallback } from "react";
 import { COLORMAP_NAMES, type ColormapName } from "@/lib/spectrogram-colormaps";
+import { ZOOM_LEVELS, type ZoomLevel } from "@/lib/spectrogram-layout";
+import {
+  DEFAULT_SETTINGS,
+  loadStoredSettings,
+  saveStoredSettings,
+  type CurrentSettings,
+} from "@/lib/spectrogram-settings";
 
-const STORAGE_KEY = "audio.spectrogram.v1";
-
-export interface SpectrogramSettings {
-  displayMaxHz: number;
-  gainDB: number;
-  rangeDB: number;
-  fftSize: 512 | 1024 | 2048;
-  colormap: ColormapName;
-}
-
-export const DEFAULT_SETTINGS: SpectrogramSettings = {
-  displayMaxHz: 12000,
-  gainDB: 25,
-  rangeDB: 70,
-  fftSize: 1024,
-  colormap: "magma",
-};
+// Re-export the canonical settings type + helpers so the rest of the annotate
+// page imports from one place. (Pre-existing import shape; we're shifting the
+// source of truth to `@/lib/spectrogram-settings` without breaking callers.)
+export type SpectrogramSettings = CurrentSettings;
+export { DEFAULT_SETTINGS, loadStoredSettings };
 
 const Y_MAX_PRESETS_HZ: readonly number[] = [3000, 6000, 9000, 12000];
-
-export function loadStoredSettings(): SpectrogramSettings {
-  if (typeof window === "undefined") return DEFAULT_SETTINGS;
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return DEFAULT_SETTINGS;
-    const parsed = JSON.parse(raw) as Partial<SpectrogramSettings>;
-    return {
-      displayMaxHz: typeof parsed.displayMaxHz === "number" ? parsed.displayMaxHz : DEFAULT_SETTINGS.displayMaxHz,
-      gainDB: typeof parsed.gainDB === "number" ? parsed.gainDB : DEFAULT_SETTINGS.gainDB,
-      rangeDB: typeof parsed.rangeDB === "number" ? parsed.rangeDB : DEFAULT_SETTINGS.rangeDB,
-      fftSize: parsed.fftSize === 512 || parsed.fftSize === 2048 ? parsed.fftSize : DEFAULT_SETTINGS.fftSize,
-      colormap:
-        parsed.colormap && COLORMAP_NAMES.includes(parsed.colormap)
-          ? parsed.colormap
-          : DEFAULT_SETTINGS.colormap,
-    };
-  } catch {
-    return DEFAULT_SETTINGS;
-  }
-}
 
 interface SpectrogramControlsProps {
   settings: SpectrogramSettings;
   onChange: (next: SpectrogramSettings) => void;
   /** Used to compute the Nyquist preset label; null until audio decoded. */
   sampleRate: number | null;
+  /** Rendered at the end of the controls row — used to slot in the
+   *  confidence-threshold slider + "show all" toggle without nesting flex
+   *  containers. */
+  trailing?: React.ReactNode;
 }
 
-export function SpectrogramControls({ settings, onChange, sampleRate }: SpectrogramControlsProps) {
-  // Persist on every change
+export function SpectrogramControls({ settings, onChange, sampleRate, trailing }: SpectrogramControlsProps) {
+  // Persist on every change. saveStoredSettings is a silent no-op when
+  // localStorage is unavailable (SSR, private-mode Safari, quota exceeded).
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
-    } catch {
-      // localStorage may be disabled — ignore
-    }
+    saveStoredSettings(settings);
   }, [settings]);
 
   const update = useCallback(
@@ -114,6 +88,33 @@ export function SpectrogramControls({ settings, onChange, sampleRate }: Spectrog
         </select>
       </Field>
 
+      <Field label="Zoom" title="Acercar el espectrograma en el eje del tiempo">
+        <select
+          value={settings.zoomLevel}
+          onChange={(e) => update("zoomLevel", Number(e.target.value) as ZoomLevel)}
+          className="bg-background border rounded px-1.5 py-0.5"
+        >
+          {ZOOM_LEVELS.map((z) => (
+            <option key={z} value={z}>
+              {z}×
+            </option>
+          ))}
+        </select>
+      </Field>
+
+      <label
+        className="flex items-center gap-1.5 text-muted-foreground select-none"
+        title="Mantener el cursor de reproducción visible al desplazar"
+      >
+        <input
+          type="checkbox"
+          checked={settings.followPlayback}
+          onChange={(e) => update("followPlayback", e.target.checked)}
+          className="cursor-pointer"
+        />
+        <span>Seguir reproducción</span>
+      </label>
+
       <Field label={`Ganancia ${settings.gainDB} dB`}>
         <input
           type="range"
@@ -137,6 +138,8 @@ export function SpectrogramControls({ settings, onChange, sampleRate }: Spectrog
           className="w-24"
         />
       </Field>
+
+      {trailing}
     </div>
   );
 }

@@ -817,6 +817,12 @@ export const audioFiles = sqliteTable(
     sampleRate: integer("sample_rate"),
     cachePath: text("cache_path"),
     spectrogramPath: text("spectrogram_path"),
+    // FLAC compression tracking — set by the audio_compression job.
+    // `compressed=true` is also set for non_compressible WAVs (kept as-is, no Drive write).
+    // Only rows where `originalDriveRevisionId IS NOT NULL` are revertible.
+    compressed: integer("compressed", { mode: "boolean" }).notNull().default(false),
+    originalFileSize: integer("original_file_size"),
+    originalDriveRevisionId: text("original_drive_revision_id"),
     createdAt: integer("created_at", { mode: "timestamp" })
       .notNull()
       .default(sql`(unixepoch())`),

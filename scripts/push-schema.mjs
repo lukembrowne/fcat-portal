@@ -718,6 +718,13 @@ const migrations = [
   `ALTER TABLE biochoco_deployments ADD COLUMN previous_counts_checked_at INTEGER`,
   // Drive sync background job: scope to a CT project (nullable) (2026-05-06)
   `ALTER TABLE biochoco_processing_jobs ADD COLUMN camera_trap_project_id INTEGER REFERENCES ct_projects(id) ON DELETE SET NULL`,
+  // Audio WAV→FLAC compression tracking (2026-05-11)
+  // `compressed=true` is set for both successful FLAC encodes and non_compressible
+  // WAVs left as-is. `original_drive_revision_id` is the Drive revision captured
+  // immediately before replacement — the anchor used by the revert job.
+  `ALTER TABLE audio_files ADD COLUMN compressed INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE audio_files ADD COLUMN original_file_size INTEGER`,
+  `ALTER TABLE audio_files ADD COLUMN original_drive_revision_id TEXT`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }
@@ -727,6 +734,22 @@ for (const m of migrations) {
 const postMigrationIndexes = [
   `CREATE INDEX IF NOT EXISTS idx_biochoco_images_starred ON biochoco_images(starred) WHERE starred = 1`,
   `CREATE INDEX IF NOT EXISTS idx_audio_detections_job ON audio_detections(job_id)`,
+
+  // Species detection browser — partial indexes for effective-species aggregation.
+  // Split the active vs. corrected branches so each gets a sargable predicate
+  // hitting its own small index. See src/db/effective-species.ts.
+  `CREATE INDEX IF NOT EXISTS idx_bio_id_species_active
+    ON biochoco_identifications(species, detection_id)
+    WHERE verification_status IN ('unverified','verified')`,
+  `CREATE INDEX IF NOT EXISTS idx_bio_id_corrected
+    ON biochoco_identifications(corrected_species, detection_id)
+    WHERE verification_status = 'corrected'`,
+  `CREATE INDEX IF NOT EXISTS idx_audio_id_species_active
+    ON audio_identifications(species, audio_detection_id)
+    WHERE verification_status IN ('unverified','verified')`,
+  `CREATE INDEX IF NOT EXISTS idx_audio_id_corrected
+    ON audio_identifications(corrected_species, audio_detection_id)
+    WHERE verification_status = 'corrected'`,
 ];
 for (const idx of postMigrationIndexes) {
   db.exec(idx);

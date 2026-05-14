@@ -18,23 +18,31 @@ import {
   ExternalLink,
   AudioLines,
   Loader2,
+  FileArchive,
+  Undo2,
 } from "lucide-react";
 import { scanDeploymentAudio } from "./actions";
 import type { AudioDeploymentRow } from "./actions";
 import { AnalyzeAudioDialog } from "./analyze-audio-dialog";
+import { CompressAudioConfirmDialog } from "./compress-audio-confirm-dialog";
+import { RevertAudioCompressionConfirmDialog } from "./revert-audio-compression-confirm-dialog";
 
 interface AudioDeploymentRowActionsProps {
   deployment: AudioDeploymentRow;
   canEdit: boolean;
+  canAdmin?: boolean;
 }
 
 export function AudioDeploymentRowActions({
   deployment,
   canEdit,
+  canAdmin = false,
 }: AudioDeploymentRowActionsProps) {
   const router = useRouter();
   const [scanning, setScanning] = useState(false);
   const [analyzeOpen, setAnalyzeOpen] = useState(false);
+  const [compressTargetId, setCompressTargetId] = useState<number | null>(null);
+  const [revertTargetId, setRevertTargetId] = useState<number | null>(null);
 
   async function handleScan(e: React.MouseEvent) {
     e.stopPropagation();
@@ -107,6 +115,36 @@ export function AudioDeploymentRowActions({
                     : "Analizar..."}
                 </DropdownMenuItem>
               )}
+
+              {canAdmin && deployment.uncompressedFileCount > 0 && (
+                <DropdownMenuItem
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setCompressTargetId(deployment.id);
+                  }}
+                  disabled={deployment.isAudioCompressionProcessing}
+                >
+                  {deployment.isAudioCompressionProcessing ? (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <FileArchive className="h-4 w-4 mr-2" />
+                  )}
+                  Comprimir a FLAC
+                </DropdownMenuItem>
+              )}
+
+              {canAdmin && deployment.revertibleFileCount > 0 && (
+                <DropdownMenuItem
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setRevertTargetId(deployment.id);
+                  }}
+                  disabled={deployment.isAudioCompressionProcessing}
+                >
+                  <Undo2 className="h-4 w-4 mr-2" />
+                  Revertir compresión
+                </DropdownMenuItem>
+              )}
             </>
           )}
 
@@ -130,7 +168,21 @@ export function AudioDeploymentRowActions({
         deploymentIds={[deployment.id]}
         subjectLabel={deployment.name}
         hasExistingBirdnet={deployment.totalDetections > 0}
+        canAdmin={canAdmin}
+        uncompressedFileCount={deployment.uncompressedFileCount}
         onComplete={() => router.refresh()}
+      />
+
+      <CompressAudioConfirmDialog
+        deploymentId={compressTargetId}
+        onClose={() => setCompressTargetId(null)}
+        onStarted={() => router.refresh()}
+      />
+
+      <RevertAudioCompressionConfirmDialog
+        deploymentId={revertTargetId}
+        onClose={() => setRevertTargetId(null)}
+        onStarted={() => router.refresh()}
       />
     </>
   );

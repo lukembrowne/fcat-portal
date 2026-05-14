@@ -72,6 +72,12 @@ export interface ExportPreviewSpeciesRow {
   train: number;
   val: number;
   test: number;
+  trainDeployments: number;
+  valDeployments: number;
+  testDeployments: number;
+  trainDeploymentNames: string[];
+  valDeploymentNames: string[];
+  testDeploymentNames: string[];
 }
 
 export interface ExportPreview {
@@ -91,6 +97,7 @@ interface CandidateRow {
   detectionId: number;
   imageId: number;
   deploymentId: number;
+  deploymentName: string;
   imagePath: string | null;
   driveFileId: string | null;
   filename: string;
@@ -128,6 +135,7 @@ async function collectExportCandidates(
       detectionId: detections.id,
       imageId: images.id,
       deploymentId: images.deploymentId,
+      deploymentName: deployments.name,
       imagePath: images.path,
       driveFileId: images.driveFileId,
       filename: images.filename,
@@ -160,6 +168,7 @@ async function collectExportCandidates(
     detectionId: r.detectionId,
     imageId: r.imageId,
     deploymentId: r.deploymentId,
+    deploymentName: r.deploymentName,
     imagePath: r.imagePath,
     driveFileId: r.driveFileId,
     filename: r.filename,
@@ -251,34 +260,64 @@ export async function getExportPreview(
   try {
     const collected = await collectExportCandidates(minExamples);
 
-    // Aggregate per-label-per-split counts for display.
+    // Aggregate per-label-per-split counts AND per-label-per-split distinct
+    // deployments in a single pass. The deployment sets let the UI show whether
+    // a skewed split is class-imbalanced or deployment-imbalanced.
     const perLabelCounts = new Map<
       string,
       { train: number; val: number; test: number }
     >();
+    const perLabelDeployments = new Map<
+      string,
+      { train: Set<string>; val: Set<string>; test: Set<string> }
+    >();
     for (const row of collected.filtered) {
       const split = collected.splitByDeployment.get(row.deploymentId);
       if (!split) continue;
-      const existing = perLabelCounts.get(row.finalLabel) ?? {
+      const existingCounts = perLabelCounts.get(row.finalLabel) ?? {
         train: 0,
         val: 0,
         test: 0,
       };
-      existing[split] += 1;
-      perLabelCounts.set(row.finalLabel, existing);
+      existingCounts[split] += 1;
+      perLabelCounts.set(row.finalLabel, existingCounts);
+
+      const existingDeps = perLabelDeployments.get(row.finalLabel) ?? {
+        train: new Set<string>(),
+        val: new Set<string>(),
+        test: new Set<string>(),
+      };
+      existingDeps[split].add(row.deploymentName);
+      perLabelDeployments.set(row.finalLabel, existingDeps);
     }
+
+    const sortNames = (s: Set<string>) =>
+      Array.from(s).sort((a, b) => a.localeCompare(b, "es"));
 
     const perSpecies: ExportPreviewSpeciesRow[] = Array.from(
       perLabelCounts.entries(),
     )
-      .map(([label, splitCounts]) => ({
-        label,
-        slug: speciesSlug(label),
-        total: splitCounts.train + splitCounts.val + splitCounts.test,
-        train: splitCounts.train,
-        val: splitCounts.val,
-        test: splitCounts.test,
-      }))
+      .map(([label, splitCounts]) => {
+        const depSets = perLabelDeployments.get(label) ?? {
+          train: new Set<string>(),
+          val: new Set<string>(),
+          test: new Set<string>(),
+        };
+        return {
+          label,
+          slug: speciesSlug(label),
+          total: splitCounts.train + splitCounts.val + splitCounts.test,
+          train: splitCounts.train,
+          val: splitCounts.val,
+          test: splitCounts.test,
+          trainDeployments: depSets.train.size,
+          valDeployments: depSets.val.size,
+          testDeployments: depSets.test.size,
+          trainDeploymentNames: sortNames(depSets.train),
+          valDeploymentNames: sortNames(depSets.val),
+          testDeploymentNames: sortNames(depSets.test),
+        };
+      })
       .sort((a, b) => b.total - a.total);
 
     const deploymentCount = collected.splitByDeployment.size;

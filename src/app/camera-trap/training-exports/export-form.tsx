@@ -7,6 +7,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   exportTrainingDataset,
   getExportPreview,
   type ExportPreview,
@@ -141,6 +147,41 @@ export function ExportForm() {
   );
 }
 
+function SplitCell({
+  count,
+  deployments,
+  names,
+}: {
+  count: number;
+  deployments: number;
+  names: string[];
+}) {
+  if (count === 0) {
+    return <span className="text-muted-foreground">0</span>;
+  }
+  const inner = (
+    <span className="cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-2">
+      {count.toLocaleString("es-EC")}{" "}
+      <span className="text-xs text-muted-foreground">({deployments})</span>
+    </span>
+  );
+  if (deployments === 0 || names.length === 0) return inner;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{inner}</TooltipTrigger>
+      <TooltipContent side="left" className="max-w-xs">
+        <div className="font-medium mb-1">
+          {deployments}{" "}
+          {deployments === 1 ? "instalación" : "instalaciones"}
+        </div>
+        <div className="text-left leading-snug">
+          {names.join(", ")}
+        </div>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 function PreviewCard({
   preview,
   loading,
@@ -213,7 +254,12 @@ function PreviewCard({
           )}
         </p>
       ) : (
+        <TooltipProvider delayDuration={150}>
         <div className="mt-3 overflow-x-auto">
+          <p className="text-xs text-muted-foreground mb-1">
+            Entre paréntesis: número de instalaciones distintas (hover para ver
+            nombres).
+          </p>
           <table className="w-full text-sm">
             <thead className="text-left text-xs text-muted-foreground">
               <tr>
@@ -234,13 +280,25 @@ function PreviewCard({
                     {row.label}
                   </td>
                   <td className="py-1 px-2 text-right tabular-nums">
-                    {row.train.toLocaleString("es-EC")}
+                    <SplitCell
+                      count={row.train}
+                      deployments={row.trainDeployments}
+                      names={row.trainDeploymentNames}
+                    />
                   </td>
                   <td className="py-1 px-2 text-right tabular-nums">
-                    {row.val.toLocaleString("es-EC")}
+                    <SplitCell
+                      count={row.val}
+                      deployments={row.valDeployments}
+                      names={row.valDeploymentNames}
+                    />
                   </td>
                   <td className="py-1 px-2 text-right tabular-nums">
-                    {row.test.toLocaleString("es-EC")}
+                    <SplitCell
+                      count={row.test}
+                      deployments={row.testDeployments}
+                      names={row.testDeploymentNames}
+                    />
                   </td>
                   <td className="py-1 pl-2 text-right tabular-nums font-semibold">
                     {row.total.toLocaleString("es-EC")}
@@ -250,6 +308,7 @@ function PreviewCard({
             </tbody>
           </table>
         </div>
+        </TooltipProvider>
       )}
 
       {droppedEntries.length > 0 && (

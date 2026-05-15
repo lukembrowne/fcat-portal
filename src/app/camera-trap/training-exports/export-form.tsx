@@ -236,7 +236,16 @@ function PreviewCard({
         </span>
       </div>
 
-      {preview.newDeploymentSplits > 0 && (
+      {preview.migrationApplied && (
+        <div className="mt-2 rounded border border-amber-500/40 bg-amber-50 p-2 text-xs text-amber-800">
+          ⚠ El próximo exporte aplicará el algoritmo de estratificación
+          v{preview.splitStrategyVersion}. Todos los splits persistidos se
+          recalcularán para garantizar al menos una instalación en
+          val + test por cada especie con ≥3 instalaciones.
+        </div>
+      )}
+
+      {preview.newDeploymentSplits > 0 && !preview.migrationApplied && (
         <p className="mt-1 text-xs text-amber-700">
           ⚠ {preview.newDeploymentSplits}{" "}
           {preview.newDeploymentSplits === 1
@@ -244,6 +253,21 @@ function PreviewCard({
             : "instalaciones recibirán un split nuevo"}{" "}
           en el próximo exporte.
         </p>
+      )}
+
+      {preview.stratifyWarnings.length > 0 && (
+        <div className="mt-2 rounded border border-amber-500/40 bg-amber-50 p-2 text-xs text-amber-800">
+          <div className="font-semibold mb-1">
+            Especies sin cobertura completa en val/test:
+          </div>
+          <ul className="ml-4 list-disc">
+            {preview.stratifyWarnings.map((w) => (
+              <li key={w.label}>
+                <span className="font-mono">{w.label}</span> — {w.reason}
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
 
       {preview.perSpecies.length === 0 ? (
@@ -309,6 +333,30 @@ function PreviewCard({
           </table>
         </div>
         </TooltipProvider>
+      )}
+
+      {preview.forcedReassignments.length > 0 && (
+        <details className="mt-3 text-xs">
+          <summary className="cursor-pointer text-muted-foreground">
+            {preview.forcedReassignments.length}{" "}
+            {preview.forcedReassignments.length === 1
+              ? "reasignación"
+              : "reasignaciones"}{" "}
+            por estratificación (garantía val/test para especies raras)
+          </summary>
+          <ul className="mt-1 ml-4 list-disc max-h-40 overflow-y-auto">
+            {preview.forcedReassignments.map((r) => (
+              <li key={`${r.label}-${r.deploymentId}`}>
+                <span className="font-mono">{r.label}</span> —{" "}
+                <span className="font-mono text-muted-foreground">
+                  {r.deploymentName}
+                </span>{" "}
+                movido de <strong>{r.from}</strong> a{" "}
+                <strong>{r.to}</strong>
+              </li>
+            ))}
+          </ul>
+        </details>
       )}
 
       {droppedEntries.length > 0 && (

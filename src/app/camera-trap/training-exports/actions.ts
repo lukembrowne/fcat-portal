@@ -41,12 +41,15 @@ import { downloadFileToBuffer } from "@/lib/drive-client";
 import { log } from "@/lib/log";
 import {
   speciesSlug,
-  assignSplit,
   computeContentHash,
   buildCounts,
   buildManifest,
+  stratifyDeploymentSplits,
+  SPLIT_STRATEGY_VERSION,
   type HashRow,
   type Split,
+  type ForcedReassignment,
+  type StratifyWarning,
 } from "@/lib/training-export-helpers";
 
 const EXPORT_ROOT = path.join(process.cwd(), "data", "training-exports");
@@ -80,6 +83,14 @@ export interface ExportPreviewSpeciesRow {
   testDeploymentNames: string[];
 }
 
+export interface ForcedReassignmentRow {
+  label: string;
+  deploymentId: number;
+  deploymentName: string;
+  from: Split;
+  to: Split;
+}
+
 export interface ExportPreview {
   minExamples: number;
   totalCandidates: number;
@@ -91,6 +102,15 @@ export interface ExportPreview {
    * on the next export. Zero means splits are already locked in for every
    * deployment with verified data. */
   newDeploymentSplits: number;
+  /** True when the next export will clear all persisted splits and
+   * re-stratify under the current SPLIT_STRATEGY_VERSION. */
+  migrationApplied: boolean;
+  splitStrategyVersion: number;
+  /** Moves performed by the stratifier to guarantee val+test coverage for
+   * species with >= STRATIFY_MIN_DEPLOYMENTS. */
+  forcedReassignments: ForcedReassignmentRow[];
+  /** Species the stratifier could not balance. */
+  stratifyWarnings: Array<{ label: string; reason: string }>;
 }
 
 interface CandidateRow {
@@ -114,11 +134,17 @@ interface CollectedCandidates {
   classList: string[];
   droppedSpecies: Record<string, number>;
   splitByDeployment: Map<number, Split>;
-  /** Deployments that did not yet have a persisted training_split when we
-   * ran the query. exportTrainingDataset persists these in a sync
-   * transaction; getExportPreview ignores them. */
+  /** Deployments whose final assignment differs from the value currently
+   * persisted in deployments.training_split. exportTrainingDataset writes
+   * these back; getExportPreview ignores them. */
   newAssignments: Array<{ id: number; split: Split }>;
   totalCandidatesBeforeFilter: number;
+  /** True when there's no prior v2 manifest, so the next export will clear
+   * all persisted splits and re-stratify from scratch. */
+  migrationApplied: boolean;
+  forcedReassignments: ForcedReassignment[];
+  stratifyWarnings: StratifyWarning[];
+  deploymentNameById: Map<number, string>;
 }
 
 /**
@@ -198,16 +224,39 @@ async function collectExportCandidates(
     (c) => c.finalLabel && classListSet.has(c.finalLabel),
   );
 
-  // 3. Resolve training_split per deployment — read existing, compute for
-  //    any that don't have one yet. This is pure read: we do NOT persist
-  //    newAssignments here. The export path writes them inside its own
-  //    transaction.
-  const splitByDeployment = new Map<number, Split>();
-  const newAssignments: Array<{ id: number; split: Split }> = [];
+  // 3. Resolve training_split per deployment via the stratifier.
+  //    - migrationApplied=true means there's no prior dataset under the
+  //      current SPLIT_STRATEGY_VERSION; the next export will clear every
+  //      deployment's persisted split and start over (anchored = {}).
+  //    - Otherwise we treat persisted splits as anchors and only stratify
+  //      newly-verified deployments around them.
+  const migrationApplied = await needsSplitStrategyMigration();
 
   const deploymentIds = Array.from(
     new Set(filtered.map((c) => c.deploymentId)),
   );
+
+  // speciesByDeployment uses finalLabel from the filtered candidates so
+  // dropped species don't influence stratification.
+  const speciesByDeployment = new Map<number, Set<string>>();
+  for (const c of filtered) {
+    if (!speciesByDeployment.has(c.deploymentId)) {
+      speciesByDeployment.set(c.deploymentId, new Set());
+    }
+    speciesByDeployment.get(c.deploymentId)!.add(c.finalLabel);
+  }
+
+  // Map deploymentId -> name for surfacing in UI / warnings.
+  const deploymentNameById = new Map<number, string>();
+  for (const c of filtered) {
+    if (!deploymentNameById.has(c.deploymentId)) {
+      deploymentNameById.set(c.deploymentId, c.deploymentName);
+    }
+  }
+
+  const anchored = new Map<number, Split>();
+  const persistedByDeployment = new Map<number, Split | null>();
+
   if (deploymentIds.length > 0) {
     const existingSplits = await db
       .select({ id: deployments.id, trainingSplit: deployments.trainingSplit })
@@ -215,17 +264,35 @@ async function collectExportCandidates(
       .where(inArray(deployments.id, deploymentIds));
 
     for (const dep of existingSplits) {
-      if (
+      const value =
         dep.trainingSplit === "train" ||
         dep.trainingSplit === "val" ||
         dep.trainingSplit === "test"
-      ) {
-        splitByDeployment.set(dep.id, dep.trainingSplit);
-      } else {
-        const split = assignSplit(dep.id);
-        splitByDeployment.set(dep.id, split);
-        newAssignments.push({ id: dep.id, split });
+          ? dep.trainingSplit
+          : null;
+      persistedByDeployment.set(dep.id, value);
+      // During a migration, no deployment is anchored — the export will
+      // clear all persisted splits before writing the new assignments.
+      if (!migrationApplied && value !== null) {
+        anchored.set(dep.id, value);
       }
+    }
+  }
+
+  const stratified = stratifyDeploymentSplits({
+    deploymentIds,
+    speciesByDeployment,
+    anchored,
+  });
+
+  const splitByDeployment = stratified.splitByDeployment;
+  const newAssignments: Array<{ id: number; split: Split }> = [];
+  for (const id of deploymentIds) {
+    const finalSplit = splitByDeployment.get(id);
+    if (!finalSplit) continue;
+    const persisted = persistedByDeployment.get(id) ?? null;
+    if (persisted !== finalSplit) {
+      newAssignments.push({ id, split: finalSplit });
     }
   }
 
@@ -236,7 +303,57 @@ async function collectExportCandidates(
     splitByDeployment,
     newAssignments,
     totalCandidatesBeforeFilter: candidates.length,
+    migrationApplied,
+    forcedReassignments: stratified.forcedReassignments,
+    stratifyWarnings: stratified.warnings,
+    deploymentNameById,
   };
+}
+
+/**
+ * Detect whether the next export should run the one-time v2 migration:
+ * clear every persisted deployments.training_split and re-stratify from
+ * scratch. Returns true iff the most recent training dataset (if any) was
+ * built under a SPLIT_STRATEGY_VERSION less than the current one.
+ *
+ * When no dataset exists yet, the column is either empty (no migration
+ * needed — first export ever) or already populated by an older code path.
+ * We treat the latter as needing migration so v2 takes effect on first use.
+ */
+async function needsSplitStrategyMigration(): Promise<boolean> {
+  const latest = await db
+    .select({ manifestPath: cameraTrapTrainingDatasets.manifestPath })
+    .from(cameraTrapTrainingDatasets)
+    .orderBy(sql`${cameraTrapTrainingDatasets.id} desc`)
+    .limit(1);
+
+  if (latest.length === 0) {
+    // No prior dataset. If any deployment already has a persisted split, it
+    // was assigned by older code — trigger migration. Otherwise no-op.
+    const anyPersisted = await db
+      .select({ id: deployments.id })
+      .from(deployments)
+      .where(sql`${deployments.trainingSplit} is not null`)
+      .limit(1);
+    return anyPersisted.length > 0;
+  }
+
+  try {
+    const manifestRaw = await fs.readFile(latest[0].manifestPath, "utf8");
+    const manifest = JSON.parse(manifestRaw) as {
+      splitStrategyVersion?: number;
+    };
+    const ver = manifest.splitStrategyVersion ?? 0;
+    return ver < SPLIT_STRATEGY_VERSION;
+  } catch (err) {
+    // Manifest unreadable — assume migration is needed so we don't compound
+    // a bad state.
+    log.warn(
+      { err, path: latest[0].manifestPath },
+      "[training-export] could not read latest manifest; assuming migration needed",
+    );
+    return true;
+  }
 }
 
 /**
@@ -322,6 +439,17 @@ export async function getExportPreview(
 
     const deploymentCount = collected.splitByDeployment.size;
 
+    const forcedReassignments: ForcedReassignmentRow[] =
+      collected.forcedReassignments.map((r) => ({
+        label: r.label,
+        deploymentId: r.deploymentId,
+        deploymentName:
+          collected.deploymentNameById.get(r.deploymentId) ??
+          `#${r.deploymentId}`,
+        from: r.from,
+        to: r.to,
+      }));
+
     return {
       success: true,
       data: {
@@ -332,6 +460,10 @@ export async function getExportPreview(
         perSpecies,
         deploymentCount,
         newDeploymentSplits: collected.newAssignments.length,
+        migrationApplied: collected.migrationApplied,
+        splitStrategyVersion: SPLIT_STRATEGY_VERSION,
+        forcedReassignments,
+        stratifyWarnings: collected.stratifyWarnings,
       },
     };
   } catch (err) {
@@ -385,12 +517,26 @@ export async function exportTrainingDataset(
       droppedSpecies,
       splitByDeployment,
       newAssignments,
+      migrationApplied,
     } = collected;
 
-    // Persist the new write-once split assignments BEFORE computing the hash,
-    // so a re-run that includes the same deployments produces the same hash.
-    if (newAssignments.length > 0) {
+    // Persist the split assignments BEFORE computing the hash, so a re-run
+    // over the same corpus produces the same hash. On the one-time v2
+    // migration, clear EVERY persisted training_split first — the stratifier
+    // ran with anchored={} so the writeback below restores them with the
+    // newly-balanced values.
+    if (migrationApplied || newAssignments.length > 0) {
       db.transaction((tx) => {
+        if (migrationApplied) {
+          tx.update(deployments)
+            .set({ trainingSplit: null })
+            .where(sql`${deployments.trainingSplit} is not null`)
+            .run();
+          log.info(
+            { splitStrategyVersion: SPLIT_STRATEGY_VERSION },
+            "[training-export] cleared all training_split values for migration",
+          );
+        }
         for (const a of newAssignments) {
           tx.update(deployments)
             .set({ trainingSplit: a.split })

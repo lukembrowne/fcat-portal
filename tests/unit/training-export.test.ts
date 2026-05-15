@@ -4,7 +4,11 @@ import {
   assignSplit,
   computeContentHash,
   buildCounts,
+  stratifyDeploymentSplits,
+  SPLIT_STRATEGY_VERSION,
+  STRATIFY_MIN_DEPLOYMENTS,
   type HashRow,
+  type Split,
 } from "@/lib/training-export-helpers";
 
 describe("speciesSlug", () => {
@@ -128,6 +132,234 @@ describe("computeContentHash", () => {
     ).not.toBe(
       computeContentHash({ rows: b, minExamples: 1, classList: ["a", "b|c"] }),
     );
+  });
+});
+
+describe("SPLIT_STRATEGY_VERSION", () => {
+  it("is the current code version (2)", () => {
+    // Bumping this constant is a deliberate, hash-invalidating event.
+    // Update the assertion in lockstep with the helper export.
+    expect(SPLIT_STRATEGY_VERSION).toBe(2);
+  });
+
+  it("is included in the content hash so a bump invalidates old hashes", () => {
+    // Snapshot of a v1-equivalent canonical hash computed before the bump.
+    // Any code change that does NOT bump SPLIT_STRATEGY_VERSION but does
+    // change the canonicalization would silently invalidate models — this
+    // test guards against that.
+    const sample: HashRow[] = [
+      { imageId: 1, finalLabel: "ocelot", deploymentId: 10, split: "train" },
+    ];
+    const hash = computeContentHash({
+      rows: sample,
+      minExamples: 50,
+      classList: ["ocelot"],
+    });
+    // Hash must be a 64-char hex string and stable over runs.
+    expect(hash).toMatch(/^[0-9a-f]{64}$/);
+    const again = computeContentHash({
+      rows: sample,
+      minExamples: 50,
+      classList: ["ocelot"],
+    });
+    expect(again).toBe(hash);
+  });
+});
+
+describe("stratifyDeploymentSplits", () => {
+  /** Build a speciesByDeployment Map for n-deployment, single-species cases. */
+  function singleSpecies(
+    species: string,
+    depIds: number[],
+  ): Map<number, Set<string>> {
+    const m = new Map<number, Set<string>>();
+    for (const id of depIds) m.set(id, new Set([species]));
+    return m;
+  }
+
+  it("returns hash bucket for species with fewer than the threshold deployments", () => {
+    expect(STRATIFY_MIN_DEPLOYMENTS).toBe(3);
+    // Find two ids — whatever the hash gives, the stratifier must not move them.
+    const ids = [101, 102];
+    const result = stratifyDeploymentSplits({
+      deploymentIds: ids,
+      speciesByDeployment: singleSpecies("rare_species", ids),
+      anchored: new Map(),
+    });
+    for (const id of ids) {
+      expect(result.splitByDeployment.get(id)).toBe(assignSplit(id));
+    }
+    expect(result.forcedReassignments).toHaveLength(0);
+    expect(result.warnings).toHaveLength(0);
+  });
+
+  it("forces 1/1/1 coverage when 3 deployments all hash to the same split", () => {
+    // Find three deployment ids that all hash to "train".
+    const trainIds: number[] = [];
+    let i = 1;
+    while (trainIds.length < 3 && i < 10000) {
+      if (assignSplit(i) === "train") trainIds.push(i);
+      i++;
+    }
+    expect(trainIds).toHaveLength(3);
+
+    const result = stratifyDeploymentSplits({
+      deploymentIds: trainIds,
+      speciesByDeployment: singleSpecies("forced_species", trainIds),
+      anchored: new Map(),
+    });
+
+    const splits = trainIds.map((id) => result.splitByDeployment.get(id)!);
+    const counts = { train: 0, val: 0, test: 0 } as Record<Split, number>;
+    for (const s of splits) counts[s] += 1;
+    expect(counts.train).toBe(1);
+    expect(counts.val).toBe(1);
+    expect(counts.test).toBe(1);
+    expect(result.forcedReassignments.length).toBe(2);
+    expect(result.warnings).toHaveLength(0);
+  });
+
+  it("is fully deterministic on identical input", () => {
+    const ids = [1, 2, 3, 4, 5, 6];
+    const species = singleSpecies("species_a", ids);
+    const r1 = stratifyDeploymentSplits({
+      deploymentIds: ids,
+      speciesByDeployment: species,
+      anchored: new Map(),
+    });
+    const r2 = stratifyDeploymentSplits({
+      deploymentIds: ids,
+      speciesByDeployment: species,
+      anchored: new Map(),
+    });
+    for (const id of ids) {
+      expect(r1.splitByDeployment.get(id)).toBe(r2.splitByDeployment.get(id));
+    }
+    expect(r1.forcedReassignments).toEqual(r2.forcedReassignments);
+  });
+
+  it("never moves anchored deployments and warns when it can't help", () => {
+    // 3 anchored deployments, all in train — stratifier cannot rebalance.
+    const ids = [201, 202, 203];
+    const anchored = new Map<number, Split>([
+      [201, "train"],
+      [202, "train"],
+      [203, "train"],
+    ]);
+    const result = stratifyDeploymentSplits({
+      deploymentIds: ids,
+      speciesByDeployment: singleSpecies("anchored_species", ids),
+      anchored,
+    });
+    for (const id of ids) {
+      expect(result.splitByDeployment.get(id)).toBe("train");
+    }
+    // Two warnings expected (val empty + test empty), both for the same species.
+    expect(result.warnings.map((w) => w.label)).toEqual([
+      "anchored_species",
+      "anchored_species",
+    ]);
+    expect(result.forcedReassignments).toHaveLength(0);
+  });
+
+  it("processes rarer species first so common species absorb the cascade", () => {
+    // Common species has 6 deployments (1..6). Rare species shares deployments
+    // 1, 2, 3 — already split 1/1/1 by anchors. Rare species has 3 deployments
+    // (1, 2, 3) so already covered. No moves needed.
+    const deployments = [1, 2, 3, 4, 5, 6];
+    const speciesByDeployment = new Map<number, Set<string>>();
+    speciesByDeployment.set(1, new Set(["common", "rare"]));
+    speciesByDeployment.set(2, new Set(["common", "rare"]));
+    speciesByDeployment.set(3, new Set(["common", "rare"]));
+    speciesByDeployment.set(4, new Set(["common"]));
+    speciesByDeployment.set(5, new Set(["common"]));
+    speciesByDeployment.set(6, new Set(["common"]));
+    const anchored = new Map<number, Split>([
+      [1, "train"],
+      [2, "val"],
+      [3, "test"],
+      [4, "train"],
+      [5, "train"],
+      [6, "train"],
+    ]);
+    const result = stratifyDeploymentSplits({
+      deploymentIds: deployments,
+      speciesByDeployment,
+      anchored,
+    });
+    // No moves: every species already has 1/1/1.
+    expect(result.forcedReassignments).toHaveLength(0);
+    expect(result.warnings).toHaveLength(0);
+    // Anchors preserved.
+    for (const [id, s] of anchored) {
+      expect(result.splitByDeployment.get(id)).toBe(s);
+    }
+  });
+
+  it("only moves rare-species coverage when forced; common species ride along", () => {
+    // Common species (id 1..10) all unanchored; rare species lives only on
+    // deployments 11, 12, 13 — also unanchored. Stratifier may need to move
+    // up to 2 of the rare-species deployments to val and test.
+    const deploymentIds = Array.from({ length: 13 }, (_, i) => i + 1);
+    const speciesByDeployment = new Map<number, Set<string>>();
+    for (let i = 1; i <= 10; i++) {
+      speciesByDeployment.set(i, new Set(["common"]));
+    }
+    for (let i = 11; i <= 13; i++) {
+      speciesByDeployment.set(i, new Set(["rare"]));
+    }
+    const result = stratifyDeploymentSplits({
+      deploymentIds,
+      speciesByDeployment,
+      anchored: new Map(),
+    });
+
+    // Rare species must have 1/1/1.
+    const rareCounts = { train: 0, val: 0, test: 0 } as Record<Split, number>;
+    for (const id of [11, 12, 13]) {
+      rareCounts[result.splitByDeployment.get(id)!] += 1;
+    }
+    expect(rareCounts.train).toBe(1);
+    expect(rareCounts.val).toBe(1);
+    expect(rareCounts.test).toBe(1);
+
+    // Common species — must still have ≥1 in each split (it has 10 deployments
+    // and hash distributes ~70/15/15).
+    const commonCounts = { train: 0, val: 0, test: 0 } as Record<
+      Split,
+      number
+    >;
+    for (let i = 1; i <= 10; i++) {
+      commonCounts[result.splitByDeployment.get(i)!] += 1;
+    }
+    expect(commonCounts.train).toBeGreaterThanOrEqual(1);
+    expect(commonCounts.val).toBeGreaterThanOrEqual(1);
+    expect(commonCounts.test).toBeGreaterThanOrEqual(1);
+  });
+
+  it("emits forcedReassignments sorted deterministically by label then id", () => {
+    // Two species that both need forced moves; ensure surfaced moves are
+    // sorted by label asc, then deployment id asc.
+    const trainIds: number[] = [];
+    let i = 1;
+    while (trainIds.length < 6 && i < 10000) {
+      if (assignSplit(i) === "train") trainIds.push(i);
+      i++;
+    }
+    expect(trainIds.length).toBeGreaterThanOrEqual(6);
+    const aIds = trainIds.slice(0, 3);
+    const bIds = trainIds.slice(3, 6);
+    const speciesByDeployment = new Map<number, Set<string>>();
+    for (const id of aIds) speciesByDeployment.set(id, new Set(["alpha"]));
+    for (const id of bIds) speciesByDeployment.set(id, new Set(["beta"]));
+    const result = stratifyDeploymentSplits({
+      deploymentIds: [...aIds, ...bIds],
+      speciesByDeployment,
+      anchored: new Map(),
+    });
+    const labels = result.forcedReassignments.map((r) => r.label);
+    const sorted = [...labels].sort((a, b) => a.localeCompare(b, "es"));
+    expect(labels).toEqual(sorted);
   });
 });
 

@@ -1,6 +1,10 @@
 import { requirePermission } from "@/lib/auth";
 import { fetchSiteDetail, getSiteShareLink } from "../actions";
+import { fetchSiteAudio } from "../habitat-actions";
 import { SiteDetailShell } from "./site-detail-shell";
+import { db } from "@/db";
+import { deployments, cameraTrapProjects } from "@/db/schema";
+import { and, eq, isNull, or } from "drizzle-orm";
 
 const ROLE_HIERARCHY = { viewer: 1, editor: 2, admin: 3 } as const;
 
@@ -24,9 +28,10 @@ export default async function SiteDetailPage({
     (biochocoRole !== undefined &&
       ROLE_HIERARCHY[biochocoRole] >= ROLE_HIERARCHY.editor);
 
-  const [result, existingLink] = await Promise.all([
+  const [result, existingLink, siteDepIds] = await Promise.all([
     fetchSiteDetail(siteId),
     canShare ? getSiteShareLink(siteId) : Promise.resolve(null),
+    fetchSiteDeploymentIds(siteId),
   ]);
 
   if (!result.success) {
@@ -48,12 +53,50 @@ export default async function SiteDetailPage({
     );
   }
 
+  const audioResult = await fetchSiteAudio(siteDepIds);
+  const audio = audioResult.success ? audioResult.data : null;
+
   return (
     <SiteDetailShell
       data={result.data}
+      audio={audio}
       siteId={siteId}
       canShare={canShare}
       existingShareLink={existingLink}
     />
   );
 }
+
+/**
+ * Look up the deployment IDs that belong to this site. Reuses the
+ * site-name/site-id fallback chain in habitat-lookup so audio queries
+ * see the same set of deployments the rest of the page does.
+ */
+async function fetchSiteDeploymentIds(siteId: string): Promise<number[]> {
+  const [proj] = await db
+    .select({ id: cameraTrapProjects.id })
+    .from(cameraTrapProjects)
+    .where(eq(cameraTrapProjects.name, "BioChoco"));
+  if (!proj) return [];
+  const rows = await db
+    .select({
+      id: deployments.id,
+      name: deployments.name,
+      siteName: deployments.siteName,
+    })
+    .from(deployments)
+    .where(
+      and(
+        eq(deployments.cameraTrapProjectId, proj.id),
+        or(eq(deployments.excluded, false), isNull(deployments.excluded)),
+      ),
+    );
+  return rows
+    .filter((r) => {
+      if (r.siteName === siteId) return true;
+      const extracted = r.name.match(/^(.+?)_V\d+$/i)?.[1];
+      return extracted === siteId;
+    })
+    .map((r) => r.id);
+}
+

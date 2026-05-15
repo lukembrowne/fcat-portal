@@ -1,12 +1,56 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { boxPlotStats } from "@/lib/stats";
-import type { AcousticIndicesGroup, AcousticIndicesPoint } from "../actions";
-import type { AcousticIndexKey } from "@/lib/acoustic-indices";
 
-// Layout constants — kept in sync with the iButton BoxPlotChart so the visual
-// language is consistent across the app. SVG viewBox provides responsive scale.
+/**
+ * A single sample plotted inside a {@link BoxPlotGroup}. The `id` must be
+ * stable per point (used for deterministic jitter and React keys).
+ */
+export interface BoxPlotPoint {
+  id: number;
+  value: number;
+  /** Bold first line in the hover tooltip. */
+  primaryLabel?: string;
+  /** Smaller second line in the tooltip. */
+  secondaryLabel?: string;
+  /** Muted footnote line under the value. */
+  footnote?: string;
+}
+
+export interface BoxPlotGroup {
+  key: string;
+  /** Display label on the x-axis. */
+  label: string;
+  /** Optional fill color (defaults to slate-400). */
+  color?: string;
+  points: BoxPlotPoint[];
+}
+
+export type BoxPlotDirection = "up" | "down" | "neutral";
+
+interface BoxPlotProps {
+  groups: BoxPlotGroup[];
+  title: string;
+  description?: string;
+  /** Optional small caption with an arrow indicator (used for acoustic indices). */
+  expectedDirection?: BoxPlotDirection;
+  expectedDirectionLabel?: string;
+  /** Rotated unit label on the y-axis (e.g. "°C", "ACI"). */
+  unitLabel?: string;
+  /** Label inserted into the tooltip and aria description (e.g. "ACI", "Mínima"). */
+  valueLabel: string;
+  /** Formats values shown in the tooltip and (by default) the y ticks. */
+  formatValue?: (value: number) => string;
+  /** Overrides the tick formatter when ticks need a different format than the tooltip. */
+  formatTickLabel?: (value: number) => string;
+  /** Groups with fewer than this many points are dimmed to signal low coverage. 0 disables. */
+  lowCoverageThreshold?: number;
+  /** Shown when no group has data. */
+  emptyMessage?: string;
+}
+
+// Shared visual constants — kept on this side so callers can't drift apart again.
 const VB_WIDTH = 1000;
 const VB_HEIGHT = 240;
 const PAD_TOP = 16;
@@ -15,25 +59,29 @@ const PAD_LEFT = 56;
 const PAD_RIGHT = 16;
 const PLOT_W = VB_WIDTH - PAD_LEFT - PAD_RIGHT;
 const PLOT_H = VB_HEIGHT - PAD_TOP - PAD_BOTTOM;
-const NEUTRAL_COLOR = "#94a3b8";
+const NEUTRAL_COLOR = "#94a3b8"; // slate-400
 const TICK_COUNT = 5;
 const POINT_RADIUS = 3.5;
 const POINT_RADIUS_HOVER = 5;
 const JITTER_SPREAD = 0.6;
-const LOW_COVERAGE_THRESHOLD = 4;
+const MAX_BOX_WIDTH = 64;
 
-interface AcousticIndicesBoxPlotProps {
-  groups: AcousticIndicesGroup[];
-  indexKey: AcousticIndexKey;
-  title: string;
-  description: string;
-  expectedDirection: "up" | "down" | "neutral";
-  unitLabel?: string;
-}
+const DIRECTION_ARROW: Record<BoxPlotDirection, string> = {
+  up: "↑",
+  down: "↓",
+  neutral: "≈",
+};
 
 function jitterFromId(id: number): number {
   const x = ((id * 9301 + 49297) % 233280) / 233280;
   return x - 0.5;
+}
+
+function defaultFormat(v: number): string {
+  if (!Number.isFinite(v)) return "—";
+  if (Math.abs(v) >= 1000) return v.toExponential(1);
+  if (Math.abs(v) >= 10) return v.toFixed(1);
+  return v.toFixed(2);
 }
 
 function niceTicks(min: number, max: number, count: number): number[] {
@@ -59,39 +107,34 @@ function niceTicks(min: number, max: number, count: number): number[] {
   return out;
 }
 
-function formatTick(v: number): string {
-  if (Math.abs(v) >= 1000) return v.toExponential(1);
-  if (Math.abs(v) >= 10) return v.toFixed(1);
-  return v.toFixed(2);
-}
-
-const DIRECTION_ARROW: Record<"up" | "down" | "neutral", string> = {
-  up: "↑",
-  down: "↓",
-  neutral: "≈",
-};
-const DIRECTION_LABEL: Record<"up" | "down" | "neutral", string> = {
-  up: "Se espera que aumente hacia bosque maduro (Müller et al. 2023).",
-  down: "Se espera que disminuya hacia bosque maduro (Müller et al. 2023).",
-  neutral:
-    "Señal débil en bosques tropicales — interprete con cautela (Müller et al. 2023).",
-};
-
-interface HoverPoint {
+interface HoverState {
   cx: number;
   cy: number;
-  point: AcousticIndicesPoint;
+  point: BoxPlotPoint;
+  groupLabel: string;
 }
 
-export function AcousticIndicesBoxPlot({
+/**
+ * Unified box plot. Used by acoustic indices, temperature distributions, and
+ * any future cross-habitat comparison chart. The component is intentionally
+ * dumb about domain semantics — callers shape their data into
+ * {@link BoxPlotGroup} / {@link BoxPlotPoint} and pick labels/colors.
+ */
+export function BoxPlot({
   groups,
-  indexKey,
   title,
   description,
   expectedDirection,
+  expectedDirectionLabel,
   unitLabel,
-}: AcousticIndicesBoxPlotProps) {
-  const [hover, setHover] = useState<HoverPoint | null>(null);
+  valueLabel,
+  formatValue = defaultFormat,
+  formatTickLabel,
+  lowCoverageThreshold = 0,
+  emptyMessage = "No hay datos.",
+}: BoxPlotProps) {
+  const [hover, setHover] = useState<HoverState | null>(null);
+  const tickFormatter = formatTickLabel ?? formatValue;
 
   const { yMin, yMax, ticks, nonEmptyGroups } = useMemo(() => {
     const nonEmpty = groups.filter((g) => g.points.length > 0);
@@ -102,10 +145,13 @@ export function AcousticIndicesBoxPlot({
     let hi = -Infinity;
     for (const g of nonEmpty) {
       for (const p of g.points) {
-        const v = p[indexKey];
-        if (v < lo) lo = v;
-        if (v > hi) hi = v;
+        if (!Number.isFinite(p.value)) continue;
+        if (p.value < lo) lo = p.value;
+        if (p.value > hi) hi = p.value;
       }
+    }
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
+      return { yMin: 0, yMax: 1, ticks: [0, 1], nonEmptyGroups: nonEmpty };
     }
     const pad = (hi - lo) * 0.08 || 1;
     const t = niceTicks(lo - pad, hi + pad, TICK_COUNT);
@@ -115,7 +161,7 @@ export function AcousticIndicesBoxPlot({
       ticks: t,
       nonEmptyGroups: nonEmpty,
     };
-  }, [groups, indexKey]);
+  }, [groups]);
 
   const yScale = (v: number): number => {
     if (yMax === yMin) return PAD_TOP + PLOT_H / 2;
@@ -124,31 +170,34 @@ export function AcousticIndicesBoxPlot({
 
   const n = nonEmptyGroups.length;
   const bandWidth = n > 0 ? PLOT_W / n : PLOT_W;
-  const boxWidth = Math.min(64, bandWidth * 0.5);
+  const boxWidth = Math.min(MAX_BOX_WIDTH, bandWidth * 0.5);
   const bandCenter = (i: number): number => PAD_LEFT + bandWidth * (i + 0.5);
 
   return (
     <div className="relative rounded-md border bg-card p-3">
       <div className="mb-1.5">
         <h3 className="text-sm font-semibold">{title}</h3>
-        <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
-        <p className="mt-0.5 text-xs text-muted-foreground">
-          <span aria-hidden className="mr-1">
-            {DIRECTION_ARROW[expectedDirection]}
-          </span>
-          {DIRECTION_LABEL[expectedDirection]}
-        </p>
+        {description && (
+          <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
+        )}
+        {expectedDirection && expectedDirectionLabel && (
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            <span aria-hidden className="mr-1">
+              {DIRECTION_ARROW[expectedDirection]}
+            </span>
+            {expectedDirectionLabel}
+          </p>
+        )}
       </div>
+
       {n === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          No hay datos para esta combinación.
-        </p>
+        <p className="text-sm text-muted-foreground">{emptyMessage}</p>
       ) : (
         <svg
           viewBox={`0 0 ${VB_WIDTH} ${VB_HEIGHT}`}
           width="100%"
           role="img"
-          aria-label={`Distribución de ${title.toLowerCase()} por tipo de hábitat`}
+          aria-label={`Distribución de ${valueLabel.toLowerCase()} en ${title.toLowerCase()}`}
           className="overflow-visible"
         >
           {ticks.map((t) => {
@@ -173,7 +222,7 @@ export function AcousticIndicesBoxPlot({
                   fill="currentColor"
                   className="text-muted-foreground"
                 >
-                  {formatTick(t)}
+                  {tickFormatter(t)}
                 </text>
               </g>
             );
@@ -193,19 +242,18 @@ export function AcousticIndicesBoxPlot({
           )}
 
           {nonEmptyGroups.map((g, i) => {
-            const values = g.points.map((p) => p[indexKey]);
+            const values = g.points.map((p) => p.value).filter(Number.isFinite);
             const s = boxPlotStats(values);
             if (!s) return null;
             const cx = bandCenter(i);
             const fill = g.color ?? NEUTRAL_COLOR;
             const isSingle = s.n === 1;
-            // n < 4 → render the whole group faded with the same tooltip rule
-            // documented in the plan (acceptance criteria).
-            const isLowCoverage = s.n < LOW_COVERAGE_THRESHOLD;
+            const isLowCoverage =
+              lowCoverageThreshold > 0 && s.n < lowCoverageThreshold;
             const groupOpacity = isLowCoverage ? 0.4 : 1;
 
             return (
-              <g key={`${g.habitatKey}-${g.dielPeriod}`} opacity={groupOpacity}>
+              <g key={g.key} opacity={groupOpacity}>
                 {!isSingle && (
                   <>
                     <line
@@ -254,13 +302,14 @@ export function AcousticIndicesBoxPlot({
                 )}
 
                 {g.points.map((p) => {
-                  const j = jitterFromId(p.deploymentId);
+                  if (!Number.isFinite(p.value)) return null;
+                  const j = jitterFromId(p.id);
                   const px = cx + j * boxWidth * JITTER_SPREAD;
-                  const py = yScale(p[indexKey]);
-                  const isHovered = hover?.point.deploymentId === p.deploymentId;
+                  const py = yScale(p.value);
+                  const isHovered = hover?.point.id === p.id;
                   return (
                     <circle
-                      key={p.deploymentId}
+                      key={p.id}
                       cx={px}
                       cy={py}
                       r={isHovered ? POINT_RADIUS_HOVER : POINT_RADIUS}
@@ -269,14 +318,18 @@ export function AcousticIndicesBoxPlot({
                       stroke="#fff"
                       strokeWidth={1}
                       style={{ cursor: "pointer" }}
-                      onMouseEnter={() => setHover({ cx: px, cy: py, point: p })}
+                      onMouseEnter={() =>
+                        setHover({
+                          cx: px,
+                          cy: py,
+                          point: p,
+                          groupLabel: g.label,
+                        })
+                      }
                       onMouseLeave={() => setHover(null)}
                     >
                       <title>
-                        {p.deploymentName}
-                        {p.siteName ? ` · ${p.siteName}` : ""}
-                        {` · ${title}: ${p[indexKey].toFixed(3)}`}
-                        {` · n=${p.nFiles} archivos`}
+                        {`${p.primaryLabel ?? g.label}${p.secondaryLabel ? ` · ${p.secondaryLabel}` : ""} · ${valueLabel}: ${formatValue(p.value)}${p.footnote ? ` · ${p.footnote}` : ""}`}
                       </title>
                     </circle>
                   );
@@ -290,7 +343,7 @@ export function AcousticIndicesBoxPlot({
                   fill="currentColor"
                   transform={`rotate(-30 ${cx} ${VB_HEIGHT - PAD_BOTTOM + 14})`}
                 >
-                  {g.habitatLabel}
+                  {g.label}
                 </text>
                 <text
                   x={cx}
@@ -320,25 +373,48 @@ export function AcousticIndicesBoxPlot({
       )}
 
       {hover && (
-        <div
-          className="pointer-events-none absolute z-10 rounded-md border bg-popover px-2 py-1 text-xs shadow-md"
-          style={{
-            left: `${(hover.cx / VB_WIDTH) * 100}%`,
-            top: `${(hover.cy / VB_HEIGHT) * 100}%`,
-            transform: "translate(-50%, calc(-100% - 8px))",
-          }}
-        >
-          <div className="font-semibold">{hover.point.deploymentName}</div>
-          {hover.point.siteName && (
-            <div className="text-muted-foreground">{hover.point.siteName}</div>
-          )}
-          <div className="font-mono">
-            {hover.point[indexKey].toFixed(3)}
-          </div>
-          <div className="text-muted-foreground">
-            n={hover.point.nFiles} archivos
-          </div>
+        <BoxPlotTooltip
+          hover={hover}
+          valueLabel={valueLabel}
+          formatValue={formatValue}
+        />
+      )}
+    </div>
+  );
+}
+
+function BoxPlotTooltip({
+  hover,
+  valueLabel,
+  formatValue,
+}: {
+  hover: HoverState;
+  valueLabel: string;
+  formatValue: (value: number) => string;
+}): ReactNode {
+  return (
+    <div
+      className="pointer-events-none absolute z-10 rounded-md border bg-popover px-2 py-1 text-xs shadow-md"
+      style={{
+        left: `${(hover.cx / VB_WIDTH) * 100}%`,
+        top: `${(hover.cy / VB_HEIGHT) * 100}%`,
+        transform: "translate(-50%, calc(-100% - 8px))",
+      }}
+    >
+      <div className="font-semibold">
+        {hover.point.primaryLabel ?? hover.groupLabel}
+      </div>
+      {hover.point.secondaryLabel && (
+        <div className="text-muted-foreground">
+          {hover.point.secondaryLabel}
         </div>
+      )}
+      <div>
+        {valueLabel}:{" "}
+        <span className="font-mono">{formatValue(hover.point.value)}</span>
+      </div>
+      {hover.point.footnote && (
+        <div className="text-muted-foreground">{hover.point.footnote}</div>
       )}
     </div>
   );

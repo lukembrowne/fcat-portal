@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import type { ResultadosData, SiteWithReadiness } from "./types";
+import type { ResultadosData } from "./types";
 import { ResultadosMap } from "./resultados-map";
 import { SiteTable } from "./site-table";
 import { getHabitatName } from "../overview/types";
@@ -15,11 +15,11 @@ import {
 } from "@/components/ui/select";
 import { Search } from "lucide-react";
 
-interface ResultadosShellProps {
+interface SitioViewProps {
   data: ResultadosData;
 }
 
-export function ResultadosShell({ data }: ResultadosShellProps) {
+export function SitioView({ data }: SitioViewProps) {
   const [search, setSearch] = useState("");
   const [habitatFilter, setHabitatFilter] = useState("all");
 
@@ -30,7 +30,7 @@ export function ResultadosShell({ data }: ResultadosShellProps) {
       sites = sites.filter(
         (s) =>
           s.siteId.toLowerCase().includes(q) ||
-          s.siteName.toLowerCase().includes(q)
+          s.siteName.toLowerCase().includes(q),
       );
     }
     if (habitatFilter !== "all") {
@@ -39,7 +39,6 @@ export function ResultadosShell({ data }: ResultadosShellProps) {
     return sites;
   }, [data.sites, search, habitatFilter]);
 
-  // Unique habitat types for filter dropdown
   const habitatTypes = useMemo(() => {
     const types = new Set(data.sites.map((s) => s.habitatType).filter(Boolean));
     return Array.from(types).sort();
@@ -47,13 +46,6 @@ export function ResultadosShell({ data }: ResultadosShellProps) {
 
   return (
     <div className="space-y-6 min-w-0">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Resultados por Sitio</h1>
-        <p className="text-muted-foreground">
-          Resumen integrado de datos de monitoreo por sitio
-        </p>
-      </div>
-
       <ResultadosMap sites={filteredSites} />
 
       <div className="flex flex-col sm:flex-row gap-3">

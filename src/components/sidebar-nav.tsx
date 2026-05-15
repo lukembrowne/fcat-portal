@@ -174,7 +174,6 @@ export function SidebarNav({ user }: SidebarNavProps) {
       children: [
         { label: "Instalaciones", href: "/audio" },
         { label: "Explorar por especie", href: "/audio/species" },
-        { label: "Índices acústicos", href: "/audio/indices" },
       ],
     });
   }

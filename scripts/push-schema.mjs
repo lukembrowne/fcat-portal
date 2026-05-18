@@ -200,7 +200,7 @@ const statements = [
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     occurred_at INTEGER NOT NULL DEFAULT (unixepoch()),
     event_type TEXT NOT NULL,
-    source TEXT NOT NULL CHECK(source IN ('admin','audio','biochoco-tools','biochoco-resultados','camera-trap','climate','cron','finance','odk')),
+    source TEXT NOT NULL CHECK(source IN ('admin','audio','biochoco-overview','biochoco-tools','biochoco-resultados','camera-trap','climate','cron','finance','odk')),
     severity TEXT NOT NULL DEFAULT 'info' CHECK(severity IN ('info','success','warn','error')),
     actor_email TEXT,
     project_id TEXT,
@@ -976,6 +976,42 @@ try {
 } catch (err) {
   try { db.exec(`ROLLBACK`); } catch { /* no active tx */ }
   console.error("Failed to migrate biochoco_processing_jobs.deployment_id:", err.message);
+}
+
+// --- Table recreation: add biochoco-overview to system_events.source CHECK (2026-05-18) ---
+try {
+  const tableInfo = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='system_events'")
+    .get();
+  if (tableInfo && !tableInfo.sql.includes("biochoco-overview")) {
+    console.log("Migrating system_events table: adding biochoco-overview to source CHECK...");
+    db.exec(`BEGIN TRANSACTION`);
+    db.exec(`CREATE TABLE system_events_new (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      occurred_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      event_type TEXT NOT NULL,
+      source TEXT NOT NULL CHECK(source IN ('admin','audio','biochoco-overview','biochoco-tools','biochoco-resultados','camera-trap','climate','cron','finance','odk')),
+      severity TEXT NOT NULL DEFAULT 'info' CHECK(severity IN ('info','success','warn','error')),
+      actor_email TEXT,
+      project_id TEXT,
+      target_type TEXT,
+      target_id TEXT,
+      summary TEXT NOT NULL,
+      duration_ms INTEGER,
+      details TEXT
+    )`);
+    db.exec(`INSERT INTO system_events_new SELECT id, occurred_at, event_type, source, severity, actor_email, project_id, target_type, target_id, summary, duration_ms, details FROM system_events`);
+    db.exec(`DROP TABLE system_events`);
+    db.exec(`ALTER TABLE system_events_new RENAME TO system_events`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_system_events_occurred_at ON system_events(occurred_at)`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_system_events_source ON system_events(source)`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_system_events_event_type ON system_events(event_type)`);
+    db.exec(`COMMIT`);
+    console.log("  system_events.source CHECK now includes biochoco-overview");
+  }
+} catch (err) {
+  try { db.exec(`ROLLBACK`); } catch { /* no active tx */ }
+  console.error("Failed to migrate system_events source constraint:", err.message);
 }
 
 // Re-enable foreign keys after table recreations

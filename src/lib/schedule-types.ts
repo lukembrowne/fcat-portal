@@ -47,7 +47,23 @@ export interface ScheduleChange {
   newValue: string;
 }
 
+/**
+ * Schedule columns that callers are allowed to write through
+ * `updateScheduleRows`. Narrow union so typos like `plannedDeployDay` fail
+ * at compile time instead of silently no-op'ing in the sheet client.
+ */
+export type WritableScheduleField =
+  | "plannedDeployDate"
+  | "plannedRetrieveDate"
+  | "actualDeployDate"
+  | "actualRetrieveDate"
+  | "deploySlotId"
+  | "retrieveSlotId"
+  | "season"
+  | "status"
+  | "driveFolderLink";
+
 export interface ScheduleRowUpdate {
   deploymentId: string;
-  fields: Partial<Record<string, string | number | null>>;
+  fields: Partial<Record<WritableScheduleField, string | number | null>>;
 }

@@ -169,6 +169,19 @@ describe("action permission guards", () => {
     it("fetchHabitatData requires biochoco viewer", () =>
       expectPermission(biochocoHabitat.fetchHabitatData, "biochoco", "viewer"));
 
+    describe("overview inline editor (editor)", () => {
+      const editorActions: [string, Function, unknown[]][] = [
+        ["previewInlineSwap", biochocoOverview.previewInlineSwap, ["A", "B"]],
+        ["commitInlineSwap", biochocoOverview.commitInlineSwap, ["A", "B", "abc"]],
+        ["commitDateEdit", biochocoOverview.commitDateEdit, ["A", "2026-04-15"]],
+      ];
+
+      for (const [name, fn, args] of editorActions) {
+        it(`${name} requires biochoco editor`, () =>
+          expectPermission(fn, "biochoco", "editor", args));
+      }
+    });
+
     describe("tools (admin)", () => {
       const adminActions: [string, Function, unknown[]][] = [
         ["fetchToolsData", biochocoTools.fetchToolsData, []],

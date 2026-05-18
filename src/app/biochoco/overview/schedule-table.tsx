@@ -33,12 +33,14 @@ import {
   ExternalLink,
   MapPin,
   Download,
+  Pencil,
 } from "lucide-react";
 import type { ScheduleRow } from "@/lib/schedule-types";
 import type { SiteInfo } from "./types";
 import { getHabitatName, getDeploymentStatus, SPANISH_MONTHS } from "./types";
 import { toUtm17N } from "@/lib/utm";
 import { FieldNotesPopover } from "@/app/biochoco/field-notes/field-notes-popover";
+import { InlineScheduleEditorDialog } from "./inline-schedule-editor-dialog";
 
 interface ScheduleTableProps {
   deploymentsThisMonth: ScheduleRow[];
@@ -49,9 +51,47 @@ interface ScheduleTableProps {
   retrievedSet: Set<string>;
   selectedMonth: { year: number; month: number };
   canEditNotes?: boolean;
+  canEditSchedule?: boolean;
   onFocusSite?: (lat: number, lng: number) => void;
   onPrevMonth?: () => void;
   onNextMonth?: () => void;
+}
+
+function EditScheduleButton({
+  deploymentId,
+  allSchedule,
+}: {
+  deploymentId: string;
+  allSchedule: ScheduleRow[];
+}) {
+  const [open, setOpen] = useState(false);
+  const self = useMemo(
+    () => allSchedule.find((r) => r.deploymentId === deploymentId),
+    [allSchedule, deploymentId],
+  );
+  if (!self) return null;
+  return (
+    <>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-7 px-2"
+        onClick={() => setOpen(true)}
+        title="Editar fechas"
+      >
+        <Pencil className="h-3.5 w-3.5" />
+        <span className="sr-only">Editar</span>
+      </Button>
+      {open && (
+        <InlineScheduleEditorDialog
+          self={self}
+          candidates={allSchedule}
+          open={open}
+          onOpenChange={setOpen}
+        />
+      )}
+    </>
+  );
 }
 
 interface CombinedRow {
@@ -189,6 +229,7 @@ export function ScheduleTable({
   retrievedSet,
   selectedMonth,
   canEditNotes = false,
+  canEditSchedule = false,
   onFocusSite,
   onPrevMonth,
   onNextMonth,
@@ -383,8 +424,24 @@ export function ScheduleTable({
         enableSorting: false,
         enableGlobalFilter: false,
       },
+      {
+        id: "edit",
+        header: "Editar",
+        cell: ({ row }) => {
+          if (!canEditSchedule) return null;
+          if (row.original.status !== "scheduled") return null;
+          return (
+            <EditScheduleButton
+              deploymentId={row.original.deploymentId}
+              allSchedule={allSchedule}
+            />
+          );
+        },
+        enableSorting: false,
+        enableGlobalFilter: false,
+      },
     ],
-    [canEditNotes, onFocusSite],
+    [canEditNotes, canEditSchedule, allSchedule, onFocusSite],
   );
 
   const table = useReactTable({

@@ -5,6 +5,7 @@ import {
   shiftSchedule,
   shiftScheduleBySlots,
   swapDeploymentDates,
+  editDeploymentDate,
   addSiteToSchedule,
   validateSchedule,
   validateSlotSchedule,
@@ -206,6 +207,143 @@ describe("swapDeploymentDates", () => {
     const b = result.rows.find((r) => r.deploymentId === "B_V1")!;
     expect(a.season).toBe("dry");      // now in August
     expect(b.season).toBe("wet_peak"); // now in January
+  });
+
+  it("throws when swapping a deployment with itself", () => {
+    const rows = [makeRow({ deploymentId: "A_V1" })];
+    expect(() => swapDeploymentDates(rows, "A_V1", "A_V1")).toThrow(
+      "Cannot swap a deployment with itself",
+    );
+  });
+});
+
+// ─── editDeploymentDate ─────────────────────────────────────
+
+describe("editDeploymentDate", () => {
+  it("shifts both dates by the same interval (30 days)", () => {
+    const rows = [
+      makeRow({
+        deploymentId: "A_V1",
+        plannedDeployDate: "2026-03-15",
+        plannedRetrieveDate: "2026-04-14",
+      }),
+    ];
+    const result = editDeploymentDate(rows, "A_V1", "2026-04-15");
+    const a = result.rows.find((r) => r.deploymentId === "A_V1")!;
+    expect(a.plannedDeployDate).toBe("2026-04-15");
+    expect(a.plannedRetrieveDate).toBe("2026-05-15"); // +30 days from new deploy
+  });
+
+  it("preserves the deploy↔retrieve interval exactly", () => {
+    const rows = [
+      makeRow({
+        deploymentId: "A_V1",
+        plannedDeployDate: "2026-03-12",
+        plannedRetrieveDate: "2026-04-11",
+      }),
+    ];
+    const result = editDeploymentDate(rows, "A_V1", "2026-06-17");
+    const a = result.rows.find((r) => r.deploymentId === "A_V1")!;
+    const newDep = new Date(a.plannedDeployDate!);
+    const newRet = new Date(a.plannedRetrieveDate!);
+    const days = Math.round((newRet.getTime() - newDep.getTime()) / 86_400_000);
+    expect(days).toBe(30);
+  });
+
+  it("recalculates season when crossing a season boundary", () => {
+    const rows = [
+      makeRow({
+        deploymentId: "A_V1",
+        plannedDeployDate: "2026-03-15",
+        plannedRetrieveDate: "2026-04-15",
+        season: "wet_peak",
+      }),
+    ];
+    const result = editDeploymentDate(rows, "A_V1", "2026-08-15"); // dry
+    const a = result.rows.find((r) => r.deploymentId === "A_V1")!;
+    expect(a.season).toBe("dry");
+    expect(result.changes.some((c) => c.field === "season")).toBe(true);
+  });
+
+  it("clears deploySlotId and retrieveSlotId", () => {
+    const rows = [
+      makeRow({
+        deploymentId: "A_V1",
+        plannedDeployDate: "2026-03-15",
+        plannedRetrieveDate: "2026-04-15",
+        deploySlotId: 7,
+        retrieveSlotId: 12,
+      }),
+    ];
+    const result = editDeploymentDate(rows, "A_V1", "2026-04-12");
+    const a = result.rows.find((r) => r.deploymentId === "A_V1")!;
+    expect(a.deploySlotId).toBeNull();
+    expect(a.retrieveSlotId).toBeNull();
+  });
+
+  it("leaves plannedRetrieveDate null if source row's retrieve is null", () => {
+    const rows = [
+      makeRow({
+        deploymentId: "A_V1",
+        plannedDeployDate: "2026-03-15",
+        plannedRetrieveDate: null,
+      }),
+    ];
+    const result = editDeploymentDate(rows, "A_V1", "2026-04-12");
+    const a = result.rows.find((r) => r.deploymentId === "A_V1")!;
+    expect(a.plannedRetrieveDate).toBeNull();
+  });
+
+  it("throws on malformed date strings", () => {
+    const rows = [makeRow({ deploymentId: "A_V1" })];
+    expect(() => editDeploymentDate(rows, "A_V1", "06/12/2026")).toThrow("Invalid date format");
+    expect(() => editDeploymentDate(rows, "A_V1", "")).toThrow("Invalid date format");
+    expect(() => editDeploymentDate(rows, "A_V1", "2026-13-1")).toThrow("Invalid date format");
+  });
+
+  it("throws on unknown deployment ID", () => {
+    const rows = [makeRow({ deploymentId: "A_V1" })];
+    expect(() => editDeploymentDate(rows, "MISSING", "2026-05-15")).toThrow("not found");
+  });
+
+  it("throws on non-scheduled status", () => {
+    const rows = [makeRow({ deploymentId: "A_V1", status: "deployed" })];
+    expect(() => editDeploymentDate(rows, "A_V1", "2026-05-15")).toThrow("not scheduled");
+  });
+
+  it("does not mutate the input rows array", () => {
+    const original = [
+      makeRow({
+        deploymentId: "A_V1",
+        plannedDeployDate: "2026-03-15",
+        plannedRetrieveDate: "2026-04-15",
+        deploySlotId: 3,
+      }),
+    ];
+    const snapshot = JSON.parse(JSON.stringify(original));
+    editDeploymentDate(original, "A_V1", "2026-05-15");
+    expect(original).toEqual(snapshot);
+  });
+
+  it("emits change records only for fields that actually changed", () => {
+    const rows = [
+      makeRow({
+        deploymentId: "A_V1",
+        plannedDeployDate: "2026-03-15",
+        plannedRetrieveDate: "2026-04-15",
+        season: "wet_peak",
+        deploySlotId: null,
+        retrieveSlotId: null,
+      }),
+    ];
+    // Edit to a date still in wet_peak so season doesn't change
+    const result = editDeploymentDate(rows, "A_V1", "2026-03-20");
+    const fields = result.changes.map((c) => c.field);
+    expect(fields).toContain("plannedDeployDate");
+    expect(fields).toContain("plannedRetrieveDate");
+    expect(fields).not.toContain("season");
+    expect(fields).not.toContain("deploySlotId");
+    expect(fields).not.toContain("retrieveSlotId");
   });
 });
 

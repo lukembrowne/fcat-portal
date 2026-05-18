@@ -498,6 +498,7 @@ export const activityLog = sqliteTable("activity_log", {
 export const EVENT_SOURCES = [
   "admin",
   "audio",
+  "biochoco-overview",
   "biochoco-tools",
   "biochoco-resultados",
   "camera-trap",

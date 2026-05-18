@@ -1,11 +1,16 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { requirePermission } from "@/lib/auth";
 import { fetchEntities, fetchSubmissions } from "@/lib/odk-client";
 import { BIOCHOCO_PROJECT_ID, BIOCHOCO_DATASET_SITES, BIOCHOCO_FORM_DEPLOY, BIOCHOCO_FORM_RETRIEVE } from "@/lib/odk-constants";
-import { loadSchedule } from "@/lib/sheets-client";
+import { loadSchedule, updateScheduleRows } from "@/lib/sheets-client";
+import { editDeploymentDate, swapDeploymentDates, validateSchedule } from "@/lib/schedule-utils";
+import { scheduleHash } from "@/lib/schedule-hash";
+import { recordEvent } from "@/lib/system-events";
 import type { OdkSiteEntity } from "@/lib/odk-types";
 import type { ActionResult } from "@/lib/types";
+import type { ScheduleChange } from "@/lib/schedule-types";
 import type { BiochocoOverviewData, SiteInfo } from "./types";
 import { db } from "@/db";
 import { deployments } from "@/db/schema";
@@ -101,4 +106,174 @@ export async function fetchBiochocoData(): Promise<ActionResult<BiochocoOverview
       error: err instanceof Error ? err.message : "Unknown error",
     };
   }
+}
+
+// ─── Inline Schedule Editor ──────────────────────────────────
+
+export interface InlineSwapPreview {
+  changes: ScheduleChange[];
+  validationErrors: string[];
+  hash: string;
+}
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Wrap an action body and translate the small set of English errors thrown
+ * by schedule-utils into Spanish. Keeps the action sites concise and the
+ * UI strings consistent.
+ */
+async function wrapAction<T>(fn: () => Promise<T>): Promise<ActionResult<T>> {
+  try {
+    const data = await fn();
+    return { success: true, data };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Error desconocido";
+    const localized =
+      msg.includes("modificado por otro usuario") ? msg
+      : msg.includes("Cannot swap a deployment with itself") ? "No se puede intercambiar una instalación consigo misma."
+      : msg.includes("Invalid date format") ? "Fecha inválida."
+      : msg.includes("not found") ? "Instalación no encontrada."
+      : msg.includes("not scheduled") ? "Esta instalación no está programada."
+      : msg.includes("no current planned deploy date") ? "La instalación no tiene fecha planificada."
+      : msg;
+    return { success: false, error: localized };
+  }
+}
+
+export async function previewInlineSwap(
+  id1: string,
+  id2: string,
+): Promise<ActionResult<InlineSwapPreview>> {
+  return wrapAction<InlineSwapPreview>(async () => {
+    await requirePermission("biochoco", "editor");
+    const schedule = await loadSchedule();
+    const { rows: updatedRows, changes } = swapDeploymentDates(schedule, id1, id2);
+    return {
+      changes,
+      validationErrors: validateSchedule(updatedRows),
+      hash: scheduleHash(schedule),
+    };
+  });
+}
+
+export async function commitInlineSwap(
+  id1: string,
+  id2: string,
+  expectedHash: string,
+): Promise<ActionResult<void>> {
+  return wrapAction<void>(async () => {
+    const user = await requirePermission("biochoco", "editor");
+    const schedule = await loadSchedule();
+    if (scheduleHash(schedule) !== expectedHash) {
+      throw new Error(
+        "El cronograma fue modificado por otro usuario. Reintenta la vista previa.",
+      );
+    }
+
+    const before1 = schedule.find((r) => r.deploymentId === id1);
+    const before2 = schedule.find((r) => r.deploymentId === id2);
+    if (!before1 || !before2) throw new Error("Deployment not found");
+
+    const { rows: updatedRows } = swapDeploymentDates(schedule, id1, id2);
+    const after1 = updatedRows.find((r) => r.deploymentId === id1)!;
+    const after2 = updatedRows.find((r) => r.deploymentId === id2)!;
+
+    await updateScheduleRows([
+      {
+        deploymentId: id1,
+        fields: {
+          plannedDeployDate: after1.plannedDeployDate,
+          plannedRetrieveDate: after1.plannedRetrieveDate,
+          deploySlotId: after1.deploySlotId,
+          retrieveSlotId: after1.retrieveSlotId,
+          season: after1.season,
+        },
+      },
+      {
+        deploymentId: id2,
+        fields: {
+          plannedDeployDate: after2.plannedDeployDate,
+          plannedRetrieveDate: after2.plannedRetrieveDate,
+          deploySlotId: after2.deploySlotId,
+          retrieveSlotId: after2.retrieveSlotId,
+          season: after2.season,
+        },
+      },
+    ]);
+
+    await recordEvent({
+      source: "biochoco-overview",
+      eventType: "schedule_inline_swap",
+      summary: `Fechas intercambiadas en cronograma: ${id1} ↔ ${id2}`,
+      actorEmail: user.email,
+      projectId: "biochoco",
+      targetType: "schedule",
+      targetId: id1,
+      details: {
+        id1,
+        id2,
+        beforeDate1: before1.plannedDeployDate,
+        afterDate1: after1.plannedDeployDate,
+        beforeDate2: before2.plannedDeployDate,
+        afterDate2: after2.plannedDeployDate,
+        habitatType1: after1.habitatType,
+        habitatType2: after2.habitatType,
+      },
+    });
+
+    revalidatePath("/biochoco");
+  });
+}
+
+export async function commitDateEdit(
+  deploymentId: string,
+  newDeployDate: string,
+): Promise<ActionResult<{ warnings: string[] }>> {
+  return wrapAction<{ warnings: string[] }>(async () => {
+    const user = await requirePermission("biochoco", "editor");
+    if (!ISO_DATE.test(newDeployDate)) throw new Error("Invalid date format");
+
+    const schedule = await loadSchedule();
+    const before = schedule.find((r) => r.deploymentId === deploymentId);
+    if (!before) throw new Error("Deployment not found");
+
+    const { rows: updatedRows } = editDeploymentDate(schedule, deploymentId, newDeployDate);
+    const after = updatedRows.find((r) => r.deploymentId === deploymentId)!;
+    const warnings = validateSchedule(updatedRows);
+
+    await updateScheduleRows([
+      {
+        deploymentId,
+        fields: {
+          plannedDeployDate: after.plannedDeployDate,
+          plannedRetrieveDate: after.plannedRetrieveDate,
+          deploySlotId: null,
+          retrieveSlotId: null,
+          season: after.season,
+        },
+      },
+    ]);
+
+    await recordEvent({
+      source: "biochoco-overview",
+      eventType: "schedule_date_edit",
+      summary: `Fecha-plan editada para ${deploymentId}: ${before.plannedDeployDate} → ${after.plannedDeployDate}`,
+      actorEmail: user.email,
+      projectId: "biochoco",
+      targetType: "schedule",
+      targetId: deploymentId,
+      details: {
+        deploymentId,
+        oldDeployDate: before.plannedDeployDate,
+        newDeployDate: after.plannedDeployDate,
+        oldRetrieveDate: before.plannedRetrieveDate,
+        newRetrieveDate: after.plannedRetrieveDate,
+        slotsCleared: before.deploySlotId !== null || before.retrieveSlotId !== null,
+      },
+    });
+
+    revalidatePath("/biochoco");
+    return { warnings };
+  });
 }

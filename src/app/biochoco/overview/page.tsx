@@ -27,5 +27,14 @@ export default async function BiochocoOverviewPage() {
       (p) => p.projectId === "biochoco" && (p.role === "editor" || p.role === "admin")
     );
 
-  return <DashboardShell data={result.data} canEditNotes={canEditNotes} />;
+  // Same role gate as notes — editor or admin on biochoco can edit the cronograma.
+  const canEditSchedule = canEditNotes;
+
+  return (
+    <DashboardShell
+      data={result.data}
+      canEditNotes={canEditNotes}
+      canEditSchedule={canEditSchedule}
+    />
+  );
 }

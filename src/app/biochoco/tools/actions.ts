@@ -16,16 +16,8 @@ import {
   validateSchedule,
   validateSlotSchedule,
 } from "@/lib/schedule-utils";
-import { createHash } from "crypto";
-import { db } from "@/db";
+import { scheduleHash } from "@/lib/schedule-hash";
 import { recordEvent } from "@/lib/system-events";
-
-// ─── Helpers ─────────────────────────────────────────────────
-
-function scheduleHash(rows: ScheduleRow[]): string {
-  const content = JSON.stringify(rows.map((r) => [r.deploymentId, r.status, r.plannedDeployDate, r.plannedRetrieveDate]));
-  return createHash("sha256").update(content).digest("hex").slice(0, 16);
-}
 
 // ─── Types ───────────────────────────────────────────────────
 

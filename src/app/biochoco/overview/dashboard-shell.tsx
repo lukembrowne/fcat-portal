@@ -13,7 +13,15 @@ import { HabitatChart } from "./habitat-chart";
 import { WorkloadTable } from "./workload-table";
 import { DurationOutliersTable } from "./duration-outliers-table";
 
-export function DashboardShell({ data, canEditNotes = false }: { data: BiochocoOverviewData; canEditNotes?: boolean }) {
+export function DashboardShell({
+  data,
+  canEditNotes = false,
+  canEditSchedule = false,
+}: {
+  data: BiochocoOverviewData;
+  canEditNotes?: boolean;
+  canEditSchedule?: boolean;
+}) {
   const now = new Date();
   const [selectedMonth, setSelectedMonth] = useState({
     year: now.getFullYear(),
@@ -161,6 +169,7 @@ export function DashboardShell({ data, canEditNotes = false }: { data: BiochocoO
         retrievedSet={retrievedSet}
         selectedMonth={selectedMonth}
         canEditNotes={canEditNotes}
+        canEditSchedule={canEditSchedule}
         onFocusSite={handleFocusSite}
         onPrevMonth={prevMonth}
         onNextMonth={nextMonth}

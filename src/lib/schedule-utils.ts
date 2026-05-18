@@ -288,6 +288,8 @@ export function swapDeploymentDates(
   id1: string,
   id2: string,
 ): { rows: ScheduleRow[]; changes: ScheduleChange[] } {
+  if (id1 === id2) throw new Error("Cannot swap a deployment with itself");
+
   const changes: ScheduleChange[] = [];
 
   const idx1 = rows.findIndex((r) => r.deploymentId === id1);
@@ -340,6 +342,65 @@ export function swapDeploymentDates(
   result[idx1] = r1;
   result[idx2] = r2;
 
+  return { rows: result, changes };
+}
+
+// ─── Edit Single Deployment's Planned Deploy Date ────────────
+
+/**
+ * Edit one scheduled deployment's planned deploy date. The planned retrieve
+ * date is shifted by the same interval to preserve deployment duration.
+ * Slot IDs are cleared because the slot template no longer matches.
+ * Caller is responsible for ISO-format validation; this guard is a defense.
+ */
+export function editDeploymentDate(
+  rows: ScheduleRow[],
+  deploymentId: string,
+  newDeployDate: string,
+): { rows: ScheduleRow[]; changes: ScheduleChange[] } {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(newDeployDate)) {
+    throw new Error(`Invalid date format: ${newDeployDate}`);
+  }
+  const idx = rows.findIndex((r) => r.deploymentId === deploymentId);
+  if (idx === -1) throw new Error(`Deployment ${deploymentId} not found`);
+
+  const row = rows[idx];
+  if (row.status !== "scheduled") throw new Error(`${deploymentId} is not scheduled`);
+  if (!row.plannedDeployDate) throw new Error(`${deploymentId} has no current planned deploy date`);
+
+  const oldDeploy = parseDate(row.plannedDeployDate);
+  const newDeploy = parseDate(newDeployDate);
+  const intervalMs = row.plannedRetrieveDate
+    ? parseDate(row.plannedRetrieveDate).getTime() - oldDeploy.getTime()
+    : 0;
+  const newRetrieveStr = row.plannedRetrieveDate
+    ? dateStr(new Date(newDeploy.getTime() + intervalMs))
+    : row.plannedRetrieveDate;
+  const newSeason = assignSeason(newDeploy);
+
+  const updated: ScheduleRow = {
+    ...row,
+    plannedDeployDate: newDeployDate,
+    plannedRetrieveDate: newRetrieveStr,
+    deploySlotId: null,
+    retrieveSlotId: null,
+    season: newSeason,
+  };
+
+  const changes: ScheduleChange[] = [];
+  const pushChange = (field: keyof ScheduleRow, oldV: unknown, newV: unknown) => {
+    const a = String(oldV ?? "N/A");
+    const b = String(newV ?? "N/A");
+    if (a !== b) changes.push({ deploymentId, field, oldValue: a, newValue: b });
+  };
+  pushChange("plannedDeployDate", row.plannedDeployDate, updated.plannedDeployDate);
+  pushChange("plannedRetrieveDate", row.plannedRetrieveDate, updated.plannedRetrieveDate);
+  pushChange("deploySlotId", row.deploySlotId, updated.deploySlotId);
+  pushChange("retrieveSlotId", row.retrieveSlotId, updated.retrieveSlotId);
+  pushChange("season", row.season, updated.season);
+
+  const result = [...rows];
+  result[idx] = updated;
   return { rows: result, changes };
 }
 

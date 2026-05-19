@@ -27,7 +27,7 @@ import {
   awaitJobTerminal,
   runDriveSyncWorker,
 } from "@/lib/camera-trap-sync-worker";
-import { runAudioSyncWorker } from "@/lib/audio-sync-worker";
+import { processNextQueueable } from "@/lib/job-queue";
 import { JOB_TYPES } from "@/lib/job-types";
 
 export const dynamic = "force-dynamic";
@@ -481,8 +481,8 @@ async function runNightlyAudioSync(): Promise<NightlyJobTerminal | null> {
         "[nightly] Reusing in-flight audio_sync job",
       );
       if (inflight.status === "pending") {
-        runAudioSyncWorker(jobId).catch((err) =>
-          log.error({ err, jobId }, "[nightly] audio worker rejected"),
+        processNextQueueable().catch((err) =>
+          log.error({ err, jobId }, "[nightly] queue advance failed"),
         );
       }
     } else {
@@ -503,8 +503,8 @@ async function runNightlyAudioSync(): Promise<NightlyJobTerminal | null> {
         .all();
       jobId = job.id;
       log.info({ jobId }, "[nightly] Enqueued audio_sync job");
-      runAudioSyncWorker(jobId).catch((err) =>
-        log.error({ err, jobId }, "[nightly] audio worker rejected"),
+      processNextQueueable().catch((err) =>
+        log.error({ err, jobId }, "[nightly] queue advance failed"),
       );
     }
 

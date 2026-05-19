@@ -192,7 +192,7 @@ describe("enqueueAudioCompressionJob — validation", () => {
     expect(r.error).toContain("WAV pendientes");
   });
 
-  it("blocks if an audio_compression job is already in flight (global cap)", async () => {
+  it("queues behind an in-flight compression on another deployment (no rejection)", async () => {
     db.insert(schema.audioFiles)
       .values({
         deploymentId,
@@ -202,7 +202,9 @@ describe("enqueueAudioCompressionJob — validation", () => {
         compressed: false,
       })
       .run();
-    // Stand up a parallel deployment so the per-deployment lock isn't the blocker.
+    // Stand up a parallel deployment with an in-flight compression. Under the
+    // unified queue this no longer rejects — the second compression is just
+    // enqueued as `pending` and the queue picker will run it later.
     const [otherDep] = db
       .insert(schema.deployments)
       .values({
@@ -227,9 +229,16 @@ describe("enqueueAudioCompressionJob — validation", () => {
       deploymentId,
       actorEmail: testUser.email,
     });
-    expect(r.success).toBe(false);
-    if (r.success) return;
-    expect(r.error).toMatch(/compresión|curso/i);
+    expect(r.success).toBe(true);
+    if (!r.success) return;
+    // The second compression is in the queue as pending — the picker won't
+    // start it while the other deployment's row is still `processing`.
+    const [row] = db
+      .select()
+      .from(schema.processingJobs)
+      .where(eq(schema.processingJobs.id, r.data.jobId))
+      .all();
+    expect(row.status).toBe("pending");
   });
 
   it("blocks if any audio job is in flight on the same deployment", async () => {

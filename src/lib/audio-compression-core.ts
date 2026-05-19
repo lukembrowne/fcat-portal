@@ -24,10 +24,8 @@ import {
 } from "@/db/schema";
 import { and, eq, inArray, sql, count, sum } from "drizzle-orm";
 import { JOB_TYPES } from "@/lib/job-types";
-import {
-  findActiveAudioJob,
-  countActiveAudioWorkWithCompression,
-} from "@/lib/job-locks";
+import { findActiveAudioJob } from "@/lib/job-locks";
+import { processNextQueueable } from "@/lib/job-queue";
 import {
   getFileMetadataWithRevision,
   replaceFileContentAndRename,
@@ -176,19 +174,9 @@ export async function enqueueAudioCompressionJob(
     };
   }
 
-  // Global cap: at most one AUDIO_COMPRESSION job in flight across all deployments.
-  // Prevents the admin from saturating the droplet by queueing every deployment.
-  // Skipped in dry-run (parallel dry-runs are fine — no Drive load).
-  if (!dryRun) {
-    const active = await countActiveAudioWorkWithCompression();
-    if (active >= 1) {
-      return {
-        success: false,
-        error:
-          "Ya hay una compresión de audio en curso. Espera a que termine antes de iniciar otra.",
-      };
-    }
-  }
+  // Cross-deployment serialization (global FLAC cap) is now handled by the
+  // unified job queue. We always insert a `pending` row; the queue picker
+  // decides when to start it.
 
   const [files] = await db
     .select({ cnt: count() })
@@ -225,18 +213,25 @@ export async function enqueueAudioCompressionJob(
     })
     .returning();
 
-  // Fire-and-forget. We do NOT use Next.js `after()` because this core is also
-  // callable from CLI scripts and tests where there is no request context.
-  // `after()` would throw outside a request. The unhandled rejection guard
-  // here is identical in effect to the camera-trap pattern.
-  void processFlacCompressionJob(job.id, deploymentId, actorEmail, dryRun).catch(
-    (err) => {
+  // Dry-runs bypass the queue: they touch no Drive, run quickly, and are
+  // used for preview UI. Real compressions go through the unified queue.
+  if (dryRun) {
+    void processFlacCompressionJob(job.id, deploymentId, actorEmail, dryRun).catch(
+      (err) => {
+        log.error(
+          { err, jobId: job.id, deploymentId },
+          "[flac] unhandled processor error",
+        );
+      },
+    );
+  } else {
+    void processNextQueueable().catch((err) => {
       log.error(
         { err, jobId: job.id, deploymentId },
-        "[flac] unhandled processor error",
+        "[flac] Queue advance failed after enqueue",
       );
-    },
-  );
+    });
+  }
 
   return { success: true, data: { jobId: job.id } };
 }
@@ -275,6 +270,12 @@ export async function cancelAudioCompressionJob(opts: {
   }
 
   log.info({ jobId: opts.jobId, actorEmail: opts.actorEmail }, "[flac] cancelled");
+
+  // Advance the queue so a cancelled pending FLAC job doesn't strand the next one.
+  processNextQueueable().catch((err) =>
+    log.error({ err, jobId: opts.jobId }, "[flac] Queue advance failed after cancel"),
+  );
+
   return { success: true, data: undefined };
 }
 
@@ -799,10 +800,29 @@ export async function processFlacCompressionJob(
   };
 
   try {
-    await db
+    // Tolerant claim: queue picker may have already flipped status=processing
+    // via `tryClaimJob`. If we're a legacy direct-call, claim atomically.
+    const claim = await db
       .update(processingJobs)
       .set({ status: "processing", startedAt: new Date() })
+      .where(
+        and(
+          eq(processingJobs.id, jobId),
+          eq(processingJobs.status, "pending"),
+        ),
+      );
+    const claimChanged = (claim as unknown as { changes: number }).changes ?? 0;
+    const [verifyJob] = await db
+      .select({ status: processingJobs.status })
+      .from(processingJobs)
       .where(eq(processingJobs.id, jobId));
+    if (verifyJob?.status !== "processing") {
+      log.warn(
+        { jobId, status: verifyJob?.status, claimChanged },
+        "[flac] Skipping — job is not in processing state",
+      );
+      return;
+    }
 
     const result = await runAudioCompressionPhase({ jobId, deploymentId, dryRun });
 
@@ -878,6 +898,10 @@ export async function processFlacCompressionJob(
       })
       .where(eq(processingJobs.id, jobId));
     await emitTerminalEvent();
+  } finally {
+    void processNextQueueable().catch((err) =>
+      log.error({ err, jobId }, "[flac] Queue advance failed after terminal"),
+    );
   }
 }
 
@@ -953,17 +977,17 @@ export async function enqueueAudioRevertJob(opts: {
     })
     .returning();
 
-  void processAudioRevertJob(job.id, deploymentId, actorEmail).catch((err) => {
+  void processNextQueueable().catch((err) => {
     log.error(
       { err, jobId: job.id, deploymentId },
-      "[flac-revert] unhandled processor error",
+      "[flac-revert] Queue advance failed after enqueue",
     );
   });
 
   return { success: true, data: { jobId: job.id } };
 }
 
-async function processAudioRevertJob(
+export async function processAudioRevertJob(
   jobId: number,
   deploymentId: number,
   actorEmail: string,
@@ -986,10 +1010,28 @@ async function processAudioRevertJob(
   };
 
   try {
-    await db
+    // Tolerant claim — see processFlacCompressionJob above for rationale.
+    const claim = await db
       .update(processingJobs)
       .set({ status: "processing", startedAt: new Date() })
+      .where(
+        and(
+          eq(processingJobs.id, jobId),
+          eq(processingJobs.status, "pending"),
+        ),
+      );
+    const claimChanged = (claim as unknown as { changes: number }).changes ?? 0;
+    const [verifyJob] = await db
+      .select({ status: processingJobs.status })
+      .from(processingJobs)
       .where(eq(processingJobs.id, jobId));
+    if (verifyJob?.status !== "processing") {
+      log.warn(
+        { jobId, status: verifyJob?.status, claimChanged },
+        "[flac-revert] Skipping — job is not in processing state",
+      );
+      return;
+    }
 
     const files = await db
       .select({
@@ -1129,5 +1171,9 @@ async function processAudioRevertJob(
       })
       .where(eq(processingJobs.id, jobId));
     await emitTerminalEvent();
+  } finally {
+    void processNextQueueable().catch((err) =>
+      log.error({ err, jobId }, "[flac-revert] Queue advance failed after terminal"),
+    );
   }
 }

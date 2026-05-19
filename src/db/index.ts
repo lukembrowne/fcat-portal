@@ -147,14 +147,28 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
   });
 }
 
+// Camera-trap job types: only these have per-image bookkeeping that needs
+// resetting when a job is recovered after a crash.
+const CAMERA_TRAP_JOB_TYPES = new Set(["ml", "ml_incremental", "compression", "revert_compression"]);
+
 /**
  * Reset jobs left in `processing` from a previous server lifecycle so they
  * resume on the next queue tick instead of being marked failed.
  *
- * Per-image writes in ml-runner mean partially-finished jobs already have
- * detections + identifications persisted for completed images. Resetting the
- * job to `pending` and re-running it through `processJobInternal` (which
- * filters to images with `status = pending`) picks up only the leftover work.
+ * Camera-trap: per-image writes in ml-runner mean partially-finished jobs
+ * already have detections + identifications persisted for completed images.
+ * Resetting the job to `pending` and re-running it through `processJobInternal`
+ * (which filters to images with `status = pending`) picks up only the leftover
+ * work.
+ *
+ * Audio jobs (birdnet, audio_analysis, audio_compression, etc.): no per-image
+ * bookkeeping at the `images` table — audio processors track progress on the
+ * job row itself and use idempotent chunk processing. Reset is just a status
+ * flip; the processor resumes naturally.
+ *
+ * After all resets, fire the unified queue picker so the recovered job (or
+ * the next pending one) starts immediately. Imported lazily to avoid pulling
+ * server-only modules into bootstrap.
  */
 export function recoverStuckJobs() {
   const database = getDb();
@@ -192,26 +206,29 @@ export function recoverStuckJobs() {
       // Leave deployment.status alone — the deployment is still mid-processing
       // semantically; only the runner died.
 
-      // Reset images that didn't finish back to `pending` so they re-enter the
-      // ML run. Already-processed images keep their detections/identifications.
-      const jobImages = database
-        .select()
-        .from(schema.images)
-        .where(eq(schema.images.jobId, job.id))
-        .all();
+      // Camera-trap-specific: reset images that didn't finish back to `pending`
+      // so they re-enter the ML run. Already-processed images keep their
+      // detections/identifications. Audio jobs skip this — no per-image state.
+      if (CAMERA_TRAP_JOB_TYPES.has(job.jobType)) {
+        const jobImages = database
+          .select()
+          .from(schema.images)
+          .where(eq(schema.images.jobId, job.id))
+          .all();
 
-      for (const img of jobImages) {
-        if (img.status === "processed") continue;
+        for (const img of jobImages) {
+          if (img.status === "processed") continue;
 
-        const update: { status: "pending"; path?: null } = { status: "pending" };
-        if (img.path && img.path.includes("/tmp/ct-job-")) {
-          update.path = null;
+          const update: { status: "pending"; path?: null } = { status: "pending" };
+          if (img.path && img.path.includes("/tmp/ct-job-")) {
+            update.path = null;
+          }
+          database
+            .update(schema.images)
+            .set(update)
+            .where(eq(schema.images.id, img.id))
+            .run();
         }
-        database
-          .update(schema.images)
-          .set(update)
-          .where(eq(schema.images.id, img.id))
-          .run();
       }
     }
 
@@ -233,6 +250,16 @@ export function recoverStuckJobs() {
       }
     } catch {
       // temp dir cleanup is best-effort
+    }
+
+    // Drain the queue — pick the oldest pending job and start it. Lazy import
+    // so this module stays free of server-only deps for the CLI/test paths.
+    if (stuckJobs.length > 0) {
+      void import("@/lib/job-queue")
+        .then((m) => m.processNextQueueable())
+        .catch((err) => {
+          log.warn({ err }, "[db] Queue drain after recovery failed");
+        });
     }
   } catch {
     // Schema might not exist yet during first push

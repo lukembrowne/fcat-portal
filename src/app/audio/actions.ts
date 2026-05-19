@@ -37,10 +37,8 @@ import {
 } from "@/lib/acoustic-indices-runner";
 import { scanDeploymentAudioInternal } from "@/lib/audio-sync-internals";
 import { JOB_TYPES } from "@/lib/job-types";
-import {
-  findActiveAudioJob,
-  countActiveAudioWorkWithCompression,
-} from "@/lib/job-locks";
+import { findActiveAudioJob } from "@/lib/job-locks";
+import { processNextQueueable } from "@/lib/job-queue";
 import {
   enqueueAudioCompressionJob,
   runAudioCompressionPhase,
@@ -471,27 +469,41 @@ export async function createBirdNETJob(
     })
     .returning();
 
-  // Fire-and-forget
-  processBirdNETJob(job.id).catch((err) => {
-    log.error({ err, jobId: job.id }, "[birdnet] Unhandled error in processBirdNETJob");
+  // Hand off to the unified queue picker.
+  void processNextQueueable().catch((err) => {
+    log.error({ err, jobId: job.id }, "[birdnet] Queue advance failed after enqueue");
   });
 
   return { success: true, data: { jobId: job.id } };
 }
 
-async function processBirdNETJob(jobId: number): Promise<void> {
+export async function processBirdNETJob(jobId: number): Promise<void> {
   try {
-    // Set status to processing
-    await db
+    // Tolerant claim — see processAudioAnalysisJob for rationale.
+    const claim = await db
       .update(processingJobs)
       .set({ status: "processing", startedAt: new Date() })
-      .where(eq(processingJobs.id, jobId));
+      .where(
+        and(
+          eq(processingJobs.id, jobId),
+          eq(processingJobs.status, "pending"),
+        ),
+      );
+    const claimChanged = (claim as unknown as { changes: number }).changes ?? 0;
 
     // Look up job + deployment
     const [job] = await db
       .select()
       .from(processingJobs)
       .where(eq(processingJobs.id, jobId));
+
+    if (job && job.status !== "processing") {
+      log.warn(
+        { jobId, status: job.status, claimChanged },
+        "[birdnet] Skipping — job is not in processing state",
+      );
+      return;
+    }
 
     if (!job) throw new Error(`Job ${jobId} not found`);
     // `processingJobs.deploymentId` became nullable for drive_sync jobs (main
@@ -682,6 +694,10 @@ async function processBirdNETJob(jobId: number): Promise<void> {
     if (failedJob) {
       await recordEvent(buildJobCompletionEvent(failedJob));
     }
+  } finally {
+    void processNextQueueable().catch((err) =>
+      log.error({ err, jobId }, "[birdnet] Queue advance failed after terminal"),
+    );
   }
 }
 
@@ -888,28 +904,42 @@ export async function createAcousticIndicesJob(
     })
     .returning();
 
-  processAcousticIndicesJob(job.id).catch((err) => {
+  void processNextQueueable().catch((err) => {
     log.error(
       { err, jobId: job.id },
-      "[acoustic-indices] Unhandled error in processAcousticIndicesJob"
+      "[acoustic-indices] Queue advance failed after enqueue"
     );
   });
 
   return { success: true, data: { jobId: job.id } };
 }
 
-async function processAcousticIndicesJob(jobId: number): Promise<void> {
+export async function processAcousticIndicesJob(jobId: number): Promise<void> {
   try {
-    await db
+    // Tolerant claim — see processAudioAnalysisJob for rationale.
+    const claim = await db
       .update(processingJobs)
       .set({ status: "processing", startedAt: new Date() })
-      .where(eq(processingJobs.id, jobId));
+      .where(
+        and(
+          eq(processingJobs.id, jobId),
+          eq(processingJobs.status, "pending"),
+        ),
+      );
+    const claimChanged = (claim as unknown as { changes: number }).changes ?? 0;
 
     const [job] = await db
       .select()
       .from(processingJobs)
       .where(eq(processingJobs.id, jobId));
     if (!job) throw new Error(`Job ${jobId} not found`);
+    if (job.status !== "processing") {
+      log.warn(
+        { jobId, status: job.status, claimChanged },
+        "[acoustic-indices] Skipping — job is not in processing state",
+      );
+      return;
+    }
 
     // Resolve the file set for this scope (deployment or project).
     const fileRows = job.deploymentId != null
@@ -1094,6 +1124,10 @@ async function processAcousticIndicesJob(jobId: number): Promise<void> {
     if (failedJob) {
       await recordEvent(buildJobCompletionEvent(failedJob));
     }
+  } finally {
+    void processNextQueueable().catch((err) =>
+      log.error({ err, jobId }, "[acoustic-indices] Queue advance failed after terminal"),
+    );
   }
 }
 
@@ -1230,19 +1264,10 @@ export async function createAudioAnalysisJob(
     };
   }
 
-  // Global cap when this job will run a compression phase — shared with the
-  // standalone AUDIO_COMPRESSION enqueue path so the FLAC encoder never has
-  // two concurrent runs.
-  if (wantCompress) {
-    const active = await countActiveAudioWorkWithCompression();
-    if (active >= 1) {
-      return {
-        success: false,
-        error:
-          "Ya hay una compresión de audio en curso. Espera a que termine antes de iniciar otra.",
-      };
-    }
-  }
+  // Cross-deployment serialization (global FLAC cap, GPU/CPU contention) is
+  // handled by the unified job queue: we always insert a `pending` row and
+  // `processNextQueueable()` decides whether to start it now or wait. No
+  // rejection here.
 
   if (includeBirdnet) {
     await db.run(sql`
@@ -1275,22 +1300,19 @@ export async function createAudioAnalysisJob(
     })
     .returning();
 
-  processAudioAnalysisJob(job.id, {
-    includeBirdnet,
-    includeIndices,
-    compressFirst: wantCompress,
-    actorEmail: user.email,
-  }).catch((err) => {
+  // Hand off to the unified queue. It will pick up our row either immediately
+  // (if nothing is running) or when the current job finishes.
+  void processNextQueueable().catch((err) => {
     log.error(
       { err, jobId: job.id },
-      "[audio-analysis] Unhandled error in processAudioAnalysisJob"
+      "[audio-analysis] Queue advance failed after enqueue"
     );
   });
 
   return { success: true, data: { jobId: job.id } };
 }
 
-async function processAudioAnalysisJob(
+export async function processAudioAnalysisJob(
   jobId: number,
   opts: {
     includeBirdnet: boolean;
@@ -1316,16 +1338,31 @@ async function processAudioAnalysisJob(
   };
 
   try {
-    await db
+    // Already-claimed by the queue picker (status='processing'). Otherwise
+    // legacy direct-call path: atomic claim guards against race with picker.
+    const claim = await db
       .update(processingJobs)
       .set({ status: "processing", startedAt: new Date() })
-      .where(eq(processingJobs.id, jobId));
+      .where(
+        and(
+          eq(processingJobs.id, jobId),
+          eq(processingJobs.status, "pending"),
+        ),
+      );
+    const claimChanged = (claim as unknown as { changes: number }).changes ?? 0;
 
     const [job] = await db
       .select()
       .from(processingJobs)
       .where(eq(processingJobs.id, jobId));
     if (!job) throw new Error(`Job ${jobId} not found`);
+    if (job.status !== "processing") {
+      log.warn(
+        { jobId, status: job.status, claimChanged },
+        "[audio-analysis] Skipping — job is not in processing state",
+      );
+      return;
+    }
     if (job.deploymentId === null) {
       throw new Error(`Audio analysis job ${jobId} has null deploymentId`);
     }
@@ -1741,6 +1778,10 @@ async function processAudioAnalysisJob(
       })
       .where(eq(processingJobs.id, jobId));
     await emitTerminalEvent();
+  } finally {
+    void processNextQueueable().catch((err) =>
+      log.error({ err, jobId }, "[audio-analysis] Queue advance failed after terminal"),
+    );
   }
 }
 
@@ -1792,6 +1833,12 @@ async function cancelAudioAnalysisJob(
   revalidatePath(`/audio/${job.deploymentId}`);
   revalidatePath("/biochoco/resultados");
   revalidatePath("/audio");
+
+  // Advance the queue so a cancellation doesn't strand the next pending job.
+  processNextQueueable().catch((err) =>
+    log.error({ err, jobId }, "[audio-analysis] Queue advance failed after cancel"),
+  );
+
   return { success: true, data: undefined };
 }
 

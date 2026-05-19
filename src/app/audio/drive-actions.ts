@@ -6,8 +6,8 @@ import { eq, and, inArray, isNotNull, count } from "drizzle-orm";
 import { after } from "next/server";
 import { requirePermission } from "@/lib/auth";
 import { getUserCameraTrapProjects } from "@/lib/camera-trap-auth";
-import { runAudioSyncWorker } from "@/lib/audio-sync-worker";
 import { JOB_TYPES } from "@/lib/job-types";
+import { processNextQueueable } from "@/lib/job-queue";
 import { log } from "@/lib/log";
 import type { ActionResult } from "@/lib/types";
 
@@ -85,8 +85,8 @@ export async function enqueueAudioSyncJob(
     .returning();
 
   after(() =>
-    runAudioSyncWorker(job.id).catch((err) =>
-      log.error({ err, jobId: job.id }, "[audio-sync] worker rejected")
+    processNextQueueable().catch((err) =>
+      log.error({ err, jobId: job.id }, "[audio-sync] Queue advance failed after enqueue")
     )
   );
 

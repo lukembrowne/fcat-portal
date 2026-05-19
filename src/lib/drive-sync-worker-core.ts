@@ -192,11 +192,24 @@ export async function runDriveSyncWorkerGeneric<TDeployment>(
       `${tag} starting`
     );
 
-    await setStatus({
-      status: "processing",
-      startedAt: new Date(),
-      statusMessage: "Buscando...",
-    });
+    // Tolerant claim: queue picker may have already flipped status=processing
+    // via `tryClaimJob`. If still pending (legacy direct-call from cron etc.),
+    // claim ourselves. Either way, just refresh the status message.
+    if (job.status === "pending") {
+      await setStatus({
+        status: "processing",
+        startedAt: new Date(),
+        statusMessage: "Buscando...",
+      });
+    } else if (job.status === "processing") {
+      await setStatus({ statusMessage: "Buscando..." });
+    } else {
+      log.warn(
+        { jobId, status: job.status },
+        `${tag} Skipping — job is not pending/processing`
+      );
+      return;
+    }
 
     // ---- Phase 1: discovery (optional) ----
     let createdIds: number[] = [];
@@ -342,6 +355,19 @@ export async function runDriveSyncWorkerGeneric<TDeployment>(
       .where(eq(processingJobs.id, jobId));
     await emitTerminalEvent();
     safeRevalidate();
+  } finally {
+    // Audio_sync participates in the unified queue; drive_sync does not, but
+    // the picker is a cheap no-op in either case (it short-circuits if the
+    // queue is empty or another job is already processing).
+    try {
+      const { processNextQueueable } = await import("@/lib/job-queue");
+      void processNextQueueable().catch((err) =>
+        log.error({ err, jobId }, `${tag} Queue advance failed after terminal`),
+      );
+    } catch {
+      // Best-effort — drive_sync may be running in a context where the
+      // import would fail (e.g. CLI test). Swallow.
+    }
   }
 }
 

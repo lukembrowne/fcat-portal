@@ -18,6 +18,7 @@ import {
   scanDeploymentImagesInternal,
 } from "@/lib/camera-trap-sync-internals";
 import { runDriveSyncWorker } from "@/lib/camera-trap-sync-worker";
+import { processNextQueueable } from "@/lib/job-queue";
 import { requirePermission } from "@/lib/auth";
 import { getUserCameraTrapProjects, requireDeploymentAccess } from "@/lib/camera-trap-auth";
 import { touchAppState } from "@/lib/app-state";
@@ -398,8 +399,8 @@ export async function compressDeploymentImages(
       })
       .returning();
 
-    // Fire and forget
-    compressJobInternal(job.id, deploymentId, user.email);
+    // Hand off to the unified queue picker.
+    processNextQueueable();
 
     revalidatePath(CAMERA_TRAP_PATH);
     return { success: true, data: { jobId: job.id } };
@@ -562,7 +563,7 @@ export async function compressImageBatch(
   return { compressed, failed, savedBytes };
 }
 
-async function compressJobInternal(
+export async function compressJobInternal(
   jobId: number,
   deploymentId: number,
   userEmail: string,
@@ -589,15 +590,36 @@ async function compressJobInternal(
 
     const skipped = uncompressedImages.length - jpegImages.length;
 
-    // Mark as processing with count
-    await db
+    // Tolerant claim: queue picker may have already flipped to processing.
+    // If still pending (legacy direct-call), atomically claim.
+    const claim = await db
       .update(processingJobs)
       .set({
         status: "processing",
         startedAt: new Date(),
         statusMessage: `Comprimiendo... 0 de ${jpegImages.length}`,
       })
-      .where(eq(processingJobs.id, jobId));
+      .where(
+        and(
+          eq(processingJobs.id, jobId),
+          eq(processingJobs.status, "pending"),
+        ),
+      );
+    const claimChanged = (claim as unknown as { changes: number }).changes ?? 0;
+    if (claimChanged === 0) {
+      // Already processing (claimed by picker); refresh status message only.
+      await db
+        .update(processingJobs)
+        .set({
+          statusMessage: `Comprimiendo... 0 de ${jpegImages.length}`,
+        })
+        .where(
+          and(
+            eq(processingJobs.id, jobId),
+            eq(processingJobs.status, "processing"),
+          ),
+        );
+    }
 
     log.info({ deploymentId, count: jpegImages.length }, "[compress] Deployment starting");
 
@@ -760,8 +782,8 @@ export async function revertCompression(
       })
       .returning();
 
-    // Fire and forget
-    revertJobInternal(job.id, deploymentId, user.email);
+    // Hand off to the unified queue picker.
+    processNextQueueable();
 
     revalidatePath(CAMERA_TRAP_PATH);
     return { success: true, data: { jobId: job.id } };
@@ -774,7 +796,7 @@ export async function revertCompression(
   }
 }
 
-async function revertJobInternal(
+export async function revertJobInternal(
   jobId: number,
   deploymentId: number,
   userEmail: string,
@@ -782,14 +804,32 @@ async function revertJobInternal(
   const startTime = Date.now();
 
   try {
-    await db
+    // Tolerant claim — see compressJobInternal above for rationale.
+    const claim = await db
       .update(processingJobs)
       .set({
         status: "processing",
         startedAt: new Date(),
         statusMessage: "Revirtiendo compresión...",
       })
-      .where(eq(processingJobs.id, jobId));
+      .where(
+        and(
+          eq(processingJobs.id, jobId),
+          eq(processingJobs.status, "pending"),
+        ),
+      );
+    const claimChanged = (claim as unknown as { changes: number }).changes ?? 0;
+    if (claimChanged === 0) {
+      await db
+        .update(processingJobs)
+        .set({ statusMessage: "Revirtiendo compresión..." })
+        .where(
+          and(
+            eq(processingJobs.id, jobId),
+            eq(processingJobs.status, "processing"),
+          ),
+        );
+    }
 
     const revertibleImages = await db
       .select()

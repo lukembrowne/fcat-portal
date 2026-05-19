@@ -49,6 +49,7 @@ import type { Deployment, ProcessingJob, Species, NewSpecies, ShareToken } from 
 import crypto from "crypto";
 import { ML_DEFAULTS } from "@/lib/ml-defaults";
 import { log } from "@/lib/log";
+import { processNextQueueable } from "@/lib/job-queue";
 
 const CAMERA_TRAP_PATH = "/camera-trap";
 
@@ -281,11 +282,16 @@ async function isJobStillActive(jobId: number): Promise<boolean> {
 /**
  * Internal processing logic — no auth check, safe revalidatePath.
  *
- * Called by the exported `processJob` server action (which adds auth)
- * and by `processNextInQueue` / batch processing (which run outside
- * a request context where requirePermission/revalidatePath would fail).
+ * Called by the exported `processJob` server action (which adds auth), by
+ * the unified queue dispatcher in `@/lib/job-queue`, and by batch processing.
+ * Exported so the queue can call it without a request context.
+ *
+ * Status contract: the queue picker uses `tryClaimJob` to atomically flip the
+ * row from `pending` → `processing` before calling us. If called directly
+ * (legacy path), we self-claim atomically below. Either way, after this
+ * function's first DB write the row is `processing`.
  */
-async function processJobInternal(
+export async function processJobInternal(
   jobId: number
 ): Promise<ActionResult<{ job: ProcessingJob }>> {
   let cacheDir: string | undefined;
@@ -318,21 +324,43 @@ async function processJobInternal(
       return { success: false, error: `Trabajo no encontrado: ${jobId}` };
     }
 
-    if (job.status !== "pending") {
+    // Already-claimed path: the queue picker atomically flipped the row to
+    // `processing` via `tryClaimJob`. We're good to go — just refresh the
+    // status message.
+    if (job.status === "processing") {
+      await db
+        .update(processingJobs)
+        .set({ statusMessage: "Iniciando procesamiento..." })
+        .where(eq(processingJobs.id, jobId));
+    } else if (job.status === "pending") {
+      // Direct-call path (no picker): atomically claim ourselves to avoid
+      // racing with the picker if it happens to fire concurrently.
+      const claim = await db
+        .update(processingJobs)
+        .set({
+          status: "processing",
+          startedAt: new Date(),
+          statusMessage: "Iniciando procesamiento...",
+        })
+        .where(
+          and(
+            eq(processingJobs.id, jobId),
+            eq(processingJobs.status, "pending"),
+          ),
+        );
+      const changed = (claim as unknown as { changes: number }).changes ?? 0;
+      if (changed === 0) {
+        return {
+          success: false,
+          error: `El trabajo ya fue reclamado (estado: ${job.status})`,
+        };
+      }
+    } else {
       return {
         success: false,
         error: `El trabajo no está pendiente (estado: ${job.status})`,
       };
     }
-
-    await db
-      .update(processingJobs)
-      .set({
-        status: "processing",
-        startedAt: new Date(),
-        statusMessage: "Iniciando procesamiento...",
-      })
-      .where(eq(processingJobs.id, jobId));
 
     // Check if this is a Drive-based deployment
     const [deployment] = await db
@@ -750,7 +778,7 @@ async function processJobInternal(
         .where(eq(deployments.id, job.deploymentId!));
 
       safeRevalidate();
-      processNextInQueue();
+      processNextQueueable();
 
       const [updatedJob] = await db
         .select()
@@ -875,7 +903,7 @@ async function processJobInternal(
     safeRevalidate();
 
     // Auto-advance queue
-    processNextInQueue();
+    processNextQueueable();
 
     const [updatedJob] = await db
       .select()
@@ -924,7 +952,7 @@ async function processJobInternal(
     safeRevalidate();
 
     // Auto-advance queue even on failure
-    processNextInQueue();
+    processNextQueueable();
 
     return {
       success: false,
@@ -1072,6 +1100,11 @@ export async function cancelJob(
     }
 
     revalidatePath(CAMERA_TRAP_PATH);
+
+    // Advance the queue — without this, cancelling a pending job leaves the
+    // queue stuck if nothing else is running.
+    processNextQueueable();
+
     return { success: true, data: undefined };
   } catch (error) {
     return {
@@ -2853,9 +2886,10 @@ export async function queueProcessing(
       }
     }
 
-    // Start the first job (fire-and-forget, no auth needed — already verified above)
+    // Hand off to the unified queue picker — it will start the oldest pending
+    // job (which may be one of these or an earlier audio/CT job).
     if (jobIds.length > 0) {
-      processJobInternal(jobIds[0]);
+      processNextQueueable();
     }
 
     revalidatePath(CAMERA_TRAP_PATH);
@@ -2891,8 +2925,8 @@ export async function queueIncrementalProcessing(
     });
     if (!result.success) return result;
 
-    // Fire-and-forget — auth already verified above.
-    processJobInternal(result.data.jobId);
+    // Hand off to the unified queue picker.
+    processNextQueueable();
 
     revalidatePath(CAMERA_TRAP_PATH);
     return { success: true, data: { jobId: result.data.jobId } };
@@ -2907,19 +2941,12 @@ export async function queueIncrementalProcessing(
   }
 }
 
-/** Called at end of processJob to auto-advance the queue. */
+/**
+ * Backwards-compatible wrapper. Delegates to the unified queue picker so old
+ * callers (and any external imports) keep working through the refactor.
+ */
 export async function processNextInQueue(): Promise<void> {
-  const [nextJob] = await db
-    .select()
-    .from(processingJobs)
-    .where(eq(processingJobs.status, "pending"))
-    .orderBy(processingJobs.createdAt)
-    .limit(1);
-
-  if (nextJob) {
-    log.info({ jobId: nextJob.id, deploymentId: nextJob.deploymentId }, "[Queue] Auto-advancing to next job");
-    processJobInternal(nextJob.id);
-  }
+  return processNextQueueable();
 }
 
 /** Cancel all pending jobs in the queue. */
@@ -2975,6 +3002,11 @@ export async function cancelQueue(): Promise<ActionResult<{ cancelled: number }>
     }
 
     revalidatePath(CAMERA_TRAP_PATH);
+
+    // Defensive queue-advance in case a new pending job slipped in during the
+    // cancel; no-op if nothing else is queued.
+    processNextQueueable();
+
     return { success: true, data: { cancelled: pendingJobs.length + (activeJob ? 1 : 0) } };
   } catch (error) {
     return {

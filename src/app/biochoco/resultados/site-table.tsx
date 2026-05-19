@@ -117,9 +117,13 @@ export function SiteTable({ sites }: SiteTableProps) {
             <TableRow
               key={site.siteId}
               className="cursor-pointer hover:bg-accent/50"
-              onClick={() =>
-                router.push(`/biochoco/resultados/${site.siteId}`)
-              }
+              onClick={(e) => {
+                // React synthetic events bubble through the React tree, not the DOM.
+                // Clicks inside portaled dialogs/menus rendered by row children would
+                // otherwise fire this navigation. Ignore anything not in the row's DOM.
+                if (!e.currentTarget.contains(e.target as Node)) return;
+                router.push(`/biochoco/resultados/${site.siteId}`);
+              }}
             >
               <TableCell>
                 <div>

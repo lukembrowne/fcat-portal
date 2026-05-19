@@ -5,6 +5,8 @@ import {
   computeContentHash,
   buildCounts,
   stratifyDeploymentSplits,
+  selectIncludedClasses,
+  findUncoveredLabels,
   SPLIT_STRATEGY_VERSION,
   STRATIFY_MIN_DEPLOYMENTS,
   type HashRow,
@@ -378,5 +380,123 @@ describe("buildCounts", () => {
     expect(counts.test).toBe(1);
     expect(counts.perClass.ocelot).toEqual({ train: 2, val: 1, test: 0 });
     expect(counts.perClass.puma).toEqual({ train: 1, val: 0, test: 1 });
+  });
+});
+
+describe("selectIncludedClasses", () => {
+  it("drops the v1 livestock regression: 75 examples in 2 deployments", () => {
+    // This is the exact scenario that broke training-export-v1.tar.gz:
+    // Anas platyrhynchos domesticus had 75 verified detections but all came
+    // from 2 cameras that both hashed to the train split.
+    const { classList, droppedSpecies } = selectIncludedClasses({
+      labelCounts: new Map([["anas_platyrhynchos_domesticus", 75]]),
+      labelDeployments: new Map([
+        ["anas_platyrhynchos_domesticus", new Set([901, 902])],
+      ]),
+      minExamples: 30,
+      minDeployments: 3,
+    });
+    expect(classList).toEqual([]);
+    expect(droppedSpecies).toEqual({ anas_platyrhynchos_domesticus: 75 });
+  });
+
+  it("keeps a class exactly at the deployment threshold", () => {
+    const { classList, droppedSpecies } = selectIncludedClasses({
+      labelCounts: new Map([["ocelot", 50]]),
+      labelDeployments: new Map([["ocelot", new Set([1, 2, 3])]]),
+      minExamples: 30,
+      minDeployments: 3,
+    });
+    expect(classList).toEqual(["ocelot"]);
+    expect(droppedSpecies).toEqual({});
+  });
+
+  it("drops a class one deployment below the threshold", () => {
+    const { classList, droppedSpecies } = selectIncludedClasses({
+      labelCounts: new Map([["ocelot", 500]]),
+      labelDeployments: new Map([["ocelot", new Set([1, 2])]]),
+      minExamples: 30,
+      minDeployments: 3,
+    });
+    expect(classList).toEqual([]);
+    expect(droppedSpecies).toEqual({ ocelot: 500 });
+  });
+
+  it("drops a class one example below the threshold even with enough deployments", () => {
+    const { classList, droppedSpecies } = selectIncludedClasses({
+      labelCounts: new Map([["puma", 29]]),
+      labelDeployments: new Map([["puma", new Set([1, 2, 3, 4])]]),
+      minExamples: 30,
+      minDeployments: 3,
+    });
+    expect(classList).toEqual([]);
+    expect(droppedSpecies).toEqual({ puma: 29 });
+  });
+
+  it("returns surviving classes sorted alphabetically", () => {
+    const { classList } = selectIncludedClasses({
+      labelCounts: new Map([
+        ["puma_concolor", 60],
+        ["aotus_lemurinus", 40],
+        ["mazama_americana", 80],
+      ]),
+      labelDeployments: new Map([
+        ["puma_concolor", new Set([1, 2, 3])],
+        ["aotus_lemurinus", new Set([4, 5, 6])],
+        ["mazama_americana", new Set([7, 8, 9])],
+      ]),
+      minExamples: 30,
+      minDeployments: 3,
+    });
+    expect(classList).toEqual([
+      "aotus_lemurinus",
+      "mazama_americana",
+      "puma_concolor",
+    ]);
+  });
+
+  it("handles empty input", () => {
+    const result = selectIncludedClasses({
+      labelCounts: new Map(),
+      labelDeployments: new Map(),
+      minExamples: 30,
+      minDeployments: 3,
+    });
+    expect(result.classList).toEqual([]);
+    expect(result.droppedSpecies).toEqual({});
+  });
+});
+
+describe("findUncoveredLabels", () => {
+  it("returns labels with zero in any split", () => {
+    const counts = new Map([
+      ["covered", { train: 5, val: 1, test: 1 }],
+      ["no_val", { train: 5, val: 0, test: 1 }],
+      ["no_test", { train: 5, val: 1, test: 0 }],
+      ["no_train", { train: 0, val: 1, test: 1 }],
+    ]);
+    expect(findUncoveredLabels(counts)).toEqual([
+      "no_test",
+      "no_train",
+      "no_val",
+    ]);
+  });
+
+  it("returns empty when every label has 1/1/1 coverage", () => {
+    const counts = new Map([
+      ["a", { train: 1, val: 1, test: 1 }],
+      ["b", { train: 10, val: 5, test: 3 }],
+    ]);
+    expect(findUncoveredLabels(counts)).toEqual([]);
+  });
+
+  it("flags the anchored-cameras edge case (3 deployments all anchored to train)", () => {
+    // Simulates the post-stratify state when a class survives inclusion
+    // (≥3 deployments) but the stratifier could not rebalance because all
+    // 3 deployments were anchored to train from a prior export.
+    const counts = new Map([
+      ["anchored_to_train_only", { train: 60, val: 0, test: 0 }],
+    ]);
+    expect(findUncoveredLabels(counts)).toEqual(["anchored_to_train_only"]);
   });
 });

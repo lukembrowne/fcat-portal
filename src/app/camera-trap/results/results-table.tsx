@@ -217,7 +217,13 @@ export function ResultsTable({ jobs, canDelete }: Props) {
                 key={job.id}
                 className="cursor-pointer"
                 data-state={selectedIds.has(job.id) ? "selected" : undefined}
-                onClick={() => router.push(`/camera-trap/results/${job.id}`)}
+                onClick={(e) => {
+                  // React synthetic events bubble through the React tree, not the DOM.
+                  // Clicks inside portaled dialogs/menus rendered by row children would
+                  // otherwise fire this navigation. Ignore anything not in the row's DOM.
+                  if (!e.currentTarget.contains(e.target as Node)) return;
+                  router.push(`/camera-trap/results/${job.id}`);
+                }}
               >
                 {canDelete && (
                   <TableCell onClick={(e) => e.stopPropagation()}>

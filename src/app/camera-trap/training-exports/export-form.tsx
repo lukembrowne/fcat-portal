@@ -255,21 +255,6 @@ function PreviewCard({
         </p>
       )}
 
-      {preview.stratifyWarnings.length > 0 && (
-        <div className="mt-2 rounded border border-amber-500/40 bg-amber-50 p-2 text-xs text-amber-800">
-          <div className="font-semibold mb-1">
-            Especies sin cobertura completa en val/test:
-          </div>
-          <ul className="ml-4 list-disc">
-            {preview.stratifyWarnings.map((w) => (
-              <li key={w.label}>
-                <span className="font-mono">{w.label}</span> — {w.reason}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
       {preview.perSpecies.length === 0 ? (
         <p className="mt-3 text-sm text-muted-foreground">
           Ninguna especie alcanza el umbral de {preview.minExamples} ejemplos.
@@ -362,14 +347,21 @@ function PreviewCard({
       {droppedEntries.length > 0 && (
         <details className="mt-3 text-xs">
           <summary className="cursor-pointer text-muted-foreground">
-            {droppedEntries.length} especies por debajo del umbral
+            {droppedEntries.length} especies por debajo de los umbrales
+            (≥{preview.minExamples} ejemplos y ≥{preview.minDeployments}{" "}
+            instalaciones)
           </summary>
           <ul className="mt-1 ml-4 list-disc max-h-40 overflow-y-auto">
-            {droppedEntries.map(([label, count]) => (
-              <li key={label}>
-                <span className="font-mono">{label}</span> — {count}
-              </li>
-            ))}
+            {droppedEntries.map(([label, count]) => {
+              const deps = preview.droppedDeployments[label] ?? 0;
+              return (
+                <li key={label}>
+                  <span className="font-mono">{label}</span> — {count}{" "}
+                  ejemplos en {deps}{" "}
+                  {deps === 1 ? "instalación" : "instalaciones"}
+                </li>
+              );
+            })}
           </ul>
         </details>
       )}

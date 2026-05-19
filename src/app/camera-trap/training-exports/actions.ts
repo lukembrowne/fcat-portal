@@ -45,11 +45,13 @@ import {
   buildCounts,
   buildManifest,
   stratifyDeploymentSplits,
+  selectIncludedClasses,
+  findUncoveredLabels,
   SPLIT_STRATEGY_VERSION,
+  STRATIFY_MIN_DEPLOYMENTS,
   type HashRow,
   type Split,
   type ForcedReassignment,
-  type StratifyWarning,
 } from "@/lib/training-export-helpers";
 
 const EXPORT_ROOT = path.join(process.cwd(), "data", "training-exports");
@@ -93,9 +95,16 @@ export interface ForcedReassignmentRow {
 
 export interface ExportPreview {
   minExamples: number;
+  /** Mirrors STRATIFY_MIN_DEPLOYMENTS — surfaced for UI copy so the
+   * threshold appears alongside `minExamples` in the dropped-list summary. */
+  minDeployments: number;
   totalCandidates: number;
   classList: string[];
   droppedSpecies: Record<string, number>;
+  /** Distinct deployment count for each dropped species. Lets the UI show
+   * "X ejemplos en Y instalaciones" so the admin can see whether a class
+   * was dropped for examples or for deployment coverage. */
+  droppedDeployments: Record<string, number>;
   perSpecies: ExportPreviewSpeciesRow[];
   deploymentCount: number;
   /** How many deployments would have a new train/val/test split persisted
@@ -109,8 +118,6 @@ export interface ExportPreview {
   /** Moves performed by the stratifier to guarantee val+test coverage for
    * species with >= STRATIFY_MIN_DEPLOYMENTS. */
   forcedReassignments: ForcedReassignmentRow[];
-  /** Species the stratifier could not balance. */
-  stratifyWarnings: Array<{ label: string; reason: string }>;
 }
 
 interface CandidateRow {
@@ -129,10 +136,20 @@ interface CandidateRow {
 }
 
 interface CollectedCandidates {
-  /** Filtered to only rows whose label is in classList. */
+  /** Filtered to only rows whose label is in the surviving classList
+   * (after both pre-stratify inclusion and post-stratify coverage drops). */
   filtered: CandidateRow[];
+  /** Surviving classes — passed all pre-filter checks AND have non-zero
+   * coverage in train, val, and test after stratification. */
   classList: string[];
+  /** Labels dropped for any reason (below minExamples, below
+   * STRATIFY_MIN_DEPLOYMENTS, or post-stratify zero coverage). Value is
+   * the total example count at the time of drop. */
   droppedSpecies: Record<string, number>;
+  /** Distinct deployments per label (computed from candidates, before
+   * the pre-filter dropped anything). Used by the UI to show deployment
+   * counts alongside example counts for dropped species. */
+  labelDeployments: Map<string, Set<number>>;
   splitByDeployment: Map<number, Split>;
   /** Deployments whose final assignment differs from the value currently
    * persisted in deployments.training_split. exportTrainingDataset writes
@@ -143,7 +160,6 @@ interface CollectedCandidates {
    * all persisted splits and re-stratify from scratch. */
   migrationApplied: boolean;
   forcedReassignments: ForcedReassignment[];
-  stratifyWarnings: StratifyWarning[];
   deploymentNameById: Map<number, string>;
 }
 
@@ -205,19 +221,27 @@ async function collectExportCandidates(
     finalLabel: (r.correctedSpecies ?? r.species ?? "").trim(),
   }));
 
-  // 2. Group by label, drop labels below threshold.
+  // 2. Group by label, drop labels that fail either pre-filter:
+  //    - total examples below minExamples → not enough signal
+  //    - distinct deployments below STRATIFY_MIN_DEPLOYMENTS → cannot be
+  //      balanced into train+val+test even after stratification
   const labelCounts = new Map<string, number>();
+  const labelDeployments = new Map<string, Set<number>>();
   for (const c of candidates) {
     if (!c.finalLabel) continue;
     labelCounts.set(c.finalLabel, (labelCounts.get(c.finalLabel) ?? 0) + 1);
+    if (!labelDeployments.has(c.finalLabel)) {
+      labelDeployments.set(c.finalLabel, new Set<number>());
+    }
+    labelDeployments.get(c.finalLabel)!.add(c.deploymentId);
   }
-  const classList: string[] = [];
-  const droppedSpecies: Record<string, number> = {};
-  for (const [label, count] of labelCounts) {
-    if (count >= minExamples) classList.push(label);
-    else droppedSpecies[label] = count;
-  }
-  classList.sort();
+
+  const { classList, droppedSpecies } = selectIncludedClasses({
+    labelCounts,
+    labelDeployments,
+    minExamples,
+    minDeployments: STRATIFY_MIN_DEPLOYMENTS,
+  });
 
   const classListSet = new Set(classList);
   const filtered = candidates.filter(
@@ -296,16 +320,66 @@ async function collectExportCandidates(
     }
   }
 
+  // 4. Defensive post-stratify drop. The deployment-count pre-filter should
+  //    already guarantee every surviving class has ≥3 deployments and the
+  //    stratifier should give 1/1/1 coverage. The one residual failure mode
+  //    is anchored deployments: if 3+ deployments for a class are all
+  //    anchored to the same split (from a prior export when the species had
+  //    fewer cameras), the stratifier emits a warning but can't move them.
+  //    Drop those classes here rather than ship a manifest the classifier
+  //    will reject.
+  const perLabelSplitCounts = new Map<
+    string,
+    { train: number; val: number; test: number }
+  >();
+  for (const c of filtered) {
+    const split = splitByDeployment.get(c.deploymentId);
+    if (!split) continue;
+    const counts = perLabelSplitCounts.get(c.finalLabel) ?? {
+      train: 0,
+      val: 0,
+      test: 0,
+    };
+    counts[split] += 1;
+    perLabelSplitCounts.set(c.finalLabel, counts);
+  }
+
+  const uncovered = findUncoveredLabels(perLabelSplitCounts);
+  let survivingClassList = classList;
+  let survivingFiltered = filtered;
+  let survivingForcedReassignments = stratified.forcedReassignments;
+
+  if (uncovered.length > 0) {
+    const uncoveredSet = new Set(uncovered);
+    for (const label of uncovered) {
+      const counts = perLabelSplitCounts.get(label)!;
+      droppedSpecies[label] = counts.train + counts.val + counts.test;
+      log.warn(
+        { label, counts },
+        "[training-export] post-stratify drop: class survived inclusion but " +
+          "stratifier could not give it val+test coverage (likely anchored " +
+          "deployments). Dropping from classList.",
+      );
+    }
+    survivingClassList = classList.filter((l) => !uncoveredSet.has(l));
+    survivingFiltered = filtered.filter(
+      (r) => !uncoveredSet.has(r.finalLabel),
+    );
+    survivingForcedReassignments = stratified.forcedReassignments.filter(
+      (r) => !uncoveredSet.has(r.label),
+    );
+  }
+
   return {
-    filtered,
-    classList,
+    filtered: survivingFiltered,
+    classList: survivingClassList,
     droppedSpecies,
+    labelDeployments,
     splitByDeployment,
     newAssignments,
     totalCandidatesBeforeFilter: candidates.length,
     migrationApplied,
-    forcedReassignments: stratified.forcedReassignments,
-    stratifyWarnings: stratified.warnings,
+    forcedReassignments: survivingForcedReassignments,
     deploymentNameById,
   };
 }
@@ -450,20 +524,30 @@ export async function getExportPreview(
         to: r.to,
       }));
 
+    // Distinct-deployment count for every dropped species, so the UI can
+    // show "X ejemplos en Y instalaciones" and the admin immediately sees
+    // whether the threshold knob to tune is examples or cameras.
+    const droppedDeployments: Record<string, number> = {};
+    for (const label of Object.keys(collected.droppedSpecies)) {
+      droppedDeployments[label] =
+        collected.labelDeployments.get(label)?.size ?? 0;
+    }
+
     return {
       success: true,
       data: {
         minExamples,
+        minDeployments: STRATIFY_MIN_DEPLOYMENTS,
         totalCandidates: collected.totalCandidatesBeforeFilter,
         classList: collected.classList,
         droppedSpecies: collected.droppedSpecies,
+        droppedDeployments,
         perSpecies,
         deploymentCount,
         newDeploymentSplits: collected.newAssignments.length,
         migrationApplied: collected.migrationApplied,
         splitStrategyVersion: SPLIT_STRATEGY_VERSION,
         forcedReassignments,
-        stratifyWarnings: collected.stratifyWarnings,
       },
     };
   } catch (err) {

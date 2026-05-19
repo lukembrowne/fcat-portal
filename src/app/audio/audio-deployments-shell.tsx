@@ -683,7 +683,13 @@ export function AudioDeploymentsShell({
                             key={row.id}
                             className={`group/row cursor-pointer hover:bg-muted/50 ${dep.excluded ? "opacity-50" : ""}`}
                             data-state={row.getIsSelected() ? "selected" : undefined}
-                            onClick={() => router.push(`/audio/${dep.id}`)}
+                            onClick={(e) => {
+                              // React synthetic events bubble through the React tree, not the DOM.
+                              // Clicks inside portaled dialogs/menus rendered by row children would
+                              // otherwise fire this navigation. Ignore anything not in the row's DOM.
+                              if (!e.currentTarget.contains(e.target as Node)) return;
+                              router.push(`/audio/${dep.id}`);
+                            }}
                           >
                             {row.getVisibleCells().map((cell) => (
                               <TableCell key={cell.id}>

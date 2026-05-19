@@ -42,7 +42,17 @@ export function assignSplit(deploymentId: number): Split {
   return "test";
 }
 
-/** Minimum total deployments a species needs before stratification kicks in. */
+/**
+ * Minimum distinct deployments a species needs for the stratifier to attempt
+ * 1/1/1 rebalancing. Also reused by the exporter as the per-class inclusion
+ * threshold: classes with fewer distinct deployments are dropped into
+ * `droppedSpecies` before the stratifier runs.
+ *
+ * These two roles must stay equal. If inclusion ever drifts below the
+ * stratifier threshold, the exporter would silently ship manifests with
+ * val=0 or test=0 for low-deployment classes — the v1 livestock bug
+ * (see docs/plans/2026-05-19-fix-training-export-guarantee-val-test-coverage-plan.md).
+ */
 export const STRATIFY_MIN_DEPLOYMENTS = 3;
 
 export interface StratifyInput {
@@ -226,6 +236,61 @@ export function stratifyDeploymentSplits(
   warnings.sort((a, b) => a.label.localeCompare(b.label, "es"));
 
   return { splitByDeployment: out, forcedReassignments, warnings };
+}
+
+/**
+ * Pre-stratify inclusion filter. A class is included in the export iff it
+ * has BOTH enough total examples AND enough distinct deployments. The
+ * deployment threshold equals STRATIFY_MIN_DEPLOYMENTS by design — classes
+ * below it cannot be balanced into train+val+test no matter how many
+ * examples they have (a single camera cannot occupy three splits).
+ *
+ * Returns surviving labels (sorted) and a flat label→totalCount drop map.
+ * Both reasons (below-examples and below-deployments) collapse into the
+ * same drop map because the manifest consumer doesn't care why a class
+ * didn't qualify, only that it didn't. The portal UI surfaces the
+ * distinction by displaying the deployment count alongside the example
+ * count for each dropped entry.
+ */
+export function selectIncludedClasses(input: {
+  labelCounts: Map<string, number>;
+  labelDeployments: Map<string, Set<number>>;
+  minExamples: number;
+  minDeployments: number;
+}): { classList: string[]; droppedSpecies: Record<string, number> } {
+  const classList: string[] = [];
+  const droppedSpecies: Record<string, number> = {};
+  for (const [label, count] of input.labelCounts) {
+    const deps = input.labelDeployments.get(label)?.size ?? 0;
+    if (count >= input.minExamples && deps >= input.minDeployments) {
+      classList.push(label);
+    } else {
+      droppedSpecies[label] = count;
+    }
+  }
+  classList.sort();
+  return { classList, droppedSpecies };
+}
+
+/**
+ * Post-stratify safety check: given the final per-label per-split counts,
+ * return the set of labels that still have zero examples in train, val, or
+ * test. After the deployment-count pre-filter this should only trigger in
+ * the edge case where 3+ deployments are anchored to the same split from a
+ * prior export and the stratifier could not rebalance them. Returns labels
+ * sorted for deterministic surfacing.
+ */
+export function findUncoveredLabels(
+  perLabelSplitCounts: Map<string, { train: number; val: number; test: number }>,
+): string[] {
+  const uncovered: string[] = [];
+  for (const [label, counts] of perLabelSplitCounts) {
+    if (counts.train === 0 || counts.val === 0 || counts.test === 0) {
+      uncovered.push(label);
+    }
+  }
+  uncovered.sort((a, b) => a.localeCompare(b, "es"));
+  return uncovered;
 }
 
 /**

@@ -46,9 +46,10 @@ export default async function ResultsPage() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold">Trabajos de ML</h1>
+          <h1 className="text-2xl font-bold">Resultados de detección</h1>
           <p className="text-sm text-muted-foreground">
-            Historial de trabajos de procesamiento con modelos de ML.
+            Historial de trabajos de detección de especies — abre un trabajo
+            para ver detecciones, identificaciones y anotaciones.
           </p>
         </div>
         <Button asChild variant="outline">

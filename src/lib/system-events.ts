@@ -81,8 +81,8 @@ const AUDIO_JOB_TYPES = new Set<JobType>([
 ]);
 
 export const JOB_LABELS: Record<JobType, string> = {
-  ml: "ML",
-  ml_incremental: "ML incremental",
+  ml: "Detección de especies",
+  ml_incremental: "Detección incremental",
   drive_sync: "Sincronización Drive",
   compression: "Compresión de imágenes",
   revert_compression: "Reversión de compresión",

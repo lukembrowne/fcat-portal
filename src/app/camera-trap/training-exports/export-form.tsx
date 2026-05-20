@@ -282,10 +282,7 @@ function PreviewCard({
             <tbody>
               {preview.perSpecies.map((row) => (
                 <tr key={row.label} className="border-t">
-                  <td
-                    className="py-1 pr-3 italic font-mono text-xs"
-                    title={row.slug}
-                  >
+                  <td className="py-1 pr-3 italic font-mono text-xs">
                     {row.label}
                   </td>
                   <td className="py-1 px-2 text-right tabular-nums">

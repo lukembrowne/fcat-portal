@@ -296,12 +296,14 @@ export function findUncoveredLabels(
 /**
  * Convert a free-form species label into a filesystem-safe slug.
  *
- * The same slug must be produced by:
- *   - the exporter (for the on-disk crop directory)
- *   - the manifest (classList entries)
- *   - the registered model's class_mapping.json
+ * Legacy: produced the on-disk folder names and manifest classList entries
+ * for training datasets shipped before 2026-05. Models trained on those
+ * exports output slug strings at inference time and do NOT link to the
+ * canonical biochoco_species table without re-training. Retained because
+ * it is still useful elsewhere and because content-hash code may need to
+ * reproduce historical slugs.
  *
- * Drift here = silent training failure, so the rules are deliberate and tested.
+ * For new exports use speciesFolderName below.
  */
 export function speciesSlug(label: string): string {
   return label
@@ -314,6 +316,41 @@ export function speciesSlug(label: string): string {
     .replace(/[^a-z0-9]+/g, "_")
     // No leading/trailing underscores.
     .replace(/^_+|_+$/g, "");
+}
+
+/**
+ * Folder-safe but human-readable rendering of a species name for the
+ * training dataset.
+ *
+ * Preserves spaces and diacritics so the on-disk folder name IS the
+ * canonical biochoco_species.scientificName. PyTorch ImageFolder reads
+ * folder names directly as class names, so class_mapping.json (and
+ * therefore inference output) will match the species table exactly,
+ * letting the English/Spanish toggle and species aggregations work
+ * natively for re-classified detections.
+ *
+ * Only strips characters that genuinely break filesystem tooling.
+ */
+export function speciesFolderName(label: string): string {
+  return (
+    label
+      // Canonical Unicode form so the bytes on disk match the bytes in the
+      // species table (most stored strings are already NFC).
+      .normalize("NFC")
+      // Path separators must never appear in a folder name.
+      .replace(/[/\\]/g, " ")
+      // Strip control chars / NUL / DEL, but keep \t \n \r so the next step
+      // can collapse them into normal spaces. (If we stripped them outright,
+      // "Panthera\nonca" would become "Pantheraonca".)
+      .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "")
+      // Collapse internal whitespace runs.
+      .replace(/\s+/g, " ")
+      .trim()
+      // A leading dot would make the folder hidden on Unix; never start with one.
+      .replace(/^\.+/, "")
+      // Generous cap that protects older filesystems (ext4 limit is 255 bytes).
+      .slice(0, 200)
+  );
 }
 
 /**
@@ -379,11 +416,13 @@ export function buildCounts(
   };
   for (const row of rows) {
     counts[row.split] += 1;
-    const slug = speciesSlug(row.finalLabel);
-    if (!counts.perClass[slug]) {
-      counts.perClass[slug] = { train: 0, val: 0, test: 0 };
+    // Key by the same folder name the exporter writes to disk, so the
+    // manifest's perClass map matches the dataset's directory structure.
+    const className = speciesFolderName(row.finalLabel);
+    if (!counts.perClass[className]) {
+      counts.perClass[className] = { train: 0, val: 0, test: 0 };
     }
-    counts.perClass[slug][row.split] += 1;
+    counts.perClass[className][row.split] += 1;
   }
   return counts;
 }

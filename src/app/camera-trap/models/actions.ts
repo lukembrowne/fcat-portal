@@ -22,12 +22,14 @@ import {
   cameraTrapModels,
   cameraTrapTrainingDatasets,
   processingJobs,
+  species,
   type CameraTrapModel,
 } from "@/db/schema";
-import { requireAdmin } from "@/lib/auth";
+import { requireAdmin, requirePermission } from "@/lib/auth";
 import { recordEvent } from "@/lib/system-events";
 import type { ActionResult } from "@/lib/types";
 import { shutdownModelServer } from "@/lib/ml-runner";
+import { ML_DEFAULTS } from "@/lib/ml-defaults";
 import { log } from "@/lib/log";
 
 const MODELS_ROOT = path.join(process.cwd(), "data", "models");
@@ -126,7 +128,18 @@ async function fileExists(p: string): Promise<boolean> {
  */
 export async function registerModelFromDir(
   formData: FormData,
-): Promise<ActionResult<{ modelId: number; version: string }>> {
+): Promise<
+  ActionResult<{
+    modelId: number;
+    version: string;
+    /** Class names from the uploaded class_mapping.json that do not match
+     * any biochoco_species.scientificName. Detections from such classes
+     * won't link to the species table (no English/Spanish name, won't
+     * aggregate with hand-annotated detections). Empty array means the
+     * model's classes are fully covered. */
+    unmatchedClasses: string[];
+  }>
+> {
   const user = await requireAdmin();
 
   const dirName = formData.get("dirName");
@@ -250,7 +263,18 @@ export async function registerModelFromDir(
       };
     }
 
-    // 7. Insert.
+    // 7. Non-fatal: flag class names that don't match the biochoco_species
+    //    table. Detections from those classes won't link to the species
+    //    table (no Eng/Spa names; won't aggregate with hand-annotated rows).
+    //    Slug-trained legacy models will trip this whole-cloth; canonical-name
+    //    models should come back clean.
+    const allSpecies = await db
+      .select({ scientificName: species.scientificName })
+      .from(species);
+    const known = new Set(allSpecies.map((s) => s.scientificName));
+    const unmatchedClasses = classMapping.filter((c) => !known.has(c));
+
+    // 8. Insert.
     const inserted = db.transaction((tx) => {
       return tx
         .insert(cameraTrapModels)
@@ -281,12 +305,29 @@ export async function registerModelFromDir(
         modelDir,
         trainingDatasetId,
         allowUntracked,
+        unmatchedClassCount: unmatchedClasses.length,
       },
     });
 
+    if (unmatchedClasses.length > 0) {
+      log.warn(
+        {
+          modelId: inserted.id,
+          version: inserted.version,
+          unmatchedCount: unmatchedClasses.length,
+          sample: unmatchedClasses.slice(0, 10),
+        },
+        "[ct-models] registered model has classes missing from biochoco_species",
+      );
+    }
+
     return {
       success: true,
-      data: { modelId: inserted.id, version: inserted.version },
+      data: {
+        modelId: inserted.id,
+        version: inserted.version,
+        unmatchedClasses,
+      },
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -436,6 +477,76 @@ export async function deleteModel(
     log.error({ err }, "[ct-models] delete failed");
     return { success: false, error: msg };
   }
+}
+
+/**
+ * Resolve what the next ML run will actually use for inference: the
+ * hard-coded detector + either the active custom classifier (if any) or
+ * the legacy AI4G fallback.
+ *
+ * Mirrors the resolution logic in ml-runner.resolveActiveClassifierModel +
+ * ml-runner-env.buildClassifierEnv, so the dialog tells the user the
+ * truth — not the misleading `processingJobs.classifierModel` string,
+ * which is always stamped with the AI4G default at job creation.
+ */
+export type ActiveClassifierInfo = {
+  detector: string;
+  classifier:
+    | {
+        kind: "custom";
+        version: string;
+        backbone: string;
+        top1Accuracy: number | null;
+        modelDir: string;
+      }
+    | { kind: "legacy"; name: string };
+};
+
+export async function getActiveClassifierInfo(): Promise<ActiveClassifierInfo> {
+  await requirePermission("camera-trap", "viewer");
+
+  const [active] = await db
+    .select({
+      version: cameraTrapModels.version,
+      modelDir: cameraTrapModels.modelDir,
+      metricsJson: cameraTrapModels.metricsJson,
+    })
+    .from(cameraTrapModels)
+    .where(eq(cameraTrapModels.active, true))
+    .limit(1);
+
+  if (!active) {
+    return {
+      detector: ML_DEFAULTS.detectorModel,
+      classifier: { kind: "legacy", name: ML_DEFAULTS.classifierModel },
+    };
+  }
+
+  let backbone = "unknown";
+  let top1: number | null = null;
+  try {
+    const m = JSON.parse(active.metricsJson) as {
+      backbone?: unknown;
+      overall?: { top1Accuracy?: unknown };
+    };
+    if (typeof m.backbone === "string") backbone = m.backbone;
+    if (typeof m.overall?.top1Accuracy === "number") {
+      top1 = m.overall.top1Accuracy;
+    }
+  } catch {
+    // metrics is opaque on parse error; backbone stays "unknown"
+  }
+
+  return {
+    detector: ML_DEFAULTS.detectorModel,
+    classifier: {
+      kind: "custom",
+      version: active.version,
+      backbone,
+      top1Accuracy: top1,
+      modelDir: active.modelDir,
+    },
+  };
 }
 
 function validateMetricsContract(m: ParsedMetrics): string | null {

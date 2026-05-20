@@ -40,7 +40,7 @@ import type { ActionResult } from "@/lib/types";
 import { downloadFileToBuffer } from "@/lib/drive-client";
 import { log } from "@/lib/log";
 import {
-  speciesSlug,
+  speciesFolderName,
   computeContentHash,
   buildCounts,
   buildManifest,
@@ -72,7 +72,11 @@ export interface ExportResult {
 
 export interface ExportPreviewSpeciesRow {
   label: string;
-  slug: string;
+  /** The on-disk folder name for this class in the exported dataset.
+   * As of 2026-05 this IS the canonical scientific name (with spaces and
+   * diacritics preserved) so re-classified detections link back to the
+   * biochoco_species table natively. */
+  folderName: string;
   total: number;
   train: number;
   val: number;
@@ -496,7 +500,7 @@ export async function getExportPreview(
         };
         return {
           label,
-          slug: speciesSlug(label),
+          folderName: speciesFolderName(label),
           total: splitCounts.train + splitCounts.val + splitCounts.test,
           train: splitCounts.train,
           val: splitCounts.val,
@@ -689,8 +693,8 @@ export async function exportTrainingDataset(
 
     for (const row of filtered) {
       const split = splitByDeployment.get(row.deploymentId)!;
-      const slug = speciesSlug(row.finalLabel);
-      const outDir = path.join(versionDir, split, slug);
+      const folderName = speciesFolderName(row.finalLabel);
+      const outDir = path.join(versionDir, split, folderName);
       const outPath = path.join(outDir, `${row.detectionId}.jpg`);
 
       try {
@@ -749,7 +753,7 @@ export async function exportTrainingDataset(
       createdAt: new Date(),
       createdBy: user.email,
       minExamplesThreshold: minExamples,
-      classList: classList.map((label) => speciesSlug(label)),
+      classList: classList.map((label) => speciesFolderName(label)),
       droppedSpecies,
       counts,
       deployments: deploymentSummaries,

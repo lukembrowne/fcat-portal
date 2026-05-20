@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   speciesSlug,
+  speciesFolderName,
   assignSplit,
   computeContentHash,
   buildCounts,
@@ -38,6 +39,51 @@ describe("speciesSlug", () => {
     expect(speciesSlug("")).toBe("");
     expect(speciesSlug("   ")).toBe("");
     expect(speciesSlug("---")).toBe("");
+  });
+});
+
+describe("speciesFolderName", () => {
+  it("returns the canonical name unchanged when already clean", () => {
+    expect(speciesFolderName("Panthera onca")).toBe("Panthera onca");
+    expect(speciesFolderName("Leopardus pardalis")).toBe("Leopardus pardalis");
+  });
+
+  it("preserves diacritics (NFC form, no stripping)", () => {
+    expect(speciesFolderName("Cerdocyón thous")).toBe("Cerdocyón thous");
+    expect(speciesFolderName("Tinamú café")).toBe("Tinamú café");
+  });
+
+  it("preserves punctuation that the species table may use", () => {
+    expect(speciesFolderName("sp. 1")).toBe("sp. 1");
+    expect(speciesFolderName("Anas platyrhynchos domesticus")).toBe(
+      "Anas platyrhynchos domesticus",
+    );
+  });
+
+  it("collapses runs of whitespace and trims edges", () => {
+    expect(speciesFolderName("  Panthera   onca  ")).toBe("Panthera onca");
+    expect(speciesFolderName("\tPanthera\nonca\t")).toBe("Panthera onca");
+  });
+
+  it("neutralizes path separators without losing the name", () => {
+    expect(speciesFolderName("a/b")).toBe("a b");
+    expect(speciesFolderName("a\\b")).toBe("a b");
+  });
+
+  it("strips control characters but keeps the rest of the string", () => {
+    // NUL (\x00) and BEL (\x07) inserted via fromCharCode so the test source
+    // stays a clean ASCII file. Both should disappear after sanitization.
+    const withControls = `Panthera${String.fromCharCode(0)} ${String.fromCharCode(7)}onca`;
+    expect(speciesFolderName(withControls)).toBe("Panthera onca");
+  });
+  it("never returns a hidden-file folder (leading dot stripped)", () => {
+    expect(speciesFolderName(".hidden")).toBe("hidden");
+    expect(speciesFolderName("..weird")).toBe("weird");
+  });
+
+  it("caps absurdly long names at 200 chars", () => {
+    const long = "A".repeat(300);
+    expect(speciesFolderName(long).length).toBe(200);
   });
 });
 
@@ -378,8 +424,22 @@ describe("buildCounts", () => {
     expect(counts.train).toBe(3);
     expect(counts.val).toBe(1);
     expect(counts.test).toBe(1);
-    expect(counts.perClass.ocelot).toEqual({ train: 2, val: 1, test: 0 });
-    expect(counts.perClass.puma).toEqual({ train: 1, val: 0, test: 1 });
+    // perClass is keyed by the on-disk folder name (canonical species name
+    // with spaces preserved), matching what the exporter writes to disk and
+    // what the model server returns at inference time.
+    expect(counts.perClass.Ocelot).toEqual({ train: 2, val: 1, test: 0 });
+    expect(counts.perClass.Puma).toEqual({ train: 1, val: 0, test: 1 });
+  });
+
+  it("uses canonical species names (spaces, diacritics) as perClass keys", () => {
+    const counts = buildCounts([
+      { finalLabel: "Panthera onca", split: "train" },
+      { finalLabel: "Cerdocyón thous", split: "val" },
+    ]);
+    expect(Object.keys(counts.perClass).sort()).toEqual([
+      "Cerdocyón thous",
+      "Panthera onca",
+    ]);
   });
 });
 

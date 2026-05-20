@@ -18,7 +18,7 @@ import {
   scanDeploymentImagesInternal,
 } from "@/lib/camera-trap-sync-internals";
 import { runDriveSyncWorker } from "@/lib/camera-trap-sync-worker";
-import { processNextQueueable } from "@/lib/job-queue";
+import { processNextQueueable, claimAndEmitStart } from "@/lib/job-queue";
 import { requirePermission } from "@/lib/auth";
 import { getUserCameraTrapProjects, requireDeploymentAccess } from "@/lib/camera-trap-auth";
 import { touchAppState } from "@/lib/app-state";
@@ -590,36 +590,18 @@ export async function compressJobInternal(
 
     const skipped = uncompressedImages.length - jpegImages.length;
 
-    // Tolerant claim: queue picker may have already flipped to processing.
-    // If still pending (legacy direct-call), atomically claim.
-    const claim = await db
+    // Atomic claim + start event. Refresh the status message in either case
+    // (own-claim or picker-already-claimed).
+    await claimAndEmitStart(jobId);
+    await db
       .update(processingJobs)
-      .set({
-        status: "processing",
-        startedAt: new Date(),
-        statusMessage: `Comprimiendo... 0 de ${jpegImages.length}`,
-      })
+      .set({ statusMessage: `Comprimiendo... 0 de ${jpegImages.length}` })
       .where(
         and(
           eq(processingJobs.id, jobId),
-          eq(processingJobs.status, "pending"),
+          eq(processingJobs.status, "processing"),
         ),
       );
-    const claimChanged = (claim as unknown as { changes: number }).changes ?? 0;
-    if (claimChanged === 0) {
-      // Already processing (claimed by picker); refresh status message only.
-      await db
-        .update(processingJobs)
-        .set({
-          statusMessage: `Comprimiendo... 0 de ${jpegImages.length}`,
-        })
-        .where(
-          and(
-            eq(processingJobs.id, jobId),
-            eq(processingJobs.status, "processing"),
-          ),
-        );
-    }
 
     log.info({ deploymentId, count: jpegImages.length }, "[compress] Deployment starting");
 
@@ -804,32 +786,17 @@ export async function revertJobInternal(
   const startTime = Date.now();
 
   try {
-    // Tolerant claim — see compressJobInternal above for rationale.
-    const claim = await db
+    // Atomic claim + start event; refresh the status message either way.
+    await claimAndEmitStart(jobId);
+    await db
       .update(processingJobs)
-      .set({
-        status: "processing",
-        startedAt: new Date(),
-        statusMessage: "Revirtiendo compresión...",
-      })
+      .set({ statusMessage: "Revirtiendo compresión..." })
       .where(
         and(
           eq(processingJobs.id, jobId),
-          eq(processingJobs.status, "pending"),
+          eq(processingJobs.status, "processing"),
         ),
       );
-    const claimChanged = (claim as unknown as { changes: number }).changes ?? 0;
-    if (claimChanged === 0) {
-      await db
-        .update(processingJobs)
-        .set({ statusMessage: "Revirtiendo compresión..." })
-        .where(
-          and(
-            eq(processingJobs.id, jobId),
-            eq(processingJobs.status, "processing"),
-          ),
-        );
-    }
 
     const revertibleImages = await db
       .select()

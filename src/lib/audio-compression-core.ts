@@ -25,7 +25,7 @@ import {
 import { and, eq, inArray, sql, count, sum } from "drizzle-orm";
 import { JOB_TYPES } from "@/lib/job-types";
 import { findActiveAudioJob } from "@/lib/job-locks";
-import { processNextQueueable } from "@/lib/job-queue";
+import { processNextQueueable, claimAndEmitStart } from "@/lib/job-queue";
 import {
   getFileMetadataWithRevision,
   replaceFileContentAndRename,
@@ -800,25 +800,11 @@ export async function processFlacCompressionJob(
   };
 
   try {
-    // Tolerant claim: queue picker may have already flipped status=processing
-    // via `tryClaimJob`. If we're a legacy direct-call, claim atomically.
-    const claim = await db
-      .update(processingJobs)
-      .set({ status: "processing", startedAt: new Date() })
-      .where(
-        and(
-          eq(processingJobs.id, jobId),
-          eq(processingJobs.status, "pending"),
-        ),
-      );
-    const claimChanged = (claim as unknown as { changes: number }).changes ?? 0;
-    const [verifyJob] = await db
-      .select({ status: processingJobs.status })
-      .from(processingJobs)
-      .where(eq(processingJobs.id, jobId));
+    // Atomic claim + start event.
+    const { claimed, job: verifyJob } = await claimAndEmitStart(jobId);
     if (verifyJob?.status !== "processing") {
       log.warn(
-        { jobId, status: verifyJob?.status, claimChanged },
+        { jobId, status: verifyJob?.status, claimed },
         "[flac] Skipping — job is not in processing state",
       );
       return;
@@ -1010,24 +996,11 @@ export async function processAudioRevertJob(
   };
 
   try {
-    // Tolerant claim — see processFlacCompressionJob above for rationale.
-    const claim = await db
-      .update(processingJobs)
-      .set({ status: "processing", startedAt: new Date() })
-      .where(
-        and(
-          eq(processingJobs.id, jobId),
-          eq(processingJobs.status, "pending"),
-        ),
-      );
-    const claimChanged = (claim as unknown as { changes: number }).changes ?? 0;
-    const [verifyJob] = await db
-      .select({ status: processingJobs.status })
-      .from(processingJobs)
-      .where(eq(processingJobs.id, jobId));
+    // Atomic claim + start event.
+    const { claimed, job: verifyJob } = await claimAndEmitStart(jobId);
     if (verifyJob?.status !== "processing") {
       log.warn(
-        { jobId, status: verifyJob?.status, claimChanged },
+        { jobId, status: verifyJob?.status, claimed },
         "[flac-revert] Skipping — job is not in processing state",
       );
       return;

@@ -426,17 +426,25 @@ export function FloatingJobProgress() {
         {/* Queue list (collapsible) */}
         {hasQueue && !isTerminal && (
           <div>
-            <button
-              onClick={() => setShowQueue(!showQueue)}
-              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-            >
-              {showQueue ? (
-                <ChevronUp className="h-3 w-3" />
-              ) : (
-                <ChevronDown className="h-3 w-3" />
-              )}
-              {pendingJobs.length} en cola
-            </button>
+            <div className="flex items-center justify-between gap-2">
+              <button
+                onClick={() => setShowQueue(!showQueue)}
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+              >
+                {showQueue ? (
+                  <ChevronUp className="h-3 w-3" />
+                ) : (
+                  <ChevronDown className="h-3 w-3" />
+                )}
+                {pendingJobs.length} en cola
+              </button>
+              <Link
+                href="/admin/jobs"
+                className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+              >
+                Ver todos
+              </Link>
+            </div>
             {showQueue && (
               <div className="mt-1 space-y-1">
                 {pendingJobs.map((job) => (

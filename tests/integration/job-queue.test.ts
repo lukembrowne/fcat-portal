@@ -47,10 +47,20 @@ vi.mock("@/lib/audio-sync-worker", () => ({
   runAudioSyncWorker: vi.fn().mockResolvedValue(undefined),
 }));
 
-const { tryClaimJob, processNextQueueable, isQueueBusy } = await import(
-  "@/lib/job-queue"
-);
+// Mock only `recordEvent` from system-events so we can assert it's called
+// when claimAndEmitStart wins. `buildJobStartEvent` remains real so the
+// payload it produces is exercised end-to-end.
+vi.mock("@/lib/system-events", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/system-events")>(
+    "@/lib/system-events",
+  );
+  return { ...actual, recordEvent: vi.fn().mockResolvedValue(undefined) };
+});
+
+const { tryClaimJob, processNextQueueable, isQueueBusy, claimAndEmitStart } =
+  await import("@/lib/job-queue");
 const ctActions = await import("@/app/camera-trap/actions");
+const systemEvents = await import("@/lib/system-events");
 
 let db: TestDb;
 
@@ -207,5 +217,28 @@ describe("processNextQueueable", () => {
 
   it("handles an empty queue without throwing", async () => {
     await expect(processNextQueueable()).resolves.toBeUndefined();
+  });
+});
+
+describe("claimAndEmitStart", () => {
+  it("emits a *.started system event when the claim wins", async () => {
+    const job = seedJob({ jobType: "audio_compression" });
+    const { claimed } = await claimAndEmitStart(job.id);
+    expect(claimed).toBe(true);
+
+    // recordEvent should have been called once, with a *.started payload.
+    expect(systemEvents.recordEvent).toHaveBeenCalledTimes(1);
+    const arg = (systemEvents.recordEvent as unknown as ReturnType<typeof vi.fn>)
+      .mock.calls[0][0];
+    expect(arg.eventType).toBe("audio_audio_compression.started");
+    expect(arg.severity).toBe("info");
+    expect(arg.targetType).toBe("processing_job");
+  });
+
+  it("does NOT emit when the row is already processing (claim lost)", async () => {
+    const job = seedJob({ jobType: "ml", status: "processing" });
+    const { claimed } = await claimAndEmitStart(job.id);
+    expect(claimed).toBe(false);
+    expect(systemEvents.recordEvent).not.toHaveBeenCalled();
   });
 });

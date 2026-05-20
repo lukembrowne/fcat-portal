@@ -22,6 +22,7 @@ import { processingJobs, type ProcessingJob } from "@/db/schema";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { JOB_TYPES, type JobType } from "@/lib/job-types";
 import { log } from "@/lib/log";
+import { recordEvent, buildJobStartEvent } from "@/lib/system-events";
 
 export const QUEUEABLE_JOB_TYPES = [
   JOB_TYPES.ML,
@@ -68,6 +69,37 @@ export async function tryClaimJob(jobId: number): Promise<boolean> {
   // drizzle-orm/better-sqlite3 returns { changes: number, lastInsertRowid }
   const changes = (result as unknown as { changes: number }).changes ?? 0;
   return changes > 0;
+}
+
+/**
+ * Atomic claim + start event emission. Wraps `tryClaimJob` and, on a winning
+ * claim, fires a `*.started` system event fire-and-forget so every
+ * pending → processing transition surfaces in Actividad del Sistema.
+ *
+ * Replaces all the bespoke "tolerant claim" blocks at the top of each
+ * processor. Returns:
+ * - `claimed`: true if THIS caller flipped the row, false otherwise (picker
+ *    or another caller already did, or the row is no longer pending).
+ * - `job`: the current row (re-fetched after the UPDATE).
+ *
+ * Idempotency: the start event fires only when `claimed === true`, gated by
+ * the atomic UPDATE's `.changes > 0`. Two concurrent calls cannot both win.
+ */
+export async function claimAndEmitStart(jobId: number): Promise<{
+  claimed: boolean;
+  job: ProcessingJob | null;
+}> {
+  const claimed = await tryClaimJob(jobId);
+  const [job] = await db
+    .select()
+    .from(processingJobs)
+    .where(eq(processingJobs.id, jobId));
+  if (claimed && job) {
+    void recordEvent(buildJobStartEvent(job)).catch((err) => {
+      log.warn({ err, jobId }, "[queue] Start event emission failed");
+    });
+  }
+  return { claimed, job: job ?? null };
 }
 
 /** True iff any queueable job is currently in `processing`. */
@@ -118,7 +150,7 @@ export async function processNextQueueable(): Promise<void> {
         .limit(1);
       if (!next) return;
 
-      const claimed = await tryClaimJob(next.id);
+      const { claimed } = await claimAndEmitStart(next.id);
       if (!claimed) {
         log.info(
           { jobId: next.id, jobType: next.jobType },

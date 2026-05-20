@@ -63,9 +63,8 @@ function createTestDb() {
 // recordEvent must be imported AFTER the mocks are set up; vitest hoists
 // `vi.mock` calls to the top of the file, so a top-level import would
 // otherwise miss them.
-const { recordEvent, buildJobCompletionEvent, JOB_LABELS } = await import(
-  "@/lib/system-events"
-);
+const { recordEvent, buildJobCompletionEvent, buildJobStartEvent, JOB_LABELS } =
+  await import("@/lib/system-events");
 const { JOB_TYPES } = await import("@/lib/job-types");
 type ProcessingJob = schema.ProcessingJob;
 
@@ -358,6 +357,50 @@ describe("buildJobCompletionEvent", () => {
         expect(evt.eventType).toBe(`${evt.source}_${jobType}.completed`);
         expect(JOB_LABELS[jobType]).toBeDefined();
         expect(evt.summary).toContain(JOB_LABELS[jobType]);
+      });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildJobStartEvent — emitted exactly once when a job transitions
+// pending → processing (via claimAndEmitStart in @/lib/job-queue).
+// ---------------------------------------------------------------------------
+
+describe("buildJobStartEvent", () => {
+  it("emits info severity, *.started eventType, and label in summary", () => {
+    const job = makeJob({ status: "processing", jobType: "birdnet" });
+    const evt = buildJobStartEvent(job);
+
+    expect(evt.source).toBe("audio");
+    expect(evt.eventType).toBe("audio_birdnet.started");
+    expect(evt.severity).toBe("info");
+    expect(evt.summary).toContain(JOB_LABELS.birdnet);
+    expect(evt.summary).toContain("iniciado");
+    expect(evt.targetType).toBe("processing_job");
+    expect(evt.targetId).toBe(1);
+    expect(evt.durationMs).toBeUndefined();
+  });
+
+  it("routes camera-trap job types to source=camera-trap", () => {
+    const job = makeJob({ status: "processing", jobType: "ml" });
+    const evt = buildJobStartEvent(job);
+    expect(evt.source).toBe("camera-trap");
+    expect(evt.eventType).toBe("camera-trap_ml.started");
+  });
+
+  describe("coverage guard — every JobType has a start event", () => {
+    for (const jobType of Object.values(JOB_TYPES)) {
+      it(`handles JobType=${jobType}`, () => {
+        const job = makeJob({ status: "processing", jobType });
+        const evt = buildJobStartEvent(job);
+
+        expect(["audio", "camera-trap"]).toContain(evt.source);
+        expect(evt.eventType).toBe(`${evt.source}_${jobType}.started`);
+        expect(evt.severity).toBe("info");
+        expect(JOB_LABELS[jobType]).toBeDefined();
+        expect(evt.summary).toContain(JOB_LABELS[jobType]);
+        expect(evt.durationMs).toBeUndefined();
       });
     }
   });

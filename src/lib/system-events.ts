@@ -102,6 +102,49 @@ const OUTCOME_VERBS: Record<TerminalOutcome, string> = {
 
 export type JobCompletionExtras = Record<string, unknown>;
 
+function jobSourceAndProject(jobType: JobType, job: ProcessingJob): {
+  source: EventSource;
+  projectId: string;
+  scope: string;
+} {
+  const source: EventSource = AUDIO_JOB_TYPES.has(jobType)
+    ? "audio"
+    : "camera-trap";
+  const projectId = job.cameraTrapProjectId
+    ? `camera-trap:${job.cameraTrapProjectId}`
+    : source === "audio"
+      ? "grabaciones"
+      : "camera-trap";
+  const scope = job.deploymentId
+    ? `Instalación ${job.deploymentId}`
+    : job.cameraTrapProjectId
+      ? `Proyecto ${job.cameraTrapProjectId}`
+      : "Todos los proyectos";
+  return { source, projectId, scope };
+}
+
+/**
+ * Event fired exactly once when a job transitions from `pending` to
+ * `processing` (gated by the atomic claim in `@/lib/job-queue`). Severity is
+ * `info`. No duration — pair with the matching `.completed|.failed|.cancelled`
+ * event for elapsed time.
+ */
+export function buildJobStartEvent(job: ProcessingJob): RecordEventInput {
+  const jobType = job.jobType as JobType;
+  const { source, projectId, scope } = jobSourceAndProject(jobType, job);
+  const label = JOB_LABELS[jobType] ?? job.jobType;
+  return {
+    source,
+    eventType: `${source}_${job.jobType}.started`,
+    severity: "info",
+    summary: `${label} iniciado · ${scope}`,
+    actorEmail: job.createdBy ?? null,
+    projectId,
+    targetType: "processing_job",
+    targetId: job.id,
+  };
+}
+
 export function buildJobCompletionEvent(
   job: ProcessingJob,
   extras?: JobCompletionExtras,
@@ -114,9 +157,7 @@ export function buildJobCompletionEvent(
         : "cancelled";
 
   const jobType = job.jobType as JobType;
-  const source: EventSource = AUDIO_JOB_TYPES.has(jobType)
-    ? "audio"
-    : "camera-trap";
+  const { source, projectId, scope } = jobSourceAndProject(jobType, job);
 
   const severity: EventSeverity =
     outcome === "completed"
@@ -128,18 +169,6 @@ export function buildJobCompletionEvent(
   const durationMs = job.startedAt
     ? Date.now() - job.startedAt.getTime()
     : null;
-
-  const projectId = job.cameraTrapProjectId
-    ? `camera-trap:${job.cameraTrapProjectId}`
-    : source === "audio"
-      ? "grabaciones"
-      : "camera-trap";
-
-  const scope = job.deploymentId
-    ? `Instalación ${job.deploymentId}`
-    : job.cameraTrapProjectId
-      ? `Proyecto ${job.cameraTrapProjectId}`
-      : "Todos los proyectos";
 
   const label = JOB_LABELS[jobType] ?? job.jobType;
 

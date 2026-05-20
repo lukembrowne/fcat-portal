@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Home, TreePine, Leaf, Camera, Shield, DollarSign, BarChart3, CloudSun, ClipboardList, Thermometer, AudioLines, ScrollText, FileText, Activity, ChevronRight, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { Home, TreePine, Leaf, Camera, Shield, DollarSign, BarChart3, CloudSun, ClipboardList, Thermometer, AudioLines, ScrollText, FileText, Activity, ListChecks, ChevronRight, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { Collapsible } from "radix-ui";
 import type { AuthUser } from "@/lib/types";
 import type { IconName, NavItem, NavSection } from "@/components/sidebar-nav";
@@ -41,6 +41,7 @@ const ICONS: Record<IconName, React.ComponentType<{ className?: string }>> = {
   "scroll-text": ScrollText,
   "file-text": FileText,
   activity: Activity,
+  "list-checks": ListChecks,
 };
 
 function NavIcon({ name }: { name?: IconName }) {

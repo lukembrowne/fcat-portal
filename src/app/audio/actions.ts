@@ -38,7 +38,7 @@ import {
 import { scanDeploymentAudioInternal } from "@/lib/audio-sync-internals";
 import { JOB_TYPES } from "@/lib/job-types";
 import { findActiveAudioJob } from "@/lib/job-locks";
-import { processNextQueueable } from "@/lib/job-queue";
+import { processNextQueueable, claimAndEmitStart } from "@/lib/job-queue";
 import {
   enqueueAudioCompressionJob,
   runAudioCompressionPhase,
@@ -479,33 +479,17 @@ export async function createBirdNETJob(
 
 export async function processBirdNETJob(jobId: number): Promise<void> {
   try {
-    // Tolerant claim — see processAudioAnalysisJob for rationale.
-    const claim = await db
-      .update(processingJobs)
-      .set({ status: "processing", startedAt: new Date() })
-      .where(
-        and(
-          eq(processingJobs.id, jobId),
-          eq(processingJobs.status, "pending"),
-        ),
-      );
-    const claimChanged = (claim as unknown as { changes: number }).changes ?? 0;
-
-    // Look up job + deployment
-    const [job] = await db
-      .select()
-      .from(processingJobs)
-      .where(eq(processingJobs.id, jobId));
-
-    if (job && job.status !== "processing") {
+    // Atomic claim + start event. Picker may have already claimed (claimed=false,
+    // status=processing) — fine. Direct callers self-claim and emit.
+    const { claimed, job } = await claimAndEmitStart(jobId);
+    if (!job) throw new Error(`Job ${jobId} not found`);
+    if (job.status !== "processing") {
       log.warn(
-        { jobId, status: job.status, claimChanged },
+        { jobId, status: job.status, claimed },
         "[birdnet] Skipping — job is not in processing state",
       );
       return;
     }
-
-    if (!job) throw new Error(`Job ${jobId} not found`);
     // `processingJobs.deploymentId` became nullable for drive_sync jobs (main
     // commit 4b6cd23). BirdNET jobs always target a single deployment, so a
     // null here is a programmer error — fail loud rather than coerce.
@@ -916,26 +900,12 @@ export async function createAcousticIndicesJob(
 
 export async function processAcousticIndicesJob(jobId: number): Promise<void> {
   try {
-    // Tolerant claim — see processAudioAnalysisJob for rationale.
-    const claim = await db
-      .update(processingJobs)
-      .set({ status: "processing", startedAt: new Date() })
-      .where(
-        and(
-          eq(processingJobs.id, jobId),
-          eq(processingJobs.status, "pending"),
-        ),
-      );
-    const claimChanged = (claim as unknown as { changes: number }).changes ?? 0;
-
-    const [job] = await db
-      .select()
-      .from(processingJobs)
-      .where(eq(processingJobs.id, jobId));
+    // Atomic claim + start event.
+    const { claimed, job } = await claimAndEmitStart(jobId);
     if (!job) throw new Error(`Job ${jobId} not found`);
     if (job.status !== "processing") {
       log.warn(
-        { jobId, status: job.status, claimChanged },
+        { jobId, status: job.status, claimed },
         "[acoustic-indices] Skipping — job is not in processing state",
       );
       return;
@@ -1338,27 +1308,12 @@ export async function processAudioAnalysisJob(
   };
 
   try {
-    // Already-claimed by the queue picker (status='processing'). Otherwise
-    // legacy direct-call path: atomic claim guards against race with picker.
-    const claim = await db
-      .update(processingJobs)
-      .set({ status: "processing", startedAt: new Date() })
-      .where(
-        and(
-          eq(processingJobs.id, jobId),
-          eq(processingJobs.status, "pending"),
-        ),
-      );
-    const claimChanged = (claim as unknown as { changes: number }).changes ?? 0;
-
-    const [job] = await db
-      .select()
-      .from(processingJobs)
-      .where(eq(processingJobs.id, jobId));
+    // Atomic claim + start event.
+    const { claimed, job } = await claimAndEmitStart(jobId);
     if (!job) throw new Error(`Job ${jobId} not found`);
     if (job.status !== "processing") {
       log.warn(
-        { jobId, status: job.status, claimChanged },
+        { jobId, status: job.status, claimed },
         "[audio-analysis] Skipping — job is not in processing state",
       );
       return;

@@ -8,6 +8,7 @@ import { revalidatePath } from "next/cache";
 import { touchAppState } from "@/lib/app-state";
 import { log } from "@/lib/log";
 import { recordEvent, buildJobCompletionEvent } from "@/lib/system-events";
+import { claimAndEmitStart } from "@/lib/job-queue";
 
 const DEFAULT_CONCURRENCY = 8;
 const MAX_CONCURRENCY = 32;
@@ -192,20 +193,14 @@ export async function runDriveSyncWorkerGeneric<TDeployment>(
       `${tag} starting`
     );
 
-    // Tolerant claim: queue picker may have already flipped status=processing
-    // via `tryClaimJob`. If still pending (legacy direct-call from cron etc.),
-    // claim ourselves. Either way, just refresh the status message.
-    if (job.status === "pending") {
-      await setStatus({
-        status: "processing",
-        startedAt: new Date(),
-        statusMessage: "Buscando...",
-      });
-    } else if (job.status === "processing") {
+    // Atomic claim + start event. Picker may have already flipped the row;
+    // either way we refresh the status message.
+    const { claimed, job: latest } = await claimAndEmitStart(jobId);
+    if (latest?.status === "processing") {
       await setStatus({ statusMessage: "Buscando..." });
     } else {
       log.warn(
-        { jobId, status: job.status },
+        { jobId, status: latest?.status, claimed },
         `${tag} Skipping — job is not pending/processing`
       );
       return;

@@ -49,7 +49,7 @@ import type { Deployment, ProcessingJob, Species, NewSpecies, ShareToken } from 
 import crypto from "crypto";
 import { ML_DEFAULTS } from "@/lib/ml-defaults";
 import { log } from "@/lib/log";
-import { processNextQueueable } from "@/lib/job-queue";
+import { processNextQueueable, claimAndEmitStart } from "@/lib/job-queue";
 
 const CAMERA_TRAP_PATH = "/camera-trap";
 
@@ -150,6 +150,23 @@ export async function createProcessingJob(
       log.info({ deploymentId }, "[createProcessingJob] Empty deployment — 0 images, 0 videos");
     }
 
+    // Resolve the active custom classifier (if any) BEFORE the insert so the
+    // classifierModel column reflects the model the user actually expects to
+    // run — the dialog showed them this version, and the table should agree
+    // from the moment the row exists. The runtime classifier is re-resolved at
+    // spawn time in ml-runner.ts and re-stamped if it changed in between.
+    let activeClassifierVersion: string | null = null;
+    try {
+      const [active] = await db
+        .select({ version: cameraTrapModels.version })
+        .from(cameraTrapModels)
+        .where(eq(cameraTrapModels.active, true))
+        .limit(1);
+      activeClassifierVersion = active?.version ?? null;
+    } catch {
+      // Tolerate DB errors — falls back to the AI4G default below.
+    }
+
     // Atomically clean up stale state from any prior jobs and link all images
     // to the new job. Done as a single transaction so a partial failure can't
     // leave detections, identifications, and image.jobId out of sync.
@@ -216,7 +233,10 @@ export async function createProcessingJob(
           deploymentId,
           jobType: incremental ? "ml_incremental" : "ml",
           detectorModel: modelConfig?.detectorModel || ML_DEFAULTS.detectorModel,
-          classifierModel: modelConfig?.classifierModel || ML_DEFAULTS.classifierModel,
+          classifierModel:
+            modelConfig?.classifierModel ||
+            activeClassifierVersion ||
+            ML_DEFAULTS.classifierModel,
           confidenceThreshold: modelConfig?.confidenceThreshold ?? ML_DEFAULTS.confidenceThreshold,
           frameExtractionRate: options?.frameExtractionRate ?? modelConfig?.frameExtractionRate ?? 1.0,
           compressFirst: options?.compressFirst ?? false,
@@ -315,46 +335,18 @@ export async function processJobInternal(
   };
 
   try {
-    const [job] = await db
-      .select()
-      .from(processingJobs)
-      .where(eq(processingJobs.id, jobId));
-
+    // Atomic claim + start event. If the queue picker already claimed the row
+    // (status='processing'), this is a no-op claim and no duplicate event is
+    // emitted. Direct-call paths self-claim and fire the start event.
+    const { claimed, job } = await claimAndEmitStart(jobId);
     if (!job) {
       return { success: false, error: `Trabajo no encontrado: ${jobId}` };
     }
-
-    // Already-claimed path: the queue picker atomically flipped the row to
-    // `processing` via `tryClaimJob`. We're good to go — just refresh the
-    // status message.
-    if (job.status === "processing") {
+    if (claimed || job.status === "processing") {
       await db
         .update(processingJobs)
         .set({ statusMessage: "Iniciando procesamiento..." })
         .where(eq(processingJobs.id, jobId));
-    } else if (job.status === "pending") {
-      // Direct-call path (no picker): atomically claim ourselves to avoid
-      // racing with the picker if it happens to fire concurrently.
-      const claim = await db
-        .update(processingJobs)
-        .set({
-          status: "processing",
-          startedAt: new Date(),
-          statusMessage: "Iniciando procesamiento...",
-        })
-        .where(
-          and(
-            eq(processingJobs.id, jobId),
-            eq(processingJobs.status, "pending"),
-          ),
-        );
-      const changed = (claim as unknown as { changes: number }).changes ?? 0;
-      if (changed === 0) {
-        return {
-          success: false,
-          error: `El trabajo ya fue reclamado (estado: ${job.status})`,
-        };
-      }
     } else {
       return {
         success: false,

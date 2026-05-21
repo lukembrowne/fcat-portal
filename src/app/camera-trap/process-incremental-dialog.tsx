@@ -14,6 +14,7 @@ import { Loader2, Info, CheckCircle2, XCircle, Clock } from "lucide-react";
 import { queueIncrementalProcessing } from "./actions";
 import { probeVideoTimestamp } from "./video-timestamp-actions";
 import type { VideoTimestampProbe, VideoTimestampMethod } from "./video-timestamp-actions";
+import { ActiveModelsInfo } from "./active-models-info";
 
 interface ProcessIncrementalDialogProps {
   deploymentId: number | null;
@@ -130,6 +131,9 @@ export function ProcessIncrementalDialog({
             preservarán.
           </DialogDescription>
         </DialogHeader>
+        <div className="pt-1">
+          <ActiveModelsInfo />
+        </div>
         {showVideoOptions && (
           <div className="space-y-3">
             <div className="space-y-1.5">

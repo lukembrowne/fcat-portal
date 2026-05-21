@@ -16,6 +16,13 @@ export interface ActiveModelForEnv {
   modelDir: string;
   classMappingJson: string;
   metricsJson: string;
+  /**
+   * Version string, used only for display (stamped onto processingJobs.classifierModel
+   * at spawn time so the jobs table shows the actually-resolved classifier instead
+   * of the AI4G default written at job creation). Optional so existing tests that
+   * construct this shape directly don't need to change.
+   */
+  version?: string;
 }
 
 /**

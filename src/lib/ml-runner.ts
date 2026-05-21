@@ -672,6 +672,7 @@ async function resolveActiveClassifierModel(): Promise<ActiveModelForEnv | null>
         modelDir: cameraTrapModels.modelDir,
         classMappingJson: cameraTrapModels.classMappingJson,
         metricsJson: cameraTrapModels.metricsJson,
+        version: cameraTrapModels.version,
       })
       .from(cameraTrapModels)
       .where(eq(cameraTrapModels.active, true))
@@ -805,10 +806,20 @@ export async function runMLPredictions(
     };
   }
 
-  // Store PID for external process management
+  // Store PID for external process management. Also stamp the actually-resolved
+  // classifier version onto the job row, since classifierModel was written with
+  // ML_DEFAULTS at job creation and may not reflect the active custom model.
+  const startUpdate: Partial<typeof processingJobs.$inferInsert> = {};
   if (serverProc.pid) {
-    await db.update(processingJobs)
-      .set({ pid: serverProc.pid })
+    startUpdate.pid = serverProc.pid;
+  }
+  if (activeClassifierModel?.version) {
+    startUpdate.classifierModel = activeClassifierModel.version;
+  }
+  if (Object.keys(startUpdate).length > 0) {
+    await db
+      .update(processingJobs)
+      .set(startUpdate)
       .where(eq(processingJobs.id, jobId));
   }
 

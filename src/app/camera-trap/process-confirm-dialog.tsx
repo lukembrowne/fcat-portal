@@ -22,6 +22,7 @@ import { queueProcessing } from "./actions";
 import { getCompressionPreviewBatch } from "./preview-actions";
 import { probeVideoTimestamp } from "./video-timestamp-actions";
 import type { VideoTimestampProbe, VideoTimestampMethod } from "./video-timestamp-actions";
+import { ActiveModelsInfo } from "./active-models-info";
 
 interface ProcessConfirmDialogProps {
   deploymentIds: number[] | null;
@@ -152,6 +153,7 @@ export function ProcessConfirmDialog({
         </DialogHeader>
 
         <div className="space-y-3">
+          <ActiveModelsInfo />
           {hasImages && (
             <div className="flex items-start gap-3">
               <TooltipProvider>

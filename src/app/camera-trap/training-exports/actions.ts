@@ -775,7 +775,7 @@ export async function exportTrainingDataset(
           classCount: classList.length,
           minExamplesThreshold: minExamples,
           classListJson: JSON.stringify(
-            classList.map((label) => speciesSlug(label)),
+            classList.map((label) => speciesFolderName(label)),
           ),
           droppedSpeciesJson: JSON.stringify(droppedSpecies),
           deploymentsJson: JSON.stringify(deploymentSummaries),

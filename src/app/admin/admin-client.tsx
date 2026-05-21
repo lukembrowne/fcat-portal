@@ -236,9 +236,16 @@ export function AdminClient({ users, projects, ctProjects, ctAccess }: AdminClie
 
   const externalCount = users.filter((u) => u.isExternal).length;
 
-  // Users who have camera-trap module access (for CT project assignment)
+  // Users who can be assigned CT sub-project access. Sub-projects (Cerro Negro,
+  // Bilsa, etc.) gate deployments, and deployments are shared between the
+  // camera-trap and audio (grabaciones) modules — so audio-only users also
+  // need to appear in this matrix or their audio queries return nothing.
   const cameraTrapUsers = users.filter(
-    (u) => u.globalRole === "super_admin" || u.permissions.some((p) => p.projectId === "camera-trap")
+    (u) =>
+      u.globalRole === "super_admin" ||
+      u.permissions.some(
+        (p) => p.projectId === "camera-trap" || p.projectId === "grabaciones"
+      )
   );
 
   return (
@@ -572,7 +579,11 @@ export function AdminClient({ users, projects, ctProjects, ctAccess }: AdminClie
           {/* User ↔ CT project access matrix */}
           {ctProjects.length > 0 && cameraTrapUsers.length > 0 && (
             <div>
-              <h3 className="text-sm font-medium mb-3">Acceso por usuario</h3>
+              <h3 className="text-sm font-medium mb-1">Acceso por usuario</h3>
+              <p className="text-xs text-muted-foreground mb-3">
+                Controla el acceso a instalaciones para los módulos de cámaras
+                trampa y grabaciones (las instalaciones se comparten).
+              </p>
               <Table>
                 <TableHeader>
                   <TableRow>

@@ -1083,15 +1083,20 @@ db.exec(`
   WHERE ct_project_id IS NULL
 `);
 
-// 5. Bootstrap: give all current camera-trap users access to all CT projects
-const cameraTrapUsers = db
-  .prepare("SELECT user_email FROM user_permissions WHERE project_id = 'camera-trap'")
+// 5. Bootstrap: give all current camera-trap and grabaciones users access to
+// all CT projects. CT sub-projects gate deployments, which are shared between
+// the camera-trap and audio (grabaciones) modules — so audio users also need
+// rows here or their audio queries return nothing.
+const deploymentUsers = db
+  .prepare(
+    "SELECT DISTINCT user_email FROM user_permissions WHERE project_id IN ('camera-trap', 'grabaciones')"
+  )
   .all();
 const allCtProjects = db.prepare("SELECT id FROM ct_projects").all();
 const insertAccess = db.prepare(
   "INSERT OR IGNORE INTO ct_project_access (user_email, ct_project_id) VALUES (?, ?)"
 );
-for (const user of cameraTrapUsers) {
+for (const user of deploymentUsers) {
   for (const proj of allCtProjects) {
     insertAccess.run(user.user_email, proj.id);
   }

@@ -240,7 +240,7 @@ describe("buildJobCompletionEvent", () => {
     expect(evt.source).toBe("camera-trap");
     expect(evt.eventType).toBe("camera-trap_ml.failed");
     expect(evt.severity).toBe("error");
-    expect(evt.summary).toBe("Detección de especies fallido · Instalación 42");
+    expect(evt.summary).toBe("Detección en cámaras trampa fallido · Instalación 42");
     expect(evt.projectId).toBe("camera-trap");
     expect(evt.details).toEqual({ errorMessage: "Model server crashed" });
   });

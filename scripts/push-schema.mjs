@@ -547,6 +547,22 @@ const statements = [
   // Partial unique index — at most one active model
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_camera_trap_models_active ON camera_trap_models(active) WHERE active = 1`,
 
+  // Camera Trap — Per-class metrics (2026-05-22, one row per model × class)
+  // CASCADE: rows are derived data, meaningless without parent model.
+  `CREATE TABLE IF NOT EXISTS camera_trap_model_class_metrics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    model_id INTEGER NOT NULL REFERENCES camera_trap_models(id) ON DELETE CASCADE,
+    class_name TEXT NOT NULL,
+    precision_value REAL,
+    recall REAL,
+    f1 REAL,
+    support INTEGER NOT NULL,
+    train_count INTEGER
+  )`,
+  // Composite unique covers the leading-prefix WHERE model_id = ? case;
+  // no standalone byModel / byClass index needed.
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_ct_mcm_model_class ON camera_trap_model_class_metrics(model_id, class_name)`,
+
   // --- Researcher Applications ---
   `CREATE TABLE IF NOT EXISTS research_applications (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -725,6 +741,9 @@ const migrations = [
   `ALTER TABLE audio_files ADD COLUMN compressed INTEGER NOT NULL DEFAULT 0`,
   `ALTER TABLE audio_files ADD COLUMN original_file_size INTEGER`,
   `ALTER TABLE audio_files ADD COLUMN original_drive_revision_id TEXT`,
+  // Per-model confusion matrix JSON (2026-05-22)
+  // { classes, matrix, axisConvention }. Nullable for legacy v1 models.
+  `ALTER TABLE camera_trap_models ADD COLUMN confusion_matrix_json TEXT`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }

@@ -40,6 +40,8 @@ interface AnnotationToolsSidebarProps {
   isStarred: boolean;
   starredBy: string | null;
   onToggleStarred?: () => void;
+  onQuickVerifyAll?: () => void;
+  unverifiedCount?: number;
   dateSuggestion: {
     field: "validStart" | "validEnd";
     value: string;
@@ -71,6 +73,8 @@ export function AnnotationToolsSidebar({
   isStarred,
   starredBy,
   onToggleStarred,
+  onQuickVerifyAll,
+  unverifiedCount = 0,
   dateSuggestion,
   onApplyDateSuggestion,
   onDismissDateSuggestion,
@@ -120,7 +124,8 @@ export function AnnotationToolsSidebar({
           undefined (audio omits star + setup tags). The wrapper hides
           entirely when no actions remain. */}
       {canEdit &&
-        (onToggleStarred ||
+        (onQuickVerifyAll ||
+          onToggleStarred ||
           onToggleSetupDeployment ||
           onToggleSetupRetrieval ||
           dateSuggestion) && (
@@ -128,6 +133,26 @@ export function AnnotationToolsSidebar({
           <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-1">
             Acciones
           </p>
+          {onQuickVerifyAll && (
+            <button
+              type="button"
+              onClick={onQuickVerifyAll}
+              disabled={unverifiedCount === 0}
+              title="Verificar todas las detecciones y avanzar (v)"
+              className={cn(
+                "w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md border text-sm transition-colors",
+                unverifiedCount === 0
+                  ? "border-border text-muted-foreground bg-muted/40 cursor-not-allowed"
+                  : "bg-emerald-600 border-emerald-600 text-white hover:bg-emerald-700"
+              )}
+            >
+              <CheckCircle2 className="size-4 shrink-0" />
+              <span className="truncate">
+                Verificar todo
+                {unverifiedCount > 0 ? ` (${unverifiedCount})` : ""}
+              </span>
+            </button>
+          )}
           {onToggleStarred && (
             <button
               type="button"

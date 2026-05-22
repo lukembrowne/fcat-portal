@@ -39,7 +39,7 @@ import {
   assignAudioSpecies,
   verifyAudioIdentification,
   rejectAudioIdentification,
-  verifyAllAudioAndAdvance,
+  bulkVerifyAudio,
 } from "@/app/audio/annotation-actions";
 
 export interface AudioDetectionData {
@@ -421,20 +421,42 @@ export function AudioAnnotationClient({
     });
   }, [selectedDetection, router]);
 
+  const isVerifyingRef = useRef(false);
+
   const handleQuickVerifyAll = useCallback(() => {
+    if (isVerifyingRef.current) return;
+
     const unverifiedIds = detections
       .filter((d) => d.identification?.verificationStatus === "unverified")
       .map((d) => d.identification!.id);
 
+    if (unverifiedIds.length === 0) return;
+
+    isVerifyingRef.current = true;
     startTransition(async () => {
-      const result = await verifyAllAudioAndAdvance(unverifiedIds, deploymentId, audioFileId);
-      if (result.success && result.data.nextFileId) {
-        router.push(buildSiblingUrl(result.data.nextFileId));
-      } else {
-        router.refresh();
+      try {
+        const result = await bulkVerifyAudio(unverifiedIds);
+        if (result.success) {
+          toast.success(
+            result.data.count === 1
+              ? "1 detección verificada"
+              : `${result.data.count} detecciones verificadas`
+          );
+          router.refresh();
+        }
+      } finally {
+        isVerifyingRef.current = false;
       }
     });
-  }, [detections, deploymentId, audioFileId, router, buildSiblingUrl]);
+  }, [detections, router]);
+
+  const unverifiedCount = useMemo(
+    () =>
+      detections.filter(
+        (d) => d.identification?.verificationStatus === "unverified"
+      ).length,
+    [detections]
+  );
 
   // Auto-scroll the spectrogram to the selected box and trigger the pulse
   // animation. Fires on every selection change (sidebar card click,
@@ -577,6 +599,8 @@ export function AudioAnnotationClient({
             onCycleDisplay={cycleDisplay}
             canEdit={isEditor}
             setupTag={null}
+            onQuickVerifyAll={isEditor ? handleQuickVerifyAll : undefined}
+            unverifiedCount={unverifiedCount}
             isStarred={false}
             starredBy={null}
             dateSuggestion={null}

@@ -7,7 +7,7 @@ import { useEffect, useRef } from "react";
  * (chrome). Handles playback (Space, Q/E, `[`/`]`, P, L), spectrogram
  * controls (F, M, +/-), and audio-specific annotation actions (V, R, N).
  *
- * Chrome keys (arrows for prev/next file, Enter verify-all, 1-9 species,
+ * Chrome keys (arrows for prev/next file, V verify-all, 1-9 species,
  * 0 last-species, Backspace/Delete, Esc) live in `useAnnotationShortcuts`
  * and must not be duplicated here.
  */

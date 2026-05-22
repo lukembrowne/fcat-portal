@@ -68,7 +68,7 @@ export function AnnotationHelpPanel() {
                 <ShortcutRow keys="← →" desc="Imagen anterior/siguiente" />
                 <ShortcutRow keys="1-9" desc="Seleccionar detección / asignar frecuente" />
                 <ShortcutRow keys="0" desc="Repetir última especie asignada" />
-                <ShortcutRow keys="Enter" desc="Verificar todo y avanzar" />
+                <ShortcutRow keys="v" desc="Verificar todo y avanzar" />
                 <ShortcutRow keys="d / ⌫" desc="Eliminar detección" />
                 <ShortcutRow keys="b" desc="Confirmar/desconfirmar vacía" />
                 <ShortcutRow keys="s" desc="Destacar imagen" />
@@ -98,7 +98,7 @@ export function AnnotationHelpPanel() {
                 <li>Los slots <Kbd>1-9</Kbd> quedan fijos durante la sesión</li>
                 <li><Kbd>0</Kbd> repite la última especie — ideal para ráfagas de 3 fotos</li>
                 <li>Con el selector abierto, escriba para buscar especies raras</li>
-                <li><Kbd>Enter</Kbd> verifica todo y avanza</li>
+                <li><Kbd>v</Kbd> verifica todo y avanza</li>
               </ul>
             </section>
           </div>

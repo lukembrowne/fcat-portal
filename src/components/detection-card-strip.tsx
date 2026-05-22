@@ -15,8 +15,8 @@ const CLASS_LABELS: Record<number, string> = {
 };
 
 const STATUS_COLORS: Record<string, string> = {
-  unverified: "bg-gray-400",
-  verified: "bg-green-500",
+  unverified: "bg-amber-500",
+  verified: "bg-emerald-500",
   rejected: "bg-red-500",
   corrected: "bg-blue-500",
 };

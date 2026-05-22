@@ -210,9 +210,8 @@ export function AnnotationToolbar({
       })}
 
       <div className="text-xs text-muted-foreground text-center pt-2 border-t">
-        <span className="font-mono">v</span> verificar &middot;{" "}
+        <span className="font-mono">v</span> verificar todo &middot;{" "}
         <span className="font-mono">r</span> rechazar &middot;{" "}
-        <span className="font-mono">Enter</span> verificar todo &middot;{" "}
         <span className="font-mono">1-9</span> seleccionar &middot;{" "}
         <span className="font-mono">Esc</span> deseleccionar
       </div>

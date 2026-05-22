@@ -7,7 +7,7 @@ export const SHORTCUTS = [
   { key: "1-9", description: "Seleccionar detección / asignar especie frecuente", category: "navigation" },
   { key: "0", description: "Repetir última especie asignada", category: "annotation" },
   { key: "Esc", description: "Cerrar selector / deseleccionar", category: "navigation" },
-  { key: "Enter", description: "Verificar todo y avanzar", category: "annotation" },
+  { key: "v", description: "Verificar todo y avanzar", category: "annotation" },
   { key: "d / ⌫ / Supr", description: "Eliminar detección", category: "annotation" },
   { key: "b", description: "Confirmar/desconfirmar imagen vacía", category: "annotation" },
   { key: "s", description: "Destacar/quitar destacado", category: "annotation" },
@@ -130,11 +130,8 @@ export function useAnnotationShortcuts(opts: AnnotationShortcutOptions) {
           e.preventDefault();
           o.onNext?.();
           break;
-        case "Enter":
-          // Skip key-repeat: a held Enter inside the delete-confirm dialog
-          // would otherwise leak through after the dialog unmounts and trigger
-          // verify-and-advance.
-          if (!hasModifier && !o.isDialogOpen && !e.repeat) {
+        case "v":
+          if (!hasModifier && !o.isDialogOpen) {
             e.preventDefault();
             o.onQuickVerifyAll?.();
           }

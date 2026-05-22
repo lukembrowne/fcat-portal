@@ -36,7 +36,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  verifyAndAdvance,
+  bulkVerify,
   createManualDetection,
   deleteDetection,
   assignSpecies,
@@ -110,7 +110,6 @@ export function ImageAnnotationClient({
   imageId,
   prevImageId,
   nextImageId,
-  navigationIds,
   confirmedBlank,
   starred,
   starredBy,
@@ -281,6 +280,14 @@ export function ImageAnnotationClient({
     [detections, deleteDialogDetectionId]
   );
 
+  const unverifiedCount = useMemo(
+    () =>
+      detections.filter(
+        (d) => d.identification?.verificationStatus === "unverified"
+      ).length,
+    [detections]
+  );
+
   // --- Action handlers ---
 
   const handleQuickVerifyAll = useCallback(() => {
@@ -295,31 +302,20 @@ export function ImageAnnotationClient({
     isVerifyingRef.current = true;
     startTransition(async () => {
       try {
-        const result = await verifyAndAdvance(
-          unverifiedIds,
-          jobId,
-          imageId,
-          navigationIds,
-        );
-        if (result.success && result.data.nextImageId) {
-          if (onNavigate) {
-            onNavigate(result.data.nextImageId);
-          } else {
-            router.push(
-              `/camera-trap/results/${jobId}/images/${result.data.nextImageId}`
-            );
-          }
-        } else if (result.success) {
-          if (result.data.deploymentCompleted) {
-            toast.success("¡Todas las identificaciones revisadas! Instalación marcada como verificada.");
-          }
+        const result = await bulkVerify(unverifiedIds);
+        if (result.success) {
+          toast.success(
+            result.data.count === 1
+              ? "1 detección verificada"
+              : `${result.data.count} detecciones verificadas`
+          );
           refresh();
         }
       } finally {
         isVerifyingRef.current = false;
       }
     });
-  }, [detections, jobId, imageId, navigationIds, router, onNavigate, refresh]);
+  }, [detections, refresh]);
 
   const handleDrawComplete = useCallback(
     (bbox: { x: number; y: number; width: number; height: number }) => {
@@ -575,6 +571,8 @@ export function ImageAnnotationClient({
             isStarred={isStarred}
             starredBy={starredBy}
             onToggleStarred={canEdit ? handleToggleStarred : undefined}
+            onQuickVerifyAll={canEdit ? handleQuickVerifyAll : undefined}
+            unverifiedCount={unverifiedCount}
             dateSuggestion={
               dateSuggestion && !suggestionDismissed
                 ? { field: dateSuggestion.field, value: dateSuggestion.value }

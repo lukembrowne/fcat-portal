@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { getSpeciesColor } from "@/lib/species-color";
 
 export interface BBoxData {
   id: number;
@@ -34,11 +33,25 @@ interface BBoxOverlayProps {
   imageFilter?: string;
 }
 
-const CLASS_COLORS: Record<number, string> = {
-  0: "#22c55e",
-  1: "#ef4444",
-  2: "#3b82f6",
-};
+// Bbox stroke/badge color encodes verification status, not species.
+//   verified  → emerald (human-confirmed)
+//   corrected → blue    (human-corrected species)
+//   rejected  → red
+//   unverified (or any other) → amber (needs review)
+//   no species/identification → gray (raw detection or manual draw)
+function verificationColor(box: BBoxData): string {
+  if (!box.species) return "#9ca3af";
+  switch (box.verificationStatus) {
+    case "verified":
+      return "#10b981";
+    case "corrected":
+      return "#3b82f6";
+    case "rejected":
+      return "#ef4444";
+    default:
+      return "#f59e0b";
+  }
+}
 
 const DRAG_THRESHOLD = 5;
 const MIN_BOX_PX = 10;
@@ -233,9 +246,7 @@ export function BBoxOverlay({
           onPointerUp={editable ? handlePointerUp : undefined}
         >
           {boxes.map((box, index) => {
-            const color = box.species
-              ? getSpeciesColor(box.species)
-              : CLASS_COLORS[box.detectionClass] || "#22c55e";
+            const color = verificationColor(box);
 
             const isSelected = selectedBoxId === box.id;
             const isHovered = hoveredId === box.id;

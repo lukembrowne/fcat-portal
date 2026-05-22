@@ -316,6 +316,48 @@ export async function rejectAudioIdentification(
   }
 }
 
+export async function bulkVerifyAudio(
+  identificationIds: number[]
+): Promise<ActionResult<{ count: number }>> {
+  const user = await requirePermission("grabaciones", "editor");
+
+  try {
+    if (identificationIds.length === 0) {
+      return { success: true, data: { count: 0 } };
+    }
+
+    for (const id of identificationIds) {
+      const depId = await getDeploymentIdForAudioIdentification(id);
+      if (depId) await requireDeploymentAccess(user, depId);
+
+      await db
+        .update(audioIdentifications)
+        .set({
+          verificationStatus: "verified",
+          verifiedBy: user.email,
+          verifiedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(audioIdentifications.id, id),
+            eq(audioIdentifications.verificationStatus, "unverified")
+          )
+        );
+    }
+
+    revalidatePath("/audio");
+    return { success: true, data: { count: identificationIds.length } };
+  } catch (error) {
+    return {
+      success: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Error al verificar detecciones",
+    };
+  }
+}
+
 export async function verifyAllAudioAndAdvance(
   identificationIds: number[],
   deploymentId: number,

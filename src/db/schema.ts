@@ -435,6 +435,9 @@ export const cameraTrapModels = sqliteTable(
     modelDir: text("model_dir").notNull(),
     classMappingJson: text("class_mapping_json").notNull(),
     metricsJson: text("metrics_json").notNull(),
+    // { classes: string[], matrix: number[][], axisConvention: "row=true,col=pred" }
+    // Nullable for legacy v1 models (registered before contract v2).
+    confusionMatrixJson: text("confusion_matrix_json"),
     confidenceThreshold: real("confidence_threshold").notNull(),
     trainingDatasetId: integer("training_dataset_id").references(
       () => cameraTrapTrainingDatasets.id,
@@ -450,6 +453,38 @@ export const cameraTrapModels = sqliteTable(
     uniqueIndex("idx_camera_trap_models_active")
       .on(table.active)
       .where(sql`active = 1`),
+  ]
+);
+
+// ---------------------------------------------------------------------------
+// Camera Trap — Per-class metrics (one row per model × class)
+// ---------------------------------------------------------------------------
+// CASCADE on model delete: rows are derived data, meaningless without parent.
+// (Contrast biochoco_identifications.classifier_model_id → SET NULL, which
+// preserves audit evidence of work done.)
+
+export const cameraTrapModelClassMetrics = sqliteTable(
+  "camera_trap_model_class_metrics",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    modelId: integer("model_id")
+      .notNull()
+      .references(() => cameraTrapModels.id, { onDelete: "cascade" }),
+    className: text("class_name").notNull(),
+    // Nullable: sklearn produces NaN when support=0; we store NULL.
+    precisionValue: real("precision_value"),
+    recall: real("recall"),
+    f1: real("f1"),
+    support: integer("support").notNull(),
+    // Nullable: decouples contract enforcement (in importer) from storage,
+    // so a future backfill of v1 models doesn't need a schema change.
+    trainCount: integer("train_count"),
+  },
+  (table) => [
+    // Composite unique is the only index needed — SQLite uses it as a
+    // prefix index for `WHERE model_id = ?`. No current query filters by
+    // class_name alone.
+    uniqueIndex("idx_ct_mcm_model_class").on(table.modelId, table.className),
   ]
 );
 
@@ -1049,6 +1084,11 @@ export type NewCameraTrapTrainingDataset =
 
 export type CameraTrapModel = typeof cameraTrapModels.$inferSelect;
 export type NewCameraTrapModel = typeof cameraTrapModels.$inferInsert;
+
+export type CameraTrapModelClassMetric =
+  typeof cameraTrapModelClassMetrics.$inferSelect;
+export type NewCameraTrapModelClassMetric =
+  typeof cameraTrapModelClassMetrics.$inferInsert;
 
 export type Species = typeof species.$inferSelect;
 export type NewSpecies = typeof species.$inferInsert;

@@ -19,6 +19,7 @@ export const JOB_TYPES = {
   REVERT_COMPRESSION: "revert_compression",
   AUDIO_COMPRESSION: "audio_compression",
   REVERT_AUDIO_COMPRESSION: "revert_audio_compression",
+  SHARED_DRIVES_RECONCILE: "shared_drives_reconcile",
 } as const;
 
 export type JobType = (typeof JOB_TYPES)[keyof typeof JOB_TYPES];

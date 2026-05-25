@@ -192,6 +192,10 @@ export const deployments = sqliteTable(
     previousCountsCheckedAt: integer("previous_counts_checked_at", { mode: "timestamp" }),
     // Training split assignment for custom classifier (write-once, set by exporter)
     trainingSplit: text("training_split", { enum: ["train", "val", "test"] }),
+    // Which Shared Drive hosts this deployment's data (multi-drive fan-out).
+    // Nullable: legacy rows + rows with NULL driveFolderId stay NULL. Routing
+    // sets it on rows it creates. ON DELETE RESTRICT in push-schema.mjs.
+    sharedDriveId: text("shared_drive_id").references(() => sharedDrives.id),
   },
   (table) => [
     uniqueIndex("idx_biochoco_deployments_project_path").on(
@@ -202,6 +206,7 @@ export const deployments = sqliteTable(
       table.projectId,
       table.driveFolderId
     ),
+    index("idx_biochoco_deployments_shared_drive_id").on(table.sharedDriveId),
   ]
 );
 
@@ -541,6 +546,7 @@ export const EVENT_SOURCES = [
   "cron",
   "finance",
   "odk",
+  "shared-drives",
 ] as const;
 export type EventSource = (typeof EVENT_SOURCES)[number];
 
@@ -573,6 +579,109 @@ export const systemEvents = sqliteTable(
     index("idx_system_events_event_type").on(t.eventType),
   ],
 );
+
+// ---------------------------------------------------------------------------
+// Shared Drives (multi-drive capacity-based fan-out registry)
+//
+// Each row = one registered Google Shared Drive. Deployments fan out across
+// these to stay under Google's 500,000-item-per-Shared-Drive hard cap. The
+// codebase is already drive-agnostic (every Drive call uses supportsAllDrives),
+// so this registry only drives the parent-folder selection on NEW deployments.
+//
+// Capacity model (two counters):
+//   effectiveCount = reconciledCount + pendingReservationsCount
+//   - reconciledCount: Drive API ground truth (nightly delta / weekly full)
+//   - pendingReservationsCount: in-flight folder reservations (sum of open
+//     reservation tokens; denormalized for cheap selector reads)
+// ---------------------------------------------------------------------------
+
+export const SHARED_DRIVE_STATUSES = [
+  "registering",
+  "active",
+  "read-only",
+  "unreachable",
+] as const;
+export type SharedDriveStatus = (typeof SHARED_DRIVE_STATUSES)[number];
+
+export const sharedDrives = sqliteTable(
+  "shared_drives",
+  {
+    // kebab-case slug, e.g. "fcat-biochoco", "fcat-biochoco-2"
+    id: text("id").primaryKey(),
+    // Google Shared Drive ID (validated /^0A[A-Za-z0-9_-]{15,40}$/). Used for
+    // capacity ops: drives.get, files.list?driveId, changes.list?driveId.
+    driveId: text("drive_id").notNull().unique(),
+    // Folder under which NEW deployment folders are created, and the root that
+    // discovery scans. For a fresh Shared Drive this equals driveId (the drive
+    // root). For fcat-biochoco it is the legacy CAMERA_TRAP_ROOT_FOLDER_ID
+    // subfolder where existing deployments already live.
+    rootFolderId: text("root_folder_id").notNull(),
+    // Display name confirmed via drives.get
+    name: text("name").notNull(),
+    status: text("status", { enum: SHARED_DRIVE_STATUSES })
+      .notNull()
+      .default("registering"),
+    // Drive API ground truth (last reconcile)
+    reconciledCount: integer("reconciled_count").notNull().default(0),
+    // In-flight reservations (sum of open reservation tokens; denormalized)
+    pendingReservationsCount: integer("pending_reservations_count")
+      .notNull()
+      .default(0),
+    itemCap: integer("item_cap").notNull().default(500000),
+    // changes.list cursor; set after the initial full count
+    changesPageToken: text("changes_page_token"),
+    lastReconciledAt: text("last_reconciled_at"),
+    lastFullReconcileAt: text("last_full_reconcile_at"),
+    lastHealthCheckAt: text("last_health_check_at"),
+    // Sanitized: ID-strings stripped, capped at 200 chars
+    lastHealthStatus: text("last_health_status"),
+    // Soft-archive flag (NULL = visible). Independent of status.
+    archivedAt: text("archived_at"),
+    notes: text("notes"),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(datetime('now'))`),
+    updatedAt: text("updated_at")
+      .notNull()
+      .default(sql`(datetime('now'))`),
+  },
+  (t) => [
+    // Selection hot path: pick fullest active, non-archived drive.
+    index("idx_shared_drives_status_active").on(t.status, t.archivedAt),
+  ],
+);
+
+export const sharedDriveReservations = sqliteTable(
+  "shared_drive_reservations",
+  {
+    // UUID per reservation
+    id: text("id").primaryKey(),
+    sharedDriveId: text("shared_drive_id")
+      .notNull()
+      .references(() => sharedDrives.id),
+    // DEPLOYMENT_QUOTA at reservation time
+    quota: integer("quota").notNull(),
+    // biochoco_deployments.id once known (nullable: set after folder insert)
+    deploymentId: integer("deployment_id"),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(datetime('now'))`),
+    // NULL until folded into reconciledCount or rolled back
+    releasedAt: text("released_at"),
+  },
+  (t) => [
+    index("idx_shared_drive_reservations_drive_open").on(
+      t.sharedDriveId,
+      t.releasedAt,
+    ),
+  ],
+);
+
+export type SharedDrive = typeof sharedDrives.$inferSelect;
+export type NewSharedDrive = typeof sharedDrives.$inferInsert;
+export type SharedDriveReservation = typeof sharedDriveReservations.$inferSelect;
+export type NewSharedDriveReservation =
+  typeof sharedDriveReservations.$inferInsert;
 
 // ---------------------------------------------------------------------------
 // Finance — Transactions (from LibroMayor CSV)

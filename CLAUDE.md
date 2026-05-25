@@ -116,6 +116,15 @@ When fixing database queries, always check for edge cases where records have NUL
 - Global concurrency cap: only ONE `audio_compression` job runs at a time across all deployments. Batch-queued jobs wait their turn.
 - Feature flag: `AUDIO_COMPRESSION_ENABLED=true` must be set in production. Pre-replace WAV revisions are pinned with `keepForever=true` while `AUDIO_KEEP_WAV_REVISION_FOREVER` is unset or "true".
 
+## Multi-Shared-Drive fan-out
+
+- New BioChoco deployment folders fan out across multiple Google Shared Drives to stay under Google's **500,000-item-per-drive** cap. Registry table: `shared_drives` (+ `shared_drive_reservations` tokens). Each deployment's drive is recorded on `biochoco_deployments.shared_drive_id` (nullable FK).
+- **Two feature flags, both default OFF, flipped independently** (discovery first): `SHARED_DRIVE_DISCOVERY_ENABLED` gates the union discovery scan; `SHARED_DRIVE_ROUTING_ENABLED` gates capacity-based routing of new folders. When OFF, behavior is the legacy env-root path — no change.
+- **`shared_drives` stores TWO Drive identifiers**: `drive_id` (the `0A…` Shared Drive ID — used for `drives.get` / `files.list?driveId` / `changes.list` capacity ops) and `root_folder_id` (the folder NEW deployment folders are created under, and that discovery scans). For `fcat-biochoco` the root is the legacy `CAMERA_TRAP_ROOT_FOLDER_ID` subfolder; for a fresh drive it defaults to the drive root (== `drive_id`). Do not conflate them.
+- **Two-counter capacity model**: `reconciled_count` (Drive API ground truth, nightly `changes.list` delta + weekly Sunday full `files.list`) + `pending_reservations_count` (in-flight reservations, `DEPLOYMENT_QUOTA`=40k each). Selector picks fullest-but-under-85%; `effective = reconciled + pending`. The DB-derived file sum is NOT used for routing (under-counts frames/trash/manual uploads).
+- Selection (`selectAndReserveSlot`) is a synchronous better-sqlite3 transaction (atomic `UPDATE … RETURNING` with `ORDER BY (reconciled+pending) DESC, id ASC`). Folder-create failure releases the reservation by token (`releaseReservation`); a TOCTOU re-check (`getDriveStatus`) runs between selection and the Drive write. Reconcile absorbs pre-scan tokens by timestamp.
+- Admin UI: `/admin/shared-drives` (register via two-step name confirmation, mark read-only/active, archive, reconcile-now). Nightly cron `/api/cron/reconcile-shared-drives` (3:15 AM ET). Runbook: `docs/operations/shared-drive-provisioning-runbook.md`. Bootstrap: `scripts/bootstrap-shared-drives.ts`.
+
 ## Gotchas
 
 - Server/Client Component imports: Don't import server-only modules in Client Components

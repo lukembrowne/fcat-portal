@@ -29,6 +29,9 @@ services:
       - TZ=America/New_York
       - FLAC_COMPRESSION_BATCH_SIZE=20
       - FLAC_COMPRESSION_WORKERS=8
+      # Multi-Shared-Drive fan-out — both default OFF (flip discovery first)
+      - SHARED_DRIVE_DISCOVERY_ENABLED=${SHARED_DRIVE_DISCOVERY_ENABLED:-false}
+      - SHARED_DRIVE_ROUTING_ENABLED=${SHARED_DRIVE_ROUTING_ENABLED:-false}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000"]

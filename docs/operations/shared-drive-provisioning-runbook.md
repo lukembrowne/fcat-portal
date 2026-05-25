@@ -95,9 +95,31 @@ docker compose exec -T portal curl -fsS -X POST \
   http://localhost:3000/api/cron/reconcile-shared-drives
 ```
 
+## Prerequisite: service-account Shared Drive membership
+
+> **Required before bootstrapping or registering any drive — including the existing
+> `FCAT-BIOCHOCO`.** The portal historically had only *folder-level* access to the
+> BIOCHOCO tree (every legacy call is parent-folder scoped: `'<folderId>' in parents`).
+> The capacity layer is the first thing that needs **Shared Drive membership**:
+> `drives.get`, `files.list?corpora=drive`, and `changes.list` all fail with
+> *"requires shared drive membership"* / *"Shared drive not found"* for a non-member,
+> even one with full folder access.
+
+For **each** Shared Drive (the existing one and every new one), a Workspace admin or
+drive Manager must add the service account (`client_email` from
+`GOOGLE_SERVICE_ACCOUNT_KEY`) as a **Content Manager member** of the drive itself —
+not merely share a folder into it. Verify with:
+
+```bash
+docker compose exec portal npx tsx scripts/bootstrap-shared-drives.ts --dry-run
+```
+
+A non-member fails fast with a membership hint; a member prints per-drive counts.
+
 ## Bootstrapping the registry (one-time)
 
-After deploying the schema, populate the registry from existing data:
+After deploying the schema (and granting membership above), populate the registry
+from existing data:
 
 ```bash
 docker compose exec portal npx tsx scripts/bootstrap-shared-drives.ts --dry-run  # preview

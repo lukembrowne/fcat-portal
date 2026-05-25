@@ -17,6 +17,10 @@
  * Requires env: GOOGLE_SERVICE_ACCOUNT_KEY (base64 JSON), CAMERA_TRAP_ROOT_FOLDER_ID.
  */
 
+import dotenv from "dotenv";
+// Load local dev env (no-op in Docker, where vars are injected by compose).
+dotenv.config({ path: ".env.local" });
+
 import Database from "better-sqlite3";
 import path from "path";
 import { google, type drive_v3 } from "googleapis";
@@ -245,6 +249,16 @@ async function main() {
 }
 
 main().catch((err) => {
+  const msg = err instanceof Error ? err.message : String(err);
   console.error("Bootstrap failed:", err);
+  if (/shared drive membership|Shared drive not found/i.test(msg)) {
+    console.error(
+      "\nHint: the service account is not a MEMBER of the Shared Drive.\n" +
+        "Folder-level sharing is not enough for capacity ops (drives.get /\n" +
+        "files.list?corpora=drive / changes.list). Add the SA (client_email\n" +
+        "from GOOGLE_SERVICE_ACCOUNT_KEY) as a Content Manager member of the\n" +
+        "Shared Drive, then re-run. See docs/operations/shared-drive-provisioning-runbook.md.",
+    );
+  }
   process.exit(1);
 });

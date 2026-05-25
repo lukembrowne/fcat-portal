@@ -1,0 +1,265 @@
+/**
+ * Multi-Shared-Drive fan-out — registry queries, atomic capacity-based
+ * selection, reservation tokens, and small event/util helpers.
+ *
+ * Background: Google caps a Shared Drive at 500,000 items. FCAT-BIOCHOCO is
+ * near that cap, so new deployment folders fan out across multiple registered
+ * Shared Drives. The codebase is already drive-agnostic (every Drive API call
+ * uses `supportsAllDrives: true`), so this module only governs WHICH drive a
+ * NEW deployment folder is created under. Existing per-file `driveFileId`
+ * reads are unaffected.
+ *
+ * Capacity model (two counters; see schema.ts):
+ *   effectiveCount = reconciledCount + pendingReservationsCount
+ *   - reconciledCount: Drive API ground truth (nightly delta / weekly full)
+ *   - pendingReservationsCount: in-flight folder reservations, denormalized
+ *     from the open `shared_drive_reservations` token rows for fast selection.
+ *
+ * Alert thresholds (industry 75/85/95 convention):
+ *   - soft (75%): re-nag alert; provision soon
+ *   - hard (85%): selector refuses NEW reservations
+ *   - stop (95%): reconcile auto-flips the drive to status='read-only'
+ */
+
+import "server-only";
+
+import { randomUUID } from "crypto";
+import { sql } from "drizzle-orm";
+import { db } from "@/db";
+import { sharedDrives, type SharedDrive, type SharedDriveStatus } from "@/db/schema";
+
+// Conservative per-deployment item cap (audio + camera-trap + frames + iButton
+// + folder overhead). Reserved up-front, trued up nightly by reconcile.
+export const DEPLOYMENT_QUOTA = 40_000;
+
+// Validates a Google Shared Drive ID (starts with 0A). Folder IDs do NOT match
+// this — that's intentional, registration must be given the drive ID.
+export const DRIVE_ID_REGEX = /^0A[A-Za-z0-9_-]{15,40}$/;
+
+// ---------------------------------------------------------------------------
+// Feature flags (both default OFF; flip discovery first, routing second)
+// ---------------------------------------------------------------------------
+
+/** Gates the union discovery scan across all registered drives. Flip first. */
+export function sharedDriveDiscoveryEnabled(): boolean {
+  return process.env.SHARED_DRIVE_DISCOVERY_ENABLED === "true";
+}
+
+/** Gates capacity-based routing of new deployment folders. Flip second. */
+export function sharedDriveRoutingEnabled(): boolean {
+  return process.env.SHARED_DRIVE_ROUTING_ENABLED === "true";
+}
+
+// ---------------------------------------------------------------------------
+// Thresholds (env-configurable; accept either 75 or 0.75 form)
+// ---------------------------------------------------------------------------
+
+function pct(envName: string, fallback: number): number {
+  const raw = process.env[envName];
+  if (!raw) return fallback;
+  let n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  if (n > 1) n = n / 100; // accept "75" as 0.75
+  return n > 1 ? fallback : n;
+}
+
+export const getSoftPct = () => pct("SHARED_DRIVE_SOFT_PCT", 0.75);
+export const getHardPct = () => pct("SHARED_DRIVE_HARD_PCT", 0.85);
+export const getStopPct = () => pct("SHARED_DRIVE_STOP_PCT", 0.95);
+
+// ---------------------------------------------------------------------------
+// Selection + reservation
+// ---------------------------------------------------------------------------
+
+export type SelectionSuccess = {
+  sharedDriveId: string;
+  driveId: string;
+  /** Parent folder under which to create the deployment folder. */
+  rootFolderId: string;
+  /** REQUIRED to release the reservation on folder-create failure. */
+  reservationId: string;
+  reconciledCount: number;
+  pendingReservationsCount: number;
+};
+
+export type SelectionResult =
+  | SelectionSuccess
+  | { error: "no_capacity" | "no_active_drives" };
+
+type PickRow = {
+  id: string;
+  drive_id: string;
+  root_folder_id: string;
+  reconciled_count: number;
+  pending_reservations_count: number;
+};
+
+/**
+ * Atomically pick the fullest active drive still under the HARD threshold and
+ * reserve DEPLOYMENT_QUOTA items via a typed token. Synchronous better-sqlite3
+ * transaction — never async (see MEMORY gotcha).
+ *
+ * Bin-packs (fullest-first) so drives fill in order; `id ASC` is a
+ * deterministic tiebreaker because SQLite does not guarantee tie resolution by
+ * rowid inside a scalar subquery.
+ */
+export function selectAndReserveSlot(): SelectionResult {
+  const quota = DEPLOYMENT_QUOTA;
+  const hardPct = getHardPct();
+  const reservationId = randomUUID();
+
+  return db.transaction((tx): SelectionResult => {
+    const row = tx.get(sql`
+      UPDATE shared_drives
+      SET pending_reservations_count = pending_reservations_count + ${quota},
+          updated_at = datetime('now')
+      WHERE id = (
+        SELECT id FROM shared_drives
+        WHERE status = 'active'
+          AND archived_at IS NULL
+          AND (reconciled_count + pending_reservations_count + ${quota}) <= (item_cap * ${hardPct})
+        ORDER BY (reconciled_count + pending_reservations_count) DESC, id ASC
+        LIMIT 1
+      )
+      RETURNING id, drive_id, root_folder_id, reconciled_count, pending_reservations_count
+    `) as PickRow | undefined;
+
+    if (!row) {
+      // Distinguish "no headroom anywhere" from "no active drives at all" so
+      // the caller can surface a clearer message.
+      const anyActive = tx.get(sql`
+        SELECT 1 AS x FROM shared_drives
+        WHERE status = 'active' AND archived_at IS NULL
+        LIMIT 1
+      `) as { x: number } | undefined;
+      return { error: anyActive ? "no_capacity" : "no_active_drives" };
+    }
+
+    tx.run(sql`
+      INSERT INTO shared_drive_reservations (id, shared_drive_id, quota)
+      VALUES (${reservationId}, ${row.id}, ${quota})
+    `);
+
+    return {
+      sharedDriveId: row.id,
+      driveId: row.drive_id,
+      rootFolderId: row.root_folder_id,
+      reservationId,
+      reconciledCount: row.reconciled_count,
+      pendingReservationsCount: row.pending_reservations_count,
+    };
+  });
+}
+
+/**
+ * Release a reservation by token. Idempotent: if reconcile already absorbed
+ * the token (marked it released), this no-ops, so the catch-block release
+ * after a reconcile can't double-decrement. `MAX(0, …)` is a defensive floor.
+ */
+export function releaseReservation(reservationId: string): void {
+  db.transaction((tx) => {
+    const token = tx.get(sql`
+      SELECT shared_drive_id, quota FROM shared_drive_reservations
+      WHERE id = ${reservationId} AND released_at IS NULL
+    `) as { shared_drive_id: string; quota: number } | undefined;
+    if (!token) return; // already released / absorbed — no-op
+
+    tx.run(sql`
+      UPDATE shared_drive_reservations
+      SET released_at = datetime('now')
+      WHERE id = ${reservationId}
+    `);
+    tx.run(sql`
+      UPDATE shared_drives
+      SET pending_reservations_count = MAX(0, pending_reservations_count - ${token.quota}),
+          updated_at = datetime('now')
+      WHERE id = ${token.shared_drive_id}
+    `);
+  });
+}
+
+/** Attach a deployment id to a reservation once the folder + DB row exist. */
+export function attachReservationToDeployment(
+  reservationId: string,
+  deploymentId: number,
+): void {
+  db.run(sql`
+    UPDATE shared_drive_reservations
+    SET deployment_id = ${deploymentId}
+    WHERE id = ${reservationId} AND released_at IS NULL
+  `);
+}
+
+// ---------------------------------------------------------------------------
+// Registry queries
+// ---------------------------------------------------------------------------
+
+/** Current status of a drive (for the TOCTOU re-check between select + create). */
+export function getDriveStatus(sharedDriveId: string): SharedDriveStatus | null {
+  const row = db.get(sql`
+    SELECT status FROM shared_drives WHERE id = ${sharedDriveId}
+  `) as { status: SharedDriveStatus } | undefined;
+  return row?.status ?? null;
+}
+
+export async function listDrives(): Promise<SharedDrive[]> {
+  return db.select().from(sharedDrives);
+}
+
+export async function getDriveById(id: string): Promise<SharedDrive | null> {
+  const [row] = await db
+    .select()
+    .from(sharedDrives)
+    .where(sql`${sharedDrives.id} = ${id}`)
+    .limit(1);
+  return row ?? null;
+}
+
+/**
+ * Root folder IDs to scan for deployment discovery — the union across every
+ * non-archived drive. Reads still resolve via supportsAllDrives regardless of
+ * status, so we include active + read-only + unreachable here (Promise.allSettled
+ * at the call site isolates a drive that genuinely can't be listed).
+ */
+export function getNonArchivedDriveRootIds(): string[] {
+  const rows = db.all(sql`
+    SELECT root_folder_id FROM shared_drives WHERE archived_at IS NULL
+  `) as { root_folder_id: string }[];
+  return rows.map((r) => r.root_folder_id);
+}
+
+/**
+ * Root folder IDs to scan when discovering deployments for a CT project whose
+ * legacy root is `projectRootFolderId`.
+ *
+ * - Discovery flag OFF, or this project is not the fanned-out one → just its
+ *   own root (unchanged behavior).
+ * - Discovery flag ON AND this project's root is registered in the fan-out
+ *   registry → the union of every non-archived drive's root, so deployments
+ *   created on additional drives are discovered too.
+ */
+export function getDiscoveryRootsForProject(
+  projectRootFolderId: string,
+): string[] {
+  if (!sharedDriveDiscoveryEnabled()) return [projectRootFolderId];
+  const registryRoots = getNonArchivedDriveRootIds();
+  if (!registryRoots.includes(projectRootFolderId)) return [projectRootFolderId];
+  return Array.from(new Set([projectRootFolderId, ...registryRoots]));
+}
+
+// ---------------------------------------------------------------------------
+// Error sanitation (before persisting to last_health_status / event details)
+// ---------------------------------------------------------------------------
+
+/**
+ * Strip anything that looks like a Drive ID or service-account hash (20+ word
+ * chars) and cap length, so Drive API errors can't leak unrelated org folder
+ * IDs / SA email patterns into the activity log.
+ */
+export function sanitizeDriveError(err: unknown): string {
+  const e = err as { code?: number | string; message?: string } | undefined;
+  let msg = e?.message ?? String(err ?? "error desconocido");
+  msg = msg.replace(/[\w-]{20,}/g, "[id]");
+  const prefix = e?.code != null ? `[${e.code}] ` : "";
+  return (prefix + msg).slice(0, 200);
+}

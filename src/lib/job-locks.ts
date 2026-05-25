@@ -69,6 +69,28 @@ export async function countActiveAudioCompressionJobs(): Promise<number> {
  * shapes consume the same CPU-bound FLAC encoder, so the global "one
  * compression at a time" cap must cover both.
  */
+/**
+ * Single-flight for the shared-drive reconciliation job. Returns the active
+ * job (pending or processing) if one exists, else null. Checked in both the
+ * cron endpoint and the admin "Reconcile now" action so we never enqueue a
+ * duplicate reconcile.
+ */
+export async function findActiveSharedDriveReconcileJob(): Promise<
+  { id: number; status: string } | null
+> {
+  const [active] = await db
+    .select({ id: processingJobs.id, status: processingJobs.status })
+    .from(processingJobs)
+    .where(
+      and(
+        eq(processingJobs.jobType, JOB_TYPES.SHARED_DRIVES_RECONCILE),
+        inArray(processingJobs.status, ["pending", "processing"]),
+      ),
+    )
+    .limit(1);
+  return active ?? null;
+}
+
 export async function countActiveAudioWorkWithCompression(): Promise<number> {
   const rows = await db
     .select({ id: processingJobs.id })

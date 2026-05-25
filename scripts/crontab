@@ -7,6 +7,10 @@
 # 1 AM Eastern = midnight Ecuador during EDT; 11 PM Ecuador during EST.
 0 1 * * * root . /etc/cron.d/portal-env && /usr/bin/curl -sf -X POST -H "Authorization: Bearer $CRON_SECRET" --max-time 600 --retry 3 --retry-delay 10 --retry-connrefused http://localhost:3000/api/cron/nightly-refresh >> /app/data/nightly-refresh.log 2>&1
 
+# Nightly Shared Drive reconciliation (3:15 AM Eastern — after nightly-refresh + hourly backup)
+# Sunday runs a full files.list count; weekdays run a cheap changes.list delta.
+15 3 * * * root . /etc/cron.d/portal-env && /usr/bin/curl -fsS -X POST -H "Authorization: Bearer $CRON_SECRET" --max-time 1800 http://localhost:3000/api/cron/reconcile-shared-drives >> /app/data/backups/cron.log 2>&1
+
 # Daily portal-updates email — analysis activity summary (7 AM Eastern, ~6-7 AM Ecuador)
 0 7 * * * root . /etc/cron.d/portal-env && /usr/bin/curl -fsS -X POST -H "Authorization: Bearer $CRON_SECRET" --max-time 120 http://localhost:3000/api/cron/portal-updates >> /app/data/backups/cron.log 2>&1
 

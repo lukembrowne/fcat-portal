@@ -16,6 +16,7 @@ const SOURCE_LABELS: Record<(typeof EVENT_SOURCES)[number], string> = {
   cron: "Tareas programadas",
   finance: "Finanzas",
   odk: "ODK",
+  "shared-drives": "Shared Drives",
 };
 
 const SEVERITY_LABELS: Record<(typeof EVENT_SEVERITIES)[number], string> = {

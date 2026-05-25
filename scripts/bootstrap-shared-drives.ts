@@ -45,20 +45,76 @@ function getDrive(): drive_v3.Drive {
 
 const drive = getDrive();
 
+// Exponential backoff on transient Drive errors (mirrors withRetry in
+// src/lib/drive-client.ts). A full count of a near-full drive is 400+
+// sequential pages, which reliably trips Google's per-user burst limit
+// (403 userRateLimitExceeded) — without backoff the count dies mid-way.
+const MAX_RETRIES = 6;
+
+function isRetriableDriveError(err: unknown): boolean {
+  const e = err as {
+    code?: number;
+    status?: number;
+    message?: string;
+    response?: { status?: number; data?: { error?: { errors?: Array<{ reason?: string }> } } };
+    errors?: Array<{ reason?: string }>;
+    cause?: { message?: string; errors?: Array<{ reason?: string }> };
+  };
+  const status = e?.code ?? e?.status ?? e?.response?.status;
+  if (status === 429) return true;
+  if (status != null && status >= 500 && status < 600) return true;
+  if (status === 403) {
+    // gaxios v7 moved the Google `reason` off the top-level `errors` array, so
+    // probe every known location and fall back to the message.
+    const reason =
+      e?.errors?.[0]?.reason ??
+      e?.cause?.errors?.[0]?.reason ??
+      e?.response?.data?.error?.errors?.[0]?.reason;
+    if (reason === "userRateLimitExceeded" || reason === "rateLimitExceeded") return true;
+    const msg = String(e?.message ?? e?.cause?.message ?? "");
+    return /rate limit/i.test(msg);
+  }
+  return false;
+}
+
+async function withRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (!isRetriableDriveError(err) || attempt === MAX_RETRIES) throw err;
+      const exp = Math.min(500 * 2 ** attempt, 32_000);
+      const delay = Math.floor(exp / 2 + Math.random() * (exp / 2));
+      console.log(`    (rate-limited on ${label}; retry ${attempt + 1} in ${delay}ms)`);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw lastErr;
+}
+
 /** Resolve the underlying Shared Drive ID + name for a folder ID. */
 async function resolveDrive(
   folderId: string,
 ): Promise<{ driveId: string | null; name: string | null }> {
-  const res = await drive.files.get({
-    fileId: folderId,
-    fields: "driveId, name",
-    supportsAllDrives: true,
-  });
+  const res = await withRetry(
+    () =>
+      drive.files.get({
+        fileId: folderId,
+        fields: "driveId, name",
+        supportsAllDrives: true,
+      }),
+    `files.get(${folderId})`,
+  );
   return { driveId: res.data.driveId ?? null, name: res.data.name ?? null };
 }
 
 async function getDriveName(driveId: string): Promise<string> {
-  const res = await drive.drives.get({ driveId, fields: "name" });
+  const res = await withRetry(
+    () => drive.drives.get({ driveId, fields: "name" }),
+    `drives.get(${driveId})`,
+  );
   return res.data.name ?? "(sin nombre)";
 }
 
@@ -67,16 +123,20 @@ async function countItems(driveId: string): Promise<number> {
   let pageToken: string | undefined;
   let pages = 0;
   do {
-    const res = await drive.files.list({
-      corpora: "drive",
-      driveId,
-      q: "trashed = false",
-      fields: "nextPageToken, files(id)",
-      pageSize: 1000,
-      pageToken,
-      supportsAllDrives: true,
-      includeItemsFromAllDrives: true,
-    });
+    const res = await withRetry(
+      () =>
+        drive.files.list({
+          corpora: "drive",
+          driveId,
+          q: "trashed = false",
+          fields: "nextPageToken, files(id)",
+          pageSize: 1000,
+          pageToken,
+          supportsAllDrives: true,
+          includeItemsFromAllDrives: true,
+        }),
+      `files.list(count ${driveId})`,
+    );
     count += res.data.files?.length ?? 0;
     pageToken = res.data.nextPageToken ?? undefined;
     pages++;
@@ -86,10 +146,10 @@ async function countItems(driveId: string): Promise<number> {
 }
 
 async function startPageToken(driveId: string): Promise<string> {
-  const res = await drive.changes.getStartPageToken({
-    driveId,
-    supportsAllDrives: true,
-  });
+  const res = await withRetry(
+    () => drive.changes.getStartPageToken({ driveId, supportsAllDrives: true }),
+    `changes.getStartPageToken(${driveId})`,
+  );
   if (!res.data.startPageToken) throw new Error("no startPageToken");
   return res.data.startPageToken;
 }

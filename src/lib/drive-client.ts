@@ -1008,18 +1008,32 @@ const MAX_DELAY_MS = 16_000;
 
 interface DriveError {
   code?: number;
-  response?: { status?: number };
+  status?: number;
+  message?: string;
+  response?: { status?: number; data?: { error?: { errors?: Array<{ reason?: string }> } } };
   errors?: Array<{ reason?: string }>;
+  cause?: { message?: string; errors?: Array<{ reason?: string }> };
 }
 
-function isRetriableDriveError(err: unknown): boolean {
+export function isRetriableDriveError(err: unknown): boolean {
   const e = err as DriveError;
-  const status = e?.code ?? e?.response?.status;
+  const status = e?.code ?? e?.status ?? e?.response?.status;
   if (status === 429) return true;
   if (status != null && status >= 500 && status < 600) return true;
   if (status === 403) {
-    const reason = e?.errors?.[0]?.reason;
-    return reason === "userRateLimitExceeded" || reason === "rateLimitExceeded";
+    // gaxios nests the Google `reason` differently across versions (v7 moved it
+    // off the top-level `errors`), so probe every known location and fall back
+    // to the human-readable message. Missing this silently disables retries for
+    // rate-limit 403s — the exact failure that breaks a full-drive count.
+    const reason =
+      e?.errors?.[0]?.reason ??
+      e?.cause?.errors?.[0]?.reason ??
+      e?.response?.data?.error?.errors?.[0]?.reason;
+    if (reason === "userRateLimitExceeded" || reason === "rateLimitExceeded") {
+      return true;
+    }
+    const msg = String(e?.message ?? e?.cause?.message ?? "");
+    return /rate limit/i.test(msg);
   }
   return false;
 }

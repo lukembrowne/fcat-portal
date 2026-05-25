@@ -15,7 +15,7 @@ import {
 import { JOB_TYPES, type JobType } from "@/lib/job-types";
 import { JOB_LABELS } from "@/lib/system-events";
 import type {
-  JobBucket,
+  JobDetail,
   LeaderboardRow,
   PortalUpdatesPayload,
   ProjectActivity,
@@ -35,10 +35,22 @@ const VERIFIED_STATUSES = ["verified", "corrected"] as const;
 const TOP_VERIFICADORES_LIMIT = 3;
 
 type JobRow = {
-  projectId: string | null;
+  jobId: number;
+  projectId: string;
+  deploymentName: string;
+  siteName: string | null;
   jobType: string;
   status: "completed" | "failed";
-  n: number;
+  totalImages: number;
+  processedImages: number;
+  failedImages: number;
+  totalVideos: number;
+  extractedFrames: number;
+  startedAt: Date | null;
+  completedAt: Date | null;
+  detectorModel: string | null;
+  classifierModel: string | null;
+  errorMessage: string | null;
 };
 
 type VerifyRow = {
@@ -138,15 +150,30 @@ async function queryJobActivity(
   windowStart: Date,
   windowEnd: Date,
 ): Promise<JobRow[]> {
+  // One row per job (no aggregation) so the email can show per-job detail:
+  // deployment, images/videos processed, duration, model, status.
+  //
   // Rows with NULL deployment_id are skipped (no project to attribute them to).
   // Project-level jobs (cameraTrapProjectId, no deployment) are rare and only
   // exist for cross-deployment ML reruns; we accept the small undercount in v1.
   const rows = await db
     .select({
+      jobId: processingJobs.id,
       projectId: deployments.projectId,
+      deploymentName: deployments.name,
+      siteName: deployments.siteName,
       jobType: processingJobs.jobType,
       status: processingJobs.status,
-      n: sql<number>`COUNT(*)`,
+      totalImages: processingJobs.totalImages,
+      processedImages: processingJobs.processedImages,
+      failedImages: processingJobs.failedImages,
+      totalVideos: processingJobs.totalVideos,
+      extractedFrames: processingJobs.extractedFrames,
+      startedAt: processingJobs.startedAt,
+      completedAt: processingJobs.completedAt,
+      detectorModel: processingJobs.detectorModel,
+      classifierModel: processingJobs.classifierModel,
+      errorMessage: processingJobs.errorMessage,
     })
     .from(processingJobs)
     .innerJoin(deployments, eq(processingJobs.deploymentId, deployments.id))
@@ -157,7 +184,6 @@ async function queryJobActivity(
         inArray(processingJobs.status, ["completed", "failed"]),
       ),
     )
-    .groupBy(deployments.projectId, processingJobs.jobType, processingJobs.status)
     .all();
 
   const out: JobRow[] = [];
@@ -165,10 +191,22 @@ async function queryJobActivity(
     if (r.projectId === null) continue;
     if (r.status !== "completed" && r.status !== "failed") continue;
     out.push({
+      jobId: r.jobId,
       projectId: r.projectId,
+      deploymentName: r.deploymentName,
+      siteName: r.siteName,
       jobType: r.jobType,
       status: r.status,
-      n: r.n,
+      totalImages: r.totalImages ?? 0,
+      processedImages: r.processedImages ?? 0,
+      failedImages: r.failedImages ?? 0,
+      totalVideos: r.totalVideos ?? 0,
+      extractedFrames: r.extractedFrames ?? 0,
+      startedAt: r.startedAt,
+      completedAt: r.completedAt,
+      detectorModel: r.detectorModel,
+      classifierModel: r.classifierModel,
+      errorMessage: r.errorMessage,
     });
   }
   return out;
@@ -331,43 +369,55 @@ async function queryProjects(): Promise<ProjectRow[]> {
 function bucketJobs(
   rows: JobRow[],
   predicate: (jt: JobType) => boolean,
-): Map<string, JobBucket[]> {
-  const byProject = new Map<string, Map<string, JobBucket>>();
+): Map<string, JobDetail[]> {
+  const byProject = new Map<string, JobDetail[]>();
 
   for (const row of rows) {
     const jt = row.jobType as JobType;
     if (!predicate(jt)) continue;
     if (!row.projectId) continue;
 
-    let projectMap = byProject.get(row.projectId);
-    if (!projectMap) {
-      projectMap = new Map();
-      byProject.set(row.projectId, projectMap);
-    }
+    const durationMs =
+      row.startedAt && row.completedAt
+        ? row.completedAt.getTime() - row.startedAt.getTime()
+        : null;
 
-    let bucket = projectMap.get(jt);
-    if (!bucket) {
-      bucket = {
-        jobType: jt,
-        label: JOB_LABELS[jt] ?? jt,
-        completed: 0,
-        failed: 0,
-      };
-      projectMap.set(jt, bucket);
-    }
+    const detail: JobDetail = {
+      jobId: row.jobId,
+      deploymentName: row.deploymentName,
+      siteName: row.siteName,
+      jobType: jt,
+      label: JOB_LABELS[jt] ?? jt,
+      status: row.status,
+      totalImages: row.totalImages,
+      processedImages: row.processedImages,
+      failedImages: row.failedImages,
+      totalVideos: row.totalVideos,
+      extractedFrames: row.extractedFrames,
+      durationMs,
+      detectorModel: row.detectorModel,
+      classifierModel: row.classifierModel,
+      errorMessage: row.errorMessage,
+    };
 
-    if (row.status === "completed") bucket.completed += row.n;
-    else bucket.failed += row.n;
+    const list = byProject.get(row.projectId) ?? [];
+    list.push(detail);
+    byProject.set(row.projectId, list);
   }
 
-  const out = new Map<string, JobBucket[]>();
-  for (const [projectId, projectMap] of byProject) {
-    const list = [...projectMap.values()].sort((a, b) =>
-      a.label.localeCompare(b.label),
-    );
-    out.set(projectId, list);
+  // Stable order within a project: label, then deployment, then jobId.
+  for (const [projectId, list] of byProject) {
+    list.sort((a, b) => {
+      const byLabel = a.label.localeCompare(b.label);
+      if (byLabel !== 0) return byLabel;
+      const byDeployment = a.deploymentName.localeCompare(b.deploymentName);
+      if (byDeployment !== 0) return byDeployment;
+      return a.jobId - b.jobId;
+    });
+    byProject.set(projectId, list);
   }
-  return out;
+
+  return byProject;
 }
 
 function sumByProject(rows: ProjectTotalRow[]): Map<string, number> {
@@ -401,12 +451,10 @@ function leaderboardByProject(
   return byProject;
 }
 
-function sumBucketCounts(byProject: Map<string, JobBucket[]>): number {
+function sumBucketCounts(byProject: Map<string, JobDetail[]>): number {
   let total = 0;
-  for (const buckets of byProject.values()) {
-    for (const b of buckets) {
-      total += b.completed + b.failed;
-    }
+  for (const jobs of byProject.values()) {
+    total += jobs.length;
   }
   return total;
 }

@@ -1,5 +1,16 @@
+import {
+  COLOR_MUTED,
+  COLOR_NEGATIVE,
+  COLOR_POSITIVE,
+  TABLE_BORDER,
+  TABLE_HEADER_BG,
+  escapeHtml,
+  formatDate,
+  formatDateTime,
+  formatDuration,
+} from "@/lib/email/format";
 import type {
-  JobBucket,
+  JobDetail,
   LeaderboardRow,
   PortalUpdatesPayload,
   ProjectActivity,
@@ -22,18 +33,19 @@ export function buildPortalUpdatesHtml(
 
   const headerHtml = `
   <h2 style="margin-bottom:4px">Actividad del Portal</h2>
-  <p style="color:#6b7280;margin-top:0;font-size:14px">Resumen de las últimas 24 horas — ${windowLabel}</p>
+  <p style="color:${COLOR_MUTED};margin-top:0;font-size:14px">Resumen de las últimas 24 horas — ${windowLabel}</p>`;
 
-  <p style="font-size:14px;margin-top:16px">
-    <strong>${payload.totalCtJobs.toLocaleString()}</strong> trabajos cámara trampa &nbsp;·&nbsp;
-    <strong>${payload.totalAudioJobs.toLocaleString()}</strong> trabajos audio &nbsp;·&nbsp;
-    <strong>${payload.totalCtVerifiedImages.toLocaleString()}</strong> imágenes verificadas &nbsp;·&nbsp;
-    <strong>${payload.totalAudioVerifiedFiles.toLocaleString()}</strong> grabaciones verificadas
-  </p>
-  `;
+  const summaryHtml = `
+  <h3 style="margin-top:24px">Resumen</h3>
+  <table style="border-collapse:collapse;margin-top:8px">
+    ${summaryRow("Trabajos cámara trampa", payload.totalCtJobs)}
+    ${summaryRow("Trabajos audio", payload.totalAudioJobs)}
+    ${summaryRow("Imágenes verificadas", payload.totalCtVerifiedImages)}
+    ${summaryRow("Grabaciones verificadas", payload.totalAudioVerifiedFiles)}
+  </table>`;
 
   const bodyHtml = payload.projects.length === 0
-    ? `<p style="margin-top:24px;color:#6b7280">No hubo actividad nueva en este período.</p>`
+    ? `<p style="margin-top:24px;color:${COLOR_MUTED}">No hubo actividad nueva en este período.</p>`
     : payload.projects.map(renderProjectSection).join("\n");
 
   return `<!DOCTYPE html>
@@ -41,17 +53,25 @@ export function buildPortalUpdatesHtml(
 <head><meta charset="utf-8"></head>
 <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1f2937;max-width:800px;margin:0 auto;padding:20px">
 ${headerHtml}
+${summaryHtml}
 ${bodyHtml}
-  <p style="color:#9ca3af;font-size:12px;margin-top:32px;border-top:1px solid #e5e7eb;padding-top:12px">portal.fcat-ecuador.org</p>
+  <p style="color:#9ca3af;font-size:12px;margin-top:32px;border-top:1px solid ${TABLE_BORDER};padding-top:12px">portal.fcat-ecuador.org</p>
 </body>
 </html>`;
+}
+
+function summaryRow(label: string, value: number): string {
+  return `<tr>
+      <td style="padding:6px 16px 6px 0;font-weight:600">${label}</td>
+      <td style="padding:6px 0">${value.toLocaleString()}</td>
+    </tr>`;
 }
 
 function renderProjectSection(project: ProjectActivity): string {
   const sections: string[] = [];
 
   if (project.ctJobs.length > 0) {
-    sections.push(renderJobBlock("Cámaras trampa — Trabajos", project.ctJobs));
+    sections.push(renderJobTable("Cámaras trampa — Trabajos", project.ctJobs));
   }
 
   if (project.ctVerifiedImages > 0) {
@@ -65,7 +85,7 @@ function renderProjectSection(project: ProjectActivity): string {
   }
 
   if (project.audioJobs.length > 0) {
-    sections.push(renderJobBlock("Audio — Trabajos", project.audioJobs));
+    sections.push(renderJobTable("Audio — Trabajos", project.audioJobs));
   }
 
   if (project.audioVerifiedFiles > 0) {
@@ -79,25 +99,97 @@ function renderProjectSection(project: ProjectActivity): string {
   }
 
   return `
-  <section style="margin-top:28px;border-top:2px solid #e5e7eb;padding-top:16px">
+  <section style="margin-top:28px;border-top:2px solid ${TABLE_BORDER};padding-top:16px">
     <h3 style="margin:0 0 12px 0;color:#111827">${escapeHtml(project.projectName)}</h3>
     ${sections.join("\n")}
   </section>`;
 }
 
-function renderJobBlock(title: string, buckets: JobBucket[]): string {
-  const rows = buckets.map((b) => {
-    const failedNote = b.failed > 0
-      ? `, <span style="color:#dc2626">${b.failed.toLocaleString()} fallidos</span>`
-      : "";
-    return `<li>${escapeHtml(b.label)}: ${b.completed.toLocaleString()} completados${failedNote}</li>`;
-  }).join("\n      ");
+function renderJobTable(title: string, jobs: JobDetail[]): string {
+  const headerCell = (text: string, align: "left" | "right" | "center") =>
+    `<th style="padding:8px 12px;border:1px solid ${TABLE_BORDER};text-align:${align}">${text}</th>`;
+
+  const rows = jobs.map(renderJobRow).join("\n");
 
   return `
-    <h4 style="margin:12px 0 4px 0;font-size:14px;color:#374151">${title}</h4>
-    <ul style="margin:0;padding-left:20px;font-size:14px">
+    <h4 style="margin:16px 0 4px 0;font-size:14px;color:#374151">${escapeHtml(title)}</h4>
+    <table style="border-collapse:collapse;width:100%;margin-top:8px;font-size:13px">
+      <tr style="background:${TABLE_HEADER_BG}">
+        ${headerCell("Tipo", "left")}
+        ${headerCell("Instalación", "left")}
+        ${headerCell("Procesado", "right")}
+        ${headerCell("Duración", "right")}
+        ${headerCell("Estado", "left")}
+      </tr>
       ${rows}
-    </ul>`;
+    </table>`;
+}
+
+function renderJobRow(job: JobDetail): string {
+  const cell = (content: string, align: "left" | "right" = "left") =>
+    `<td style="padding:6px 12px;border:1px solid ${TABLE_BORDER};text-align:${align};vertical-align:top">${content}</td>`;
+
+  // Tipo: label + model as a muted sub-line.
+  const model = job.detectorModel
+    ? `<div style="color:${COLOR_MUTED};font-size:11px;margin-top:2px">${escapeHtml(
+        [job.detectorModel, job.classifierModel].filter(Boolean).join(" · "),
+      )}</div>`
+    : "";
+  const tipoCell = `<strong>${escapeHtml(job.label)}</strong>${model}`;
+
+  // Instalación: deployment + site sub-line.
+  const site = job.siteName
+    ? `<div style="color:${COLOR_MUTED};font-size:11px;margin-top:2px">${escapeHtml(job.siteName)}</div>`
+    : "";
+  const instalacionCell = `${escapeHtml(job.deploymentName)}${site}`;
+
+  // Procesado: images (+ videos/frames), with failed count in red.
+  const procesadoCell = renderProcessedCell(job);
+
+  // Estado: colored label, error sub-line on failure.
+  const estadoCell = renderEstadoCell(job);
+
+  return `<tr>
+        ${cell(tipoCell)}
+        ${cell(instalacionCell)}
+        ${cell(procesadoCell, "right")}
+        ${cell(formatDuration(job.durationMs), "right")}
+        ${cell(estadoCell)}
+      </tr>`;
+}
+
+function renderProcessedCell(job: JobDetail): string {
+  const parts: string[] = [];
+
+  if (job.totalImages > 0 || job.processedImages > 0) {
+    parts.push(
+      `${job.processedImages.toLocaleString()} / ${job.totalImages.toLocaleString()}`,
+    );
+  }
+  if (job.totalVideos > 0) {
+    parts.push(`${job.totalVideos.toLocaleString()} videos`);
+  }
+  if (job.extractedFrames > 0) {
+    parts.push(`${job.extractedFrames.toLocaleString()} frames`);
+  }
+
+  const main = parts.length > 0 ? parts.join(" · ") : "—";
+
+  const failed = job.failedImages > 0
+    ? `<div style="color:${COLOR_NEGATIVE};font-size:11px;margin-top:2px">${job.failedImages.toLocaleString()} fallidas</div>`
+    : "";
+
+  return `${main}${failed}`;
+}
+
+function renderEstadoCell(job: JobDetail): string {
+  if (job.status === "failed") {
+    const error = job.errorMessage
+      ? `<div style="color:${COLOR_NEGATIVE};font-size:11px;margin-top:2px">${escapeHtml(job.errorMessage)}</div>`
+      : "";
+    return `<span style="color:${COLOR_NEGATIVE};font-weight:600">Fallido</span>${error}`;
+  }
+  return `<span style="color:${COLOR_POSITIVE};font-weight:600">Completado</span>`;
 }
 
 function renderVerifyBlock(
@@ -108,29 +200,22 @@ function renderVerifyBlock(
   const leaderboardHtml = leaderboard.length === 0
     ? ""
     : `
-    <p style="margin:4px 0 0 0;font-size:13px;color:#6b7280">
-      Verificadores:
-      ${leaderboard.map((r) => `<strong>${escapeHtml(r.actorEmail)}</strong> (${r.count.toLocaleString()})`).join(" &nbsp;·&nbsp; ")}
-    </p>`;
+    <table style="border-collapse:collapse;margin-top:8px;font-size:13px">
+      <tr style="background:${TABLE_HEADER_BG}">
+        <th style="padding:6px 12px;border:1px solid ${TABLE_BORDER};text-align:left">Verificador</th>
+        <th style="padding:6px 12px;border:1px solid ${TABLE_BORDER};text-align:right">Cantidad</th>
+      </tr>
+      ${leaderboard
+        .map(
+          (r) => `<tr>
+        <td style="padding:6px 12px;border:1px solid ${TABLE_BORDER}">${escapeHtml(r.actorEmail)}</td>
+        <td style="padding:6px 12px;border:1px solid ${TABLE_BORDER};text-align:right">${r.count.toLocaleString()}</td>
+      </tr>`,
+        )
+        .join("\n")}
+    </table>`;
 
   return `
-    <h4 style="margin:12px 0 4px 0;font-size:14px;color:#374151">${title}</h4>
-    <p style="margin:0;font-size:14px">${totalLine}</p>${leaderboardHtml}`;
-}
-
-function formatDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
-
-function formatDateTime(d: Date): string {
-  return d.toISOString().slice(0, 16).replace("T", " ") + " UTC";
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
+    <h4 style="margin:16px 0 4px 0;font-size:14px;color:#374151">${escapeHtml(title)}</h4>
+    <p style="margin:0;font-size:14px">${escapeHtml(totalLine)}</p>${leaderboardHtml}`;
 }

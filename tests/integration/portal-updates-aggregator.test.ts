@@ -154,6 +154,14 @@ function makeJob(args: {
   jobType: string;
   status: "completed" | "failed" | "pending" | "processing" | "cancelled";
   completedAt: Date | null;
+  startedAt?: Date | null;
+  totalImages?: number;
+  processedImages?: number;
+  failedImages?: number;
+  totalVideos?: number;
+  extractedFrames?: number;
+  detectorModel?: string | null;
+  errorMessage?: string | null;
 }): void {
   db.insert(schema.processingJobs)
     .values({
@@ -161,6 +169,14 @@ function makeJob(args: {
       jobType: args.jobType,
       status: args.status,
       completedAt: args.completedAt,
+      startedAt: args.startedAt ?? null,
+      totalImages: args.totalImages ?? 0,
+      processedImages: args.processedImages ?? 0,
+      failedImages: args.failedImages ?? 0,
+      totalVideos: args.totalVideos ?? 0,
+      extractedFrames: args.extractedFrames ?? 0,
+      detectorModel: args.detectorModel ?? null,
+      errorMessage: args.errorMessage ?? null,
     })
     .run();
 }
@@ -183,7 +199,7 @@ describe("buildPortalUpdatesPayload — empty state", () => {
 });
 
 describe("buildPortalUpdatesPayload — camera-trap jobs", () => {
-  it("counts completed + failed jobs by type per project; ignores pending/cancelled", async () => {
+  it("emits one row per completed/failed job by type per project; ignores pending/cancelled", async () => {
     const ct = makeDeployment("camera-trap");
     const bc = makeDeployment("biochoco");
 
@@ -203,19 +219,57 @@ describe("buildPortalUpdatesPayload — camera-trap jobs", () => {
 
     const ctp = payload.projects.find((p) => p.projectId === "camera-trap")!;
     expect(ctp).toBeDefined();
-    const mlBucket = ctp.ctJobs.find((b) => b.jobType === "ml")!;
-    expect(mlBucket.completed).toBe(2);
-    expect(mlBucket.failed).toBe(1);
+    const mlCompleted = ctp.ctJobs.filter((j) => j.jobType === "ml" && j.status === "completed");
+    expect(mlCompleted).toHaveLength(2);
+    const mlFailed = ctp.ctJobs.filter((j) => j.jobType === "ml" && j.status === "failed");
+    expect(mlFailed).toHaveLength(1);
 
-    const driveBucket = ctp.ctJobs.find((b) => b.jobType === "drive_sync")!;
-    expect(driveBucket.completed).toBe(1);
-    expect(driveBucket.failed).toBe(0);
+    const driveJobs = ctp.ctJobs.filter((j) => j.jobType === "drive_sync");
+    expect(driveJobs).toHaveLength(1);
+    expect(driveJobs[0].status).toBe("completed");
 
     const bcp = payload.projects.find((p) => p.projectId === "biochoco")!;
-    expect(bcp.ctJobs.find((b) => b.jobType === "ml")!.completed).toBe(1);
+    expect(bcp.ctJobs.filter((j) => j.jobType === "ml" && j.status === "completed")).toHaveLength(1);
 
     expect(payload.totalCtJobs).toBe(5);
     expect(payload.totalAudioJobs).toBe(0);
+  });
+
+  it("surfaces per-job detail: deployment, processed counts, duration", async () => {
+    const ct = makeDeployment("camera-trap", "REF-003_V1");
+    const startedAt = inWindow(2);
+    const completedAt = new Date(startedAt.getTime() + 5 * 60_000); // 5 min later
+    makeJob({
+      deploymentId: ct,
+      jobType: "ml",
+      status: "completed",
+      startedAt,
+      completedAt,
+      totalImages: 1200,
+      processedImages: 1180,
+      failedImages: 20,
+      detectorModel: "yolov9c",
+    });
+
+    const payload = await aggregator.buildPortalUpdatesPayload(WINDOW_START, NOW);
+    const ctp = payload.projects.find((p) => p.projectId === "camera-trap")!;
+    const job = ctp.ctJobs.find((j) => j.jobType === "ml")!;
+
+    expect(job.deploymentName).toBe("REF-003_V1");
+    expect(job.processedImages).toBe(1180);
+    expect(job.totalImages).toBe(1200);
+    expect(job.failedImages).toBe(20);
+    expect(job.detectorModel).toBe("yolov9c");
+    expect(job.durationMs).toBe(5 * 60_000);
+  });
+
+  it("leaves durationMs null when startedAt is missing", async () => {
+    const ct = makeDeployment("camera-trap");
+    makeJob({ deploymentId: ct, jobType: "ml", status: "completed", completedAt: inWindow(3) });
+
+    const payload = await aggregator.buildPortalUpdatesPayload(WINDOW_START, NOW);
+    const ctp = payload.projects.find((p) => p.projectId === "camera-trap")!;
+    expect(ctp.ctJobs[0].durationMs).toBeNull();
   });
 
   it("skips jobs with NULL deployment_id (no project to attribute)", async () => {
@@ -241,8 +295,12 @@ describe("buildPortalUpdatesPayload — audio jobs", () => {
     const ctp = payload.projects.find((p) => p.projectId === "camera-trap")!;
 
     expect(ctp.audioJobs).toHaveLength(3);
-    expect(ctp.audioJobs.find((b) => b.jobType === "birdnet")!.completed).toBe(1);
-    expect(ctp.audioJobs.find((b) => b.jobType === "audio_compression")!.failed).toBe(1);
+    expect(
+      ctp.audioJobs.filter((j) => j.jobType === "birdnet" && j.status === "completed"),
+    ).toHaveLength(1);
+    expect(
+      ctp.audioJobs.filter((j) => j.jobType === "audio_compression" && j.status === "failed"),
+    ).toHaveLength(1);
 
     expect(ctp.ctJobs).toHaveLength(1);
     expect(ctp.ctJobs[0].jobType).toBe("ml");

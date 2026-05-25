@@ -24,6 +24,12 @@ import { Resend } from "resend";
 import { log } from "@/lib/log";
 import { recordEvent } from "@/lib/system-events";
 import {
+  formatBytes,
+  formatCountCell,
+  formatDeltaHtml,
+  formatNewSince,
+} from "@/lib/email/format";
+import {
   awaitJobTerminal,
   runDriveSyncWorker,
 } from "@/lib/camera-trap-sync-worker";
@@ -75,18 +81,6 @@ interface SnapshotDelta extends SnapshotData {
   deltaAudioSizeBytes: number | null;
   deltaIbuttonSizeBytes: number | null;
   previousSnapshotDate: string | null;
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(1024));
-  const value = bytes / Math.pow(1024, i);
-  return `${value.toFixed(i > 1 ? 1 : 0)} ${units[i]}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -694,53 +688,6 @@ async function sendReport(
 // ---------------------------------------------------------------------------
 // HTML Email Builder
 // ---------------------------------------------------------------------------
-
-/**
- * Render a count cell with an inline delta vs the previous run.
- * - previous === null: first run, show count only.
- * - delta === 0: show count only (avoid noise on stable deployments).
- * - delta !== 0: show "<count> <span>(+N)</span>" with color.
- */
-function formatCountCell(current: number | null | undefined, previous: number | null): string {
-  const cur = current ?? 0;
-  if (previous === null) return cur.toLocaleString();
-  const d = cur - previous;
-  if (d === 0) return cur.toLocaleString();
-  const color = d > 0 ? "#16a34a" : "#dc2626";
-  const sign = d > 0 ? "+" : "";
-  return `${cur.toLocaleString()} <span style="color:${color};font-weight:600;font-size:11px">(${sign}${d})</span>`;
-}
-
-function formatDeltaHtml(
-  countDelta: number | null,
-  sizeDelta: number | null,
-  previousDate: string | null
-): string {
-  if (countDelta === null) return "";
-  const sinceLabel = previousDate ? `desde ${previousDate}` : "desde último conteo";
-  if (countDelta === 0 && (sizeDelta === null || sizeDelta === 0)) {
-    return ` <span style="color:#6b7280">sin cambios ${sinceLabel}</span>`;
-  }
-  const parts: string[] = [];
-  if (countDelta !== 0) {
-    parts.push(`${countDelta > 0 ? "+" : ""}${countDelta} archivos`);
-  }
-  if (sizeDelta && sizeDelta !== 0) {
-    parts.push(`${sizeDelta > 0 ? "+" : ""}${formatBytes(Math.abs(sizeDelta))}`);
-  }
-  const color = countDelta > 0 ? "#16a34a" : "#dc2626";
-  return ` <span style="color:${color};font-weight:600">${parts.join(", ")} ${sinceLabel}</span>`;
-}
-
-function formatNewSince(value: number | null, previousDate: string | null): string {
-  if (value === null) return "";
-  const sinceLabel = previousDate ? `desde ${previousDate}` : "desde último conteo";
-  if (value === 0) {
-    return ` <span style="color:#6b7280">sin cambios ${sinceLabel}</span>`;
-  }
-  const color = value > 0 ? "#16a34a" : "#dc2626";
-  return ` <span style="color:${color};font-weight:600">+${value.toLocaleString()} ${sinceLabel}</span>`;
-}
 
 function buildAudioSection(report: AudioReport): string {
   return `

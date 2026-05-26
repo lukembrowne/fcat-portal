@@ -1964,6 +1964,16 @@ export async function deleteDeployments(
       .delete(deployments)
       .where(inArray(deployments.id, ids));
 
+    // Remove on-disk thumbnail directories (not covered by the DB cascade and
+    // not reclaimed by LRU eviction since the deployment no longer exists).
+    for (const id of ids) {
+      try {
+        await deleteDeploymentThumbnails(id);
+      } catch {
+        // Best-effort; thumbnails regenerate on demand anyway
+      }
+    }
+
     await recordEvent({
       source: "camera-trap",
       eventType: "delete_deployments",
@@ -1990,7 +2000,7 @@ export async function deleteDeployments(
 // Delete blank images from Drive (soft-delete to trash)
 // ---------------------------------------------------------------------------
 
-import { thumbnailPath as thumbPathFn } from "@/lib/thumbnail";
+import { thumbnailPath as thumbPathFn, deleteDeploymentThumbnails } from "@/lib/thumbnail";
 
 const DELETE_BATCH_SIZE = 50;
 const CACHE_BASE = path.join(process.cwd(), "data", "cache", "ct-images");

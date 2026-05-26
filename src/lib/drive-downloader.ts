@@ -19,7 +19,13 @@ import { db } from "@/db";
 import { images, videos } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { downloadDeploymentImages } from "./drive-client";
-import { THUMBNAIL_DIR, THUMBNAIL_WIDTH, THUMBNAIL_QUALITY, thumbnailPath } from "./thumbnail";
+import {
+  THUMBNAIL_DIR,
+  THUMBNAIL_WIDTH,
+  THUMBNAIL_QUALITY,
+  thumbnailPath,
+  evictThumbnailsIfOverLimit,
+} from "./thumbnail";
 import { log } from "@/lib/log";
 
 const TEMP_BASE = path.join(process.cwd(), "data", "tmp");
@@ -257,6 +263,9 @@ export async function downloadDeploymentForProcessing(
     { jobId, generated: imagesWithPaths.length },
     "[drive-downloader] Thumbnails complete"
   );
+
+  // Keep the thumbnail cache under its disk budget (LRU, skips this deployment).
+  await evictThumbnailsIfOverLimit(deploymentId);
 
   return { cacheDir, downloaded, skipped: alreadyCached.size, failed };
 }

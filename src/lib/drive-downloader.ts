@@ -34,6 +34,14 @@ const THUMB_BATCH_SIZE = 20;
 const CT_CACHE_MAX_BYTES =
   parseInt(process.env.CT_IMAGE_CACHE_MAX_GB || "30", 10) * 1024 * 1024 * 1024;
 /**
+ * Free-disk headroom required before we let a deployment download proceed. The
+ * 2026-05-25 outage filled the shared 193 GB root disk (downloading 81 GB up
+ * front) and crash-looped the box plus every co-tenant container. This margin
+ * protects them; don't shrink it casually.
+ */
+const DISK_MARGIN_BYTES =
+  parseInt(process.env.CT_PROCESS_DISK_MARGIN_GB || "20", 10) * 1024 * 1024 * 1024;
+/**
  * Per-file size cap for anything we download into the cache. Anything larger
  * is rejected during preflight rather than allowed to consume the cache.
  * Camera-trap stills are typically 1–10 MB; 100 MB is a generous ceiling that
@@ -69,6 +77,56 @@ export type DownloadProgressEvent =
   | { phase: "preflight"; cached: number; toDownload: number }
   | { phase: "downloading"; downloaded: number; failed: number; total: number }
   | { phase: "thumbnails"; generated: number; total: number };
+
+/**
+ * Free bytes on the filesystem holding the image cache, or `null` if it cannot
+ * be measured. `data/` is a host bind-mount on the root fs and `process.cwd()`
+ * is on that same fs, so statfs of cwd reflects the cache's filesystem. (Revisit
+ * — statfs the cache path — if `data/` is ever moved to a separate volume.)
+ *
+ * FAIL-CLOSED: a `null` return must NEVER be treated as "plenty of room".
+ * Callers treat unmeasurable disk as "do not risk an unbounded bulk download",
+ * because permitting a bulk download on a measurement glitch is exactly the
+ * branch that recreated the outage.
+ */
+export async function getFreeDiskBytes(): Promise<number | null> {
+  try {
+    const s = await fs.statfs(process.cwd());
+    return s.bavail * s.bsize;
+  } catch (err) {
+    log.warn({ err }, "[drive-downloader] statfs failed — treating disk as unmeasurable");
+    return null;
+  }
+}
+
+/**
+ * Pure capacity check: does `pendingBytes` fit in `freeBytes` while preserving
+ * `marginBytes` of headroom? Unit-tested in isolation.
+ */
+export function diskFits(
+  pendingBytes: number,
+  freeBytes: number,
+  marginBytes: number = DISK_MARGIN_BYTES,
+): boolean {
+  return pendingBytes + marginBytes <= freeBytes;
+}
+
+/**
+ * Thrown when a deployment's pending download (or a single chunk) cannot fit in
+ * free disk with the safety margin. The runner's outer catch turns this into a
+ * clean `failed` job + `scanned` deployment instead of an ENOSPC server crash.
+ */
+export class InsufficientDiskError extends Error {
+  constructor(pendingBytes: number, freeBytes: number, marginBytes: number = DISK_MARGIN_BYTES) {
+    const gb = (b: number) => (b / 1024 / 1024 / 1024).toFixed(1);
+    super(
+      `Espacio en disco insuficiente: la descarga requiere ~${gb(pendingBytes)} GB ` +
+        `pero solo hay ~${gb(freeBytes)} GB libres (margen ${gb(marginBytes)} GB). ` +
+        `Procese menos imágenes o amplíe el disco.`,
+    );
+    this.name = "InsufficientDiskError";
+  }
+}
 
 /**
  * Download all images for a deployment from Drive to a persistent cache directory.
@@ -175,6 +233,16 @@ export async function downloadDeploymentForProcessing(
 
   if (onProgress) {
     await onProgress({ phase: "preflight", cached: alreadyCached.size, toDownload: toDownload.length });
+  }
+
+  // Disk guard: refuse to start a download that would push the shared root
+  // filesystem toward 100%. Fail-closed when disk is unmeasurable. The runner's
+  // outer catch converts the throw into a clean failed job (no server crash).
+  if (downloadSize > 0) {
+    const freeBytes = await getFreeDiskBytes();
+    if (freeBytes === null || !diskFits(downloadSize, freeBytes)) {
+      throw new InsufficientDiskError(downloadSize, freeBytes ?? 0);
+    }
   }
 
   // Download only missing images
@@ -369,6 +437,15 @@ export async function downloadVideosForProcessing(
 
   if (onProgress) {
     await onProgress({ phase: "preflight", cached: alreadyCached.size, toDownload: toDownload.length });
+  }
+
+  // Disk guard (same as images): videos are larger per-file, so an unguarded
+  // bulk video download can fill the shared disk too. Fail-closed.
+  if (downloadSize > 0) {
+    const freeBytes = await getFreeDiskBytes();
+    if (freeBytes === null || !diskFits(downloadSize, freeBytes)) {
+      throw new InsufficientDiskError(downloadSize, freeBytes ?? 0);
+    }
   }
 
   // Download missing videos (lower parallelism — videos are larger)

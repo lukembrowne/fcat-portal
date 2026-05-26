@@ -10,6 +10,7 @@ import { SPANISH_MONTHS } from "./types";
 import { OverviewMap } from "./overview-map";
 import { ScheduleTable } from "./schedule-table";
 import { HabitatChart } from "./habitat-chart";
+import { FieldNotesTable } from "./field-notes-table";
 import { WorkloadTable } from "./workload-table";
 import { DurationOutliersTable } from "./duration-outliers-table";
 
@@ -108,6 +109,11 @@ export function DashboardShell({
 
   const monthLabel = `${SPANISH_MONTHS[selectedMonth.month]} ${selectedMonth.year}`;
 
+  const notesCount = useMemo(
+    () => data.schedule.filter((r) => r.fieldNotes && r.fieldNotes.trim().length > 0).length,
+    [data.schedule],
+  );
+
   function formatDateShort(dateStr: string | null): string {
     if (!dateStr) return "N/A";
     const d = new Date(dateStr);
@@ -194,6 +200,20 @@ export function DashboardShell({
       <section>
         <h2 className="text-lg font-semibold mb-3">Instalaciones por Tipo de Hábitat</h2>
         <HabitatChart schedule={data.schedule} deployedSet={deployedSet} retrievedSet={retrievedSet} />
+      </section>
+
+      <Separator />
+
+      <section>
+        <h2 className="text-lg font-semibold mb-3">
+          Notas de Campo{" "}
+          <span className="text-sm font-normal text-muted-foreground">({notesCount})</span>
+        </h2>
+        <FieldNotesTable
+          schedule={data.schedule}
+          deployedSet={deployedSet}
+          retrievedSet={retrievedSet}
+        />
       </section>
 
       <Separator />

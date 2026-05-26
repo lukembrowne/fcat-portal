@@ -795,6 +795,27 @@ export async function processJobInternal(
       });
 
       if (uncompressedJpegs.length > 0) {
+        // Capture the ML denominator so we can restore it after compression.
+        // `totalImages` here is the deployment image total (+ extracted frames)
+        // that the analysis phase reports against.
+        const [{ realTotal }] = await db
+          .select({ realTotal: processingJobs.totalImages })
+          .from(processingJobs)
+          .where(eq(processingJobs.id, jobId));
+
+        // Drive the progress bar off compression counts during this sub-phase so
+        // the floating toast + admin numeric bar actually advance (not just the
+        // status text). Without this, processedImages stays 0 and the bar reads
+        // 0% the whole compression. The ML phase resets processedImages from 0.
+        await db
+          .update(processingJobs)
+          .set({
+            totalImages: uncompressedJpegs.length,
+            processedImages: 0,
+            statusMessage: `Comprimiendo... (0 de ${uncompressedJpegs.length})`,
+          })
+          .where(eq(processingJobs.id, jobId));
+
         const { compressImageBatch } = await import("./drive-actions");
         await compressImageBatch(
           uncompressedJpegs.map((img) => ({ ...img, deploymentId: deployment.id })),
@@ -804,11 +825,21 @@ export async function processJobInternal(
             await db
               .update(processingJobs)
               .set({
+                processedImages: processedSoFar,
                 statusMessage: `Comprimiendo... (${processedSoFar} de ${uncompressedJpegs.length})`,
               })
               .where(eq(processingJobs.id, jobId));
           },
         );
+
+        // Restore the ML denominator and reset progress for the analysis phase.
+        await db
+          .update(processingJobs)
+          .set({
+            totalImages: realTotal ?? uncompressedJpegs.length,
+            processedImages: 0,
+          })
+          .where(eq(processingJobs.id, jobId));
       }
     }
 

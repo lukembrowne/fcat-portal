@@ -22,12 +22,20 @@ import {
   type ModelForDisplay,
 } from "@/lib/display-species";
 import { eq, desc, inArray, and, or, gte, ne, sql, count, sum, isNotNull, isNull, notExists } from "drizzle-orm";
-import { runMLPredictions, checkPytorchWildlife, cancelModelServerJob } from "@/lib/ml-runner";
+import { runMLPredictions, checkPytorchWildlife, cancelModelServerJob, type MLRunResult } from "@/lib/ml-runner";
 import {
   downloadDeploymentForProcessing,
   downloadVideosForProcessing,
   cleanupJobTempDir,
+  assessPendingStillDownload,
+  filterDownloadableRows,
+  getFreeDiskBytes,
+  diskFits,
+  InsufficientDiskError,
+  CHUNKING_ENABLED,
+  type DownloadProgressEvent,
 } from "@/lib/drive-downloader";
+import { processDeploymentImagesChunked } from "@/lib/chunked-image-processor";
 import { uploadFramesToDrive, trashFile } from "@/lib/drive-client";
 import { extractFrames, cancelFrameExtraction } from "@/lib/frame-extractor";
 import { requirePermission } from "@/lib/auth";
@@ -315,6 +323,11 @@ export async function processJobInternal(
   jobId: number
 ): Promise<ActionResult<{ job: ProcessingJob }>> {
   let cacheDir: string | undefined;
+  // When the deployment's pending download won't fit free disk, we process in
+  // chunks (download → ML → release) so peak disk ≈ one chunk. Decided in the
+  // image phase; read in the frame phase (release frame locals) and ML phase
+  // (chunked loop instead of a single bulk ML pass).
+  let useChunked = false;
 
   // Local idempotency for the activity-log event. processJobInternal has FIVE
   // internal terminal-transition sites (pre-flight fail, empty-deployment
@@ -364,47 +377,85 @@ export async function processJobInternal(
       return { success: false, error: "Instalación no encontrada" };
     }
 
+    // Cancellation check — read job status from DB between download/ML batches.
+    // Hoisted to function scope so the chunked ML loop (below the Drive block)
+    // can use it too.
+    const checkCancelled = async (): Promise<boolean> => {
+      const [j] = await db.select({ status: processingJobs.status })
+        .from(processingJobs).where(eq(processingJobs.id, jobId));
+      return !j || j.status !== "processing";
+    };
+
     // For Drive deployments: download images + videos to persistent cache
     if (deployment.driveFolderId) {
-      // Cancellation check — read job status from DB between download batches
-      const checkCancelled = async (): Promise<boolean> => {
-        const [j] = await db.select({ status: processingJobs.status })
-          .from(processingJobs).where(eq(processingJobs.id, jobId));
-        return !j || j.status !== "processing";
+      // Progress callback shared by the bulk download and the chunked loop.
+      const onImageProgress = async (event: DownloadProgressEvent) => {
+        if (event.phase === "preflight") {
+          const msg = event.cached > 0
+            ? `${event.cached} en caché, descargando ${event.toDownload}...`
+            : `Descargando ${event.toDownload} imágenes de Drive...`;
+          await db.update(processingJobs).set({
+            cachedImages: event.cached,
+            downloadTotal: event.toDownload,
+            statusMessage: event.toDownload === 0 ? `${event.cached} imágenes en caché` : msg,
+          }).where(eq(processingJobs.id, jobId));
+        } else if (event.phase === "downloading") {
+          await db.update(processingJobs).set({
+            downloadedImages: event.downloaded,
+            statusMessage: event.failed > 0
+              ? `Descargando... ${event.downloaded} de ${event.total} (${event.failed} fallidos)`
+              : `Descargando... ${event.downloaded} de ${event.total}`,
+          }).where(eq(processingJobs.id, jobId));
+        } else if (event.phase === "thumbnails") {
+          await db.update(processingJobs).set({
+            statusMessage: `Generando miniaturas... ${event.generated} de ${event.total}`,
+          }).where(eq(processingJobs.id, jobId));
+        }
       };
 
-      // --- Download images ---
+      // --- Decide bulk vs chunked download ---
       log.info({ jobId }, "[process] starting image download phase");
 
-      const downloadResult = await downloadDeploymentForProcessing(
-        deployment.id,
-        jobId,
-        async (event) => {
-          if (event.phase === "preflight") {
-            const msg = event.cached > 0
-              ? `${event.cached} en caché, descargando ${event.toDownload}...`
-              : `Descargando ${event.toDownload} imágenes de Drive...`;
-            await db.update(processingJobs).set({
-              cachedImages: event.cached,
-              downloadTotal: event.toDownload,
-              statusMessage: event.toDownload === 0 ? `${event.cached} imágenes en caché` : msg,
-            }).where(eq(processingJobs.id, jobId));
-          } else if (event.phase === "downloading") {
-            await db.update(processingJobs).set({
-              downloadedImages: event.downloaded,
-              statusMessage: event.failed > 0
-                ? `Descargando... ${event.downloaded} de ${event.total} (${event.failed} fallidos)`
-                : `Descargando... ${event.downloaded} de ${event.total}`,
-            }).where(eq(processingJobs.id, jobId));
-          } else if (event.phase === "thumbnails") {
-            await db.update(processingJobs).set({
-              statusMessage: `Generando miniaturas... ${event.generated} de ${event.total}`,
-            }).where(eq(processingJobs.id, jobId));
-          }
-        },
-        checkCancelled,
-      );
-      cacheDir = downloadResult.cacheDir;
+      const assessment = await assessPendingStillDownload(deployment.id);
+      cacheDir = assessment.cacheDir;
+      const freeBytes = await getFreeDiskBytes();
+      const fitsBulk = freeBytes !== null && diskFits(assessment.pendingBytes, freeBytes);
+
+      // Fail-closed: too big for one pass and chunking disabled → clean failure.
+      if (!fitsBulk && !CHUNKING_ENABLED) {
+        throw new InsufficientDiskError(assessment.pendingBytes, freeBytes ?? 0);
+      }
+
+      useChunked = !fitsBulk && CHUNKING_ENABLED && assessment.driveImageCount > 0;
+
+      let bulkDownloadResult: { downloaded: number; skipped: number } | null = null;
+      if (useChunked) {
+        const gb = (b: number) => +(b / 1024 / 1024 / 1024).toFixed(1);
+        log.warn(
+          {
+            jobId,
+            deploymentId: deployment.id,
+            pendingGb: gb(assessment.pendingBytes),
+            freeGb: freeBytes === null ? null : gb(freeBytes),
+            images: assessment.driveImageCount,
+          },
+          "[process] pending download exceeds free disk — using chunked (disk-bounded) processing"
+        );
+        await db.update(processingJobs).set({
+          downloadTotal: assessment.driveImageCount,
+          statusMessage: "Procesamiento por lotes (disco limitado)...",
+        }).where(eq(processingJobs.id, jobId));
+        // Stills are downloaded on demand in the chunked ML loop (after frames).
+      } else {
+        const downloadResult = await downloadDeploymentForProcessing(
+          deployment.id,
+          jobId,
+          onImageProgress,
+          checkCancelled,
+        );
+        cacheDir = downloadResult.cacheDir;
+        bulkDownloadResult = downloadResult;
+      }
 
       // --- Download videos ---
       const deploymentVideos = await db
@@ -438,8 +489,11 @@ export async function processJobInternal(
         );
       }
 
-      // Fail only if nothing was downloaded/cached for both images AND videos
-      const hasImages = downloadResult.downloaded > 0 || downloadResult.skipped > 0;
+      // Fail only if nothing was downloaded/cached for both images AND videos.
+      // In chunked mode nothing is downloaded yet — presence is the image count.
+      const hasImages = useChunked
+        ? assessment.driveImageCount > 0
+        : (bulkDownloadResult!.downloaded > 0 || bulkDownloadResult!.skipped > 0);
       const hasVideos = deploymentVideos.some((v) => v.path || v.driveFileId);
       if (!hasImages && !hasVideos && (deployment.totalImages ?? 0) > 0) {
         await db
@@ -667,6 +721,26 @@ export async function processJobInternal(
               { uploaded: driveFileIds.size, total: framesToUpload.length },
               "[processJob] Uploaded frames to Drive"
             );
+
+            // Chunked mode only: release local frame files now that they're on
+            // Drive (driveFileId set above). The chunked ML loop re-downloads
+            // them on demand grouped like any other image, keeping peak disk
+            // bounded. Bulk mode leaves frames on disk (already there for ML).
+            if (useChunked) {
+              for (const frame of framesToUpload) {
+                if (driveFileIds.get(frame.filename)) {
+                  try {
+                    await fs.unlink(frame.localPath);
+                  } catch {
+                    // File may already be gone
+                  }
+                  await db
+                    .update(images)
+                    .set({ path: null })
+                    .where(eq(images.id, frame.imageId));
+                }
+              }
+            }
           }
 
           // Delete local source videos from cache (originals are on Drive)
@@ -837,17 +911,48 @@ export async function processJobInternal(
       .set({ statusMessage: "Cargando modelos ML..." })
       .where(eq(processingJobs.id, jobId));
 
-    const mlResult = await runMLPredictions(jobId, {
-      imagePaths: pendingImages
-        .map((img) => img.path)
-        .filter((p): p is string => p !== null),
+    const mlConfigBase = {
       detectorModel: job.detectorModel || ML_DEFAULTS.detectorModel,
       classifierModel: job.classifierModel || ML_DEFAULTS.classifierModel,
       device: "auto",
       confidenceThreshold: job.confidenceThreshold ?? ML_DEFAULTS.confidenceThreshold,
       batchSize: ML_DEFAULTS.batchSize,
       numWorkers: ML_DEFAULTS.numWorkers,
-    });
+    };
+
+    let mlResult: MLRunResult;
+    if (useChunked) {
+      // Disk-bounded path: download → ML → release one chunk at a time. ML runs
+      // per chunk (warm model server is reused), so we skip the single bulk pass.
+      const downloadable = filterDownloadableRows(cacheDir!, pendingImages);
+      const outcome = await processDeploymentImagesChunked({
+        deploymentId: deployment.id,
+        jobId,
+        cacheDir: cacheDir!,
+        rows: downloadable,
+        mlConfigBase,
+        checkCancelled,
+      });
+      if (outcome.cancelled) {
+        log.warn({ jobId }, "[processJob] chunked processing cancelled — aborting");
+        return { success: false, error: "Job was externally terminated" };
+      }
+      mlResult = {
+        success: !outcome.anyFailed,
+        totalProcessed: outcome.totalProcessed,
+        totalDetections: outcome.totalDetections,
+        error: outcome.anyFailed
+          ? "Una o más imágenes fallaron durante el análisis"
+          : undefined,
+      };
+    } else {
+      mlResult = await runMLPredictions(jobId, {
+        imagePaths: pendingImages
+          .map((img) => img.path)
+          .filter((p): p is string => p !== null),
+        ...mlConfigBase,
+      });
+    }
 
     log.info(
       {

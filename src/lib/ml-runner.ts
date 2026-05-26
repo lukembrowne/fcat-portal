@@ -50,6 +50,17 @@ export interface MLConfig {
   confidenceThreshold: number;
   batchSize: number;
   numWorkers: number;
+  /**
+   * Cumulative-progress support for chunked processing. When a job is ML'd one
+   * chunk at a time, `runMLPredictions` is called once per chunk and would
+   * otherwise reset `processedImages` to 0 each call (the progress bar would run
+   * backward). Pass the number of images processed in prior chunks as
+   * `progressOffset` and the job's full image total as `progressTotal` so the
+   * persisted `processedImages` / status message stay monotonic and correct.
+   * Both default to single-pass behavior (offset 0, total = this call's images).
+   */
+  progressOffset?: number;
+  progressTotal?: number;
 }
 
 export interface MLRunResult {
@@ -435,10 +446,14 @@ function spawnModelServer(): void {
       if (!currentJob) return;
       const job = currentJob;
 
+      // Cumulative progress across chunked runs (defaults preserve single-pass).
+      const progressBase = job.config.progressOffset ?? 0;
+      const progressDenom = job.config.progressTotal ?? job.config.imagePaths.length;
+
       if (msg.type === "progress") {
         await db
           .update(processingJobs)
-          .set({ processedImages: job.processedCount })
+          .set({ processedImages: progressBase + job.processedCount })
           .where(eq(processingJobs.id, job.jobId));
       } else if (msg.type === "result" && msg.image) {
         const imageId = job.imagePathToId.get(msg.image);
@@ -488,8 +503,8 @@ function spawnModelServer(): void {
         await db
           .update(processingJobs)
           .set({
-            processedImages: job.processedCount,
-            statusMessage: `Analizando imágenes... (${job.processedCount} de ${job.config.imagePaths.length})`,
+            processedImages: progressBase + job.processedCount,
+            statusMessage: `Analizando imágenes... (${progressBase + job.processedCount} de ${progressDenom})`,
           })
           .where(eq(processingJobs.id, job.jobId));
       } else if (msg.type === "error" && msg.image) {

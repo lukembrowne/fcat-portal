@@ -42,6 +42,15 @@ const CT_CACHE_MAX_BYTES =
 const DISK_MARGIN_BYTES =
   parseInt(process.env.CT_PROCESS_DISK_MARGIN_GB || "20", 10) * 1024 * 1024 * 1024;
 /**
+ * Target bytes per chunk in chunked (disk-bounded) processing. Peak cache usage
+ * during a chunked run is ≈ one chunk. An operator can lower this under disk
+ * pressure without a redeploy.
+ */
+const CHUNK_TARGET_BYTES =
+  parseInt(process.env.CT_PROCESS_CHUNK_MAX_GB || "10", 10) * 1024 * 1024 * 1024;
+/** Assumed size for image rows whose `file_size` is null/0 when grouping chunks. */
+const NULL_SIZE_FALLBACK_BYTES = 20 * 1024 * 1024;
+/**
  * Per-file size cap for anything we download into the cache. Anything larger
  * is rejected during preflight rather than allowed to consume the cache.
  * Camera-trap stills are typically 1–10 MB; 100 MB is a generous ceiling that
@@ -77,6 +86,66 @@ export type DownloadProgressEvent =
   | { phase: "preflight"; cached: number; toDownload: number }
   | { phase: "downloading"; downloaded: number; failed: number; total: number }
   | { phase: "thumbnails"; generated: number; total: number };
+
+/** A row from the `biochoco_images` table. */
+export type ImageRow = typeof images.$inferSelect;
+
+/**
+ * Kill-switch for chunked (disk-bounded) processing. When false, deployments
+ * that don't fit free disk fail cleanly via the Part A guard instead of being
+ * chunked. Emergency lever only — flip to "false" without a redeploy if chunking
+ * ever misbehaves in production.
+ */
+export const CHUNKING_ENABLED =
+  (process.env.CT_PROCESS_CHUNKING_ENABLED ?? "true") !== "false";
+
+/**
+ * Generate (and cache) thumbnails for already-downloaded full-res images. Shared
+ * by the bulk download and the chunked loop. MUST run before any full-res file
+ * is released — thumbnails are derived from the full-res file on disk.
+ */
+async function generateThumbnails(
+  deploymentId: number,
+  entries: Array<{ imageId: number; localPath: string }>,
+  onProgress?: (event: DownloadProgressEvent) => Promise<void>,
+): Promise<void> {
+  const thumbDir = path.join(THUMBNAIL_DIR, String(deploymentId));
+  await fs.mkdir(thumbDir, { recursive: true });
+
+  for (let i = 0; i < entries.length; i += THUMB_BATCH_SIZE) {
+    const batch = entries.slice(i, i + THUMB_BATCH_SIZE);
+    await Promise.all(
+      batch.map(async ({ imageId, localPath }) => {
+        const tp = thumbnailPath(deploymentId, imageId);
+        try {
+          await fs.access(tp);
+        } catch {
+          // Thumbnail doesn't exist — generate from downloaded/cached image
+          try {
+            const imgData = await fs.readFile(localPath);
+            const thumb = await sharp(imgData)
+              .resize(THUMBNAIL_WIDTH)
+              .jpeg({ quality: THUMBNAIL_QUALITY })
+              .toBuffer();
+            await fs.writeFile(tp, thumb);
+          } catch (err) {
+            log.warn(
+              { err, imageId },
+              "[drive-downloader] Thumbnail generation failed"
+            );
+          }
+        }
+      })
+    );
+    if (onProgress) {
+      await onProgress({
+        phase: "thumbnails",
+        generated: Math.min(i + THUMB_BATCH_SIZE, entries.length),
+        total: entries.length,
+      });
+    }
+  }
+}
 
 /**
  * Free bytes on the filesystem holding the image cache, or `null` if it cannot
@@ -286,46 +355,16 @@ export async function downloadDeploymentForProcessing(
       .where(eq(images.id, img.id));
   }
 
-  // Generate thumbnails in batches of THUMB_BATCH_SIZE
-  const thumbDir = path.join(THUMBNAIL_DIR, String(deploymentId));
-  await fs.mkdir(thumbDir, { recursive: true });
-
+  // Generate thumbnails (shared helper — must run before any full-res release)
   const imagesWithPaths = driveImages.filter((img) => pathMap.has(img.driveFileId!));
-
-  for (let i = 0; i < imagesWithPaths.length; i += THUMB_BATCH_SIZE) {
-    const batch = imagesWithPaths.slice(i, i + THUMB_BATCH_SIZE);
-    await Promise.all(
-      batch.map(async (img) => {
-        const localPath = pathMap.get(img.driveFileId!)!;
-        const tp = thumbnailPath(deploymentId, img.id);
-        try {
-          await fs.access(tp);
-        } catch {
-          // Thumbnail doesn't exist — generate from downloaded/cached image
-          try {
-            const imgData = await fs.readFile(localPath);
-            const thumb = await sharp(imgData)
-              .resize(THUMBNAIL_WIDTH)
-              .jpeg({ quality: THUMBNAIL_QUALITY })
-              .toBuffer();
-            await fs.writeFile(tp, thumb);
-          } catch (err) {
-            log.warn(
-              { err, imageId: img.id },
-              "[drive-downloader] Thumbnail generation failed"
-            );
-          }
-        }
-      })
-    );
-    if (onProgress) {
-      await onProgress({
-        phase: "thumbnails",
-        generated: Math.min(i + THUMB_BATCH_SIZE, imagesWithPaths.length),
-        total: imagesWithPaths.length,
-      });
-    }
-  }
+  await generateThumbnails(
+    deploymentId,
+    imagesWithPaths.map((img) => ({
+      imageId: img.id,
+      localPath: pathMap.get(img.driveFileId!)!,
+    })),
+    onProgress
+  );
 
   log.info(
     { jobId, generated: imagesWithPaths.length },
@@ -336,6 +375,199 @@ export async function downloadDeploymentForProcessing(
   await evictThumbnailsIfOverLimit(deploymentId);
 
   return { cacheDir, downloaded, skipped: alreadyCached.size, failed };
+}
+
+// ---------------------------------------------------------------------------
+// Chunked (disk-bounded) processing primitives — used by the camera-trap runner
+// when a deployment's pending download won't fit in free disk. See
+// docs/plans/2026-05-26-fix-ml-chunked-download-plan.md.
+// ---------------------------------------------------------------------------
+
+/**
+ * Estimate the not-yet-cached download size for a deployment's still images, to
+ * decide bulk vs chunked. Read-only; mirrors the bulk download's image
+ * selection (drive-backed, safe filename, under the per-file cap) and sums
+ * bytes for files not already present in the cache (fallback for null sizes).
+ */
+export async function assessPendingStillDownload(deploymentId: number): Promise<{
+  cacheDir: string;
+  pendingBytes: number;
+  driveImageCount: number;
+}> {
+  const cacheDir = path.join(CACHE_BASE, String(deploymentId));
+  const deploymentImages = await db
+    .select()
+    .from(images)
+    .where(eq(images.deploymentId, deploymentId));
+
+  let pendingBytes = 0;
+  let driveImageCount = 0;
+  for (const img of deploymentImages) {
+    if (!img.driveFileId) continue;
+    if (!isSafeCacheFilename(cacheDir, img.filename)) continue;
+    if ((img.fileSize ?? 0) > MAX_FILE_SIZE_BYTES) continue;
+    driveImageCount++;
+    const localPath = path.join(cacheDir, img.filename);
+    try {
+      await fs.access(localPath);
+    } catch {
+      pendingBytes += img.fileSize && img.fileSize > 0 ? img.fileSize : NULL_SIZE_FALLBACK_BYTES;
+    }
+  }
+  return { cacheDir, pendingBytes, driveImageCount };
+}
+
+/**
+ * Filter image rows to those safely downloadable into `cacheDir`: drive-backed,
+ * safe filename, under the per-file size cap. Same predicate the bulk path uses.
+ */
+export function filterDownloadableRows(cacheDir: string, rows: ImageRow[]): ImageRow[] {
+  return rows.filter(
+    (img) =>
+      !!img.driveFileId &&
+      isSafeCacheFilename(cacheDir, img.filename) &&
+      (img.fileSize ?? 0) <= MAX_FILE_SIZE_BYTES
+  );
+}
+
+/**
+ * Group image rows into chunks whose cumulative file size stays under
+ * `chunkTargetBytes`. Rows with null/0 sizes use a fallback estimate. A single
+ * file larger than the target gets its own chunk. Pure — unit-tested.
+ */
+export function groupRowsIntoChunks(
+  rows: ImageRow[],
+  chunkTargetBytes: number = CHUNK_TARGET_BYTES,
+  nullSizeFallback: number = NULL_SIZE_FALLBACK_BYTES
+): ImageRow[][] {
+  const chunks: ImageRow[][] = [];
+  let current: ImageRow[] = [];
+  let acc = 0;
+  for (const row of rows) {
+    const size = row.fileSize && row.fileSize > 0 ? row.fileSize : nullSizeFallback;
+    if (current.length > 0 && acc + size > chunkTargetBytes) {
+      chunks.push(current);
+      current = [];
+      acc = 0;
+    }
+    current.push(row);
+    acc += size;
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks;
+}
+
+/**
+ * Download a specific set of image rows into the cache: skip already-cached
+ * files, download the rest, write images.path, and generate thumbnails (before
+ * any release). Self-contained primitive shared by the chunked loop. Returns
+ * the local paths that are now present on disk (for handing to the ML runner).
+ *
+ * NOTE: rows must be pre-filtered with filterDownloadableRows. No disk guard
+ * here — bulk guards in downloadDeploymentForProcessing; chunked gates per chunk.
+ */
+export async function downloadImageSet(
+  cacheDir: string,
+  deploymentId: number,
+  jobId: number,
+  rows: ImageRow[],
+  onProgress?: (event: DownloadProgressEvent) => Promise<void>,
+  isCancelled?: () => Promise<boolean>
+): Promise<{ downloaded: number; skipped: number; failed: number; localPaths: string[] }> {
+  await fs.mkdir(cacheDir, { recursive: true });
+
+  // Split into already-cached vs to-download by filesystem existence.
+  const toDownload: Array<{
+    id: string;
+    name: string;
+    size: number;
+    modifiedTime: string;
+    relativePath: string;
+  }> = [];
+  const alreadyCached = new Map<string, string>();
+  for (const img of rows) {
+    if (!img.driveFileId) continue;
+    const localPath = path.join(cacheDir, img.filename);
+    try {
+      await fs.access(localPath);
+      alreadyCached.set(img.driveFileId, localPath);
+    } catch {
+      toDownload.push({
+        id: img.driveFileId,
+        name: img.filename,
+        size: img.fileSize || 0,
+        modifiedTime: "",
+        relativePath: img.filename,
+      });
+    }
+  }
+
+  if (onProgress) {
+    await onProgress({ phase: "preflight", cached: alreadyCached.size, toDownload: toDownload.length });
+  }
+
+  let downloaded = 0;
+  let failed = 0;
+  const pathMap = new Map<string, string>();
+
+  if (toDownload.length > 0) {
+    const result = await downloadDeploymentImages(
+      toDownload,
+      cacheDir,
+      (dl, fl, total) => {
+        downloaded = dl;
+        failed = fl;
+        onProgress?.({ phase: "downloading", downloaded: dl, failed: fl, total });
+      },
+      isCancelled
+    );
+    downloaded = result.downloaded;
+    failed = result.failed;
+    for (const [fileId, localPath] of result.pathMap) pathMap.set(fileId, localPath);
+  }
+  for (const [fileId, localPath] of alreadyCached) pathMap.set(fileId, localPath);
+
+  // Write cache paths into images.path
+  for (const img of rows) {
+    if (!img.driveFileId) continue;
+    const localPath = pathMap.get(img.driveFileId);
+    if (!localPath) continue;
+    await db.update(images).set({ path: localPath }).where(eq(images.id, img.id));
+  }
+
+  // Thumbnails — MUST precede any release of full-res files.
+  const withPaths = rows.filter((img) => img.driveFileId && pathMap.has(img.driveFileId));
+  await generateThumbnails(
+    deploymentId,
+    withPaths.map((img) => ({ imageId: img.id, localPath: pathMap.get(img.driveFileId!)! })),
+    onProgress
+  );
+
+  return {
+    downloaded,
+    skipped: alreadyCached.size,
+    failed,
+    localPaths: withPaths.map((img) => pathMap.get(img.driveFileId!)!),
+  };
+}
+
+/**
+ * After a chunk has been ML'd, delete its full-res cache files and null
+ * images.path. Detections/identifications and thumbnails are kept; the image
+ * proxy falls back to Drive via driveFileId. Non-atomic by design (unlink then
+ * per-row DB update); recoverStuckJobs' existence-based path-nulling makes a
+ * crash between the two safe on resume.
+ */
+export async function releaseChunkFiles(cacheDir: string, rows: ImageRow[]): Promise<void> {
+  for (const img of rows) {
+    const localPath = path.join(cacheDir, img.filename);
+    try {
+      await fs.unlink(localPath);
+    } catch {
+      // File may already be gone
+    }
+    await db.update(images).set({ path: null }).where(eq(images.id, img.id));
+  }
 }
 
 /**
@@ -550,7 +782,7 @@ export async function cleanupOrphanedTempDirs(): Promise<void> {
  * Skips the deployment currently being processed.
  * Nulls out images.path for evicted deployments so the proxy falls back to Drive.
  */
-async function evictIfOverLimit(currentDeploymentId: number): Promise<void> {
+export async function evictIfOverLimit(currentDeploymentId: number): Promise<void> {
   try {
     let entries: string[];
     try {

@@ -34,7 +34,7 @@ export default async function DeploymentDetailPage({ params }: PageProps) {
     notFound();
   }
 
-  const { deployment, images, videos, jobs, stats } = data;
+  const { deployment, images, videos, jobs, stats, isProcessing } = data;
 
   const latestJob = jobs[0];
   const canProcess =
@@ -61,9 +61,11 @@ export default async function DeploymentDetailPage({ params }: PageProps) {
     }
   }
 
-  // Compute display status for badge
-  const displayStatus =
-    deployment.status === "processed" && stats.totalDetections === 0
+  // Compute display status for badge. "Procesando" is driven by the live
+  // isProcessing flag (derived from active jobs), not a stored status.
+  const displayStatus = isProcessing
+    ? "processing"
+    : deployment.status === "processed" && stats.totalDetections === 0
       ? "processed_empty"
       : deployment.status;
 
@@ -86,7 +88,6 @@ export default async function DeploymentDetailPage({ params }: PageProps) {
     ? await getDeploymentResultsData(deployment.id)
     : null;
 
-  const isProcessing = deployment.status === "processing";
   const hasResults = !!resultsData;
 
   return (
@@ -142,6 +143,7 @@ export default async function DeploymentDetailPage({ params }: PageProps) {
                 deploymentId={deployment.id}
                 deploymentName={deployment.name}
                 status={deployment.status}
+                isProcessing={isProcessing}
                 totalDetections={stats.totalDetections}
                 revertibleImageCount={revertibleImageCount}
                 pendingImageCount={pendingImageCount}

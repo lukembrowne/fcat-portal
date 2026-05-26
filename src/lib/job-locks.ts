@@ -46,6 +46,64 @@ export async function findActiveAudioJob(
 }
 
 /**
+ * The set of job types that operate on a deployment's camera-trap images.
+ * A deployment may have at most one of these `pending`/`processing` at a time.
+ *
+ * This is the single source of truth for "is this deployment currently being
+ * processed?" — the UI and guards derive processing state from a live query of
+ * these jobs rather than from a denormalized `deployments.status = "processing"`
+ * column (which could drift out of sync when a job was killed or cancelled).
+ */
+export const CAMERA_TRAP_ACTIVE_JOB_TYPES = [
+  JOB_TYPES.ML,
+  JOB_TYPES.ML_INCREMENTAL,
+  JOB_TYPES.COMPRESSION,
+  JOB_TYPES.REVERT_COMPRESSION,
+] as const satisfies readonly JobType[];
+
+export async function findActiveCameraTrapJob(
+  deploymentId: number,
+): Promise<{ id: number; jobType: string } | null> {
+  const [active] = await db
+    .select({ id: processingJobs.id, jobType: processingJobs.jobType })
+    .from(processingJobs)
+    .where(
+      and(
+        eq(processingJobs.deploymentId, deploymentId),
+        inArray(processingJobs.jobType, [...CAMERA_TRAP_ACTIVE_JOB_TYPES]),
+        inArray(processingJobs.status, ["pending", "processing"]),
+      ),
+    )
+    .limit(1);
+  return active ?? null;
+}
+
+/**
+ * Batch variant for list views: returns the set of deployment IDs that have an
+ * active camera-trap job. One indexed query instead of N per-row lookups.
+ */
+export async function findActiveCameraTrapJobIds(
+  deploymentIds: number[],
+): Promise<Set<number>> {
+  if (deploymentIds.length === 0) return new Set();
+  const rows = await db
+    .select({ deploymentId: processingJobs.deploymentId })
+    .from(processingJobs)
+    .where(
+      and(
+        inArray(processingJobs.deploymentId, deploymentIds),
+        inArray(processingJobs.jobType, [...CAMERA_TRAP_ACTIVE_JOB_TYPES]),
+        inArray(processingJobs.status, ["pending", "processing"]),
+      ),
+    );
+  const ids = new Set<number>();
+  for (const r of rows) {
+    if (r.deploymentId != null) ids.add(r.deploymentId);
+  }
+  return ids;
+}
+
+/**
  * Count concurrent AUDIO_COMPRESSION jobs across all deployments. Used to
  * enforce a global "only one at a time" cap so the admin can't accidentally
  * saturate the droplet by queuing every deployment.

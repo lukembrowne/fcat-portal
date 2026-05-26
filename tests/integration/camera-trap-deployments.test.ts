@@ -17,6 +17,7 @@ import {
   setupAuthMocks,
   testUser,
 } from "../helpers/mock-auth";
+import { findActiveCameraTrapJob } from "@/lib/job-locks";
 
 setupAuthMocks();
 setupIntegrationDbMock();
@@ -458,17 +459,13 @@ describe("getDeploymentsWithStats — counts and pendingImageCount", () => {
 
 describe("edge cases", () => {
   it("deleteDeployments cascades even when deployment has in-progress jobs", async () => {
-    // Create a processing job (sets deployment to "processing")
+    // Create a processing job — the deployment now has an active (pending) job.
     const createResult = await actions.createProcessingJob(seed.deployment.id);
     expect(createResult.success).toBe(true);
 
-    // Verify deployment is now processing
-    const [dep] = db
-      .select()
-      .from(schema.deployments)
-      .where(eq(schema.deployments.id, seed.deployment.id))
-      .all();
-    expect(dep.status).toBe("processing");
+    // Verify an active camera-trap job exists for the deployment.
+    const active = await findActiveCameraTrapJob(seed.deployment.id);
+    expect(active).not.toBeNull();
 
     // Delete should still work and cascade everything
     const result = await actions.deleteDeployments([seed.deployment.id]);

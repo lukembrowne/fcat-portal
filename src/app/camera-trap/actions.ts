@@ -58,6 +58,11 @@ import crypto from "crypto";
 import { ML_DEFAULTS } from "@/lib/ml-defaults";
 import { log } from "@/lib/log";
 import { processNextQueueable, claimAndEmitStart } from "@/lib/job-queue";
+import {
+  findActiveCameraTrapJob,
+  findActiveCameraTrapJobIds,
+  CAMERA_TRAP_ACTIVE_JOB_TYPES,
+} from "@/lib/job-locks";
 
 const CAMERA_TRAP_PATH = "/camera-trap";
 
@@ -91,25 +96,11 @@ export async function createProcessingJob(
     // Reject if a job is already active for this deployment. Without this
     // guard, two near-simultaneous createProcessingJob calls would both insert
     // jobs and race on images.jobId — the loser ends up with zero linked
-    // images and orphaned detections.
-    if (deployment.status === "processing") {
-      return {
-        success: false,
-        error: "Esta instalación ya está siendo procesada",
-      };
-    }
-    const [activeJob] = await db
-      .select({ id: processingJobs.id })
-      .from(processingJobs)
-      .where(
-        and(
-          eq(processingJobs.deploymentId, deploymentId),
-          inArray(processingJobs.status, ["pending", "processing"]),
-          // Only block on camera trap job types, not BirdNET
-          inArray(processingJobs.jobType, ["ml", "ml_incremental", "compression", "revert_compression"])
-        )
-      )
-      .limit(1);
+    // images and orphaned detections. This live active-job query is the single
+    // source of truth for "is this deployment busy?" — we no longer rely on a
+    // denormalized deployments.status = "processing" flag (which could strand a
+    // deployment if a job was killed or cancelled without resetting it).
+    const activeJob = await findActiveCameraTrapJob(deploymentId);
     if (activeJob) {
       return {
         success: false,
@@ -266,19 +257,13 @@ export async function createProcessingJob(
           .run();
       }
 
-      // Incremental jobs don't flip the deployment to "processing" — the
-      // active-job query already prevents concurrent runs, and keeping the
-      // deployment in its prior state (e.g. "processed") avoids confusing the
-      // UI during the run. The success-path finalization in processJobInternal
-      // will set it to "processed" when the job completes (which is what we
-      // want anyway: any deployment with newly added images can no longer be
-      // considered fully verified).
-      if (!incremental) {
-        tx.update(deployments)
-          .set({ status: "processing", updatedAt: new Date() })
-          .where(eq(deployments.id, deploymentId))
-          .run();
-      }
+      // We no longer flip the deployment to a "processing" status. "Processing"
+      // is derived live from the active-job query (findActiveCameraTrapJob), so
+      // the deployment.status column only ever holds durable lifecycle values
+      // (scanned/processed/verified/...). The active-job query above already
+      // prevents concurrent runs, and processJobInternal's finalization sets the
+      // lifecycle status (processed on success, scanned on a destructive
+      // reprocess that failed) when the job reaches a terminal state.
 
       return inserted;
     });
@@ -1063,9 +1048,10 @@ export async function processJobInternal(
       .where(eq(processingJobs.id, jobId));
     await emitTerminalEvent();
 
-    // Revert deployment status from "processing" to "scanned" — but not for
-    // incremental jobs, which never flipped the deployment to "processing"
-    // and shouldn't downgrade a previously processed/verified deployment.
+    // A non-incremental job runs a destructive cleanup at creation time
+    // (detections/verifications wiped), so a failure leaves the deployment with
+    // no results — set it to "scanned". Incremental jobs touch nothing on
+    // failure, so leave their prior processed/verified state intact.
     const [failedJob] = await db
       .select()
       .from(processingJobs)
@@ -1087,6 +1073,21 @@ export async function processJobInternal(
       error: error instanceof Error ? error.message : "Procesamiento falló",
     };
   }
+}
+
+/**
+ * Map a stored deployment status to a durable lifecycle value. The legacy
+ * "processing" value is no longer written (processing state is now derived live
+ * from the active-job query), but old rows may still have it persisted —
+ * normalize it to its lifecycle equivalent so the UI never shows a stale
+ * "Procesando" badge for an idle deployment.
+ */
+function normalizeStoredDeploymentStatus(
+  status: string,
+  hasCompletedJob: boolean,
+): string {
+  if (status === "processing") return hasCompletedJob ? "processed" : "scanned";
+  return status;
 }
 
 /** Safe revalidatePath — silently ignores errors when called outside a request context. */
@@ -1548,7 +1549,10 @@ export async function deleteJobs(
 export interface DeploymentRow {
   id: number;
   name: string;
+  /** Durable lifecycle status (never "processing" — that's derived; see isProcessing). */
   status: string;
+  /** Derived live from the active-job query — true while an ML/compression job runs. */
+  isProcessing: boolean;
   driveFolderId: string | null;
   projectLabel: string | null;
   cameraTrapProjectId: number | null;
@@ -1797,6 +1801,10 @@ export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
     });
   }
 
+  // Derive "currently processing" from a live active-job query — never from a
+  // stored deployments.status flag (which could drift if a job was killed).
+  const activeJobDepIds = await findActiveCameraTrapJobIds(deploymentIds);
+
   return allDeployments.map((d) => {
     const jobInfo = jobMap.get(d.id);
     const latestStatus = latestStatusMap.get(d.id);
@@ -1804,7 +1812,8 @@ export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
     return {
       id: d.id,
       name: d.name,
-      status: d.status,
+      status: normalizeStoredDeploymentStatus(d.status, completedJobId != null),
+      isProcessing: activeJobDepIds.has(d.id),
       driveFolderId: d.driveFolderId,
       projectLabel: d.projectLabel,
       cameraTrapProjectId: d.cameraTrapProjectId,
@@ -3008,8 +3017,8 @@ export async function queueProcessing(
 
       if (!deployment) continue;
 
-      // Skip if already processing
-      if (deployment.status === "processing") continue;
+      // Skip if a job is already active (derived from the live active-job query)
+      if (await findActiveCameraTrapJob(depId)) continue;
 
       // Auto-scan if unscanned
       if (deployment.status === "unscanned" && deployment.driveFolderId) {
@@ -3297,8 +3306,25 @@ export async function getDeployment(id: number) {
 
   const pendingVideoCount = deploymentVideos.filter((v) => v.status === "pending").length;
 
+  // Derive processing state live from this deployment's jobs (already loaded),
+  // rather than trusting a denormalized deployments.status flag. Normalize any
+  // legacy stored "processing" status to its lifecycle equivalent.
+  const activeJobTypes = new Set<string>(CAMERA_TRAP_ACTIVE_JOB_TYPES);
+  const isProcessing = jobs.some(
+    (j) =>
+      (j.status === "pending" || j.status === "processing") &&
+      activeJobTypes.has(j.jobType),
+  );
+
   return {
-    deployment,
+    deployment: {
+      ...deployment,
+      status: normalizeStoredDeploymentStatus(
+        deployment.status,
+        latestCompletedJob != null,
+      ),
+    },
+    isProcessing,
     images: deploymentImages,
     videos: deploymentVideos,
     jobs,

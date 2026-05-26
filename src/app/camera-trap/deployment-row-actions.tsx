@@ -23,7 +23,7 @@ export function DeploymentRowActions({
   const router = useRouter();
   const [quickProcessIds, setQuickProcessIds] = useState<number[] | null>(null);
 
-  const isProcessing = deployment.status === "processing";
+  const isProcessing = deployment.isProcessing;
   const hasImages = (deployment.totalImages ?? 0) > 0;
   const hasVideos = (deployment.totalVideos ?? 0) > 0;
   const hasResults = !!deployment.lastCompletedJobId;
@@ -71,6 +71,7 @@ export function DeploymentRowActions({
           deploymentId={deployment.id}
           deploymentName={deployment.name}
           status={deployment.status}
+          isProcessing={isProcessing}
           totalDetections={deployment.totalDetections ?? 0}
           totalImages={deployment.totalImages ?? 0}
           hasImages={hasImages}

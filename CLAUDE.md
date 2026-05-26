@@ -116,6 +116,13 @@ When fixing database queries, always check for edge cases where records have NUL
 - Global concurrency cap: only ONE `audio_compression` job runs at a time across all deployments. Batch-queued jobs wait their turn.
 - Feature flag: `AUDIO_COMPRESSION_ENABLED=true` must be set in production. Pre-replace WAV revisions are pinned with `keepForever=true` while `AUDIO_KEEP_WAV_REVISION_FOREVER` is unset or "true".
 
+## Camera-trap ML processing
+
+- **Disk-bounded downloads.** `processJobInternal` (`src/app/camera-trap/actions.ts`) never downloads a whole deployment up front if it won't fit free disk. A pre-flight guard (`getFreeDiskBytes`/`diskFits`/`InsufficientDiskError` in `src/lib/drive-downloader.ts`) fails a too-big job cleanly (Spanish message) instead of filling the disk. When the pending download exceeds free disk, processing runs **chunked**: download → ML → release one byte-budgeted chunk at a time (`src/lib/chunked-image-processor.ts`), so peak `data/cache/ct-images/{id}` ≈ one chunk. Full-res files are deleted after each chunk's ML; detections + thumbnails persist and the image proxy falls back to Drive.
+- **Knobs:** `CT_PROCESS_DISK_MARGIN_GB` (default 20, free-disk headroom — protects co-tenant containers), `CT_PROCESS_CHUNK_MAX_GB` (default 10, bytes per chunk), `CT_PROCESS_CHUNKING_ENABLED` (default true; set `false` as an emergency lever to revert to bulk + guard — big deployments then fail cleanly instead of chunking). `CT_IMAGE_CACHE_MAX_GB` (default 30) gates *other* deployments' caches only, NOT the active one.
+- **`getFreeDiskBytes` is fail-closed**: returns `null` when statfs can't measure, and the decision treats `null` as "doesn't fit" — never permit an unbounded bulk download on a measurement glitch (that recreated the 2026-05-25 outage).
+- The warm model server is reused across per-chunk `runMLPredictions` calls (no reload). Chunked ML passes `progressOffset`/`progressTotal` so `processedImages` stays monotonic. `recoverStuckJobs` nulls any reset image's `path` whose file is missing on disk (chunked runs delete cache files), so resume re-downloads only what's gone and never re-ML's `processed` images.
+
 ## Gotchas
 
 - Server/Client Component imports: Don't import server-only modules in Client Components

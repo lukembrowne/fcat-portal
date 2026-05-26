@@ -220,7 +220,12 @@ export function recoverStuckJobs() {
           if (img.status === "processed") continue;
 
           const update: { status: "pending"; path?: null } = { status: "pending" };
-          if (img.path && img.path.includes("/tmp/ct-job-")) {
+          // Null any path (temp OR cache) whose file no longer exists on disk.
+          // Chunked processing deletes full-res files of processed chunks, so a
+          // crash mid-run can leave a pending row pointing at a since-deleted
+          // cache file (data/cache/ct-images/...). Nulling it forces a clean
+          // re-download; the image proxy falls back to Drive meanwhile.
+          if (img.path && !fs.existsSync(img.path)) {
             update.path = null;
           }
           database

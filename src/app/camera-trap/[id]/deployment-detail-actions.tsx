@@ -7,6 +7,7 @@ interface DeploymentDetailActionsProps {
   deploymentId: number;
   deploymentName: string;
   status: string;
+  isProcessing: boolean;
   totalDetections: number;
   revertibleImageCount: number;
   pendingImageCount: number;
@@ -25,6 +26,7 @@ export function DeploymentDetailActions({
   deploymentId,
   deploymentName,
   status,
+  isProcessing,
   totalDetections,
   revertibleImageCount,
   pendingImageCount,
@@ -45,6 +47,7 @@ export function DeploymentDetailActions({
       deploymentId={deploymentId}
       deploymentName={deploymentName}
       status={status}
+      isProcessing={isProcessing}
       totalDetections={totalDetections}
       totalImages={totalImages}
       hasImages={hasImages}

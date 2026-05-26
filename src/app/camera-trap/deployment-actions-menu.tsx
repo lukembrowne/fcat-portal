@@ -52,6 +52,8 @@ export interface DeploymentActionsMenuProps {
   deploymentId: number;
   deploymentName: string;
   status: string;
+  /** Derived live from active jobs (not the stored status). Gates actions while a job runs. */
+  isProcessing: boolean;
   totalDetections: number;
   totalImages: number;
   hasImages: boolean;
@@ -82,6 +84,7 @@ export function DeploymentActionsMenu({
   deploymentId,
   deploymentName,
   status,
+  isProcessing,
   totalDetections,
   totalImages,
   hasImages,
@@ -109,7 +112,6 @@ export function DeploymentActionsMenu({
   const [incrementalDialogId, setIncrementalDialogId] = useState<number | null>(null);
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
 
-  const isProcessing = status === "processing";
   const anyPending = scanningAction || verifyingAction || odkAction;
 
   const handleScan = () => {

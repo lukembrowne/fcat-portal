@@ -46,13 +46,15 @@ function computeStatusCounts(deployments: DeploymentRow[]) {
   let verificadas = 0;
 
   for (const d of deployments) {
+    // "Procesando" is derived from active jobs, not the stored status.
+    if (d.isProcessing) {
+      procesando++;
+      continue;
+    }
     switch (d.status) {
       case "unscanned":
       case "scanned":
         porProcesar++;
-        break;
-      case "processing":
-        procesando++;
         break;
       case "processed":
         porRevisar++;

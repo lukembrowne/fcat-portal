@@ -17,6 +17,7 @@ import {
   setupAuthMocks,
   testUser,
 } from "../helpers/mock-auth";
+import { findActiveCameraTrapJob, findActiveCameraTrapJobIds } from "@/lib/job-locks";
 
 setupAuthMocks();
 setupIntegrationDbMock();
@@ -125,8 +126,9 @@ describe("createProcessingJob", () => {
     }
   });
 
-  it("sets deployment status to processing", async () => {
-    await actions.createProcessingJob(seed.deployment.id);
+  it("does NOT flip deployment.status to 'processing' — processing is derived from active jobs", async () => {
+    const result = await actions.createProcessingJob(seed.deployment.id);
+    expect(result.success).toBe(true);
 
     const [dep] = db
       .select()
@@ -134,7 +136,11 @@ describe("createProcessingJob", () => {
       .where(eq(schema.deployments.id, seed.deployment.id))
       .all();
 
-    expect(dep.status).toBe("processing");
+    // The denormalized "processing" flag is gone — the deployment keeps its
+    // durable lifecycle status, and the active-job query is the lock.
+    expect(dep.status).not.toBe("processing");
+    const active = await findActiveCameraTrapJob(seed.deployment.id);
+    expect(active).not.toBeNull();
   });
 
   it("accepts custom model config", async () => {
@@ -1663,5 +1669,104 @@ describe("verifyAndAdvance with candidateImageIds", () => {
     if (!result.success) return;
 
     expect(result.data.nextImageId).toBe(b.id);
+  });
+});
+
+// === Derived processing state (regression: stuck "processing" deployment) ===
+
+describe("processing state is derived from active jobs", () => {
+  /** Insert a deployment with a given lifecycle status and return its id. */
+  function makeDeployment(status: string): number {
+    const [dep] = db
+      .insert(schema.deployments)
+      .values({
+        projectId: "camera-trap",
+        name: `DERIVED-${status}-${Math.random().toString(36).slice(2, 7)}`,
+        status,
+        cameraTrapProjectId: seed.deployment.cameraTrapProjectId,
+      })
+      .returning()
+      .all();
+    return dep.id;
+  }
+
+  function addJob(deploymentId: number, jobType: string, status: string) {
+    db.insert(schema.processingJobs)
+      .values({ deploymentId, jobType, status })
+      .run();
+  }
+
+  describe("findActiveCameraTrapJob", () => {
+    it("finds a pending/processing ML job", async () => {
+      const depId = makeDeployment("scanned");
+      addJob(depId, "ml", "pending");
+      const active = await findActiveCameraTrapJob(depId);
+      expect(active).not.toBeNull();
+      expect(active?.jobType).toBe("ml");
+    });
+
+    it("ignores terminal jobs (completed/failed/cancelled)", async () => {
+      const depId = makeDeployment("scanned");
+      addJob(depId, "ml", "cancelled");
+      addJob(depId, "ml", "failed");
+      addJob(depId, "ml", "completed");
+      expect(await findActiveCameraTrapJob(depId)).toBeNull();
+    });
+
+    it("ignores non-camera-trap job types (e.g. birdnet)", async () => {
+      const depId = makeDeployment("scanned");
+      addJob(depId, "birdnet", "processing");
+      expect(await findActiveCameraTrapJob(depId)).toBeNull();
+    });
+
+    it("findActiveCameraTrapJobIds batches across deployments", async () => {
+      const busy = makeDeployment("scanned");
+      const idle = makeDeployment("scanned");
+      addJob(busy, "compression", "processing");
+      addJob(idle, "ml", "completed");
+      const ids = await findActiveCameraTrapJobIds([busy, idle]);
+      expect(ids.has(busy)).toBe(true);
+      expect(ids.has(idle)).toBe(false);
+    });
+  });
+
+  describe("getDeployment normalization", () => {
+    it("maps a stale stored 'processing' to 'scanned' when no completed job exists", async () => {
+      const depId = makeDeployment("processing");
+      addJob(depId, "ml", "cancelled");
+      const data = await actions.getDeployment(depId);
+      expect(data?.deployment.status).toBe("scanned");
+      expect(data?.isProcessing).toBe(false);
+    });
+
+    it("maps a stale stored 'processing' to 'processed' when a completed job exists", async () => {
+      const depId = makeDeployment("processing");
+      addJob(depId, "ml", "completed");
+      const data = await actions.getDeployment(depId);
+      expect(data?.deployment.status).toBe("processed");
+      expect(data?.isProcessing).toBe(false);
+    });
+
+    it("reports isProcessing=true while an active job runs", async () => {
+      const depId = makeDeployment("scanned");
+      addJob(depId, "ml", "processing");
+      const data = await actions.getDeployment(depId);
+      expect(data?.isProcessing).toBe(true);
+    });
+  });
+
+  it("a cancelled job with a stale 'processing' status no longer blocks reprocessing", async () => {
+    // Reproduces the production bug: job cancelled, but the deployment was
+    // stranded at status "processing", which used to block createProcessingJob.
+    const depId = makeDeployment("processing");
+    addJob(depId, "ml", "cancelled");
+    db.insert(schema.images)
+      .values({ deploymentId: depId, jobId: null, filename: "STUCK_001.jpg", status: "pending" })
+      .run();
+
+    expect(await findActiveCameraTrapJob(depId)).toBeNull();
+
+    const result = await actions.createProcessingJob(depId);
+    expect(result.success).toBe(true);
   });
 });

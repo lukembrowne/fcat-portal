@@ -71,6 +71,26 @@ const POST_PROCESS_STATUSES = new Set([
   "verified_empty",
 ]);
 
+/**
+ * Effective status for display/filtering. "Procesando" is derived from the live
+ * isProcessing flag (active jobs), never from the stored status column. Falls
+ * back to the lifecycle status, collapsing detection-less "processed" rows to
+ * the "processed_empty" badge.
+ */
+function deploymentDisplayStatus(d: DeploymentRow): string {
+  if (d.isProcessing) return "processing";
+  if (d.status === "processed" && (d.totalDetections == null || d.totalDetections === 0)) {
+    return "processed_empty";
+  }
+  return d.status;
+}
+
+/** Whether a deployment matches the selected status-filter dropdown value. */
+function deploymentMatchesStatusFilter(d: DeploymentRow, filter: string): boolean {
+  if (filter === "processing") return d.isProcessing;
+  return !d.isProcessing && d.status === filter;
+}
+
 export interface CtProject {
   id: number;
   name: string;
@@ -162,7 +182,7 @@ export function DeploymentsTable({
   const filteredData = useMemo(() => {
     let data = initialDeployments;
     if (statusFilter) {
-      data = data.filter((d) => d.status === statusFilter);
+      data = data.filter((d) => deploymentMatchesStatusFilter(d, statusFilter));
     }
     return data;
   }, [initialDeployments, statusFilter]);
@@ -173,7 +193,7 @@ export function DeploymentsTable({
       .map((g) => {
         let deps = g.deployments;
         if (statusFilter) {
-          deps = deps.filter((d) => d.status === statusFilter);
+          deps = deps.filter((d) => deploymentMatchesStatusFilter(d, statusFilter));
         }
         if (globalFilter) {
           const lower = globalFilter.toLowerCase();
@@ -283,10 +303,9 @@ export function DeploymentsTable({
         ),
         cell: ({ row }) => {
           const d = row.original;
-          const displayStatus = d.status === "processed" && (d.totalDetections == null || d.totalDetections === 0)
-            ? "processed_empty"
-            : d.status;
-          const showProgress = (d.status === "processed" || d.status === "verified") &&
+          const displayStatus = deploymentDisplayStatus(d);
+          const showProgress = !d.isProcessing &&
+            (d.status === "processed" || d.status === "verified") &&
             d.totalIdentifications != null && d.totalIdentifications > 0;
           return (
             <span className="inline-flex items-center gap-1">

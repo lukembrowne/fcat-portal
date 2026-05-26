@@ -19,6 +19,7 @@ import {
 } from "@/lib/camera-trap-sync-internals";
 import { runDriveSyncWorker } from "@/lib/camera-trap-sync-worker";
 import { processNextQueueable, claimAndEmitStart } from "@/lib/job-queue";
+import { findActiveCameraTrapJob } from "@/lib/job-locks";
 import { requirePermission } from "@/lib/auth";
 import { getUserCameraTrapProjects, requireDeploymentAccess } from "@/lib/camera-trap-auth";
 import { touchAppState } from "@/lib/app-state";
@@ -342,8 +343,10 @@ export async function compressDeploymentImages(
       return { success: false, error: "Instalación no encontrada" };
     }
 
-    // Guard: don't compress during active ML processing
-    if (deployment.status === "processing") {
+    // Guard: don't compress during active ML processing. Derived from the live
+    // active-job query (no denormalized deployments.status = "processing" flag).
+    const activeMlJob = await findActiveCameraTrapJob(deploymentId);
+    if (activeMlJob && (activeMlJob.jobType === "ml" || activeMlJob.jobType === "ml_incremental")) {
       return { success: false, error: "No se puede comprimir mientras se está procesando" };
     }
 
@@ -712,7 +715,9 @@ export async function revertCompression(
       return { success: false, error: "Instalación no encontrada" };
     }
 
-    if (deployment.status === "processing") {
+    // Guard: don't revert during active ML processing (derived from active jobs).
+    const activeMlJob = await findActiveCameraTrapJob(deploymentId);
+    if (activeMlJob && (activeMlJob.jobType === "ml" || activeMlJob.jobType === "ml_incremental")) {
       return { success: false, error: "No se puede revertir mientras se está procesando" };
     }
 

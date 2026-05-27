@@ -44,21 +44,30 @@ Open the new Shared Drive in a browser. The URL is
    - The portal calls `drives.get` and shows the drive's **name + creation date**.
      This confirms the service account can see it and you pasted the right ID.
    - If it errors, the SA membership (step 1.2) didn't take — re-check the role.
-3. (Optional) Set a deployment **root folder** if new deployments should live in a
-   subfolder rather than the drive root. Leave blank to use the drive root.
-4. Click **Registrar**. The portal inserts the row as `registering`, runs an initial
+3. **Select the project** this drive serves (required). One drive serves exactly one
+   project; routing + discovery are scoped to it, so the drive only ever holds and is
+   scanned for that project's deployments. A large project (BioChoco) can have several
+   drives; provision another and assign it to the same project when it fills.
+4. (Optional) Set a deployment **root folder** if new deployments should live in a
+   subfolder rather than the drive root. Leave blank to use the drive root (correct
+   for a fresh drive dedicated to one project).
+5. Click **Registrar**. The portal inserts the row as `registering`, runs an initial
    full item count, then flips it to `active` (or `unreachable` if Drive access fails).
+
+> A registered drive's project can be re-assigned inline from the table (the project
+> dropdown in the Acciones column) — useful if `bootstrap-shared-drives.ts` left a
+> drive unassigned because its root folder didn't match a project root.
 
 ### 4. Flip the feature flags (first time only)
 
 The fan-out is gated by two env flags (both default `false`). Flip them
 independently, **discovery first**:
 
-1. `SHARED_DRIVE_DISCOVERY_ENABLED=true` — discovery scans now union across all
-   registered drives. Deploy, monitor camera-trap sync for 24h (should be a no-op
-   until the new drive holds deployments).
+1. `SHARED_DRIVE_DISCOVERY_ENABLED=true` — discovery scans now union across the
+   **project's** registered drives. Deploy, monitor camera-trap sync for 24h (should
+   be a no-op until the new drive holds deployments).
 2. Mark the near-full drive `read-only` in **/admin/shared-drives** so the new drive
-   is the only `active` one.
+   is the only `active` one **for that project** (other projects are unaffected).
 3. `SHARED_DRIVE_ROUTING_ENABLED=true` — new deployment folders now route by
    capacity. Deploy.
 

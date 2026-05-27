@@ -9,8 +9,8 @@ import type { DeploymentRow } from "./actions";
 export interface ProjectGroup {
   projectLabel: string;
   deployments: DeploymentRow[];
-  /** Summary counts for the group header */
-  actionableCount: number;
+  /** Per-group status breakdown for the group header (mirrors the top summary strip). */
+  counts: StatusCounts;
   totalCount: number;
 }
 
@@ -33,17 +33,25 @@ function groupByProject(deployments: DeploymentRow[]): ProjectGroup[] {
       projectLabel,
       deployments: deps,
       totalCount: deps.length,
-      actionableCount: deps.filter((d) =>
-        ["unscanned", "scanned", "processing", "processed"].includes(d.status)
-      ).length,
+      counts: computeStatusCounts(deps),
     }));
 }
 
-function computeStatusCounts(deployments: DeploymentRow[]) {
+export interface StatusCounts {
+  porProcesar: number;
+  procesando: number;
+  porRevisar: number;
+  verificadas: number;
+  /** Subset of porProcesar: deployments that still have no files/images. */
+  sinArchivos: number;
+}
+
+function computeStatusCounts(deployments: DeploymentRow[]): StatusCounts {
   let porProcesar = 0;
   let procesando = 0;
   let porRevisar = 0;
   let verificadas = 0;
+  let sinArchivos = 0;
 
   for (const d of deployments) {
     // "Procesando" is derived from active jobs, not the stored status.
@@ -55,6 +63,7 @@ function computeStatusCounts(deployments: DeploymentRow[]) {
       case "unscanned":
       case "scanned":
         porProcesar++;
+        if ((d.totalImages ?? 0) + (d.totalVideos ?? 0) === 0) sinArchivos++;
         break;
       case "processed":
         porRevisar++;
@@ -66,7 +75,7 @@ function computeStatusCounts(deployments: DeploymentRow[]) {
     }
   }
 
-  return { porProcesar, procesando, porRevisar, verificadas };
+  return { porProcesar, procesando, porRevisar, verificadas, sinArchivos };
 }
 
 export default async function CameraTrapPage() {

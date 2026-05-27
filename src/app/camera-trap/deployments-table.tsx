@@ -56,7 +56,7 @@ import { BatchDeleteDialog } from "./batch-delete-dialog";
 import { bulkUpdateMetadata } from "./actions";
 import { enqueueDriveSyncJob } from "./drive-actions";
 import { ProcessConfirmDialog } from "./process-confirm-dialog";
-import type { ProjectGroup } from "./page";
+import type { ProjectGroup, StatusCounts } from "./page";
 import { useRowRangeSelection } from "@/hooks/use-row-range-selection";
 
 /** localStorage key for remembering which project groups the user has collapsed
@@ -808,9 +808,6 @@ export function DeploymentsTable({
             ) : (
               sortedGroups.map((group) => {
                 const isCollapsed = collapsedGroups.has(group.projectLabel);
-                const actionable = group.deployments.filter((d) =>
-                  ["unscanned", "scanned", "processing", "processed"].includes(d.status)
-                ).length;
                 const selectableDepIds = group.deployments
                   .filter((d) => filteredRowIds.has(String(d.id)))
                   .map((d) => d.id);
@@ -839,11 +836,7 @@ export function DeploymentsTable({
                           <span className="text-muted-foreground text-xs">
                             {group.totalCount} instalaciones
                           </span>
-                          {actionable > 0 && (
-                            <span className="text-xs font-medium text-orange-600">
-                              {actionable} pendiente{actionable !== 1 ? "s" : ""}
-                            </span>
-                          )}
+                          <GroupStatusChips counts={group.counts} />
                         </div>
                       </TableCell>
                     </TableRow>
@@ -920,6 +913,41 @@ export function DeploymentsTable({
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * Per-project status breakdown shown in the group header, mirroring the page's
+ * top summary strip. Chips with a zero value are hidden to keep the header clean.
+ */
+function GroupStatusChips({ counts }: { counts: StatusCounts }) {
+  const chips: { label: string; value: number; dotClass: string; valueClass: string; extra?: string }[] = [
+    {
+      label: "Por Procesar",
+      value: counts.porProcesar,
+      dotClass: "bg-blue-600",
+      valueClass: "text-blue-700",
+      extra: counts.sinArchivos > 0 ? `${counts.sinArchivos} sin archivos` : undefined,
+    },
+    { label: "Procesando", value: counts.procesando, dotClass: "bg-yellow-500", valueClass: "text-yellow-600" },
+    { label: "Por Revisar", value: counts.porRevisar, dotClass: "bg-orange-500", valueClass: "text-orange-600" },
+    { label: "Verificadas", value: counts.verificadas, dotClass: "bg-emerald-600", valueClass: "text-emerald-700" },
+  ];
+
+  const visible = chips.filter((c) => c.value > 0);
+  if (visible.length === 0) return null;
+
+  return (
+    <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+      {visible.map((c) => (
+        <span key={c.label} className="inline-flex items-center gap-1.5">
+          <span className={`h-2 w-2 rounded-full ${c.dotClass}`} aria-hidden />
+          <span className="text-muted-foreground">{c.label}</span>
+          <span className={`font-semibold tabular-nums ${c.valueClass}`}>{c.value}</span>
+          {c.extra && <span className="text-muted-foreground">({c.extra})</span>}
+        </span>
+      ))}
+    </span>
   );
 }
 

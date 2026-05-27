@@ -73,7 +73,7 @@ export function DeploymentGalleryClient({
   }, []);
 
   // Stable LRU cache instance — survives across renders, cleared on close.
-  // Sized above the prefetch window (6 ahead + 1 behind + current = 8) so
+  // Sized above the prefetch window (8 ahead + 1 behind + current = 10) so
   // just-cached payloads survive a direction flip instead of being evicted.
   const cacheRef = useRef<AnnotationPayloadCache<ImagePayload>>(
     new AnnotationPayloadCache<ImagePayload>(16),
@@ -210,7 +210,7 @@ export function DeploymentGalleryClient({
     fetchPayload: getImagePayload,
     buildImageUrl,
     direction,
-    ahead: 6,
+    ahead: 8,
     enabled: currentImageId != null && sessionContext != null,
   });
 

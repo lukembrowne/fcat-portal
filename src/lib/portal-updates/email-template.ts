@@ -38,10 +38,26 @@ export function buildPortalUpdatesHtml(
   const summaryHtml = `
   <h3 style="margin-top:24px">Resumen</h3>
   <table style="border-collapse:collapse;margin-top:8px">
-    ${summaryRow("Trabajos cámara trampa", payload.totalCtJobs)}
-    ${summaryRow("Trabajos audio", payload.totalAudioJobs)}
-    ${summaryRow("Imágenes verificadas", payload.totalCtVerifiedImages)}
-    ${summaryRow("Grabaciones verificadas", payload.totalAudioVerifiedFiles)}
+    ${summaryRow(
+      "Trabajos cámara trampa",
+      payload.totalCtJobs,
+      "Procesos de detección/ML de cámara trampa finalizados (completados o fallidos) en el período",
+    )}
+    ${summaryRow(
+      "Trabajos audio",
+      payload.totalAudioJobs,
+      "Procesos de audio (BirdNET, índices acústicos, etc.) finalizados en el período",
+    )}
+    ${summaryRow(
+      "Imágenes verificadas",
+      payload.totalCtVerifiedImages,
+      "Imágenes con al menos una identificación verificada o corregida en el período (cada imagen cuenta una vez, sin importar cuántas especies se revisaron)",
+    )}
+    ${summaryRow(
+      "Grabaciones verificadas",
+      payload.totalAudioVerifiedFiles,
+      "Grabaciones con al menos una identificación verificada o corregida en el período (cada grabación cuenta una vez, sin importar cuántas especies se revisaron)",
+    )}
   </table>`;
 
   const bodyHtml = payload.projects.length === 0
@@ -60,10 +76,11 @@ ${bodyHtml}
 </html>`;
 }
 
-function summaryRow(label: string, value: number): string {
+function summaryRow(label: string, value: number, description: string): string {
+  const labelCell = `<strong>${label}</strong><div style="color:${COLOR_MUTED};font-size:12px;font-weight:400;margin-top:2px;max-width:480px">${description}</div>`;
   return `<tr>
-      <td style="padding:6px 16px 6px 0;font-weight:600">${label}</td>
-      <td style="padding:6px 0">${value.toLocaleString()}</td>
+      <td style="padding:8px 16px 8px 0;vertical-align:top">${labelCell}</td>
+      <td style="padding:8px 0;vertical-align:top;text-align:right;font-weight:600">${value.toLocaleString()}</td>
     </tr>`;
 }
 

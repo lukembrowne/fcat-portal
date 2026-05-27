@@ -6,6 +6,7 @@ import { recordEvent, buildJobCompletionEvent } from "@/lib/system-events";
 import { eq, and, inArray, sql, count } from "drizzle-orm";
 import {
   listDeploymentFolders,
+  listDeploymentFoldersAcrossDrives,
   isValidFolderId,
   checkDeploymentUploads,
   downloadFileToBuffer,
@@ -13,6 +14,7 @@ import {
   getFileRevisions,
   downloadFileRevision,
 } from "@/lib/drive-client";
+import { getDiscoveryRootsForProject } from "@/lib/shared-drives";
 import { matchOdkDeployments } from "./odk-actions";
 import {
   scanDeploymentImagesInternal,
@@ -178,7 +180,11 @@ export async function syncWithDrive(
     const allErrors: string[] = [];
 
     for (const proj of projectsToSync) {
-      const driveFolders = await listDeploymentFolders(proj.driveFolderId);
+      const roots = getDiscoveryRootsForProject(proj.id, proj.driveFolderId);
+      const driveFolders =
+        roots.length === 1
+          ? await listDeploymentFolders(roots[0])
+          : await listDeploymentFoldersAcrossDrives(roots);
       const newFolders = driveFolders.filter((f) => !knownFolderIds.has(f.id));
 
       for (const folder of newFolders) {

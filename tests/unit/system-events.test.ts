@@ -353,7 +353,7 @@ describe("buildJobCompletionEvent", () => {
         const job = makeJob({ status: "completed", jobType });
         const evt = buildJobCompletionEvent(job);
 
-        expect(["audio", "camera-trap"]).toContain(evt.source);
+        expect(["audio", "camera-trap", "shared-drives"]).toContain(evt.source);
         expect(evt.eventType).toBe(`${evt.source}_${jobType}.completed`);
         expect(JOB_LABELS[jobType]).toBeDefined();
         expect(evt.summary).toContain(JOB_LABELS[jobType]);
@@ -395,7 +395,7 @@ describe("buildJobStartEvent", () => {
         const job = makeJob({ status: "processing", jobType });
         const evt = buildJobStartEvent(job);
 
-        expect(["audio", "camera-trap"]).toContain(evt.source);
+        expect(["audio", "camera-trap", "shared-drives"]).toContain(evt.source);
         expect(evt.eventType).toBe(`${evt.source}_${jobType}.started`);
         expect(evt.severity).toBe("info");
         expect(JOB_LABELS[jobType]).toBeDefined();

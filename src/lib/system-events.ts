@@ -92,6 +92,7 @@ export const JOB_LABELS: Record<JobType, string> = {
   audio_sync: "Sincronización de audio",
   audio_compression: "Compresión FLAC",
   revert_audio_compression: "Reversión de compresión FLAC",
+  shared_drives_reconcile: "Reconciliación de Shared Drives",
 };
 
 const OUTCOME_VERBS: Record<TerminalOutcome, string> = {
@@ -107,6 +108,15 @@ function jobSourceAndProject(jobType: JobType, job: ProcessingJob): {
   projectId: string;
   scope: string;
 } {
+  // Shared-drive reconciliation is portal-wide infra, not tied to a project.
+  if (jobType === JOB_TYPES.SHARED_DRIVES_RECONCILE) {
+    return {
+      source: "shared-drives",
+      projectId: "shared-drives",
+      scope: "Todos los drives",
+    };
+  }
+
   const source: EventSource = AUDIO_JOB_TYPES.has(jobType)
     ? "audio"
     : "camera-trap";

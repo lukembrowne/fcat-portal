@@ -36,7 +36,58 @@ export function setupIntegrationDbMock() {
   }));
 }
 
-const CAMERA_TRAP_DDL = `
+// Shared Drives fan-out tables (created first so the deployments FK resolves).
+const SHARED_DRIVES_DDL = `
+  CREATE TABLE shared_drives (
+    id TEXT PRIMARY KEY,
+    drive_id TEXT NOT NULL UNIQUE,
+    root_folder_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    camera_trap_project_id INTEGER,
+    status TEXT NOT NULL DEFAULT 'registering' CHECK(status IN ('registering','active','read-only','unreachable')),
+    reconciled_count INTEGER NOT NULL DEFAULT 0,
+    pending_reservations_count INTEGER NOT NULL DEFAULT 0,
+    item_cap INTEGER NOT NULL DEFAULT 500000,
+    changes_page_token TEXT,
+    last_reconciled_at TEXT,
+    last_full_reconcile_at TEXT,
+    last_health_check_at TEXT,
+    last_health_status TEXT,
+    archived_at TEXT,
+    notes TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE shared_drive_reservations (
+    id TEXT PRIMARY KEY,
+    shared_drive_id TEXT NOT NULL REFERENCES shared_drives(id) ON DELETE RESTRICT,
+    quota INTEGER NOT NULL,
+    deployment_id INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    released_at TEXT,
+    CHECK ((released_at IS NULL) OR (released_at >= created_at))
+  );
+
+  CREATE INDEX idx_shared_drives_status_active ON shared_drives(status, archived_at);
+  CREATE INDEX idx_shared_drives_project_status ON shared_drives(camera_trap_project_id, status, archived_at);
+  CREATE INDEX idx_shared_drive_reservations_drive_open ON shared_drive_reservations(shared_drive_id, released_at);
+`;
+
+/**
+ * Minimal in-memory DB with only the shared-drives tables, for fast unit tests
+ * of the selection / reservation logic.
+ */
+export function createSharedDrivesTestDb() {
+  const sqlite = new Database(":memory:");
+  sqlite.pragma("foreign_keys = ON");
+  sqlite.exec(SHARED_DRIVES_DDL);
+  return drizzle(sqlite, { schema });
+}
+
+const CAMERA_TRAP_DDL =
+  SHARED_DRIVES_DDL +
+  `
   CREATE TABLE users (
     email TEXT PRIMARY KEY,
     name TEXT,
@@ -117,7 +168,8 @@ const CAMERA_TRAP_DDL = `
     previous_camera_count INTEGER,
     previous_audio_count INTEGER,
     previous_ibutton_count INTEGER,
-    previous_counts_checked_at INTEGER
+    previous_counts_checked_at INTEGER,
+    shared_drive_id TEXT REFERENCES shared_drives(id)
   );
 
   CREATE TABLE biochoco_processing_jobs (

@@ -456,6 +456,35 @@ export async function listDeploymentFolders(
 }
 
 /**
+ * Multi-drive discovery: union the deployment folders under each registered
+ * Shared Drive's root. `Promise.allSettled` isolates a single drive's failure
+ * (e.g. the SA lost access) so the others still return. Used when
+ * SHARED_DRIVE_DISCOVERY_ENABLED is on; the single-root function above is the
+ * unchanged primitive.
+ */
+export async function listDeploymentFoldersAcrossDrives(
+  rootFolderIds: string[],
+): Promise<DriveFolder[]> {
+  const settled = await Promise.allSettled(
+    rootFolderIds.map((root) => listDeploymentFolders(root)),
+  );
+  const seen = new Set<string>();
+  const merged: DriveFolder[] = [];
+  for (const result of settled) {
+    if (result.status === "rejected") {
+      log.warn({ err: result.reason }, "[Drive] Deployment-folder scan failed for one drive");
+      continue;
+    }
+    for (const folder of result.value) {
+      if (seen.has(folder.id)) continue;
+      seen.add(folder.id);
+      merged.push(folder);
+    }
+  }
+  return merged.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
  * Recursively list all image files in a folder with metadata.
  * Filters by MIME type prefix `image/`, then post-filters by supported extensions.
  * Handles pagination with do...while + nextPageToken.
@@ -979,18 +1008,32 @@ const MAX_DELAY_MS = 16_000;
 
 interface DriveError {
   code?: number;
-  response?: { status?: number };
+  status?: number;
+  message?: string;
+  response?: { status?: number; data?: { error?: { errors?: Array<{ reason?: string }> } } };
   errors?: Array<{ reason?: string }>;
+  cause?: { message?: string; errors?: Array<{ reason?: string }> };
 }
 
-function isRetriableDriveError(err: unknown): boolean {
+export function isRetriableDriveError(err: unknown): boolean {
   const e = err as DriveError;
-  const status = e?.code ?? e?.response?.status;
+  const status = e?.code ?? e?.status ?? e?.response?.status;
   if (status === 429) return true;
   if (status != null && status >= 500 && status < 600) return true;
   if (status === 403) {
-    const reason = e?.errors?.[0]?.reason;
-    return reason === "userRateLimitExceeded" || reason === "rateLimitExceeded";
+    // gaxios nests the Google `reason` differently across versions (v7 moved it
+    // off the top-level `errors`), so probe every known location and fall back
+    // to the human-readable message. Missing this silently disables retries for
+    // rate-limit 403s — the exact failure that breaks a full-drive count.
+    const reason =
+      e?.errors?.[0]?.reason ??
+      e?.cause?.errors?.[0]?.reason ??
+      e?.response?.data?.error?.errors?.[0]?.reason;
+    if (reason === "userRateLimitExceeded" || reason === "rateLimitExceeded") {
+      return true;
+    }
+    const msg = String(e?.message ?? e?.cause?.message ?? "");
+    return /rate limit/i.test(msg);
   }
   return false;
 }
@@ -1364,4 +1407,148 @@ export async function getFileMetadata(
     mimeType: meta.data.mimeType ?? "application/octet-stream",
     name: meta.data.name ?? "download",
   };
+}
+
+// ---------------------------------------------------------------------------
+// Shared Drive capacity helpers (multi-drive fan-out reconciliation)
+//
+// These operate at the *drive* level (driveId, the 0A… Shared Drive ID), not
+// the folder level. `drives.get` does NOT expose an item count (Drive API v3),
+// so capacity is measured by a full `files.list?driveId` count (weekly /
+// bootstrap) trued up nightly by a `changes.list?driveId` delta.
+// ---------------------------------------------------------------------------
+
+export interface SharedDriveMetadata {
+  name: string;
+  createdTime: string | null;
+}
+
+/**
+ * Fetch Shared Drive metadata. Used to (1) confirm a drive ID at registration
+ * and (2) health-check access during reconcile. Throws on 403/404/5xx (the
+ * caller maps that to status='unreachable').
+ */
+export async function getSharedDriveMetadata(
+  driveId: string,
+): Promise<SharedDriveMetadata> {
+  const drive = getDrive();
+  const res = await withRetry(
+    () =>
+      drive.drives.get({
+        driveId,
+        fields: "name,createdTime",
+      }),
+    `drives.get(${driveId})`,
+  );
+  return {
+    name: res.data.name ?? "(sin nombre)",
+    createdTime: res.data.createdTime ?? null,
+  };
+}
+
+/**
+ * Full paginated item count of a Shared Drive (excludes trashed). Used for the
+ * weekly full reconcile and the at-registration baseline. ~500 calls at 500K
+ * items, so callers should bound concurrency (p-limit).
+ */
+export async function countSharedDriveItems(driveId: string): Promise<number> {
+  const drive = getDrive();
+  let count = 0;
+  let pageToken: string | undefined;
+  do {
+    const res = await withRetry(
+      () =>
+        drive.files.list({
+          corpora: "drive",
+          driveId,
+          q: "trashed = false",
+          fields: "nextPageToken, files(id)",
+          pageSize: 1000,
+          pageToken,
+          supportsAllDrives: true,
+          includeItemsFromAllDrives: true,
+        }),
+      `files.list(count ${driveId})`,
+    );
+    count += res.data.files?.length ?? 0;
+    pageToken = res.data.nextPageToken ?? undefined;
+  } while (pageToken);
+  return count;
+}
+
+/** Opaque cursor for a Shared Drive's change feed (tokens never expire). */
+export async function getChangesStartPageToken(
+  driveId: string,
+): Promise<string> {
+  const drive = getDrive();
+  const res = await withRetry(
+    () =>
+      drive.changes.getStartPageToken({
+        driveId,
+        supportsAllDrives: true,
+      }),
+    `changes.getStartPageToken(${driveId})`,
+  );
+  if (!res.data.startPageToken) {
+    throw new Error("Drive API returned no startPageToken");
+  }
+  return res.data.startPageToken;
+}
+
+export interface SharedDriveChangesDelta {
+  /** net item delta = creates − (removes + newly-trashed) since the token. */
+  delta: number;
+  /** cursor to persist for the next delta run. */
+  newStartPageToken: string;
+}
+
+/**
+ * Paginate the change feed from `pageToken`, accumulating a net item delta.
+ * `includeRemoved` surfaces deletions; a file flipped to `trashed` also counts
+ * as a removal (it no longer counts toward the 500K cap once trashed... it
+ * actually still does until purged, but we treat trash as removed and let the
+ * weekly full count correct the drift — documented in the plan).
+ */
+export async function listSharedDriveChangesDelta(
+  driveId: string,
+  pageToken: string,
+): Promise<SharedDriveChangesDelta> {
+  const drive = getDrive();
+  let delta = 0;
+  let token: string | undefined = pageToken;
+  let newStartPageToken = pageToken;
+
+  do {
+    const res = await withRetry(
+      () =>
+        drive.changes.list({
+          driveId,
+          pageToken: token,
+          includeRemoved: true,
+          pageSize: 1000,
+          fields:
+            "nextPageToken, newStartPageToken, changes(removed, file(id, trashed, mimeType))",
+          supportsAllDrives: true,
+          includeItemsFromAllDrives: true,
+        }),
+      `changes.list(${driveId})`,
+    );
+
+    for (const change of res.data.changes ?? []) {
+      const removed = change.removed === true;
+      const trashed = change.file?.trashed === true;
+      if (removed || trashed) {
+        delta -= 1;
+      } else if (change.file?.id) {
+        delta += 1;
+      }
+    }
+
+    if (res.data.newStartPageToken) {
+      newStartPageToken = res.data.newStartPageToken;
+    }
+    token = res.data.nextPageToken ?? undefined;
+  } while (token);
+
+  return { delta, newStartPageToken };
 }

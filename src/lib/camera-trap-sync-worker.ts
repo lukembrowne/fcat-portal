@@ -3,7 +3,12 @@ import "server-only";
 import { db } from "@/db";
 import { deployments, cameraTrapProjects, type Deployment } from "@/db/schema";
 import { eq, and, isNotNull } from "drizzle-orm";
-import { listDeploymentFolders, isValidFolderId } from "@/lib/drive-client";
+import {
+  listDeploymentFolders,
+  listDeploymentFoldersAcrossDrives,
+  isValidFolderId,
+} from "@/lib/drive-client";
+import { getDiscoveryRootsForProject } from "@/lib/shared-drives";
 import { CAMERA_TRAP_DRIVE_LAST_SYNC_KEY } from "@/lib/app-state-keys";
 import { log } from "@/lib/log";
 import {
@@ -65,7 +70,11 @@ export async function runDriveSyncWorker(jobId: number): Promise<void> {
       for (const proj of projectsToWalk) {
         if (await signal.isCancelled()) break;
         try {
-          const driveFolders = await listDeploymentFolders(proj.driveFolderId);
+          const roots = getDiscoveryRootsForProject(proj.id, proj.driveFolderId);
+          const driveFolders =
+            roots.length === 1
+              ? await listDeploymentFolders(roots[0])
+              : await listDeploymentFoldersAcrossDrives(roots);
           const known = await db
             .select({ id: deployments.driveFolderId })
             .from(deployments)

@@ -200,7 +200,7 @@ const statements = [
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     occurred_at INTEGER NOT NULL DEFAULT (unixepoch()),
     event_type TEXT NOT NULL,
-    source TEXT NOT NULL CHECK(source IN ('admin','audio','biochoco-overview','biochoco-tools','biochoco-resultados','camera-trap','climate','cron','finance','odk')),
+    source TEXT NOT NULL CHECK(source IN ('admin','audio','biochoco-overview','biochoco-tools','biochoco-resultados','camera-trap','climate','cron','finance','odk','shared-drives')),
     severity TEXT NOT NULL DEFAULT 'info' CHECK(severity IN ('info','success','warn','error')),
     actor_email TEXT,
     project_id TEXT,
@@ -213,6 +213,42 @@ const statements = [
   `CREATE INDEX IF NOT EXISTS idx_system_events_occurred_at ON system_events(occurred_at)`,
   `CREATE INDEX IF NOT EXISTS idx_system_events_source ON system_events(source)`,
   `CREATE INDEX IF NOT EXISTS idx_system_events_event_type ON system_events(event_type)`,
+
+  // Shared Drives — multi-drive capacity-based fan-out registry (2026-05-24)
+  `CREATE TABLE IF NOT EXISTS shared_drives (
+    id TEXT PRIMARY KEY,
+    drive_id TEXT NOT NULL UNIQUE,
+    root_folder_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    camera_trap_project_id INTEGER REFERENCES ct_projects(id),
+    status TEXT NOT NULL DEFAULT 'registering' CHECK(status IN ('registering','active','read-only','unreachable')),
+    reconciled_count INTEGER NOT NULL DEFAULT 0,
+    pending_reservations_count INTEGER NOT NULL DEFAULT 0,
+    item_cap INTEGER NOT NULL DEFAULT 500000,
+    changes_page_token TEXT,
+    last_reconciled_at TEXT,
+    last_full_reconcile_at TEXT,
+    last_health_check_at TEXT,
+    last_health_status TEXT,
+    archived_at TEXT,
+    notes TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
+  `CREATE TABLE IF NOT EXISTS shared_drive_reservations (
+    id TEXT PRIMARY KEY,
+    shared_drive_id TEXT NOT NULL REFERENCES shared_drives(id) ON DELETE RESTRICT,
+    quota INTEGER NOT NULL,
+    deployment_id INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    released_at TEXT,
+    CHECK ((released_at IS NULL) OR (released_at >= created_at))
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_shared_drives_status_active ON shared_drives(status, archived_at)`,
+  // NOTE: idx_shared_drives_project_status is created in postMigrationIndexes —
+  // the camera_trap_project_id column is added by an ALTER migration, which runs
+  // AFTER this block, so the index can't be created here for existing DBs.
+  `CREATE INDEX IF NOT EXISTS idx_shared_drive_reservations_drive_open ON shared_drive_reservations(shared_drive_id, released_at)`,
 
   // Finance — Transactions
   `CREATE TABLE IF NOT EXISTS finance_transactions (
@@ -744,6 +780,12 @@ const migrations = [
   // Per-model confusion matrix JSON (2026-05-22)
   // { classes, matrix, axisConvention }. Nullable for legacy v1 models.
   `ALTER TABLE camera_trap_models ADD COLUMN confusion_matrix_json TEXT`,
+  // Multi-shared-drive fan-out: which Shared Drive hosts a deployment (2026-05-24)
+  // Nullable FK; ON DELETE RESTRICT so admin deletes can't orphan rows.
+  `ALTER TABLE biochoco_deployments ADD COLUMN shared_drive_id TEXT REFERENCES shared_drives(id) ON DELETE RESTRICT`,
+  // Project-scoped fan-out: which project a Shared Drive serves (2026-05-27).
+  // One project per drive — routing + discovery are scoped to this.
+  `ALTER TABLE shared_drives ADD COLUMN camera_trap_project_id INTEGER REFERENCES ct_projects(id)`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }
@@ -769,10 +811,34 @@ const postMigrationIndexes = [
   `CREATE INDEX IF NOT EXISTS idx_audio_id_corrected
     ON audio_identifications(corrected_species, audio_detection_id)
     WHERE verification_status = 'corrected'`,
+  // Multi-shared-drive fan-out: index the deployment → drive FK (2026-05-24)
+  `CREATE INDEX IF NOT EXISTS idx_biochoco_deployments_shared_drive_id ON biochoco_deployments(shared_drive_id)`,
+  // Project-scoped fan-out: selection hot path (2026-05-27)
+  `CREATE INDEX IF NOT EXISTS idx_shared_drives_project_status ON shared_drives(camera_trap_project_id, status, archived_at)`,
 ];
 for (const idx of postMigrationIndexes) {
   db.exec(idx);
 }
+
+// Backfill shared_drives.camera_trap_project_id by matching a drive's root
+// folder to a project's root folder (idempotent; only fills NULLs). A drive
+// registered at a project's own root belongs to that project. Drives whose
+// root is a bare drive root match nothing and stay NULL until assigned in the
+// admin UI (and are simply never selected by routing/discovery while NULL).
+try {
+  db.exec(`
+    UPDATE shared_drives
+    SET camera_trap_project_id = (
+      SELECT p.id FROM ct_projects p
+      WHERE p.drive_folder_id = shared_drives.root_folder_id
+    )
+    WHERE camera_trap_project_id IS NULL
+      AND EXISTS (
+        SELECT 1 FROM ct_projects p
+        WHERE p.drive_folder_id = shared_drives.root_folder_id
+      )
+  `);
+} catch { /* table/columns may not exist on a partial schema */ }
 
 // --- Table recreations ---
 // IMPORTANT: Disable foreign keys during table recreation to prevent
@@ -1031,6 +1097,42 @@ try {
 } catch (err) {
   try { db.exec(`ROLLBACK`); } catch { /* no active tx */ }
   console.error("Failed to migrate system_events source constraint:", err.message);
+}
+
+// --- Table recreation: add shared-drives to system_events.source CHECK (2026-05-24) ---
+try {
+  const tableInfo = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='system_events'")
+    .get();
+  if (tableInfo && !tableInfo.sql.includes("shared-drives")) {
+    console.log("Migrating system_events table: adding shared-drives to source CHECK...");
+    db.exec(`BEGIN TRANSACTION`);
+    db.exec(`CREATE TABLE system_events_new (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      occurred_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      event_type TEXT NOT NULL,
+      source TEXT NOT NULL CHECK(source IN ('admin','audio','biochoco-overview','biochoco-tools','biochoco-resultados','camera-trap','climate','cron','finance','odk','shared-drives')),
+      severity TEXT NOT NULL DEFAULT 'info' CHECK(severity IN ('info','success','warn','error')),
+      actor_email TEXT,
+      project_id TEXT,
+      target_type TEXT,
+      target_id TEXT,
+      summary TEXT NOT NULL,
+      duration_ms INTEGER,
+      details TEXT
+    )`);
+    db.exec(`INSERT INTO system_events_new SELECT id, occurred_at, event_type, source, severity, actor_email, project_id, target_type, target_id, summary, duration_ms, details FROM system_events`);
+    db.exec(`DROP TABLE system_events`);
+    db.exec(`ALTER TABLE system_events_new RENAME TO system_events`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_system_events_occurred_at ON system_events(occurred_at)`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_system_events_source ON system_events(source)`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_system_events_event_type ON system_events(event_type)`);
+    db.exec(`COMMIT`);
+    console.log("  system_events.source CHECK now includes shared-drives");
+  }
+} catch (err) {
+  try { db.exec(`ROLLBACK`); } catch { /* no active tx */ }
+  console.error("Failed to migrate system_events source constraint (shared-drives):", err.message);
 }
 
 // Re-enable foreign keys after table recreations

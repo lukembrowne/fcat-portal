@@ -12,7 +12,7 @@ import { hasProjectAccess } from "@/lib/auth";
 import type { AuthUser } from "@/lib/types";
 import { SidebarShell } from "@/components/sidebar-shell";
 
-export type IconName = "home" | "tree-pine" | "leaf" | "camera" | "shield" | "dollar-sign" | "bar-chart-3" | "cloud-sun" | "clipboard-list" | "thermometer" | "audio-lines" | "scroll-text" | "file-text" | "activity" | "list-checks";
+export type IconName = "home" | "tree-pine" | "leaf" | "camera" | "shield" | "dollar-sign" | "bar-chart-3" | "cloud-sun" | "clipboard-list" | "thermometer" | "audio-lines" | "scroll-text" | "file-text" | "activity" | "list-checks" | "hard-drive";
 
 export interface NavItem {
   label: string;
@@ -216,6 +216,7 @@ export function SidebarNav({ user }: SidebarNavProps) {
     adminItems.push({ label: "Panel de Admin", href: "/admin", icon: "shield" });
     adminItems.push({ label: "Trabajos del sistema", href: "/admin/jobs", icon: "list-checks" });
     adminItems.push({ label: "Actividad del sistema", href: "/admin/activity", icon: "activity" });
+    adminItems.push({ label: "Shared Drives", href: "/admin/shared-drives", icon: "hard-drive" });
     adminItems.push({ label: "Registros del sistema", href: "/admin/logs", icon: "scroll-text" });
   }
 

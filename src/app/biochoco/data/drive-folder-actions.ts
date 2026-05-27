@@ -17,6 +17,16 @@ import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import type { ActionResult } from "@/lib/types";
 import { log } from "@/lib/log";
+import { recordEvent } from "@/lib/system-events";
+import {
+  sharedDriveRoutingEnabled,
+  selectAndReserveSlot,
+  releaseReservation,
+  attachReservationToDeployment,
+  getDriveStatus,
+  getDriveById,
+  type SelectionSuccess,
+} from "@/lib/shared-drives";
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -219,13 +229,73 @@ export async function createSingleDriveFolder(
       .from(cameraTrapProjects)
       .where(eq(cameraTrapProjects.name, "BioChoco"));
 
-    const rootFolderId = bioChocoProject?.driveFolderId ?? process.env.CAMERA_TRAP_ROOT_FOLDER_ID;
-    if (!rootFolderId) {
-      return {
-        deploymentId,
-        success: false,
-        error: "La carpeta de Drive del proyecto BioChoco no está configurada.",
-      };
+    const legacyRoot = bioChocoProject?.driveFolderId ?? process.env.CAMERA_TRAP_ROOT_FOLDER_ID;
+
+    // Resolve the parent folder. When routing is enabled, pick + reserve a
+    // slot on the fullest-but-eligible Shared Drive; otherwise use the legacy
+    // env/project root. Routing failures are loud (recorded as error events).
+    let rootFolderId: string;
+    let reservation: SelectionSuccess | null = null;
+    let sharedDriveId: string | null = null;
+
+    if (sharedDriveRoutingEnabled()) {
+      if (!bioChocoProject?.id) {
+        return {
+          deploymentId,
+          success: false,
+          error: "El proyecto BioChoco no existe en la base de datos.",
+        };
+      }
+      const sel = selectAndReserveSlot(bioChocoProject.id);
+      if ("error" in sel) {
+        await recordEvent({
+          source: "shared-drives",
+          eventType: `deployment_folder_create_${sel.error}`,
+          severity: "error",
+          summary: `Creación de carpeta sin capacidad (${deploymentId})`,
+          targetType: "ct_project",
+          targetId: bioChocoProject?.id ?? null,
+          details: { deploymentId },
+        });
+        return {
+          deploymentId,
+          success: false,
+          error:
+            sel.error === "no_capacity"
+              ? "Sin capacidad disponible. Notifica al administrador para aprovisionar un nuevo drive."
+              : "No hay Shared Drives activos configurados. Notifica al administrador.",
+        };
+      }
+      // TOCTOU: an admin may have flipped the drive to read-only between the
+      // reservation and now — re-check before committing a Drive write.
+      if (getDriveStatus(sel.sharedDriveId) !== "active") {
+        releaseReservation(sel.reservationId);
+        await recordEvent({
+          source: "shared-drives",
+          eventType: "reservation_aborted_status_changed",
+          severity: "warn",
+          summary: `Reserva abortada (${deploymentId}): el drive cambió de estado`,
+          targetType: "shared_drive",
+          targetId: sel.sharedDriveId,
+        });
+        return {
+          deploymentId,
+          success: false,
+          error: "El drive seleccionado cambió de estado. Intenta de nuevo.",
+        };
+      }
+      rootFolderId = sel.rootFolderId;
+      reservation = sel;
+      sharedDriveId = sel.sharedDriveId;
+    } else {
+      if (!legacyRoot) {
+        return {
+          deploymentId,
+          success: false,
+          error: "La carpeta de Drive del proyecto BioChoco no está configurada.",
+        };
+      }
+      rootFolderId = legacyRoot;
     }
 
     const { siteMap, submissionMap, scheduleSet } =
@@ -233,6 +303,7 @@ export async function createSingleDriveFolder(
 
     const sub = submissionMap.get(deploymentId);
     if (!sub) {
+      if (reservation) releaseReservation(reservation.reservationId);
       return {
         deploymentId,
         success: false,
@@ -242,8 +313,14 @@ export async function createSingleDriveFolder(
 
     const site = siteMap.get(sub.siteId);
 
-    // Create Drive folder + subfolders
-    const folder = await createDeploymentFolder(rootFolderId, deploymentId);
+    // Create Drive folder + subfolders. On failure, release the reservation.
+    let folder: Awaited<ReturnType<typeof createDeploymentFolder>>;
+    try {
+      folder = await createDeploymentFolder(rootFolderId, deploymentId);
+    } catch (err) {
+      if (reservation) releaseReservation(reservation.reservationId);
+      throw err;
+    }
 
     // Update Sheets schedule if the deployment exists there
     if (scheduleSet.has(deploymentId)) {
@@ -272,6 +349,7 @@ export async function createSingleDriveFolder(
           projectLabel: "BioChoco",
           name: deploymentId,
           driveFolderId: folder.id,
+          sharedDriveId,
           siteName: site?.name ?? null,
           latitude: site?.lat ?? null,
           longitude: site?.lng ?? null,
@@ -289,6 +367,17 @@ export async function createSingleDriveFolder(
           uploadCountsCheckedAt: new Date(),
         })
         .onConflictDoNothing();
+
+      // Best-effort: link the reservation to the deployment row for audit.
+      // (Reconcile absorbs reservations by timestamp, not by this link.)
+      if (reservation) {
+        const [row] = await db
+          .select({ id: deployments.id })
+          .from(deployments)
+          .where(eq(deployments.name, deploymentId))
+          .limit(1);
+        if (row) attachReservationToDeployment(reservation.reservationId, row.id);
+      }
     } catch (err) {
       log.error(
         { err, deploymentId },
@@ -334,7 +423,22 @@ export async function recreateDriveFolder(
       .from(cameraTrapProjects)
       .where(eq(cameraTrapProjects.name, "BioChoco"));
 
-    const rootFolderId = bioChocoProject?.driveFolderId ?? process.env.CAMERA_TRAP_ROOT_FOLDER_ID;
+    const legacyRoot = bioChocoProject?.driveFolderId ?? process.env.CAMERA_TRAP_ROOT_FOLDER_ID;
+
+    // Recreate under the SAME drive the deployment already lives on (if known),
+    // so an existing deployment is never scattered across drives. No new
+    // reservation: the deployment was already counted; reconcile trues up.
+    const [existingDep] = await db
+      .select({ sharedDriveId: deployments.sharedDriveId })
+      .from(deployments)
+      .where(eq(deployments.name, deploymentId))
+      .limit(1);
+
+    let rootFolderId = legacyRoot;
+    if (existingDep?.sharedDriveId) {
+      const drive = await getDriveById(existingDep.sharedDriveId);
+      if (drive) rootFolderId = drive.rootFolderId;
+    }
     if (!rootFolderId) {
       return {
         deploymentId,

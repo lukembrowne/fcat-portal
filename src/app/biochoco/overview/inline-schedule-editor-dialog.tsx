@@ -30,6 +30,8 @@ interface Props {
   candidates: ScheduleRow[];
   /** The ODK site entity for `self.siteId` — enables the "Editar sitio" section. */
   site: SiteInfo | null;
+  /** Dates/swap are editable only for future (scheduled) deployments. The name is always editable. */
+  canEditDates: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
@@ -59,7 +61,7 @@ function formatISO(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-export function InlineScheduleEditorDialog({ self, candidates, site, open, onOpenChange }: Props) {
+export function InlineScheduleEditorDialog({ self, candidates, site, canEditDates, open, onOpenChange }: Props) {
   const router = useRouter();
   const [state, setState] = useState<DialogState>({ mode: "idle" });
   const [dateInput, setDateInput] = useState(self.plannedDeployDate ?? "");
@@ -195,14 +197,15 @@ export function InlineScheduleEditorDialog({ self, candidates, site, open, onOpe
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-4xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
             Editar {self.deploymentId} — {habitatLabel}
           </DialogTitle>
           <DialogDescription>
-            Cambiar la fecha de instalación, intercambiar con otra instalación
-            programada, o editar los datos del sitio en ODK.
+            {canEditDates
+              ? "Cambiar la fecha de instalación, intercambiar con otra instalación programada, o editar los datos del sitio en ODK."
+              : "Esta instalación ya no está programada, así que las fechas no se pueden cambiar. Puedes editar los datos del sitio en ODK."}
           </DialogDescription>
         </DialogHeader>
 
@@ -220,209 +223,218 @@ export function InlineScheduleEditorDialog({ self, candidates, site, open, onOpe
           <div>{self.siteName}</div>
         </div>
 
-        {/* ───── Direct date edit ───── */}
-        <section className="space-y-3 rounded-lg border p-4">
-          <h3 className="text-sm font-semibold">Cambiar fecha</h3>
-          <div className="flex flex-wrap items-end gap-3">
-            <div>
-              <label className="text-xs font-medium block mb-1" htmlFor="new-deploy-date">
-                Nueva fecha de instalación
-              </label>
-              <Input
-                id="new-deploy-date"
-                type="date"
-                value={dateInput}
-                min={TODAY_ISO}
-                onChange={(e) => setDateInput(e.target.value)}
-                className="w-44"
-              />
-            </div>
-            {newRetrievePreview && (
-              <p className="text-xs text-muted-foreground pb-2">
-                Recuperación se moverá a{" "}
-                <span className="tabular-nums font-medium text-foreground">
-                  {newRetrievePreview}
-                </span>
-                .
-              </p>
-            )}
-          </div>
-          <Button onClick={handleCommitDateEdit} disabled={dateEditDisabled} size="sm">
-            {isPending ? "Guardando..." : "Aplicar cambio de fecha"}
-          </Button>
-        </section>
-
-        {/* ───── Swap ───── */}
-        <section className="space-y-3 rounded-lg border p-4">
-          <h3 className="text-sm font-semibold">o intercambiar con otra instalación</h3>
-
-          <div className="flex items-center gap-2 text-sm">
-            <Checkbox
-              id="habitat-only"
-              checked={habitatOnly}
-              onCheckedChange={(v) => setHabitatOnly(v === true)}
-            />
-            <label htmlFor="habitat-only" className="cursor-pointer">
-              Solo mismo hábitat ({habitatLabel})
-            </label>
-          </div>
-
-          <div className="relative">
-            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Buscar por ID o sitio..."
-              value={candidateFilter}
-              onChange={(e) => setCandidateFilter(e.target.value)}
-              className="pl-9 h-9"
-            />
-          </div>
-
-          <div className="max-h-64 overflow-y-auto rounded-md border">
-            {filtered.length === 0 ? (
-              <p className="text-sm text-muted-foreground p-3">
-                No hay instalaciones que coincidan con el filtro.
-              </p>
-            ) : (
-              <ul className="divide-y">
-                {filtered.map((c) => (
-                  <li key={c.deploymentId}>
-                    <label className="flex items-center gap-3 p-2 cursor-pointer hover:bg-muted/50 text-sm">
-                      <input
-                        type="radio"
-                        name="swap-target"
-                        value={c.deploymentId}
-                        checked={selectedSwapId === c.deploymentId}
-                        onChange={() => setSelectedSwapId(c.deploymentId)}
-                      />
-                      <span className="font-mono text-xs">{c.deploymentId}</span>
-                      <span className="text-muted-foreground">{c.siteName}</span>
-                      <span className="tabular-nums ml-auto">
-                        {c.plannedDeployDate ?? "—"}
-                      </span>
+        <div className={canEditDates ? "grid gap-4 md:grid-cols-2 md:items-start" : "space-y-4"}>
+          {/* Left column: site editing (always) + date editing (future only) */}
+          <div className="space-y-4">
+            {/* ───── Edit site entity (name / coords / habitat) ───── */}
+            {site && (
+              <section className="space-y-3 rounded-lg border p-4">
+                <h3 className="text-sm font-semibold">Editar sitio</h3>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="sm:col-span-2">
+                    <label className="text-xs font-medium block mb-1" htmlFor="site-name">
+                      Nombre
                     </label>
-                  </li>
-                ))}
-              </ul>
+                    <Input
+                      id="site-name"
+                      value={siteName}
+                      onChange={(e) => setSiteName(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium block mb-1" htmlFor="site-lat">
+                      Latitud
+                    </label>
+                    <Input
+                      id="site-lat"
+                      inputMode="decimal"
+                      value={siteLat}
+                      onChange={(e) => setSiteLat(e.target.value)}
+                      className="tabular-nums"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium block mb-1" htmlFor="site-lng">
+                      Longitud
+                    </label>
+                    <Input
+                      id="site-lng"
+                      inputMode="decimal"
+                      value={siteLng}
+                      onChange={(e) => setSiteLng(e.target.value)}
+                      className="tabular-nums"
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="text-xs font-medium block mb-1" htmlFor="site-habitat">
+                      Hábitat
+                    </label>
+                    <Select value={siteHabitat} onValueChange={setSiteHabitat}>
+                      <SelectTrigger id="site-habitat" className="w-full">
+                        <SelectValue placeholder="Seleccionar hábitat" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {Object.entries(HABITAT_NAMES).map(([key, label]) => (
+                          <SelectItem key={key} value={key}>
+                            {label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Estos campos pertenecen al sitio{" "}
+                  <span className="font-mono">{site.siteId}</span> en ODK y afectan todas sus
+                  visitas. El nombre se sincroniza con la hoja del cronograma.
+                </p>
+                <Button onClick={handleSaveSite} disabled={isPending || !siteChanged} size="sm">
+                  {isPending ? "Guardando..." : "Guardar sitio"}
+                </Button>
+              </section>
+            )}
+
+            {/* ───── Direct date edit (future deployments only) ───── */}
+            {canEditDates && (
+              <section className="space-y-3 rounded-lg border p-4">
+                <h3 className="text-sm font-semibold">Cambiar fecha</h3>
+                <div className="flex flex-wrap items-end gap-3">
+                  <div>
+                    <label className="text-xs font-medium block mb-1" htmlFor="new-deploy-date">
+                      Nueva fecha de instalación
+                    </label>
+                    <Input
+                      id="new-deploy-date"
+                      type="date"
+                      value={dateInput}
+                      min={TODAY_ISO}
+                      onChange={(e) => setDateInput(e.target.value)}
+                      className="w-44"
+                    />
+                  </div>
+                  {newRetrievePreview && (
+                    <p className="text-xs text-muted-foreground pb-2">
+                      Recuperación se moverá a{" "}
+                      <span className="tabular-nums font-medium text-foreground">
+                        {newRetrievePreview}
+                      </span>
+                      .
+                    </p>
+                  )}
+                </div>
+                <Button onClick={handleCommitDateEdit} disabled={dateEditDisabled} size="sm">
+                  {isPending ? "Guardando..." : "Aplicar cambio de fecha"}
+                </Button>
+              </section>
             )}
           </div>
 
-          <Button onClick={handlePreviewSwap} disabled={swapDisabled} variant="secondary" size="sm">
-            {isPending ? "Calculando..." : "Vista previa del intercambio"}
-          </Button>
+          {/* Right column: swap with another scheduled deployment (future only) */}
+          {canEditDates && (
+            <section className="space-y-3 rounded-lg border p-4">
+              <h3 className="text-sm font-semibold">o intercambiar con otra instalación</h3>
 
-          {state.mode === "swap-preview" && (
-            <div className="space-y-3">
-              <div className="rounded-md border overflow-auto">
-                <Table className="text-xs">
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>ID</TableHead>
-                      <TableHead>Campo</TableHead>
-                      <TableHead>Antes</TableHead>
-                      <TableHead>Después</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {state.preview.changes.map((c, i) => (
-                      <TableRow key={i}>
-                        <TableCell className="font-mono">{c.deploymentId}</TableCell>
-                        <TableCell>{c.field}</TableCell>
-                        <TableCell className="tabular-nums">{c.oldValue}</TableCell>
-                        <TableCell className="tabular-nums">{c.newValue}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+              <div className="flex items-center gap-2 text-sm">
+                <Checkbox
+                  id="habitat-only"
+                  checked={habitatOnly}
+                  onCheckedChange={(v) => setHabitatOnly(v === true)}
+                />
+                <label htmlFor="habitat-only" className="cursor-pointer">
+                  Solo mismo hábitat ({habitatLabel})
+                </label>
               </div>
 
-              {state.preview.validationErrors.length > 0 && (
-                <div className="rounded-md bg-yellow-50 p-3 text-xs">
-                  <p className="font-medium text-yellow-800">
-                    {state.preview.validationErrors.length} advertencia
-                    {state.preview.validationErrors.length === 1 ? "" : "s"}:
+              <div className="relative">
+                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Buscar por ID o sitio..."
+                  value={candidateFilter}
+                  onChange={(e) => setCandidateFilter(e.target.value)}
+                  className="pl-9 h-9"
+                />
+              </div>
+
+              <div className="max-h-64 overflow-y-auto rounded-md border">
+                {filtered.length === 0 ? (
+                  <p className="text-sm text-muted-foreground p-3">
+                    No hay instalaciones que coincidan con el filtro.
                   </p>
-                  <ul className="mt-1 list-disc pl-5 text-yellow-700 space-y-0.5">
-                    {state.preview.validationErrors.slice(0, 10).map((e, i) => (
-                      <li key={i}>{e}</li>
+                ) : (
+                  <ul className="divide-y">
+                    {filtered.map((c) => (
+                      <li key={c.deploymentId}>
+                        <label className="flex items-center gap-3 p-2 cursor-pointer hover:bg-muted/50 text-sm">
+                          <input
+                            type="radio"
+                            name="swap-target"
+                            value={c.deploymentId}
+                            checked={selectedSwapId === c.deploymentId}
+                            onChange={() => setSelectedSwapId(c.deploymentId)}
+                          />
+                          <span className="font-mono text-xs">{c.deploymentId}</span>
+                          <span className="text-muted-foreground">{c.siteName}</span>
+                          <span className="tabular-nums ml-auto">
+                            {c.plannedDeployDate ?? "—"}
+                          </span>
+                        </label>
+                      </li>
                     ))}
                   </ul>
+                )}
+              </div>
+
+              <Button onClick={handlePreviewSwap} disabled={swapDisabled} variant="secondary" size="sm">
+                {isPending ? "Calculando..." : "Vista previa del intercambio"}
+              </Button>
+
+              {state.mode === "swap-preview" && (
+                <div className="space-y-3">
+                  <div className="rounded-md border overflow-auto">
+                    <Table className="text-xs">
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>ID</TableHead>
+                          <TableHead>Campo</TableHead>
+                          <TableHead>Antes</TableHead>
+                          <TableHead>Después</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {state.preview.changes.map((c, i) => (
+                          <TableRow key={i}>
+                            <TableCell className="font-mono">{c.deploymentId}</TableCell>
+                            <TableCell>{c.field}</TableCell>
+                            <TableCell className="tabular-nums">{c.oldValue}</TableCell>
+                            <TableCell className="tabular-nums">{c.newValue}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+
+                  {state.preview.validationErrors.length > 0 && (
+                    <div className="rounded-md bg-yellow-50 p-3 text-xs">
+                      <p className="font-medium text-yellow-800">
+                        {state.preview.validationErrors.length} advertencia
+                        {state.preview.validationErrors.length === 1 ? "" : "s"}:
+                      </p>
+                      <ul className="mt-1 list-disc pl-5 text-yellow-700 space-y-0.5">
+                        {state.preview.validationErrors.slice(0, 10).map((e, i) => (
+                          <li key={i}>{e}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  <Button onClick={handleCommitSwap} disabled={isPending} size="sm">
+                    {isPending ? "Guardando..." : "Aplicar intercambio"}
+                  </Button>
                 </div>
               )}
-
-              <Button onClick={handleCommitSwap} disabled={isPending} size="sm">
-                {isPending ? "Guardando..." : "Aplicar intercambio"}
-              </Button>
-            </div>
+            </section>
           )}
-        </section>
-
-        {/* ───── Edit site entity (name / coords / habitat) ───── */}
-        {site && (
-          <section className="space-y-3 rounded-lg border p-4">
-            <h3 className="text-sm font-semibold">Editar sitio</h3>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="sm:col-span-2">
-                <label className="text-xs font-medium block mb-1" htmlFor="site-name">
-                  Nombre
-                </label>
-                <Input
-                  id="site-name"
-                  value={siteName}
-                  onChange={(e) => setSiteName(e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="text-xs font-medium block mb-1" htmlFor="site-lat">
-                  Latitud
-                </label>
-                <Input
-                  id="site-lat"
-                  inputMode="decimal"
-                  value={siteLat}
-                  onChange={(e) => setSiteLat(e.target.value)}
-                  className="tabular-nums"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-medium block mb-1" htmlFor="site-lng">
-                  Longitud
-                </label>
-                <Input
-                  id="site-lng"
-                  inputMode="decimal"
-                  value={siteLng}
-                  onChange={(e) => setSiteLng(e.target.value)}
-                  className="tabular-nums"
-                />
-              </div>
-              <div className="sm:col-span-2">
-                <label className="text-xs font-medium block mb-1" htmlFor="site-habitat">
-                  Hábitat
-                </label>
-                <Select value={siteHabitat} onValueChange={setSiteHabitat}>
-                  <SelectTrigger id="site-habitat" className="w-full">
-                    <SelectValue placeholder="Seleccionar hábitat" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {Object.entries(HABITAT_NAMES).map(([key, label]) => (
-                      <SelectItem key={key} value={key}>
-                        {label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Estos campos pertenecen al sitio{" "}
-              <span className="font-mono">{site.siteId}</span> en ODK y afectan todas sus
-              visitas. El nombre se sincroniza con la hoja del cronograma.
-            </p>
-            <Button onClick={handleSaveSite} disabled={isPending || !siteChanged} size="sm">
-              {isPending ? "Guardando..." : "Guardar sitio"}
-            </Button>
-          </section>
-        )}
+        </div>
 
         {warnings.length > 0 && (
           <div className="rounded-md bg-yellow-50 p-3 text-xs">

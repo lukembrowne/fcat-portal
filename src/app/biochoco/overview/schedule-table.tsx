@@ -61,10 +61,13 @@ function EditScheduleButton({
   deploymentId,
   allSchedule,
   siteMap,
+  canEditDates,
 }: {
   deploymentId: string;
   allSchedule: ScheduleRow[];
   siteMap: Map<string, SiteInfo>;
+  /** Dates/swap are editable only for future (scheduled) deployments; the name is always editable. */
+  canEditDates: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const self = useMemo(
@@ -79,7 +82,7 @@ function EditScheduleButton({
         size="sm"
         className="h-7 px-2"
         onClick={() => setOpen(true)}
-        title="Editar fechas"
+        title="Editar"
       >
         <Pencil className="h-3.5 w-3.5" />
         <span className="sr-only">Editar</span>
@@ -89,6 +92,7 @@ function EditScheduleButton({
           self={self}
           candidates={allSchedule}
           site={siteMap.get(self.siteId) ?? null}
+          canEditDates={canEditDates}
           open={open}
           onOpenChange={setOpen}
         />
@@ -432,12 +436,12 @@ export function ScheduleTable({
         header: "Editar",
         cell: ({ row }) => {
           if (!canEditSchedule) return null;
-          if (row.original.status !== "scheduled") return null;
           return (
             <EditScheduleButton
               deploymentId={row.original.deploymentId}
               allSchedule={allSchedule}
               siteMap={siteMap}
+              canEditDates={row.original.status === "scheduled"}
             />
           );
         },

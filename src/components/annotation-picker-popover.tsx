@@ -38,6 +38,32 @@ function groupByType(speciesList: Species[]): [string, Species[]][] {
   return TYPE_ORDER.filter((t) => groups.has(t)).map((t) => [t, groups.get(t)!]);
 }
 
+/**
+ * Relevance scorer for the species search, replacing cmdk's default fuzzy
+ * subsequence matcher (which let "chicken" match "Metachirus myosuros"). Each
+ * typed token must appear as a substring somewhere in the species' fields
+ * (scientific name + common/Spanish names); exact and prefix matches rank
+ * highest. Returning 0 hides the item; cmdk floats the highest-scoring item's
+ * group to the top, so an exact match surfaces first regardless of taxon group.
+ */
+function speciesFilter(value: string, search: string, keywords?: string[]): number {
+  const q = search.trim().toLowerCase();
+  if (!q) return 1;
+  const fields = [value, ...(keywords ?? [])]
+    .map((f) => f.toLowerCase().trim())
+    .filter(Boolean);
+  const tokens = q.split(/\s+/);
+  const haystack = fields.join(" ");
+  if (!tokens.every((t) => haystack.includes(t))) return 0;
+  let best = 0.3;
+  for (const f of fields) {
+    if (f === q) return 1;
+    if (f.startsWith(q)) best = Math.max(best, 0.9);
+    else if (f.split(/[\s/-]+/).some((w) => w.startsWith(q))) best = Math.max(best, 0.6);
+  }
+  return best;
+}
+
 function displayName(sp: Species, mode: NameDisplay): string {
   if (mode === "spanish") return sp.spanishName || sp.commonName || sp.scientificName;
   if (mode === "scientific") return sp.scientificName;
@@ -89,16 +115,23 @@ export function AnnotationPickerPopover({
   const verificationStatus =
     selectedDetection?.identification?.verificationStatus ?? "unclassified";
 
-  // Focus the search input when the popover opens so typing a letter lands
-  // in the typeahead immediately.
-  const wasOpenRef = useRef(false);
+  // Focus the search input once the popover actually becomes renderable so
+  // typing a letter lands in the typeahead immediately. We key off
+  // `open && selectedDetection` (the same gate as the render below), not just
+  // `open`: when a NEW box is drawn, `open` flips true while `selectedDetection`
+  // is still null (it only arrives after the server refresh). Focusing on the
+  // bare `open` transition would fire against an unmounted input (no-op) and
+  // then never re-fire, leaving the input unfocused. Tracking the renderable
+  // transition focuses the input the moment it mounts.
+  const isRenderable = open && !!selectedDetection;
+  const wasRenderableRef = useRef(false);
   useEffect(() => {
-    if (open && !wasOpenRef.current) {
+    if (isRenderable && !wasRenderableRef.current) {
       // Defer to the next frame so Radix has finished mounting the content.
       requestAnimationFrame(() => searchInputRef.current?.focus());
     }
-    wasOpenRef.current = open;
-  }, [open, searchInputRef]);
+    wasRenderableRef.current = isRenderable;
+  }, [isRenderable, searchInputRef]);
 
   // Mirror the container ref into state so Radix's `collisionBoundary` gets
   // an Element value, not a ref-access-during-render.
@@ -123,7 +156,7 @@ export function AnnotationPickerPopover({
         // Let our own effect handle focus once Radix is done mounting.
         e.preventDefault();
       }}
-      className="w-80 p-0"
+      className="w-96 p-0"
     >
       <div className="px-3 py-2 border-b flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
@@ -220,6 +253,7 @@ export function AnnotationPickerPopover({
       <Command
         loop
         shouldFilter={true}
+        filter={speciesFilter}
         className="border-0"
         onKeyDown={(e) => {
           // Backspace/Delete on an empty typeahead deletes the selected bbox.

@@ -220,6 +220,7 @@ const statements = [
     drive_id TEXT NOT NULL UNIQUE,
     root_folder_id TEXT NOT NULL,
     name TEXT NOT NULL,
+    camera_trap_project_id INTEGER REFERENCES ct_projects(id),
     status TEXT NOT NULL DEFAULT 'registering' CHECK(status IN ('registering','active','read-only','unreachable')),
     reconciled_count INTEGER NOT NULL DEFAULT 0,
     pending_reservations_count INTEGER NOT NULL DEFAULT 0,
@@ -244,6 +245,9 @@ const statements = [
     CHECK ((released_at IS NULL) OR (released_at >= created_at))
   )`,
   `CREATE INDEX IF NOT EXISTS idx_shared_drives_status_active ON shared_drives(status, archived_at)`,
+  // NOTE: idx_shared_drives_project_status is created in postMigrationIndexes —
+  // the camera_trap_project_id column is added by an ALTER migration, which runs
+  // AFTER this block, so the index can't be created here for existing DBs.
   `CREATE INDEX IF NOT EXISTS idx_shared_drive_reservations_drive_open ON shared_drive_reservations(shared_drive_id, released_at)`,
 
   // Finance — Transactions
@@ -779,6 +783,9 @@ const migrations = [
   // Multi-shared-drive fan-out: which Shared Drive hosts a deployment (2026-05-24)
   // Nullable FK; ON DELETE RESTRICT so admin deletes can't orphan rows.
   `ALTER TABLE biochoco_deployments ADD COLUMN shared_drive_id TEXT REFERENCES shared_drives(id) ON DELETE RESTRICT`,
+  // Project-scoped fan-out: which project a Shared Drive serves (2026-05-27).
+  // One project per drive — routing + discovery are scoped to this.
+  `ALTER TABLE shared_drives ADD COLUMN camera_trap_project_id INTEGER REFERENCES ct_projects(id)`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }
@@ -806,10 +813,32 @@ const postMigrationIndexes = [
     WHERE verification_status = 'corrected'`,
   // Multi-shared-drive fan-out: index the deployment → drive FK (2026-05-24)
   `CREATE INDEX IF NOT EXISTS idx_biochoco_deployments_shared_drive_id ON biochoco_deployments(shared_drive_id)`,
+  // Project-scoped fan-out: selection hot path (2026-05-27)
+  `CREATE INDEX IF NOT EXISTS idx_shared_drives_project_status ON shared_drives(camera_trap_project_id, status, archived_at)`,
 ];
 for (const idx of postMigrationIndexes) {
   db.exec(idx);
 }
+
+// Backfill shared_drives.camera_trap_project_id by matching a drive's root
+// folder to a project's root folder (idempotent; only fills NULLs). A drive
+// registered at a project's own root belongs to that project. Drives whose
+// root is a bare drive root match nothing and stay NULL until assigned in the
+// admin UI (and are simply never selected by routing/discovery while NULL).
+try {
+  db.exec(`
+    UPDATE shared_drives
+    SET camera_trap_project_id = (
+      SELECT p.id FROM ct_projects p
+      WHERE p.drive_folder_id = shared_drives.root_folder_id
+    )
+    WHERE camera_trap_project_id IS NULL
+      AND EXISTS (
+        SELECT 1 FROM ct_projects p
+        WHERE p.drive_folder_id = shared_drives.root_folder_id
+      )
+  `);
+} catch { /* table/columns may not exist on a partial schema */ }
 
 // --- Table recreations ---
 // IMPORTANT: Disable foreign keys during table recreation to prevent

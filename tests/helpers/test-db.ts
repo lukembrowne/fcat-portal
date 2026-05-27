@@ -43,6 +43,7 @@ const SHARED_DRIVES_DDL = `
     drive_id TEXT NOT NULL UNIQUE,
     root_folder_id TEXT NOT NULL,
     name TEXT NOT NULL,
+    camera_trap_project_id INTEGER,
     status TEXT NOT NULL DEFAULT 'registering' CHECK(status IN ('registering','active','read-only','unreachable')),
     reconciled_count INTEGER NOT NULL DEFAULT 0,
     pending_reservations_count INTEGER NOT NULL DEFAULT 0,
@@ -69,6 +70,7 @@ const SHARED_DRIVES_DDL = `
   );
 
   CREATE INDEX idx_shared_drives_status_active ON shared_drives(status, archived_at);
+  CREATE INDEX idx_shared_drives_project_status ON shared_drives(camera_trap_project_id, status, archived_at);
   CREATE INDEX idx_shared_drive_reservations_drive_open ON shared_drive_reservations(shared_drive_id, released_at);
 `;
 

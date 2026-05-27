@@ -95,15 +95,18 @@ type PickRow = {
 };
 
 /**
- * Atomically pick the fullest active drive still under the HARD threshold and
- * reserve DEPLOYMENT_QUOTA items via a typed token. Synchronous better-sqlite3
- * transaction — never async (see MEMORY gotcha).
+ * Atomically pick the fullest active drive still under the HARD threshold —
+ * scoped to a single project's drive pool — and reserve DEPLOYMENT_QUOTA items
+ * via a typed token. Synchronous better-sqlite3 transaction — never async (see
+ * MEMORY gotcha).
  *
- * Bin-packs (fullest-first) so drives fill in order; `id ASC` is a
+ * One project per drive: only drives with this `camera_trap_project_id` are
+ * eligible, so a project can never spill into another project's drive. Bin-packs
+ * (fullest-first) so a project's drives fill in order; `id ASC` is a
  * deterministic tiebreaker because SQLite does not guarantee tie resolution by
  * rowid inside a scalar subquery.
  */
-export function selectAndReserveSlot(): SelectionResult {
+export function selectAndReserveSlot(projectId: number): SelectionResult {
   const quota = DEPLOYMENT_QUOTA;
   const hardPct = getHardPct();
   const reservationId = randomUUID();
@@ -117,6 +120,7 @@ export function selectAndReserveSlot(): SelectionResult {
         SELECT id FROM shared_drives
         WHERE status = 'active'
           AND archived_at IS NULL
+          AND camera_trap_project_id = ${projectId}
           AND (reconciled_count + pending_reservations_count + ${quota}) <= (item_cap * ${hardPct})
         ORDER BY (reconciled_count + pending_reservations_count) DESC, id ASC
         LIMIT 1
@@ -125,11 +129,12 @@ export function selectAndReserveSlot(): SelectionResult {
     `) as PickRow | undefined;
 
     if (!row) {
-      // Distinguish "no headroom anywhere" from "no active drives at all" so
-      // the caller can surface a clearer message.
+      // Distinguish "no headroom on this project's drives" from "this project
+      // has no active drives at all" so the caller can surface a clearer message.
       const anyActive = tx.get(sql`
         SELECT 1 AS x FROM shared_drives
         WHERE status = 'active' AND archived_at IS NULL
+          AND camera_trap_project_id = ${projectId}
         LIMIT 1
       `) as { x: number } | undefined;
       return { error: anyActive ? "no_capacity" : "no_active_drives" };
@@ -216,35 +221,91 @@ export async function getDriveById(id: string): Promise<SharedDrive | null> {
 }
 
 /**
- * Root folder IDs to scan for deployment discovery — the union across every
- * non-archived drive. Reads still resolve via supportsAllDrives regardless of
- * status, so we include active + read-only + unreachable here (Promise.allSettled
- * at the call site isolates a drive that genuinely can't be listed).
+ * Root folder IDs of a project's non-archived drives. Reads still resolve via
+ * supportsAllDrives regardless of status, so we include active + read-only +
+ * unreachable (Promise.allSettled at the call site isolates a drive that
+ * genuinely can't be listed).
  */
-export function getNonArchivedDriveRootIds(): string[] {
+export function getDriveRootIdsForProject(projectId: number): string[] {
   const rows = db.all(sql`
-    SELECT root_folder_id FROM shared_drives WHERE archived_at IS NULL
+    SELECT root_folder_id FROM shared_drives
+    WHERE archived_at IS NULL AND camera_trap_project_id = ${projectId}
   `) as { root_folder_id: string }[];
   return rows.map((r) => r.root_folder_id);
 }
 
 /**
- * Root folder IDs to scan when discovering deployments for a CT project whose
- * legacy root is `projectRootFolderId`.
+ * Root folder IDs to scan when discovering deployments for a CT project.
  *
- * - Discovery flag OFF, or this project is not the fanned-out one → just its
- *   own root (unchanged behavior).
- * - Discovery flag ON AND this project's root is registered in the fan-out
- *   registry → the union of every non-archived drive's root, so deployments
- *   created on additional drives are discovered too.
+ * - Discovery flag OFF → just the project's own root (unchanged behavior).
+ * - Discovery flag ON → the union of the project's own root and the roots of
+ *   every non-archived drive registered to THIS project. Scoped per project, so
+ *   discovery never sweeps another project's drive (no cross-contamination).
+ * - A project with no registered drives → just its own root.
  */
 export function getDiscoveryRootsForProject(
+  projectId: number,
   projectRootFolderId: string,
 ): string[] {
   if (!sharedDriveDiscoveryEnabled()) return [projectRootFolderId];
-  const registryRoots = getNonArchivedDriveRootIds();
-  if (!registryRoots.includes(projectRootFolderId)) return [projectRootFolderId];
-  return Array.from(new Set([projectRootFolderId, ...registryRoots]));
+  const projectRoots = getDriveRootIdsForProject(projectId);
+  if (projectRoots.length === 0) return [projectRootFolderId];
+  return Array.from(new Set([projectRootFolderId, ...projectRoots]));
+}
+
+/** Per-project capacity rollup for provision-ahead alerts + the admin UI. */
+export type ProjectCapacity = {
+  projectId: number;
+  driveCount: number;
+  activeDriveCount: number;
+  reconciledTotal: number;
+  effectiveTotal: number;
+  capTotal: number;
+  /** Fill of the project's emptiest ACTIVE drive (0..1); null if none active. */
+  emptiestActiveFill: number | null;
+  /** True if the project has at least one active drive under the hard pct. */
+  hasHeadroom: boolean;
+};
+
+export function getProjectCapacities(): ProjectCapacity[] {
+  const hardPct = getHardPct();
+  const rows = db.all(sql`
+    SELECT
+      camera_trap_project_id AS pid,
+      COUNT(*) AS drive_count,
+      SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active_count,
+      SUM(reconciled_count) AS reconciled_total,
+      SUM(reconciled_count + pending_reservations_count) AS effective_total,
+      SUM(item_cap) AS cap_total,
+      MIN(CASE WHEN status = 'active'
+            THEN CAST(reconciled_count + pending_reservations_count AS REAL) / item_cap
+          END) AS emptiest_active_fill,
+      MAX(CASE WHEN status = 'active'
+              AND (reconciled_count + pending_reservations_count) < (item_cap * ${hardPct})
+            THEN 1 ELSE 0 END) AS has_headroom
+    FROM shared_drives
+    WHERE archived_at IS NULL AND camera_trap_project_id IS NOT NULL
+    GROUP BY camera_trap_project_id
+  `) as Array<{
+    pid: number;
+    drive_count: number;
+    active_count: number;
+    reconciled_total: number;
+    effective_total: number;
+    cap_total: number;
+    emptiest_active_fill: number | null;
+    has_headroom: number;
+  }>;
+  return rows.map((r) => ({
+    projectId: r.pid,
+    driveCount: r.drive_count,
+    activeDriveCount: r.active_count,
+    reconciledTotal: r.reconciled_total,
+    effectiveTotal: r.effective_total,
+    capTotal: r.cap_total,
+    emptiestActiveFill: r.emptiest_active_fill,
+    hasHeadroom: r.has_headroom === 1,
+  }));
 }
 
 // ---------------------------------------------------------------------------

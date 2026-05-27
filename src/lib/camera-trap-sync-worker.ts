@@ -70,7 +70,7 @@ export async function runDriveSyncWorker(jobId: number): Promise<void> {
       for (const proj of projectsToWalk) {
         if (await signal.isCancelled()) break;
         try {
-          const roots = getDiscoveryRootsForProject(proj.driveFolderId);
+          const roots = getDiscoveryRootsForProject(proj.id, proj.driveFolderId);
           const driveFolders =
             roots.length === 1
               ? await listDeploymentFolders(roots[0])

@@ -179,7 +179,7 @@ export async function syncWithDrive(
     const allErrors: string[] = [];
 
     for (const proj of projectsToSync) {
-      const roots = getDiscoveryRootsForProject(proj.driveFolderId);
+      const roots = getDiscoveryRootsForProject(proj.id, proj.driveFolderId);
       const driveFolders =
         roots.length === 1
           ? await listDeploymentFolders(roots[0])

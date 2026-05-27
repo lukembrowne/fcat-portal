@@ -239,7 +239,14 @@ export async function createSingleDriveFolder(
     let sharedDriveId: string | null = null;
 
     if (sharedDriveRoutingEnabled()) {
-      const sel = selectAndReserveSlot();
+      if (!bioChocoProject?.id) {
+        return {
+          deploymentId,
+          success: false,
+          error: "El proyecto BioChoco no existe en la base de datos.",
+        };
+      }
+      const sel = selectAndReserveSlot(bioChocoProject.id);
       if ("error" in sel) {
         await recordEvent({
           source: "shared-drives",

@@ -34,7 +34,13 @@ import {
   getChangesStartPageToken,
   listSharedDriveChangesDelta,
 } from "@/lib/drive-client";
-import { getSoftPct, getHardPct, getStopPct, sanitizeDriveError } from "@/lib/shared-drives";
+import {
+  getSoftPct,
+  getHardPct,
+  getStopPct,
+  sanitizeDriveError,
+  getProjectCapacities,
+} from "@/lib/shared-drives";
 
 // Cap parallel per-drive Drive work to stay under the per-SA quota
 // (~325K units/min). 5 drives × pageSize 1000 (100 units) keeps headroom.
@@ -243,6 +249,68 @@ async function applyThresholdTransitions(
   }
 }
 
+function hadRecentProjectEvent(eventType: string, projectId: number): boolean {
+  const row = db.get(sql`
+    SELECT 1 AS x FROM system_events
+    WHERE source = 'shared-drives'
+      AND event_type = ${eventType}
+      AND target_id = ${String(projectId)}
+      AND occurred_at >= unixepoch('now', '-1 day')
+    LIMIT 1
+  `) as { x: number } | undefined;
+  return !!row;
+}
+
+/**
+ * After per-drive counts are trued up, roll up capacity per project and warn
+ * when a project should provision its next drive — either it has no active
+ * drive with headroom (urgent), or its emptiest active drive is already past the
+ * soft threshold (a single new deployment could fill it). 24h dedup per project.
+ */
+async function emitProjectProvisionAlerts(): Promise<void> {
+  const soft = getSoftPct();
+  const names = new Map<number, string>();
+  for (const p of db.all(sql`SELECT id, name FROM ct_projects`) as {
+    id: number;
+    name: string;
+  }[]) {
+    names.set(p.id, p.name);
+  }
+
+  for (const c of getProjectCapacities()) {
+    const needsProvision =
+      !c.hasHeadroom ||
+      (c.emptiestActiveFill !== null && c.emptiestActiveFill >= soft);
+    if (!needsProvision) continue;
+    if (hadRecentProjectEvent("project_provision_ahead", c.projectId)) continue;
+
+    const name = names.get(c.projectId) ?? `#${c.projectId}`;
+    const pctStr =
+      c.capTotal > 0
+        ? `${((c.effectiveTotal / c.capTotal) * 100).toFixed(1)}%`
+        : "—";
+    await recordEvent({
+      source: "shared-drives",
+      eventType: "project_provision_ahead",
+      severity: c.hasHeadroom ? "warn" : "error",
+      summary: c.hasHeadroom
+        ? `Proyecto ${name}: aprovisiona el próximo Shared Drive pronto (${pctStr})`
+        : `Proyecto ${name}: sin capacidad — aprovisiona un Shared Drive YA (${pctStr})`,
+      targetType: "ct_project",
+      targetId: String(c.projectId),
+      details: {
+        projectId: c.projectId,
+        driveCount: c.driveCount,
+        activeDriveCount: c.activeDriveCount,
+        effectiveTotal: c.effectiveTotal,
+        capTotal: c.capTotal,
+        emptiestActiveFill: c.emptiestActiveFill,
+        hasHeadroom: c.hasHeadroom,
+      },
+    });
+  }
+}
+
 /**
  * Entry point dispatched for a `shared_drives_reconcile` processing job. Run
  * directly by the cron endpoint / admin action (not the unified queue).
@@ -304,6 +372,9 @@ export async function runReconciliationJob(jobId: number): Promise<void> {
 
     const ok = results.filter((r) => r.status === "fulfilled").length;
     const failed = results.length - ok;
+
+    // Per-project provision-ahead alerts (after all counts are trued up).
+    await emitProjectProvisionAlerts();
     const driveDeltas = results
       .filter((r): r is PromiseFulfilledResult<ReconcileResult> => r.status === "fulfilled")
       .map((r) => ({

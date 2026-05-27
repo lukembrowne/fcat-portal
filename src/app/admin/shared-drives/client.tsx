@@ -10,7 +10,9 @@ import {
   archiveDrive,
   unarchiveDrive,
   editDriveName,
+  assignDriveProject,
   type DrivePreview,
+  type ProjectOption,
 } from "./actions";
 
 const BTN = "rounded border px-3 py-1 text-sm hover:bg-muted disabled:opacity-50";
@@ -41,11 +43,12 @@ export function ReconcileNowButton() {
   );
 }
 
-export function RegisterDriveButton() {
+export function RegisterDriveButton({ projects }: { projects: ProjectOption[] }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [driveId, setDriveId] = useState("");
   const [rootFolderId, setRootFolderId] = useState("");
+  const [projectId, setProjectId] = useState<string>("");
   const [preview, setPreview] = useState<DrivePreview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
@@ -53,6 +56,7 @@ export function RegisterDriveButton() {
   function reset() {
     setDriveId("");
     setRootFolderId("");
+    setProjectId("");
     setPreview(null);
     setError(null);
   }
@@ -104,6 +108,23 @@ export function RegisterDriveButton() {
                 )}
                 <label className="mt-3 block text-xs">
                   <span className="mb-1 block text-muted-foreground">
+                    Proyecto (cada drive sirve a un proyecto)
+                  </span>
+                  <select
+                    className="w-full rounded border px-2 py-1 text-sm bg-background"
+                    value={projectId}
+                    onChange={(e) => setProjectId(e.target.value)}
+                  >
+                    <option value="">— Selecciona un proyecto —</option>
+                    {projects.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="mt-3 block text-xs">
+                  <span className="mb-1 block text-muted-foreground">
                     Carpeta raíz de instalaciones (opcional — por defecto la raíz del drive)
                   </span>
                   <input
@@ -147,13 +168,14 @@ export function RegisterDriveButton() {
               ) : (
                 <button
                   className={BTN_PRIMARY}
-                  disabled={pending || preview.alreadyRegistered}
+                  disabled={pending || preview.alreadyRegistered || !projectId}
                   onClick={() =>
                     start(async () => {
                       setError(null);
                       const res = await registerDrive({
                         driveId: preview.driveId,
                         name: preview.name,
+                        cameraTrapProjectId: Number(projectId),
                         rootFolderId: rootFolderId.trim() || undefined,
                       });
                       if (res.success) {
@@ -182,11 +204,15 @@ export function RowActions({
   name,
   status,
   archived,
+  projects,
+  projectId,
 }: {
   id: string;
   name: string;
   status: string;
   archived: boolean;
+  projects: ProjectOption[];
+  projectId: number | null;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -200,7 +226,24 @@ export function RowActions({
   }
 
   return (
-    <div className="inline-flex flex-wrap justify-end gap-1">
+    <div className="inline-flex flex-wrap items-center justify-end gap-1">
+      <select
+        className="rounded border px-1 py-1 text-xs bg-background"
+        value={projectId ?? ""}
+        disabled={pending}
+        title="Proyecto asignado"
+        onChange={(e) => {
+          const next = Number(e.target.value);
+          if (next && next !== projectId) run(() => assignDriveProject(id, next));
+        }}
+      >
+        <option value="">— sin proyecto —</option>
+        {projects.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.name}
+          </option>
+        ))}
+      </select>
       {status === "active" && (
         <button className={BTN} disabled={pending} onClick={() => run(() => markStatus(id, "read-only"))}>
           Solo lectura

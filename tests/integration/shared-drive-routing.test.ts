@@ -38,6 +38,9 @@ const createDeploymentFolder = vi.mocked(driveClient.createDeploymentFolder);
 
 const DEPLOY_ID = "TP-999";
 
+// Set by seedBioChocoProject() in beforeEach; seeded drives belong to it.
+let bioChocoProjectId = 0;
+
 function seedDrive(id: string, reconciledCount: number, status: schema.SharedDriveStatus = "active") {
   testDbRef.current
     .insert(schema.sharedDrives)
@@ -46,6 +49,7 @@ function seedDrive(id: string, reconciledCount: number, status: schema.SharedDri
       driveId: `0A${id.padEnd(16, "x")}`,
       rootFolderId: `root-${id}`,
       name: id,
+      cameraTrapProjectId: bioChocoProjectId,
       status,
       reconciledCount,
     })
@@ -53,10 +57,12 @@ function seedDrive(id: string, reconciledCount: number, status: schema.SharedDri
 }
 
 function seedBioChocoProject() {
-  testDbRef.current
+  const [row] = testDbRef.current
     .insert(schema.cameraTrapProjects)
     .values({ name: "BioChoco", driveFolderId: "legacy-root" })
-    .run();
+    .returning({ id: schema.cameraTrapProjects.id })
+    .all();
+  bioChocoProjectId = row.id;
 }
 
 function setOdkFixtures() {

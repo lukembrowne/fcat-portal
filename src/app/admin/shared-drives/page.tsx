@@ -119,13 +119,14 @@ export default async function AdminSharedDrivesPage({
   const sortDir: SortDirection = asString(params.sortDir) === "asc" ? "asc" : "desc";
   const includeArchived = asString(params.archived) === "1";
 
-  const { rows, thresholds } = await listSharedDrives({
+  const { rows, thresholds, projects, projectCapacities } = await listSharedDrives({
     sortBy,
     sortDir,
     includeArchived,
   });
 
   const anyNearCap = rows.some((r) => r.fillPct >= thresholds.hard);
+  const provisionAhead = projectCapacities.filter((c) => c.provisionAhead);
 
   return (
     <div className="max-w-7xl mx-auto">
@@ -134,23 +135,59 @@ export default async function AdminSharedDrivesPage({
           <h1 className="text-3xl font-bold mb-2">Shared Drives</h1>
           <p className="text-muted-foreground max-w-3xl">
             Registro de Shared Drives de Google para la distribución de
-            instalaciones (fan-out por capacidad). Las nuevas instalaciones se
-            crean en el drive más lleno que aún esté por debajo del{" "}
-            {(thresholds.hard * 100).toFixed(0)}%. Las lecturas funcionan en
+            instalaciones por capacidad. Cada drive sirve a un proyecto; un
+            proyecto grande puede ocupar varios drives. Las nuevas instalaciones
+            se crean en el drive más lleno del proyecto que aún esté por debajo
+            del {(thresholds.hard * 100).toFixed(0)}%. Las lecturas funcionan en
             cualquier drive sin importar su estado.
           </p>
         </div>
         <div className="flex shrink-0 gap-2">
           <ReconcileNowButton />
-          <RegisterDriveButton />
+          <RegisterDriveButton projects={projects} />
         </div>
       </div>
 
-      {anyNearCap && (
+      {projectCapacities.length > 0 && (
+        <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {projectCapacities.map((c) => (
+            <div
+              key={c.projectId}
+              className={`rounded border p-3 ${c.provisionAhead ? "border-amber-400 bg-amber-50" : "bg-muted/20"}`}
+            >
+              <div className="flex items-baseline justify-between">
+                <span className="font-medium">{c.projectName}</span>
+                <span className="text-xs text-muted-foreground">
+                  {c.activeDriveCount}/{c.driveCount} drive(s) activos
+                </span>
+              </div>
+              <div className="mt-2 h-2 w-full overflow-hidden rounded bg-muted">
+                <div
+                  className={`h-full ${fillColor(c.fillPct, thresholds)}`}
+                  style={{ width: `${(Math.min(1, c.fillPct) * 100).toFixed(1)}%` }}
+                />
+              </div>
+              <div className="mt-1 text-xs text-muted-foreground tabular-nums">
+                {c.effectiveTotal.toLocaleString("es-EC")} /{" "}
+                {c.capTotal.toLocaleString("es-EC")} ({(c.fillPct * 100).toFixed(1)}%)
+              </div>
+              {c.provisionAhead && (
+                <div className="mt-2 text-xs font-medium text-amber-800">
+                  ⚠️ Aprovisiona el próximo drive para este proyecto.
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {(anyNearCap || provisionAhead.length > 0) && (
         <div className="mb-4 rounded border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">
-          ⚠️ Uno o más drives superan el umbral crítico (
-          {(thresholds.hard * 100).toFixed(0)}%). Aprovisiona un nuevo Shared
-          Drive y regístralo aquí.
+          ⚠️ {provisionAhead.length > 0
+            ? `Estos proyectos necesitan un nuevo drive pronto: ${provisionAhead.map((c) => c.projectName).join(", ")}.`
+            : `Uno o más drives superan el umbral crítico (${(thresholds.hard * 100).toFixed(0)}%).`}{" "}
+          Crea un nuevo Shared Drive, agrégale la cuenta de servicio y regístralo
+          aquí (asignándolo al proyecto correcto).
         </div>
       )}
 
@@ -159,6 +196,7 @@ export default async function AdminSharedDrivesPage({
           <thead className="bg-muted/40 text-left">
             <tr>
               <SortableHeader column="name" label="Nombre" currentSort={sortBy} currentDir={sortDir} />
+              <th className="px-3 py-2 font-medium">Proyecto</th>
               <SortableHeader column="status" label="Estado" currentSort={sortBy} currentDir={sortDir} />
               <SortableHeader column="reconciledCount" label="Capacidad" currentSort={sortBy} currentDir={sortDir} />
               <th className="px-3 py-2 font-medium">Drive ID</th>
@@ -170,7 +208,7 @@ export default async function AdminSharedDrivesPage({
           <tbody>
             {rows.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-3 py-6 text-center text-muted-foreground">
+                <td colSpan={8} className="px-3 py-6 text-center text-muted-foreground">
                   No hay Shared Drives registrados. Usa “Registrar drive”.
                 </td>
               </tr>
@@ -182,6 +220,13 @@ export default async function AdminSharedDrivesPage({
                   <div className="text-xs text-muted-foreground font-mono">{row.id}</div>
                   {row.archivedAt && (
                     <span className="text-xs italic text-muted-foreground">archivado</span>
+                  )}
+                </td>
+                <td className="px-3 py-2 whitespace-nowrap">
+                  {row.projectName ? (
+                    <span className="text-sm">{row.projectName}</span>
+                  ) : (
+                    <span className="text-xs italic text-amber-700">sin proyecto</span>
                   )}
                 </td>
                 <td className="px-3 py-2 whitespace-nowrap">
@@ -217,6 +262,8 @@ export default async function AdminSharedDrivesPage({
                     name={row.name}
                     status={row.status}
                     archived={!!row.archivedAt}
+                    projects={projects}
+                    projectId={row.cameraTrapProjectId}
                   />
                 </td>
               </tr>

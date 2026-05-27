@@ -14,16 +14,21 @@ const {
   selectAndReserveSlot,
   releaseReservation,
   getDriveStatus,
-  getNonArchivedDriveRootIds,
+  getDriveRootIdsForProject,
   DEPLOYMENT_QUOTA,
   DRIVE_ID_REGEX,
   sanitizeDriveError,
 } = mod;
 
+// Default project for seeded drives (one-project-per-drive). Tests that need
+// multiple projects override `cameraTrapProjectId`.
+const PROJECT = 1;
+
 type DriveSeed = {
   id: string;
   driveId?: string;
   rootFolderId?: string;
+  cameraTrapProjectId?: number;
   status?: schema.SharedDriveStatus;
   reconciledCount?: number;
   pendingReservationsCount?: number;
@@ -39,6 +44,7 @@ function seedDrive(s: DriveSeed) {
       driveId: s.driveId ?? `0A${s.id.padEnd(16, "x")}`,
       rootFolderId: s.rootFolderId ?? `root-${s.id}`,
       name: s.id,
+      cameraTrapProjectId: s.cameraTrapProjectId ?? PROJECT,
       status: s.status ?? "active",
       reconciledCount: s.reconciledCount ?? 0,
       pendingReservationsCount: s.pendingReservationsCount ?? 0,
@@ -78,21 +84,33 @@ describe("DRIVE_ID_REGEX", () => {
 
 describe("selectAndReserveSlot", () => {
   it("returns no_active_drives when the registry is empty", () => {
-    expect(selectAndReserveSlot()).toEqual({ error: "no_active_drives" });
+    expect(selectAndReserveSlot(PROJECT)).toEqual({ error: "no_active_drives" });
   });
 
   it("returns no_active_drives when only non-active / archived drives exist", () => {
     seedDrive({ id: "a", status: "read-only" });
     seedDrive({ id: "b", status: "registering" });
     seedDrive({ id: "c", status: "active", archivedAt: "2026-05-24 00:00:00" });
-    expect(selectAndReserveSlot()).toEqual({ error: "no_active_drives" });
+    expect(selectAndReserveSlot(PROJECT)).toEqual({ error: "no_active_drives" });
+  });
+
+  it("only considers drives belonging to the requested project", () => {
+    // An eligible drive on a DIFFERENT project must never be picked.
+    seedDrive({ id: "other", cameraTrapProjectId: 2, reconciledCount: 0 });
+    expect(selectAndReserveSlot(PROJECT)).toEqual({ error: "no_active_drives" });
+    // Once this project has a drive, it's picked — the other stays untouched.
+    seedDrive({ id: "mine", cameraTrapProjectId: PROJECT, reconciledCount: 0 });
+    const res = selectAndReserveSlot(PROJECT);
+    if ("error" in res) throw new Error("expected a pick");
+    expect(res.sharedDriveId).toBe("mine");
+    expect(pending("other")).toBe(0);
   });
 
   it("picks the fullest eligible drive and reserves the quota", () => {
     seedDrive({ id: "low", reconciledCount: 10_000 });
     seedDrive({ id: "high", reconciledCount: 200_000 });
 
-    const res = selectAndReserveSlot();
+    const res = selectAndReserveSlot(PROJECT);
     expect("error" in res).toBe(false);
     if ("error" in res) return;
     expect(res.sharedDriveId).toBe("high");
@@ -105,7 +123,7 @@ describe("selectAndReserveSlot", () => {
   it("breaks ties on id ASC", () => {
     seedDrive({ id: "bbb", reconciledCount: 10_000 });
     seedDrive({ id: "aaa", reconciledCount: 10_000 });
-    const res = selectAndReserveSlot();
+    const res = selectAndReserveSlot(PROJECT);
     if ("error" in res) throw new Error("expected a pick");
     expect(res.sharedDriveId).toBe("aaa");
   });
@@ -113,16 +131,16 @@ describe("selectAndReserveSlot", () => {
   it("never reserves past the hard threshold (default 85%)", () => {
     // cap 100k → hard 85k. Each reservation = 40k. Two fit (80k), third refused.
     seedDrive({ id: "d", reconciledCount: 0, itemCap: 100_000 });
-    expect("error" in selectAndReserveSlot()).toBe(false);
-    expect("error" in selectAndReserveSlot()).toBe(false);
-    expect(selectAndReserveSlot()).toEqual({ error: "no_capacity" });
+    expect("error" in selectAndReserveSlot(PROJECT)).toBe(false);
+    expect("error" in selectAndReserveSlot(PROJECT)).toBe(false);
+    expect(selectAndReserveSlot(PROJECT)).toEqual({ error: "no_capacity" });
     expect(pending("d")).toBe(2 * DEPLOYMENT_QUOTA);
   });
 
   it("never lets concurrent-style repeated reservations exceed cap*hard", () => {
     seedDrive({ id: "x", itemCap: 500_000 });
     seedDrive({ id: "y", itemCap: 500_000 });
-    for (let i = 0; i < 30; i++) selectAndReserveSlot();
+    for (let i = 0; i < 30; i++) selectAndReserveSlot(PROJECT);
     for (const id of ["x", "y"]) {
       const row = testDbRef.current.get(
         sql`SELECT reconciled_count + pending_reservations_count AS eff, item_cap AS cap FROM shared_drives WHERE id = ${id}`,
@@ -135,7 +153,7 @@ describe("selectAndReserveSlot", () => {
 describe("releaseReservation", () => {
   it("decrements pending and is idempotent by token", () => {
     seedDrive({ id: "d" });
-    const res = selectAndReserveSlot();
+    const res = selectAndReserveSlot(PROJECT);
     if ("error" in res) throw new Error("expected a pick");
     expect(pending("d")).toBe(DEPLOYMENT_QUOTA);
 
@@ -155,18 +173,21 @@ describe("releaseReservation", () => {
   });
 });
 
-describe("getDriveStatus / getNonArchivedDriveRootIds", () => {
-  it("reads current status and lists non-archived roots", () => {
+describe("getDriveStatus / getDriveRootIdsForProject", () => {
+  it("reads current status and lists a project's non-archived roots", () => {
     seedDrive({ id: "a", status: "active", rootFolderId: "root-a" });
     seedDrive({ id: "b", status: "read-only", rootFolderId: "root-b" });
     seedDrive({ id: "c", status: "active", rootFolderId: "root-c", archivedAt: "2026-05-24 00:00:00" });
+    // A drive on another project must be excluded from this project's roots.
+    seedDrive({ id: "d", status: "active", rootFolderId: "root-d", cameraTrapProjectId: 2 });
 
     expect(getDriveStatus("a")).toBe("active");
     expect(getDriveStatus("b")).toBe("read-only");
     expect(getDriveStatus("missing")).toBeNull();
 
-    const roots = getNonArchivedDriveRootIds().sort();
+    const roots = getDriveRootIdsForProject(PROJECT).sort();
     expect(roots).toEqual(["root-a", "root-b"]);
+    expect(getDriveRootIdsForProject(2)).toEqual(["root-d"]);
   });
 });
 
@@ -182,7 +203,7 @@ describe("sanitizeDriveError", () => {
 });
 
 describe("selection query plan", () => {
-  it("uses the status/archived index for the selection filter", () => {
+  it("uses the project/status index for the (project-scoped) selection filter", () => {
     for (let i = 0; i < 200; i++) {
       seedDrive({ id: `d${String(i).padStart(3, "0")}`, reconciledCount: i * 100 });
     }
@@ -190,11 +211,12 @@ describe("selection query plan", () => {
       EXPLAIN QUERY PLAN
       SELECT id FROM shared_drives
       WHERE status = 'active' AND archived_at IS NULL
+        AND camera_trap_project_id = ${PROJECT}
         AND (reconciled_count + pending_reservations_count + 40000) <= (item_cap * 0.85)
       ORDER BY (reconciled_count + pending_reservations_count) DESC, id ASC
       LIMIT 1
     `) as { detail: string }[];
     const joined = plan.map((p) => p.detail).join(" | ");
-    expect(joined).toMatch(/idx_shared_drives_status_active/);
+    expect(joined).toMatch(/idx_shared_drives_project_status/);
   });
 });

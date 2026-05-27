@@ -198,12 +198,21 @@ async function main() {
   console.log(`Env root resolves to Shared Drive ${envResolved.driveId}`);
 
   const upsertDrive = db.prepare(`
-    INSERT OR IGNORE INTO shared_drives (id, drive_id, root_folder_id, name, status)
-    VALUES (?, ?, ?, ?, 'registering')
+    INSERT OR IGNORE INTO shared_drives (id, drive_id, root_folder_id, name, camera_trap_project_id, status)
+    VALUES (?, ?, ?, ?, ?, 'registering')
   `);
 
+  // fcat-biochoco serves the project whose root folder IS the env root.
+  const bioProj = db
+    .prepare("SELECT id FROM ct_projects WHERE drive_folder_id = ?")
+    .get(envRoot) as { id: number } | undefined;
+  if (!bioProj) {
+    console.warn(
+      `  ⚠️  No ct_project has drive_folder_id = ${envRoot}; fcat-biochoco will be left unassigned (assign it in the admin UI).`,
+    );
+  }
   if (!DRY_RUN) {
-    upsertDrive.run("fcat-biochoco", envResolved.driveId, envRoot, "FCAT-BIOCHOCO");
+    upsertDrive.run("fcat-biochoco", envResolved.driveId, envRoot, "FCAT-BIOCHOCO", bioProj?.id ?? null);
   }
   rootToDrive.set(envRoot, { slug: "fcat-biochoco", driveId: envResolved.driveId });
 

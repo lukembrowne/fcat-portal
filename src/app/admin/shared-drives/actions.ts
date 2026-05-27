@@ -1,7 +1,12 @@
 "use server";
 
 import { db } from "@/db";
-import { sharedDrives, processingJobs, type SharedDrive } from "@/db/schema";
+import {
+  sharedDrives,
+  processingJobs,
+  cameraTrapProjects,
+  type SharedDrive,
+} from "@/db/schema";
 import { asc, desc, sql } from "drizzle-orm";
 import { requireAdmin } from "@/lib/auth";
 import { recordEvent } from "@/lib/system-events";
@@ -14,6 +19,8 @@ import {
   getSoftPct,
   getHardPct,
   getStopPct,
+  getProjectCapacities,
+  type ProjectCapacity,
 } from "@/lib/shared-drives";
 import {
   getSharedDriveMetadata,
@@ -44,6 +51,7 @@ export type SortDirection = "asc" | "desc";
 export type SharedDriveRow = SharedDrive & {
   effectiveCount: number;
   fillPct: number;
+  projectName: string | null;
 };
 
 export type ThresholdConfig = {
@@ -52,11 +60,35 @@ export type ThresholdConfig = {
   stop: number;
 };
 
+export type ProjectOption = { id: number; name: string };
+
+export type ProjectCapacityRow = ProjectCapacity & {
+  projectName: string;
+  fillPct: number;
+  /** True when this project should provision its next drive soon. */
+  provisionAhead: boolean;
+};
+
+/** CT projects available to assign a drive to (for the register/assign UI). */
+export async function listSharedDriveProjects(): Promise<ProjectOption[]> {
+  await requireAdmin();
+  const rows = await db
+    .select({ id: cameraTrapProjects.id, name: cameraTrapProjects.name })
+    .from(cameraTrapProjects)
+    .orderBy(asc(cameraTrapProjects.name));
+  return rows;
+}
+
 export async function listSharedDrives(opts: {
   sortBy?: string;
   sortDir?: string;
   includeArchived?: boolean;
-}): Promise<{ rows: SharedDriveRow[]; thresholds: ThresholdConfig }> {
+}): Promise<{
+  rows: SharedDriveRow[];
+  thresholds: ThresholdConfig;
+  projects: ProjectOption[];
+  projectCapacities: ProjectCapacityRow[];
+}> {
   await requireAdmin();
 
   const sortBy = (opts.sortBy && opts.sortBy in SORTABLE_COLUMNS
@@ -73,6 +105,25 @@ export async function listSharedDrives(opts: {
         .where(sql`${sharedDrives.archivedAt} IS NULL`)
         .orderBy(orderFn(SORTABLE_COLUMNS[sortBy]), idTiebreak);
 
+  const projects = await listSharedDriveProjects();
+  const projectName = new Map(projects.map((p) => [p.id, p.name]));
+
+  const thresholds = { soft: getSoftPct(), hard: getHardPct(), stop: getStopPct() };
+
+  const projectCapacities: ProjectCapacityRow[] = getProjectCapacities()
+    .map((c) => ({
+      ...c,
+      projectName: projectName.get(c.projectId) ?? `#${c.projectId}`,
+      fillPct: c.capTotal > 0 ? c.effectiveTotal / c.capTotal : 0,
+      // Provision-ahead: no active drive with headroom, OR the emptiest active
+      // drive is already past the soft threshold (so a single new deployment
+      // could fill it). Mirrors the runbook's "provision at 50%" instinct.
+      provisionAhead:
+        !c.hasHeadroom ||
+        (c.emptiestActiveFill !== null && c.emptiestActiveFill >= thresholds.soft),
+    }))
+    .sort((a, b) => b.fillPct - a.fillPct);
+
   return {
     rows: rows.map((r) => {
       const effectiveCount = r.reconciledCount + r.pendingReservationsCount;
@@ -80,9 +131,14 @@ export async function listSharedDrives(opts: {
         ...r,
         effectiveCount,
         fillPct: r.itemCap > 0 ? effectiveCount / r.itemCap : 0,
+        projectName: r.cameraTrapProjectId
+          ? projectName.get(r.cameraTrapProjectId) ?? null
+          : null,
       };
     }),
-    thresholds: { soft: getSoftPct(), hard: getHardPct(), stop: getStopPct() },
+    thresholds,
+    projects,
+    projectCapacities,
   };
 }
 
@@ -151,12 +207,25 @@ function slugify(input: string): string {
 export async function registerDrive(input: {
   driveId: string;
   name: string;
+  cameraTrapProjectId: number;
   rootFolderId?: string;
 }): Promise<ActionResult<{ id: string }>> {
   const admin = await requireAdmin();
   const driveId = input.driveId.trim();
   if (!DRIVE_ID_REGEX.test(driveId)) {
     return { success: false, error: "ID de Shared Drive inválido." };
+  }
+  const projectId = Number(input.cameraTrapProjectId);
+  if (!Number.isInteger(projectId) || projectId <= 0) {
+    return { success: false, error: "Selecciona un proyecto para este drive." };
+  }
+  const [project] = await db
+    .select({ id: cameraTrapProjects.id })
+    .from(cameraTrapProjects)
+    .where(sql`${cameraTrapProjects.id} = ${projectId}`)
+    .limit(1);
+  if (!project) {
+    return { success: false, error: "El proyecto seleccionado no existe." };
   }
   const name = input.name.trim() || "(sin nombre)";
   // For a fresh Shared Drive the deployment root is the drive root (== driveId).
@@ -190,6 +259,7 @@ export async function registerDrive(input: {
     driveId,
     rootFolderId,
     name,
+    cameraTrapProjectId: projectId,
     status: "registering",
   });
 
@@ -228,10 +298,46 @@ export async function registerDrive(input: {
     actorEmail: admin.email,
     targetType: "shared_drive",
     targetId: id,
-    details: { driveId, rootFolderId },
+    details: { driveId, rootFolderId, cameraTrapProjectId: projectId },
   });
   revalidatePath("/admin/shared-drives");
   return { success: true, data: { id } };
+}
+
+/** Assign (or re-assign) a registered drive to a CT project. */
+export async function assignDriveProject(
+  id: string,
+  cameraTrapProjectId: number,
+): Promise<ActionResult> {
+  const admin = await requireAdmin();
+  const projectId = Number(cameraTrapProjectId);
+  if (!Number.isInteger(projectId) || projectId <= 0) {
+    return { success: false, error: "Proyecto inválido." };
+  }
+  const [project] = await db
+    .select({ id: cameraTrapProjects.id, name: cameraTrapProjects.name })
+    .from(cameraTrapProjects)
+    .where(sql`${cameraTrapProjects.id} = ${projectId}`)
+    .limit(1);
+  if (!project) return { success: false, error: "El proyecto no existe." };
+
+  db.run(sql`
+    UPDATE shared_drives
+    SET camera_trap_project_id = ${projectId}, updated_at = datetime('now')
+    WHERE id = ${id}
+  `);
+  await recordEvent({
+    source: "shared-drives",
+    eventType: "drive_project_assigned",
+    severity: "info",
+    summary: `Drive ${id} asignado al proyecto ${project.name}`,
+    actorEmail: admin.email,
+    targetType: "shared_drive",
+    targetId: id,
+    details: { cameraTrapProjectId: projectId },
+  });
+  revalidatePath("/admin/shared-drives");
+  return { success: true, data: undefined };
 }
 
 // ---------------------------------------------------------------------------

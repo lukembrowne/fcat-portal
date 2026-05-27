@@ -618,6 +618,13 @@ export const sharedDrives = sqliteTable(
     rootFolderId: text("root_folder_id").notNull(),
     // Display name confirmed via drives.get
     name: text("name").notNull(),
+    // The camera-trap project this drive serves. One project per drive: a
+    // project's drive pool = all rows with its id. Routing + discovery are
+    // scoped to this so projects never cross-contaminate. Nullable only so the
+    // migration is safe + unassigned drives are simply never selected.
+    cameraTrapProjectId: integer("camera_trap_project_id").references(
+      () => cameraTrapProjects.id,
+    ),
     status: text("status", { enum: SHARED_DRIVE_STATUSES })
       .notNull()
       .default("registering"),
@@ -646,8 +653,12 @@ export const sharedDrives = sqliteTable(
       .default(sql`(datetime('now'))`),
   },
   (t) => [
-    // Selection hot path: pick fullest active, non-archived drive.
-    index("idx_shared_drives_status_active").on(t.status, t.archivedAt),
+    // Selection hot path: pick a project's fullest active, non-archived drive.
+    index("idx_shared_drives_project_status").on(
+      t.cameraTrapProjectId,
+      t.status,
+      t.archivedAt,
+    ),
   ],
 );
 

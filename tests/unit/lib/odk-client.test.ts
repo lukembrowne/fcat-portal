@@ -25,6 +25,9 @@ vi.stubGlobal("fetch", mockFetch);
 const {
   fetchSubmissions,
   fetchEntities,
+  fetchEntity,
+  updateEntity,
+  OdkEntityError,
   fetchAttachment,
   fetchRepeatData,
   parseWktPoint,
@@ -434,5 +437,92 @@ describe("auth failure", () => {
 
     // This should eventually throw when re-auth fails
     await expect(fetchSubmissions("1", "form1")).rejects.toThrow();
+  });
+});
+
+// === fetchEntity (single entity read) ===
+
+describe("fetchEntity", () => {
+  it("GETs the single-entity URL (not OData) and returns currentVersion", async () => {
+    const captured: string[] = [];
+    setupFetchMock((url) => {
+      captured.push(url);
+      return new Response(
+        JSON.stringify({ currentVersion: { version: 7, label: "Site A", data: { site_id: "A" } } }),
+        { status: 200 },
+      );
+    });
+
+    const res = await fetchEntity("8", "monitoring_sites_v0_14", "uuid-1");
+    expect(res.currentVersion.version).toBe(7);
+    expect(res.currentVersion.label).toBe("Site A");
+    expect(res.currentVersion.data.site_id).toBe("A");
+    const dataUrl = captured.find((u) => !u.includes("/v1/sessions"))!;
+    expect(dataUrl).toContain("/datasets/monitoring_sites_v0_14/entities/uuid-1");
+    expect(dataUrl).not.toContain(".svc"); // not OData
+  });
+
+  it("throws OdkEntityError carrying status on a 404", async () => {
+    setupFetchMock(() => new Response("Not Found", { status: 404, statusText: "Not Found" }));
+    await expect(fetchEntity("8", "sites", "missing")).rejects.toMatchObject({
+      name: "OdkEntityError",
+      status: 404,
+    });
+  });
+});
+
+// === updateEntity (PATCH with optimistic concurrency) ===
+
+describe("updateEntity", () => {
+  it("PATCHes ?baseVersion= with a { label, data } body", async () => {
+    let capturedUrl = "";
+    let capturedInit: RequestInit | undefined;
+    setupFetchMock((url) => {
+      capturedUrl = url;
+      return new Response(
+        JSON.stringify({ currentVersion: { version: 8, label: "New", data: {} } }),
+        { status: 200 },
+      );
+    });
+    // Capture the init arg too (setupFetchMock only passes url).
+    mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.includes("/v1/sessions")) {
+        return new Response(JSON.stringify({ token: "test-token" }), { status: 200 });
+      }
+      capturedUrl = url;
+      capturedInit = init;
+      return new Response(
+        JSON.stringify({ currentVersion: { version: 8, label: "New", data: {} } }),
+        { status: 200 },
+      );
+    });
+
+    await updateEntity(
+      "8",
+      "monitoring_sites_v0_14",
+      "uuid-1",
+      { label: "New", data: { latitude: "0.5", habitat_type: "primary_forest" } },
+      7,
+    );
+
+    expect(capturedUrl).toContain("/datasets/monitoring_sites_v0_14/entities/uuid-1");
+    expect(capturedUrl).toContain("?baseVersion=7");
+    expect(capturedInit?.method).toBe("PATCH");
+    const body = JSON.parse(String(capturedInit?.body));
+    expect(body.label).toBe("New");
+    expect(body.data).toEqual({ latitude: "0.5", habitat_type: "primary_forest" });
+  });
+
+  it("throws OdkEntityError with status 409 on a version conflict", async () => {
+    setupFetchMock(() => new Response("Conflict", { status: 409, statusText: "Conflict" }));
+    await expect(
+      updateEntity("8", "sites", "uuid-1", { label: "x" }, 1),
+    ).rejects.toMatchObject({ name: "OdkEntityError", status: 409 });
+  });
+
+  it("exposes OdkEntityError as a real class", () => {
+    const err = new OdkEntityError("boom", 500);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.status).toBe(500);
   });
 });

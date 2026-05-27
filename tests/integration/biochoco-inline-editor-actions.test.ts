@@ -18,9 +18,22 @@ import { scheduleHash } from "@/lib/schedule-hash";
 setupAuthMocks();
 
 const loadScheduleMock = vi.fn();
-const updateScheduleRowsMock = vi.fn(async () => undefined);
+const updateScheduleRowsMock = vi.fn(async () => ({ matchedRows: 1, cellsWritten: 1 }));
 const recordEventMock = vi.fn(async () => undefined);
 const revalidatePathMock = vi.fn();
+const updateTagMock = vi.fn();
+const fetchEntityMock = vi.fn();
+const updateEntityMock = vi.fn();
+
+// Real error class so the action's `err instanceof OdkEntityError` checks work.
+class OdkEntityError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "OdkEntityError";
+    this.status = status;
+  }
+}
 
 vi.mock("@/lib/sheets-client", () => ({
   loadSchedule: (...args: unknown[]) => loadScheduleMock(...args),
@@ -33,12 +46,16 @@ vi.mock("@/lib/system-events", () => ({
 
 vi.mock("next/cache", () => ({
   revalidatePath: (...args: unknown[]) => revalidatePathMock(...args),
+  updateTag: (...args: unknown[]) => updateTagMock(...args),
 }));
 
 // Stub out fetchBiochocoData's other dependencies so the module imports.
 vi.mock("@/lib/odk-client", () => ({
   fetchEntities: vi.fn(async () => []),
   fetchSubmissions: vi.fn(async () => []),
+  fetchEntity: (...args: unknown[]) => fetchEntityMock(...args),
+  updateEntity: (...args: unknown[]) => updateEntityMock(...args),
+  OdkEntityError,
 }));
 
 vi.mock("@/lib/odk-constants", () => ({
@@ -51,7 +68,7 @@ vi.mock("@/lib/odk-constants", () => ({
 vi.mock("@/db", () => ({ db: {} }));
 vi.mock("@/db/schema", () => ({ deployments: "deployments" }));
 
-const { previewInlineSwap, commitInlineSwap, commitDateEdit } = await import(
+const { previewInlineSwap, commitInlineSwap, commitDateEdit, updateSiteEntity } = await import(
   "@/app/biochoco/overview/actions"
 );
 
@@ -249,6 +266,171 @@ describe("biochoco overview inline editor actions", () => {
         expect(result.error).toBe(
           "No se puede intercambiar una instalación consigo misma.",
         );
+      }
+    });
+  });
+
+  // ─── updateSiteEntity ─────────────────────────────────────
+
+  describe("updateSiteEntity", () => {
+    const BASE_INPUT = {
+      siteId: "A",
+      uuid: "uuid-a",
+      name: "A - Nuevo Nombre",
+      latitude: "0.5",
+      longitude: "-79.2",
+      habitatType: "primary_forest",
+      expected: {
+        name: "A - Viejo Nombre",
+        latitude: "0.5",
+        longitude: "-79.2",
+        habitatType: "secondary_forest",
+      },
+    };
+
+    /** Live entity whose values match BASE_INPUT.expected (no conflict). */
+    function liveMatchingExpected(overrides: Record<string, string> = {}) {
+      return {
+        currentVersion: {
+          version: 3,
+          label: "A - Viejo Nombre",
+          data: {
+            site_id: "A",
+            latitude: "0.5",
+            longitude: "-79.2",
+            habitat_type: "secondary_forest",
+            ...overrides,
+          },
+        },
+      };
+    }
+
+    beforeEach(() => {
+      fetchEntityMock.mockResolvedValue(liveMatchingExpected());
+      updateEntityMock.mockResolvedValue({ currentVersion: { version: 4, label: "A", data: {} } });
+      loadScheduleMock.mockResolvedValue([
+        makeRow({ deploymentId: "A_V1", siteId: "A" }),
+        makeRow({ deploymentId: "A_V2", siteId: "A" }),
+      ]);
+      updateScheduleRowsMock.mockResolvedValue({ matchedRows: 2, cellsWritten: 2 });
+    });
+
+    it("blocks the network when the name is blank (validation first)", async () => {
+      const result = await updateSiteEntity({ ...BASE_INPUT, name: "   " });
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toBe("El nombre no puede estar vacío.");
+      expect(fetchEntityMock).not.toHaveBeenCalled();
+      expect(updateEntityMock).not.toHaveBeenCalled();
+    });
+
+    it("rejects out-of-range coordinates without any network call", async () => {
+      const result = await updateSiteEntity({ ...BASE_INPUT, latitude: "999", longitude: "0" });
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toBe("Coordenadas inválidas.");
+      expect(fetchEntityMock).not.toHaveBeenCalled();
+    });
+
+    it("rejects one-empty-one-filled coordinates", async () => {
+      const result = await updateSiteEntity({ ...BASE_INPUT, latitude: "0.5", longitude: "" });
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toBe("Coordenadas inválidas.");
+      expect(fetchEntityMock).not.toHaveBeenCalled();
+    });
+
+    it("rejects an unknown habitat", async () => {
+      const result = await updateSiteEntity({ ...BASE_INPUT, habitatType: "lava_field" });
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toBe("Hábitat inválido.");
+      expect(fetchEntityMock).not.toHaveBeenCalled();
+    });
+
+    it("detects a page-load conflict (live values changed) and does NOT PATCH", async () => {
+      fetchEntityMock.mockResolvedValue(
+        liveMatchingExpected({ habitat_type: "pasture" }), // someone changed habitat
+      );
+      const result = await updateSiteEntity(BASE_INPUT);
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain("actualizado por otra persona");
+      expect(updateEntityMock).not.toHaveBeenCalled();
+    });
+
+    it("maps a 404 on read to the 'ya no existe' message", async () => {
+      fetchEntityMock.mockRejectedValue(new OdkEntityError("gone", 404));
+      const result = await updateSiteEntity(BASE_INPUT);
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain("ya no existe");
+      expect(updateEntityMock).not.toHaveBeenCalled();
+    });
+
+    it("maps a 409 on PATCH to the conflict message", async () => {
+      updateEntityMock.mockRejectedValue(new OdkEntityError("conflict", 409));
+      const result = await updateSiteEntity(BASE_INPUT);
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain("actualizado por otra persona");
+    });
+
+    it("PATCHes label + data and emits a site_entity_edit event on success", async () => {
+      const result = await updateSiteEntity(BASE_INPUT);
+      expect(result.success).toBe(true);
+
+      expect(updateEntityMock).toHaveBeenCalledTimes(1);
+      const [, , uuid, patch, baseVersion] = updateEntityMock.mock.calls[0];
+      expect(uuid).toBe("uuid-a");
+      expect(baseVersion).toBe(3);
+      expect(patch.label).toBe("A - Nuevo Nombre");
+      expect(patch.data).toMatchObject({
+        latitude: "0.5",
+        longitude: "-79.2",
+        habitat_type: "primary_forest",
+      });
+      // No geometry key in live data → none written.
+      expect(patch.data.geometry).toBeUndefined();
+
+      expect(recordEventMock).toHaveBeenCalledTimes(1);
+      const event = recordEventMock.mock.calls[0][0];
+      expect(event.source).toBe("biochoco-overview");
+      expect(event.eventType).toBe("site_entity_edit");
+      expect(event.targetType).toBe("site");
+      expect(updateTagMock).toHaveBeenCalledWith("biochoco-sites");
+    });
+
+    it("syncs the name to every schedule row for the site", async () => {
+      await updateSiteEntity(BASE_INPUT);
+      const updates = updateScheduleRowsMock.mock.calls[0][0] as Array<{
+        deploymentId: string;
+        fields: Record<string, unknown>;
+      }>;
+      expect(updates).toHaveLength(2);
+      for (const u of updates) {
+        expect(u.fields).toEqual({ siteName: "A - Nuevo Nombre" });
+      }
+    });
+
+    it("keeps geometry in sync when the entity has a geometry property", async () => {
+      fetchEntityMock.mockResolvedValue(liveMatchingExpected({ geometry: "POINT (-79.2 0.5)" }));
+      await updateSiteEntity(BASE_INPUT);
+      const patch = updateEntityMock.mock.calls[0][3];
+      expect(patch.data.geometry).toBe("POINT (-79.2 0.5)");
+    });
+
+    it("still succeeds (with a warning) when the Sheet sync fails — ODK is committed", async () => {
+      updateScheduleRowsMock.mockRejectedValue(new Error("sheets down"));
+      const result = await updateSiteEntity(BASE_INPUT);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.warnings.length).toBeGreaterThan(0);
+        expect(result.data.warnings[0]).toContain("ODK");
+      }
+      // The ODK write still happened.
+      expect(updateEntityMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("warns when the site_name column is missing (silent no-op detected)", async () => {
+      updateScheduleRowsMock.mockResolvedValue({ matchedRows: 2, cellsWritten: 0 });
+      const result = await updateSiteEntity(BASE_INPUT);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.warnings.some((w) => w.includes("site_name"))).toBe(true);
       }
     });
   });

@@ -1,8 +1,8 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
+import { revalidatePath, updateTag } from "next/cache";
 import { requirePermission } from "@/lib/auth";
-import { fetchEntities, fetchSubmissions } from "@/lib/odk-client";
+import { fetchEntities, fetchSubmissions, fetchEntity, updateEntity, OdkEntityError } from "@/lib/odk-client";
 import { BIOCHOCO_PROJECT_ID, BIOCHOCO_DATASET_SITES, BIOCHOCO_FORM_DEPLOY, BIOCHOCO_FORM_RETRIEVE } from "@/lib/odk-constants";
 import { loadSchedule, updateScheduleRows } from "@/lib/sheets-client";
 import { editDeploymentDate, swapDeploymentDates, validateSchedule } from "@/lib/schedule-utils";
@@ -11,7 +11,7 @@ import { recordEvent } from "@/lib/system-events";
 import type { OdkSiteEntity } from "@/lib/odk-types";
 import type { ActionResult } from "@/lib/types";
 import type { ScheduleChange } from "@/lib/schedule-types";
-import type { BiochocoOverviewData, SiteInfo } from "./types";
+import { HABITAT_NAMES, type BiochocoOverviewData, type SiteInfo } from "./types";
 import { db } from "@/db";
 import { deployments } from "@/db/schema";
 import { log } from "@/lib/log";
@@ -21,7 +21,7 @@ export async function fetchBiochocoData(): Promise<ActionResult<BiochocoOverview
     await requirePermission("biochoco", "viewer");
     const [schedule, rawSites, rawDeploys, rawRetrieves] = await Promise.all([
       loadSchedule(),
-      fetchEntities<OdkSiteEntity>(BIOCHOCO_PROJECT_ID, BIOCHOCO_DATASET_SITES),
+      fetchEntities<OdkSiteEntity>(BIOCHOCO_PROJECT_ID, BIOCHOCO_DATASET_SITES, { tags: ["biochoco-sites"] }),
       fetchSubmissions<Record<string, unknown>>(BIOCHOCO_PROJECT_ID, BIOCHOCO_FORM_DEPLOY),
       fetchSubmissions<Record<string, unknown>>(BIOCHOCO_PROJECT_ID, BIOCHOCO_FORM_RETRIEVE),
     ]);
@@ -54,6 +54,7 @@ export async function fetchBiochocoData(): Promise<ActionResult<BiochocoOverview
 
     // Transform sites
     const sites: SiteInfo[] = rawSites.map((s) => ({
+      uuid: s.uuid,
       siteId: s.site_id ?? s.label ?? "",
       siteName: s.label ?? s.site_name ?? "",
       habitatType: s.habitat_type ?? "",
@@ -273,6 +274,175 @@ export async function commitDateEdit(
       },
     });
 
+    revalidatePath("/biochoco");
+    return { warnings };
+  });
+}
+
+// ─── Site Entity Editor ──────────────────────────────────────
+
+export interface SiteEntityEditInput {
+  siteId: string;
+  uuid: string;
+  name: string;
+  latitude: string;
+  longitude: string;
+  habitatType: string;
+  /** Values shown when the dialog opened — the optimistic-lock baseline. */
+  expected: {
+    name: string;
+    latitude: string;
+    longitude: string;
+    habitatType: string;
+  };
+}
+
+const SITE_CONFLICT_MSG =
+  "El sitio fue actualizado por otra persona. Recarga e intenta de nuevo.";
+
+/** Two coordinate strings match if both blank or both parse to the same float. */
+function coordsEqual(a: string, b: string): boolean {
+  const at = a.trim();
+  const bt = b.trim();
+  if (at === "" || bt === "") return at === bt;
+  return parseFloat(at) === parseFloat(bt);
+}
+
+/**
+ * Edit a BioChoco site's name (entity `label`), coordinates and habitat directly
+ * on the ODK entity (the source of truth), then best-effort mirror the name into
+ * the schedule Sheet's `site_name` column. Site fields are shared across all of
+ * the site's deployments, so this affects every visit.
+ *
+ * Concurrency: the `expected` page-load baseline is compared against the live
+ * entity before writing (catches edits since the dialog opened); `baseVersion`
+ * backstops the narrow read→PATCH race. Both surface the same Spanish message.
+ */
+export async function updateSiteEntity(
+  input: SiteEntityEditInput,
+): Promise<ActionResult<{ warnings: string[] }>> {
+  return wrapAction<{ warnings: string[] }>(async () => {
+    const user = await requirePermission("biochoco", "editor");
+
+    const { siteId, uuid, expected } = input;
+    const name = input.name.trim();
+    const latitude = input.latitude.trim();
+    const longitude = input.longitude.trim();
+    const habitatType = input.habitatType.trim();
+
+    // 1. Validate (before any network call)
+    if (!name) throw new Error("El nombre no puede estar vacío.");
+    const latFilled = latitude !== "";
+    const lngFilled = longitude !== "";
+    if (latFilled !== lngFilled) throw new Error("Coordenadas inválidas.");
+    if (latFilled) {
+      const latN = parseFloat(latitude);
+      const lngN = parseFloat(longitude);
+      if (
+        !Number.isFinite(latN) || !Number.isFinite(lngN) ||
+        latN < -90 || latN > 90 || lngN < -180 || lngN > 180
+      ) {
+        throw new Error("Coordenadas inválidas.");
+      }
+    }
+    if (habitatType !== "" && !(habitatType in HABITAT_NAMES)) {
+      throw new Error("Hábitat inválido.");
+    }
+
+    // 2. Read the live entity (for version + current values). 404 → distinct message.
+    let current;
+    try {
+      current = await fetchEntity(BIOCHOCO_PROJECT_ID, BIOCHOCO_DATASET_SITES, uuid);
+    } catch (err) {
+      if (err instanceof OdkEntityError && err.status === 404) {
+        throw new Error("El sitio ya no existe. Recarga la página.");
+      }
+      throw err;
+    }
+    const cv = current.currentVersion;
+    const data = cv.data ?? {};
+
+    // 3. Page-load conflict check — did anyone edit since the dialog opened?
+    const conflict =
+      (cv.label ?? "").trim() !== expected.name.trim() ||
+      !coordsEqual(data.latitude ?? "", expected.latitude) ||
+      !coordsEqual(data.longitude ?? "", expected.longitude) ||
+      (data.habitat_type ?? "") !== expected.habitatType;
+    if (conflict) throw new Error(SITE_CONFLICT_MSG);
+
+    // 4. Build patch. Keep ODK's `geometry` in sync if the dataset has it
+    //    (lon-lat order; cleared when coords are cleared).
+    const patchData: Record<string, string> = {
+      latitude,
+      longitude,
+      habitat_type: habitatType,
+    };
+    if ("geometry" in data) {
+      patchData.geometry = latFilled ? `POINT (${longitude} ${latitude})` : "";
+    }
+
+    try {
+      await updateEntity(
+        BIOCHOCO_PROJECT_ID,
+        BIOCHOCO_DATASET_SITES,
+        uuid,
+        { label: name, data: patchData },
+        cv.version,
+      );
+    } catch (err) {
+      if (err instanceof OdkEntityError && err.status === 409) {
+        throw new Error(SITE_CONFLICT_MSG);
+      }
+      throw err;
+    }
+
+    // 5. Best-effort Sheet sync — ODK is already committed, so never fail here.
+    const warnings: string[] = [];
+    try {
+      const schedule = await loadSchedule();
+      const rows = schedule.filter((r) => r.siteId === siteId);
+      if (rows.length === 0) {
+        warnings.push("Guardado en ODK. No se encontraron filas en la hoja para este sitio.");
+      } else {
+        const { cellsWritten } = await updateScheduleRows(
+          rows.map((r) => ({ deploymentId: r.deploymentId, fields: { siteName: name } })),
+        );
+        if (cellsWritten === 0) {
+          warnings.push("Guardado en ODK, pero la hoja no se actualizó (falta la columna site_name).");
+        }
+      }
+    } catch (err) {
+      log.warn({ err }, "[updateSiteEntity] Sheet name sync failed");
+      warnings.push("Guardado en ODK, pero la hoja no se pudo actualizar.");
+    }
+
+    // 6. Audit event
+    await recordEvent({
+      source: "biochoco-overview",
+      eventType: "site_entity_edit",
+      summary: `Sitio editado: ${siteId} (${cv.label} → ${name})`,
+      actorEmail: user.email,
+      projectId: "biochoco",
+      targetType: "site",
+      targetId: siteId,
+      details: {
+        siteId,
+        uuid,
+        before: {
+          name: cv.label,
+          latitude: data.latitude ?? "",
+          longitude: data.longitude ?? "",
+          habitatType: data.habitat_type ?? "",
+        },
+        after: { name, latitude, longitude, habitatType },
+      },
+    });
+
+    // 7. Refresh ODK-derived views (overview sites + cross-tab habitat map).
+    //    `updateTag` is the Next 16 single-arg, read-your-own-writes primitive
+    //    for Server Actions; it invalidates the "biochoco-sites" fetch Data Cache
+    //    tag attached in fetchEntities. `revalidatePath` refreshes the route tree.
+    updateTag("biochoco-sites");
     revalidatePath("/biochoco");
     return { warnings };
   });

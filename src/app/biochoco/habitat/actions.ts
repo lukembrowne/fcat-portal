@@ -35,6 +35,7 @@ export async function fetchHabitatData(): Promise<
     ]);
 
     const sites: SiteInfo[] = rawSites.map((s) => ({
+      uuid: s.uuid,
       siteId: s.site_id ?? s.label ?? "",
       siteName: s.label ?? s.site_name ?? "",
       habitatType: s.habitat_type ?? "",

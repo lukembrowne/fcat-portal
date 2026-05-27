@@ -60,9 +60,11 @@ interface ScheduleTableProps {
 function EditScheduleButton({
   deploymentId,
   allSchedule,
+  siteMap,
 }: {
   deploymentId: string;
   allSchedule: ScheduleRow[];
+  siteMap: Map<string, SiteInfo>;
 }) {
   const [open, setOpen] = useState(false);
   const self = useMemo(
@@ -86,6 +88,7 @@ function EditScheduleButton({
         <InlineScheduleEditorDialog
           self={self}
           candidates={allSchedule}
+          site={siteMap.get(self.siteId) ?? null}
           open={open}
           onOpenChange={setOpen}
         />
@@ -434,6 +437,7 @@ export function ScheduleTable({
             <EditScheduleButton
               deploymentId={row.original.deploymentId}
               allSchedule={allSchedule}
+              siteMap={siteMap}
             />
           );
         },
@@ -441,7 +445,7 @@ export function ScheduleTable({
         enableGlobalFilter: false,
       },
     ],
-    [canEditNotes, canEditSchedule, allSchedule, onFocusSite],
+    [canEditNotes, canEditSchedule, allSchedule, onFocusSite, siteMap],
   );
 
   const table = useReactTable({

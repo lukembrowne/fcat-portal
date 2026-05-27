@@ -12,17 +12,33 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Search } from "lucide-react";
 import type { ScheduleRow } from "@/lib/schedule-types";
-import { commitDateEdit, commitInlineSwap, previewInlineSwap, type InlineSwapPreview } from "./actions";
-import { getHabitatName } from "./types";
+import { commitDateEdit, commitInlineSwap, previewInlineSwap, updateSiteEntity, type InlineSwapPreview } from "./actions";
+import { getHabitatName, HABITAT_NAMES, type SiteInfo } from "./types";
 
 interface Props {
   self: ScheduleRow;
   candidates: ScheduleRow[];
+  /** The ODK site entity for `self.siteId` — enables the "Editar sitio" section. */
+  site: SiteInfo | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+}
+
+/** A coordinate input matches the original if both blank or numerically equal. */
+function coordUnchanged(input: string, original: number | null): boolean {
+  const t = input.trim();
+  if (t === "") return original == null;
+  return original != null && parseFloat(t) === original;
 }
 
 type DialogState =
@@ -43,7 +59,7 @@ function formatISO(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-export function InlineScheduleEditorDialog({ self, candidates, open, onOpenChange }: Props) {
+export function InlineScheduleEditorDialog({ self, candidates, site, open, onOpenChange }: Props) {
   const router = useRouter();
   const [state, setState] = useState<DialogState>({ mode: "idle" });
   const [dateInput, setDateInput] = useState(self.plannedDeployDate ?? "");
@@ -53,6 +69,22 @@ export function InlineScheduleEditorDialog({ self, candidates, open, onOpenChang
   const [error, setError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [isPending, startTransition] = useTransition();
+
+  // ───── Site entity edit state (prefilled from the page-load site values) ─────
+  const [siteName, setSiteName] = useState(site?.siteName ?? "");
+  const [siteLat, setSiteLat] = useState(site?.lat != null ? String(site.lat) : "");
+  const [siteLng, setSiteLng] = useState(site?.lng != null ? String(site.lng) : "");
+  const [siteHabitat, setSiteHabitat] = useState(site?.habitatType ?? "");
+
+  const siteChanged = useMemo(() => {
+    if (!site) return false;
+    return (
+      siteName.trim() !== (site.siteName ?? "").trim() ||
+      siteHabitat !== (site.habitatType ?? "") ||
+      !coordUnchanged(siteLat, site.lat) ||
+      !coordUnchanged(siteLng, site.lng)
+    );
+  }, [site, siteName, siteHabitat, siteLat, siteLng]);
 
   const filtered = useMemo(() => {
     const q = candidateFilter.toLowerCase();
@@ -123,6 +155,39 @@ export function InlineScheduleEditorDialog({ self, candidates, open, onOpenChang
     });
   }
 
+  function handleSaveSite() {
+    if (!site || !siteChanged) return;
+    setError(null);
+    setWarnings([]);
+    startTransition(async () => {
+      const result = await updateSiteEntity({
+        siteId: site.siteId,
+        uuid: site.uuid,
+        name: siteName,
+        latitude: siteLat,
+        longitude: siteLng,
+        habitatType: siteHabitat,
+        expected: {
+          name: site.siteName,
+          latitude: site.lat != null ? String(site.lat) : "",
+          longitude: site.lng != null ? String(site.lng) : "",
+          habitatType: site.habitatType,
+        },
+      });
+      if (result.success) {
+        if (result.data.warnings.length > 0) {
+          // Keep the dialog open so the "saved to ODK, sheet didn't" warning is seen.
+          setWarnings(result.data.warnings);
+          router.refresh();
+        } else {
+          handleSuccess();
+        }
+      } else {
+        setError(result.error);
+      }
+    });
+  }
+
   const habitatLabel = getHabitatName(self.habitatType);
   const swapDisabled = !selectedSwapId || isPending;
   const dateEditDisabled =
@@ -136,8 +201,8 @@ export function InlineScheduleEditorDialog({ self, candidates, open, onOpenChang
             Editar {self.deploymentId} — {habitatLabel}
           </DialogTitle>
           <DialogDescription>
-            Cambiar la fecha de instalación o intercambiar con otra instalación
-            programada.
+            Cambiar la fecha de instalación, intercambiar con otra instalación
+            programada, o editar los datos del sitio en ODK.
           </DialogDescription>
         </DialogHeader>
 
@@ -290,6 +355,74 @@ export function InlineScheduleEditorDialog({ self, candidates, open, onOpenChang
             </div>
           )}
         </section>
+
+        {/* ───── Edit site entity (name / coords / habitat) ───── */}
+        {site && (
+          <section className="space-y-3 rounded-lg border p-4">
+            <h3 className="text-sm font-semibold">Editar sitio</h3>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="sm:col-span-2">
+                <label className="text-xs font-medium block mb-1" htmlFor="site-name">
+                  Nombre
+                </label>
+                <Input
+                  id="site-name"
+                  value={siteName}
+                  onChange={(e) => setSiteName(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium block mb-1" htmlFor="site-lat">
+                  Latitud
+                </label>
+                <Input
+                  id="site-lat"
+                  inputMode="decimal"
+                  value={siteLat}
+                  onChange={(e) => setSiteLat(e.target.value)}
+                  className="tabular-nums"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium block mb-1" htmlFor="site-lng">
+                  Longitud
+                </label>
+                <Input
+                  id="site-lng"
+                  inputMode="decimal"
+                  value={siteLng}
+                  onChange={(e) => setSiteLng(e.target.value)}
+                  className="tabular-nums"
+                />
+              </div>
+              <div className="sm:col-span-2">
+                <label className="text-xs font-medium block mb-1" htmlFor="site-habitat">
+                  Hábitat
+                </label>
+                <Select value={siteHabitat} onValueChange={setSiteHabitat}>
+                  <SelectTrigger id="site-habitat" className="w-full">
+                    <SelectValue placeholder="Seleccionar hábitat" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(HABITAT_NAMES).map(([key, label]) => (
+                      <SelectItem key={key} value={key}>
+                        {label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Estos campos pertenecen al sitio{" "}
+              <span className="font-mono">{site.siteId}</span> en ODK y afectan todas sus
+              visitas. El nombre se sincroniza con la hoja del cronograma.
+            </p>
+            <Button onClick={handleSaveSite} disabled={isPending || !siteChanged} size="sm">
+              {isPending ? "Guardando..." : "Guardar sitio"}
+            </Button>
+          </section>
+        )}
 
         {warnings.length > 0 && (
           <div className="rounded-md bg-yellow-50 p-3 text-xs">

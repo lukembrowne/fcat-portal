@@ -24,6 +24,7 @@ export const loadSiteHabitatMap = cache(async (): Promise<HabitatMap> => {
     const sites = await fetchEntities<OdkSiteEntity>(
       BIOCHOCO_PROJECT_ID,
       BIOCHOCO_DATASET_SITES,
+      { tags: ["biochoco-sites"] },
     );
     const map: HabitatMap = new Map();
     for (const site of sites) {

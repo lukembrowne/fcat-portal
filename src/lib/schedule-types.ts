@@ -61,7 +61,10 @@ export type WritableScheduleField =
   | "retrieveSlotId"
   | "season"
   | "status"
-  | "driveFolderLink";
+  | "driveFolderLink"
+  // Display-only mirror of the ODK entity label; auto-synced by updateSiteEntity,
+  // never hand-edited. No business logic in schedule-utils reads it.
+  | "siteName";
 
 export interface ScheduleRowUpdate {
   deploymentId: string;

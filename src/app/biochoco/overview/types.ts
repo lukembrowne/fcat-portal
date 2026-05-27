@@ -1,6 +1,8 @@
 import type { ScheduleRow } from "@/lib/schedule-types";
 
 export interface SiteInfo {
+  /** ODK entity UUID (`__id`) — the address for entity read/write. */
+  uuid: string;
   siteId: string;
   siteName: string;
   habitatType: string;

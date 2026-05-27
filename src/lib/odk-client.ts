@@ -164,7 +164,7 @@ export async function fetchSubmissions<T = Record<string, unknown>>(
 export async function fetchEntities<T = Record<string, unknown>>(
   projectId: string,
   datasetName: string,
-  options?: { revalidate?: number }
+  options?: { revalidate?: number; tags?: string[] }
 ): Promise<T[]> {
   const baseUrl = `${ODK_CENTRAL_URL}/v1/projects/${projectId}/datasets/${datasetName}.svc/Entities`;
   const all: T[] = [];
@@ -178,7 +178,7 @@ export async function fetchEntities<T = Record<string, unknown>>(
 
     const url = `${baseUrl}?${params}`;
     const res = await odkFetch(url, {
-      next: { revalidate: options?.revalidate ?? 300 },
+      next: { revalidate: options?.revalidate ?? 300, tags: options?.tags },
     } as RequestInit);
 
     if (!res.ok) {
@@ -209,6 +209,70 @@ export async function fetchEntities<T = Record<string, unknown>>(
   }
 
   return all;
+}
+
+/** Error thrown by single-entity read/write helpers, carrying the HTTP status. */
+export class OdkEntityError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "OdkEntityError";
+    this.status = status;
+  }
+}
+
+/** A single ODK entity's current version (label + flat string `data` properties). */
+export interface OdkEntityVersion {
+  version: number;
+  label: string;
+  data: Record<string, string>;
+}
+
+/**
+ * Read a single ODK entity (NOT via OData) so the live `currentVersion.version`
+ * is available for optimistic-concurrency PATCHes. Uses `cache: "no-store"` —
+ * the 300s-cached `fetchEntities` would hand back a stale baseVersion.
+ * Throws {@link OdkEntityError} (with `.status`) on non-OK, so callers can map
+ * a 404 (entity deleted) distinctly from other failures.
+ */
+export async function fetchEntity(
+  projectId: string,
+  datasetName: string,
+  uuid: string
+): Promise<{ currentVersion: OdkEntityVersion }> {
+  const url = `${ODK_CENTRAL_URL}/v1/projects/${projectId}/datasets/${datasetName}/entities/${uuid}`;
+  const res = await odkFetch(url, { cache: "no-store" } as RequestInit);
+  if (!res.ok) {
+    throw new OdkEntityError(`ODK entity fetch failed: ${res.status} ${res.statusText}`, res.status);
+  }
+  return res.json();
+}
+
+/**
+ * Update a single ODK entity with optimistic concurrency. `baseVersion` must
+ * equal the server's current version or ODK rejects with HTTP 409 (we never
+ * pass `?force=true` — we want conflict detection). Unspecified `data`
+ * properties are preserved by PATCH. Throws {@link OdkEntityError} (with
+ * `.status`) on non-OK so the caller owns the localized message.
+ */
+export async function updateEntity(
+  projectId: string,
+  datasetName: string,
+  uuid: string,
+  patch: { label?: string; data?: Record<string, string> },
+  baseVersion: number
+): Promise<{ currentVersion: OdkEntityVersion }> {
+  const url = `${ODK_CENTRAL_URL}/v1/projects/${projectId}/datasets/${datasetName}/entities/${uuid}?baseVersion=${baseVersion}`;
+  const res = await odkFetch(url, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+    cache: "no-store",
+  } as RequestInit);
+  if (!res.ok) {
+    throw new OdkEntityError(`ODK entity update failed: ${res.status} ${res.statusText}`, res.status);
+  }
+  return res.json();
 }
 
 /**

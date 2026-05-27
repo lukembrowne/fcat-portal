@@ -172,10 +172,15 @@ export async function saveSchedule(rows: ScheduleRow[]): Promise<void> {
 
 /**
  * Update specific fields on specific rows (by deploymentId).
+ *
+ * Returns how much actually happened so callers can detect a silent no-op
+ * (e.g. a missing column header or an unmatched deploymentId): `matchedRows`
+ * is the number of update entries whose deploymentId was found in the sheet,
+ * `cellsWritten` is the number of cells actually queued for write.
  */
 export async function updateScheduleRows(
   updates: ScheduleRowUpdate[]
-): Promise<void> {
+): Promise<{ matchedRows: number; cellsWritten: number }> {
   const sheets = getSheets();
   const spreadsheetId = requireSheetId();
 
@@ -186,13 +191,14 @@ export async function updateScheduleRows(
   });
 
   const allRows = res.data.values;
-  if (!allRows || allRows.length < 2) return;
+  if (!allRows || allRows.length < 2) return { matchedRows: 0, cellsWritten: 0 };
 
   const headers = allRows[0] as string[];
   const deploymentIdCol = headers.indexOf("deployment_id");
-  if (deploymentIdCol === -1) return;
+  if (deploymentIdCol === -1) return { matchedRows: 0, cellsWritten: 0 };
 
   const batchUpdates: sheets_v4.Schema$ValueRange[] = [];
+  let matchedRows = 0;
 
   for (const update of updates) {
     // Find the row index (0-based in data, +2 for 1-indexed header)
@@ -200,6 +206,7 @@ export async function updateScheduleRows(
       (row, i) => i > 0 && row[deploymentIdCol] === update.deploymentId
     );
     if (rowIdx === -1) continue;
+    matchedRows++;
 
     const sheetRow = rowIdx + 1; // 1-indexed
 
@@ -225,6 +232,8 @@ export async function updateScheduleRows(
       },
     });
   }
+
+  return { matchedRows, cellsWritten: batchUpdates.length };
 }
 
 /**

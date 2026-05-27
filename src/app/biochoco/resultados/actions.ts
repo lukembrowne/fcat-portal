@@ -51,6 +51,7 @@ function extractSiteId(deploymentName: string): string | null {
 /** Transform ODK site entities to SiteInfo. */
 function transformSites(rawSites: OdkSiteEntity[]): SiteInfo[] {
   return rawSites.map((s) => ({
+    uuid: s.uuid,
     siteId: s.site_id ?? s.label ?? "",
     siteName: s.label ?? s.site_name ?? "",
     habitatType: s.habitat_type ?? "",

@@ -171,6 +171,7 @@ export function FloatingJobProgress() {
   const isCompressionLike =
     isCompression || isRevert || isAudioCompression || isAudioRevert;
   const isDriveSync = jobType === "drive_sync" || jobType === "audio_sync";
+  const isImageCache = jobType === "cache_deployment_images";
   const isAudioJob =
     isBirdnet ||
     isAcousticIndices ||
@@ -178,7 +179,7 @@ export function FloatingJobProgress() {
     isAudioCompression ||
     isAudioRevert;
   const isLinkable =
-    !isCompressionLike && !isDriveSync && !isAudioJob;
+    !isCompressionLike && !isDriveSync && !isAudioJob && !isImageCache;
   const unitLabel = isDriveSync
     ? "instalaciones"
     : isAudioJob
@@ -526,6 +527,11 @@ export function FloatingJobProgress() {
               Análisis acústico completado
             </span>
           )}
+          {status === "completed" && isImageCache && (
+            <span className="text-xs font-medium text-green-600">
+              Imágenes almacenadas en caché
+            </span>
+          )}
           {(status === "failed" || status === "cancelled") && isLinkable && (
             <Link
               href={`/camera-trap/process?jobId=${jobId}`}
@@ -557,6 +563,11 @@ export function FloatingJobProgress() {
           {(status === "failed" || status === "cancelled") && isAudioAnalysis && (
             <span className="text-xs text-muted-foreground">
               {status === "failed" ? "Análisis fallido" : "Análisis cancelado"}
+            </span>
+          )}
+          {(status === "failed" || status === "cancelled") && isImageCache && (
+            <span className="text-xs text-muted-foreground">
+              {status === "failed" ? "Caché fallida" : "Caché cancelada"}
             </span>
           )}
         </div>

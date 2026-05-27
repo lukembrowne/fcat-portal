@@ -22,6 +22,12 @@ import {
 import { runDriveSyncWorker } from "@/lib/camera-trap-sync-worker";
 import { processNextQueueable, claimAndEmitStart } from "@/lib/job-queue";
 import { findActiveCameraTrapJob } from "@/lib/job-locks";
+import { JOB_TYPES } from "@/lib/job-types";
+import {
+  downloadDeploymentForProcessing,
+  InsufficientDiskError,
+  type DownloadProgressEvent,
+} from "@/lib/drive-downloader";
 import { requirePermission } from "@/lib/auth";
 import { getUserCameraTrapProjects, requireDeploymentAccess } from "@/lib/camera-trap-auth";
 import { touchAppState } from "@/lib/app-state";
@@ -692,6 +698,244 @@ export async function compressJobInternal(
     if (failedJob) {
       await recordEvent(buildJobCompletionEvent(failedJob));
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Pre-cache deployment images — warm the local disk cache so annotation is
+// instant (the image proxy serves from disk instead of fetching from Drive on
+// every page load). This is the download phase of ML processing WITHOUT the ML:
+// it reuses downloadDeploymentForProcessing (download → write images.path →
+// thumbnails) and never releases the full-res files.
+// ---------------------------------------------------------------------------
+
+/**
+ * Enqueue a `cache_deployment_images` background job that downloads all of a
+ * deployment's Drive-backed images to the local cache. Single-flight per
+ * deployment (shares the camera-trap active-job lock with ML/compression).
+ */
+export async function cacheDeploymentImages(
+  deploymentId: number,
+): Promise<ActionResult<{ jobId: number }>> {
+  const user = await requirePermission("camera-trap", "editor");
+
+  try {
+    await requireDeploymentAccess(user, deploymentId);
+
+    const [deployment] = await db
+      .select()
+      .from(deployments)
+      .where(eq(deployments.id, deploymentId));
+
+    if (!deployment) {
+      return { success: false, error: "Instalación no encontrada" };
+    }
+
+    // Single-flight: don't cache while any camera-trap job (ML, compression,
+    // or another cache) is active on this deployment — they race on images.path.
+    const activeJob = await findActiveCameraTrapJob(deploymentId);
+    if (activeJob) {
+      return {
+        success: false,
+        error: "Ya hay un trabajo en curso para esta instalación",
+      };
+    }
+
+    // Count Drive-backed images (those the cache job can actually download).
+    const [{ value: driveImageCount } = { value: 0 }] = await db
+      .select({ value: count() })
+      .from(images)
+      .where(
+        and(
+          eq(images.deploymentId, deploymentId),
+          sql`${images.driveFileId} IS NOT NULL`,
+        ),
+      );
+
+    if (!driveImageCount) {
+      return {
+        success: false,
+        error: "No hay imágenes en Drive para almacenar en caché",
+      };
+    }
+
+    const [job] = await db
+      .insert(processingJobs)
+      .values({
+        deploymentId,
+        jobType: JOB_TYPES.CACHE_DEPLOYMENT_IMAGES,
+        status: "pending",
+        totalImages: driveImageCount,
+        processedImages: 0,
+        failedImages: 0,
+        createdBy: user.email,
+        statusMessage: "Preparando caché…",
+      })
+      .returning();
+
+    // Hand off to the unified queue picker.
+    processNextQueueable();
+
+    revalidatePath(CAMERA_TRAP_PATH);
+    return { success: true, data: { jobId: job.id } };
+  } catch (err) {
+    log.error({ err, deploymentId }, "[cache-images] Enqueue failed");
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : "Error al iniciar caché",
+    };
+  }
+}
+
+/**
+ * Processor for `cache_deployment_images`. Mirrors `compressJobInternal`'s
+ * lifecycle (claim → progress → terminal transition → event) but the work is a
+ * plain download via `downloadDeploymentForProcessing`. No ML, and full-res
+ * files are intentionally kept on disk so the image proxy serves them locally.
+ *
+ * The disk guard inside `downloadDeploymentForProcessing` throws
+ * `InsufficientDiskError` for too-big deployments; the catch turns that into a
+ * clean `failed` row instead of an ENOSPC server crash.
+ */
+export async function cacheImagesJobInternal(
+  jobId: number,
+  deploymentId: number,
+  _userEmail: string,
+): Promise<void> {
+  const startTime = Date.now();
+
+  // Re-select status; the downloader honors this between files so the floating
+  // widget's Cancel button stops the job promptly.
+  const checkCancelled = async (): Promise<boolean> => {
+    const [j] = await db
+      .select({ status: processingJobs.status })
+      .from(processingJobs)
+      .where(eq(processingJobs.id, jobId));
+    return !j || j.status !== "processing";
+  };
+
+  try {
+    // Atomic claim + start event (tolerate picker-already-claimed).
+    await claimAndEmitStart(jobId);
+
+    const onProgress = async (event: DownloadProgressEvent): Promise<void> => {
+      if (event.phase === "preflight") {
+        await db
+          .update(processingJobs)
+          .set({
+            downloadTotal: event.toDownload,
+            statusMessage:
+              event.toDownload === 0
+                ? "Imágenes ya en caché"
+                : `Preparando descarga de ${event.toDownload} imágenes…`,
+          })
+          .where(eq(processingJobs.id, jobId));
+      } else if (event.phase === "downloading") {
+        await db
+          .update(processingJobs)
+          .set({
+            downloadedImages: event.downloaded,
+            downloadTotal: event.total,
+            processedImages: event.downloaded,
+            failedImages: event.failed,
+            statusMessage: `Descargando imágenes (${event.downloaded} de ${event.total})`,
+          })
+          .where(eq(processingJobs.id, jobId));
+      } else if (event.phase === "thumbnails") {
+        await db
+          .update(processingJobs)
+          .set({
+            statusMessage: `Generando miniaturas (${event.generated} de ${event.total})`,
+          })
+          .where(eq(processingJobs.id, jobId));
+      }
+    };
+
+    log.info({ jobId, deploymentId }, "[cache-images] Starting");
+
+    const result = await downloadDeploymentForProcessing(
+      deploymentId,
+      jobId,
+      onProgress,
+      checkCancelled,
+    );
+
+    // If the user cancelled mid-download, cancelJob already flipped the row to
+    // "cancelled"; don't clobber it back to "completed".
+    if (await checkCancelled()) {
+      log.info({ jobId, deploymentId }, "[cache-images] Cancelled");
+      return;
+    }
+
+    const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(0);
+    const cachedTotal = result.downloaded + result.skipped;
+
+    await db
+      .update(processingJobs)
+      .set({
+        status: "completed",
+        completedAt: new Date(),
+        processedImages: cachedTotal,
+        failedImages: result.failed,
+        statusMessage: `En caché: ${cachedTotal}, Errores: ${result.failed}`,
+      })
+      .where(eq(processingJobs.id, jobId));
+
+    const [completedJob] = await db
+      .select()
+      .from(processingJobs)
+      .where(eq(processingJobs.id, jobId));
+    if (completedJob) {
+      await recordEvent(
+        buildJobCompletionEvent(completedJob, {
+          downloaded: result.downloaded,
+          skipped: result.skipped,
+          failed: result.failed,
+        }),
+      );
+    }
+
+    log.info(
+      {
+        jobId,
+        deploymentId,
+        downloaded: result.downloaded,
+        skipped: result.skipped,
+        failed: result.failed,
+        elapsedSec,
+      },
+      "[cache-images] Complete",
+    );
+  } catch (err) {
+    log.error({ err, jobId, deploymentId }, "[cache-images] FAILED");
+
+    const message =
+      err instanceof InsufficientDiskError
+        ? err.message
+        : err instanceof Error
+          ? err.message
+          : "Error desconocido";
+
+    await db
+      .update(processingJobs)
+      .set({
+        status: "failed",
+        completedAt: new Date(),
+        errorMessage: message,
+        statusMessage: "Error al almacenar en caché",
+      })
+      .where(eq(processingJobs.id, jobId));
+
+    const [failedJob] = await db
+      .select()
+      .from(processingJobs)
+      .where(eq(processingJobs.id, jobId));
+    if (failedJob) {
+      await recordEvent(buildJobCompletionEvent(failedJob));
+    }
+  } finally {
+    // Advance the queue regardless of outcome.
+    processNextQueueable();
   }
 }
 

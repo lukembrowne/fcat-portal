@@ -35,6 +35,7 @@ export const QUEUEABLE_JOB_TYPES = [
   JOB_TYPES.AUDIO_COMPRESSION,
   JOB_TYPES.REVERT_AUDIO_COMPRESSION,
   JOB_TYPES.AUDIO_SYNC,
+  JOB_TYPES.CACHE_DEPLOYMENT_IMAGES,
 ] as const satisfies readonly JobType[];
 
 const QUEUEABLE_SET = new Set<string>(QUEUEABLE_JOB_TYPES);
@@ -256,6 +257,15 @@ async function dispatchClaimedJob(job: ProcessingJob): Promise<void> {
     case JOB_TYPES.AUDIO_SYNC: {
       const m = await import("@/lib/audio-sync-worker");
       await m.runAudioSyncWorker(job.id);
+      return;
+    }
+    case JOB_TYPES.CACHE_DEPLOYMENT_IMAGES: {
+      const m = await import("@/app/camera-trap/drive-actions");
+      await m.cacheImagesJobInternal(
+        job.id,
+        job.deploymentId!,
+        job.createdBy ?? "",
+      );
       return;
     }
     default:

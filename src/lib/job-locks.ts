@@ -59,6 +59,7 @@ export const CAMERA_TRAP_ACTIVE_JOB_TYPES = [
   JOB_TYPES.ML_INCREMENTAL,
   JOB_TYPES.COMPRESSION,
   JOB_TYPES.REVERT_COMPRESSION,
+  JOB_TYPES.CACHE_DEPLOYMENT_IMAGES,
 ] as const satisfies readonly JobType[];
 
 export async function findActiveCameraTrapJob(

@@ -25,6 +25,7 @@ import {
   Eye,
   Pencil,
   PlusCircle,
+  HardDriveDownload,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -34,7 +35,7 @@ import {
   undoVerified,
   getUnverifiedCount,
 } from "./actions";
-import { scanDeploymentImages } from "./drive-actions";
+import { scanDeploymentImages, cacheDeploymentImages } from "./drive-actions";
 import { matchOdkDeployments } from "./odk-actions";
 import { CompressConfirmDialog } from "./compress-confirm-dialog";
 import { RevertConfirmDialog } from "./revert-confirm-dialog";
@@ -105,6 +106,7 @@ export function DeploymentActionsMenu({
   const [scanningAction, startScanning] = useTransition();
   const [verifyingAction, startVerifying] = useTransition();
   const [odkAction, startOdk] = useTransition();
+  const [cachingAction, startCaching] = useTransition();
   const [compressDialogId, setCompressDialogId] = useState<number | null>(null);
   const [revertDialogId, setRevertDialogId] = useState<number | null>(null);
   const [deleteDialogId, setDeleteDialogId] = useState<number | null>(null);
@@ -112,7 +114,7 @@ export function DeploymentActionsMenu({
   const [incrementalDialogId, setIncrementalDialogId] = useState<number | null>(null);
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
 
-  const anyPending = scanningAction || verifyingAction || odkAction;
+  const anyPending = scanningAction || verifyingAction || odkAction || cachingAction;
 
   const handleScan = () => {
     startScanning(async () => {
@@ -197,6 +199,19 @@ export function DeploymentActionsMenu({
       const result = await undoVerified(deploymentId);
       if (result.success) {
         toast.success("Revisión reabierta");
+        router.refresh();
+      } else {
+        toast.error(result.error);
+      }
+    });
+  };
+
+  const handleCacheImages = () => {
+    startCaching(async () => {
+      const result = await cacheDeploymentImages(deploymentId);
+      if (result.success) {
+        toast.success("Almacenando imágenes en caché…");
+        window.dispatchEvent(new Event("job-started"));
         router.refresh();
       } else {
         toast.error(result.error);
@@ -297,6 +312,20 @@ export function DeploymentActionsMenu({
                 <div>{scanningAction ? "Escaneando..." : "Buscar Imágenes"}</div>
                 <p className="text-xs text-muted-foreground font-normal">
                   Escanear la carpeta de Drive para encontrar nuevas imágenes
+                </p>
+              </div>
+            </DropdownMenuItem>
+          )}
+          {!isProcessing && hasImages && (
+            <DropdownMenuItem
+              onClick={handleCacheImages}
+              disabled={cachingAction || anyPending}
+            >
+              <HardDriveDownload className="h-4 w-4 mr-2 shrink-0" />
+              <div>
+                <div>{cachingAction ? "Iniciando…" : "Almacenar imágenes en caché"}</div>
+                <p className="text-xs text-muted-foreground font-normal">
+                  Descargar las imágenes al servidor para acelerar la anotación
                 </p>
               </div>
             </DropdownMenuItem>

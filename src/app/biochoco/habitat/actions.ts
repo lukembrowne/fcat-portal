@@ -42,6 +42,9 @@ export async function fetchHabitatData(): Promise<
       lat: s.latitude ? parseFloat(String(s.latitude)) : null,
       lng: s.longitude ? parseFloat(String(s.longitude)) : null,
       habitatAssessed: (s.habitat_assessed as string) ?? "",
+      landownerName: s.landowner_name ?? "",
+      landownerPhone: s.landowner_phone ?? "",
+      notes: s.notes ?? "",
     }));
 
     const assessments: HabitatAssessment[] = rawSubmissions.map((sub) => {

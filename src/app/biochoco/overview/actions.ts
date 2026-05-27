@@ -61,6 +61,9 @@ export async function fetchBiochocoData(): Promise<ActionResult<BiochocoOverview
       lat: s.latitude ? parseFloat(String(s.latitude)) : null,
       lng: s.longitude ? parseFloat(String(s.longitude)) : null,
       habitatAssessed: (s.habitat_assessed as string) ?? "",
+      landownerName: s.landowner_name ?? "",
+      landownerPhone: s.landowner_phone ?? "",
+      notes: s.notes ?? "",
     }));
 
     // Extract deployment_ids and actual dates from form submissions
@@ -288,12 +291,18 @@ export interface SiteEntityEditInput {
   latitude: string;
   longitude: string;
   habitatType: string;
+  landownerName: string;
+  landownerPhone: string;
+  notes: string;
   /** Values shown when the dialog opened — the optimistic-lock baseline. */
   expected: {
     name: string;
     latitude: string;
     longitude: string;
     habitatType: string;
+    landownerName: string;
+    landownerPhone: string;
+    notes: string;
   };
 }
 
@@ -306,6 +315,23 @@ function coordsEqual(a: string, b: string): boolean {
   const bt = b.trim();
   if (at === "" || bt === "") return at === bt;
   return parseFloat(at) === parseFloat(bt);
+}
+
+/**
+ * Rebuild ODK's geopoint string "lat lng altitude accuracy", preserving the
+ * existing altitude/accuracy (we have no new readings — only lat/lng change).
+ * Returns "" when coordinates are cleared.
+ */
+function buildGeometry(
+  latitude: string,
+  longitude: string,
+  existing: string | undefined,
+): string {
+  if (latitude === "" || longitude === "") return "";
+  const parts = (existing ?? "").trim().split(/\s+/);
+  const altitude = parts[2] ?? "0";
+  const accuracy = parts[3] ?? "0";
+  return `${latitude} ${longitude} ${altitude} ${accuracy}`;
 }
 
 /**
@@ -329,6 +355,9 @@ export async function updateSiteEntity(
     const latitude = input.latitude.trim();
     const longitude = input.longitude.trim();
     const habitatType = input.habitatType.trim();
+    const landownerName = input.landownerName.trim();
+    const landownerPhone = input.landownerPhone.trim();
+    const notes = input.notes.trim();
 
     // 1. Validate (before any network call)
     if (!name) throw new Error("El nombre no puede estar vacío.");
@@ -367,19 +396,26 @@ export async function updateSiteEntity(
       (cv.label ?? "").trim() !== expected.name.trim() ||
       !coordsEqual(data.latitude ?? "", expected.latitude) ||
       !coordsEqual(data.longitude ?? "", expected.longitude) ||
-      (data.habitat_type ?? "") !== expected.habitatType;
+      (data.habitat_type ?? "") !== expected.habitatType ||
+      (data.landowner_name ?? "").trim() !== expected.landownerName.trim() ||
+      (data.landowner_phone ?? "").trim() !== expected.landownerPhone.trim() ||
+      (data.notes ?? "").trim() !== expected.notes.trim();
     if (conflict) throw new Error(SITE_CONFLICT_MSG);
 
-    // 4. Build patch. Keep ODK's `geometry` in sync if the dataset has it
-    //    (lon-lat order; cleared when coords are cleared).
+    // 4. Build patch. These are all defined properties of monitoring_sites, so we
+    //    always send them (OData omits empty values, so "x" in data is unreliable).
+    //    `geometry` mirrors ODK's geopoint format "lat lng alt acc"; cleared with coords.
+    //    `habitat_type_spanish` is the parallel display column — keep it in sync.
     const patchData: Record<string, string> = {
       latitude,
       longitude,
       habitat_type: habitatType,
+      habitat_type_spanish: habitatType ? (HABITAT_NAMES[habitatType] ?? "") : "",
+      geometry: buildGeometry(latitude, longitude, data.geometry),
+      landowner_name: landownerName,
+      landowner_phone: landownerPhone,
+      notes,
     };
-    if ("geometry" in data) {
-      patchData.geometry = latFilled ? `POINT (${longitude} ${latitude})` : "";
-    }
 
     try {
       await updateEntity(
@@ -433,8 +469,11 @@ export async function updateSiteEntity(
           latitude: data.latitude ?? "",
           longitude: data.longitude ?? "",
           habitatType: data.habitat_type ?? "",
+          landownerName: data.landowner_name ?? "",
+          landownerPhone: data.landowner_phone ?? "",
+          notes: data.notes ?? "",
         },
-        after: { name, latitude, longitude, habitatType },
+        after: { name, latitude, longitude, habitatType, landownerName, landownerPhone, notes },
       },
     });
 

@@ -280,11 +280,17 @@ describe("biochoco overview inline editor actions", () => {
       latitude: "0.5",
       longitude: "-79.2",
       habitatType: "primary_forest",
+      landownerName: "Nuevo Dueño",
+      landownerPhone: "0999999999",
+      notes: "Nueva nota",
       expected: {
         name: "A - Viejo Nombre",
         latitude: "0.5",
         longitude: "-79.2",
         habitatType: "secondary_forest",
+        landownerName: "Viejo Dueño",
+        landownerPhone: "0888888888",
+        notes: "Vieja nota",
       },
     };
 
@@ -299,6 +305,9 @@ describe("biochoco overview inline editor actions", () => {
             latitude: "0.5",
             longitude: "-79.2",
             habitat_type: "secondary_forest",
+            landowner_name: "Viejo Dueño",
+            landowner_phone: "0888888888",
+            notes: "Vieja nota",
             ...overrides,
           },
         },
@@ -382,9 +391,12 @@ describe("biochoco overview inline editor actions", () => {
         latitude: "0.5",
         longitude: "-79.2",
         habitat_type: "primary_forest",
+        habitat_type_spanish: "Bosque Primario", // synced parallel column
+        geometry: "0.5 -79.2 0 0", // ODK geopoint format, default alt/acc
+        landowner_name: "Nuevo Dueño",
+        landowner_phone: "0999999999",
+        notes: "Nueva nota",
       });
-      // No geometry key in live data → none written.
-      expect(patch.data.geometry).toBeUndefined();
 
       expect(recordEventMock).toHaveBeenCalledTimes(1);
       const event = recordEventMock.mock.calls[0][0];
@@ -406,11 +418,38 @@ describe("biochoco overview inline editor actions", () => {
       }
     });
 
-    it("keeps geometry in sync when the entity has a geometry property", async () => {
-      fetchEntityMock.mockResolvedValue(liveMatchingExpected({ geometry: "POINT (-79.2 0.5)" }));
-      await updateSiteEntity(BASE_INPUT);
+    it("rebuilds geometry in ODK geopoint format, preserving altitude/accuracy", async () => {
+      fetchEntityMock.mockResolvedValue(liveMatchingExpected({ geometry: "0.5 -79.2 142.7 4.057" }));
+      await updateSiteEntity({
+        ...BASE_INPUT,
+        latitude: "0.6",
+        longitude: "-79.3",
+        expected: { ...BASE_INPUT.expected, latitude: "0.5", longitude: "-79.2" },
+      });
       const patch = updateEntityMock.mock.calls[0][3];
-      expect(patch.data.geometry).toBe("POINT (-79.2 0.5)");
+      // New lat/lng, but altitude + accuracy carried over from the existing point.
+      expect(patch.data.geometry).toBe("0.6 -79.3 142.7 4.057");
+    });
+
+    it("clears geometry (and coords) when coordinates are cleared", async () => {
+      await updateSiteEntity({
+        ...BASE_INPUT,
+        latitude: "",
+        longitude: "",
+        expected: { ...BASE_INPUT.expected, latitude: "0.5", longitude: "-79.2" },
+      });
+      const patch = updateEntityMock.mock.calls[0][3];
+      expect(patch.data.latitude).toBe("");
+      expect(patch.data.longitude).toBe("");
+      expect(patch.data.geometry).toBe("");
+    });
+
+    it("detects a conflict when landowner/notes changed upstream and does NOT PATCH", async () => {
+      fetchEntityMock.mockResolvedValue(liveMatchingExpected({ landowner_phone: "0777777777" }));
+      const result = await updateSiteEntity(BASE_INPUT);
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain("actualizado por otra persona");
+      expect(updateEntityMock).not.toHaveBeenCalled();
     });
 
     it("still succeeds (with a warning) when the Sheet sync fails — ODK is committed", async () => {

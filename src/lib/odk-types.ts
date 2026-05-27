@@ -221,8 +221,15 @@ export interface OdkSiteEntity {
   site_id: string;
   site_name: string;
   habitat_type: string;
+  /** Parallel display column ODK keeps alongside habitat_type — must stay in sync. */
+  habitat_type_spanish?: string;
   latitude: string | null;
   longitude: string | null;
+  /** ODK geopoint string: "lat lng altitude accuracy". Derived from latitude/longitude. */
+  geometry?: string;
+  landowner_name?: string;
+  landowner_phone?: string;
+  notes?: string;
   [key: string]: unknown;
 }
 

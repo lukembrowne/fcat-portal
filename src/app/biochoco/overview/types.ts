@@ -9,6 +9,9 @@ export interface SiteInfo {
   lat: number | null;
   lng: number | null;
   habitatAssessed: string;
+  landownerName: string;
+  landownerPhone: string;
+  notes: string;
 }
 
 export interface BiochocoOverviewData {

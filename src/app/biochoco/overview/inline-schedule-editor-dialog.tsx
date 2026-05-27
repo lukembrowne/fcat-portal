@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
@@ -77,6 +78,9 @@ export function InlineScheduleEditorDialog({ self, candidates, site, canEditDate
   const [siteLat, setSiteLat] = useState(site?.lat != null ? String(site.lat) : "");
   const [siteLng, setSiteLng] = useState(site?.lng != null ? String(site.lng) : "");
   const [siteHabitat, setSiteHabitat] = useState(site?.habitatType ?? "");
+  const [siteLandownerName, setSiteLandownerName] = useState(site?.landownerName ?? "");
+  const [siteLandownerPhone, setSiteLandownerPhone] = useState(site?.landownerPhone ?? "");
+  const [siteNotes, setSiteNotes] = useState(site?.notes ?? "");
 
   const siteChanged = useMemo(() => {
     if (!site) return false;
@@ -84,9 +88,12 @@ export function InlineScheduleEditorDialog({ self, candidates, site, canEditDate
       siteName.trim() !== (site.siteName ?? "").trim() ||
       siteHabitat !== (site.habitatType ?? "") ||
       !coordUnchanged(siteLat, site.lat) ||
-      !coordUnchanged(siteLng, site.lng)
+      !coordUnchanged(siteLng, site.lng) ||
+      siteLandownerName.trim() !== (site.landownerName ?? "").trim() ||
+      siteLandownerPhone.trim() !== (site.landownerPhone ?? "").trim() ||
+      siteNotes.trim() !== (site.notes ?? "").trim()
     );
-  }, [site, siteName, siteHabitat, siteLat, siteLng]);
+  }, [site, siteName, siteHabitat, siteLat, siteLng, siteLandownerName, siteLandownerPhone, siteNotes]);
 
   const filtered = useMemo(() => {
     const q = candidateFilter.toLowerCase();
@@ -169,11 +176,17 @@ export function InlineScheduleEditorDialog({ self, candidates, site, canEditDate
         latitude: siteLat,
         longitude: siteLng,
         habitatType: siteHabitat,
+        landownerName: siteLandownerName,
+        landownerPhone: siteLandownerPhone,
+        notes: siteNotes,
         expected: {
           name: site.siteName,
           latitude: site.lat != null ? String(site.lat) : "",
           longitude: site.lng != null ? String(site.lng) : "",
           habitatType: site.habitatType,
+          landownerName: site.landownerName,
+          landownerPhone: site.landownerPhone,
+          notes: site.notes,
         },
       });
       if (result.success) {
@@ -281,6 +294,38 @@ export function InlineScheduleEditorDialog({ self, candidates, site, canEditDate
                         ))}
                       </SelectContent>
                     </Select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium block mb-1" htmlFor="site-landowner-name">
+                      Nombre del propietario
+                    </label>
+                    <Input
+                      id="site-landowner-name"
+                      value={siteLandownerName}
+                      onChange={(e) => setSiteLandownerName(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium block mb-1" htmlFor="site-landowner-phone">
+                      Teléfono del propietario
+                    </label>
+                    <Input
+                      id="site-landowner-phone"
+                      inputMode="tel"
+                      value={siteLandownerPhone}
+                      onChange={(e) => setSiteLandownerPhone(e.target.value)}
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="text-xs font-medium block mb-1" htmlFor="site-notes">
+                      Notas
+                    </label>
+                    <Textarea
+                      id="site-notes"
+                      rows={3}
+                      value={siteNotes}
+                      onChange={(e) => setSiteNotes(e.target.value)}
+                    />
                   </div>
                 </div>
                 <p className="text-xs text-muted-foreground">

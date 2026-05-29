@@ -56,7 +56,7 @@ import {
   batchRescanAudio,
 } from "./actions";
 import type { AudioDeploymentRow, AudioProject } from "./actions";
-import type { AudioProjectGroup } from "./page";
+import type { AudioProjectGroup, AudioStatusCounts } from "./page";
 import { AudioDeploymentRowActions } from "./audio-deployment-row-actions";
 import { BatchAnalyzeDialog } from "./batch-analyze-dialog";
 import { BatchClearAudioIndexDialog } from "./batch-clear-index-dialog";
@@ -66,13 +66,7 @@ import { ConfidenceThresholdSlider } from "@/components/audio/confidence-thresho
 interface AudioDeploymentsShellProps {
   groups: AudioProjectGroup[];
   deployments: AudioDeploymentRow[];
-  counts: {
-    sinEscanear: number;
-    escaneados: number;
-    procesando: number;
-    porRevisar: number;
-    revisados: number;
-  };
+  counts: AudioStatusCounts;
   distinctProjects: AudioProject[];
   isEditor: boolean;
   isAdmin: boolean;
@@ -664,11 +658,7 @@ export function AudioDeploymentsShell({
                           <span className="text-muted-foreground text-xs">
                             {group.totalCount} instalaciones
                           </span>
-                          {group.actionableCount > 0 && (
-                            <span className="text-xs font-medium text-orange-600">
-                              {group.actionableCount} pendiente{group.actionableCount !== 1 ? "s" : ""}
-                            </span>
-                          )}
+                          <GroupStatusChips counts={group.counts} />
                         </div>
                       </TableCell>
                     </TableRow>
@@ -777,6 +767,31 @@ function SummaryStat({
       <span className={`h-2 w-2 rounded-full ${dotClass}`} aria-hidden />
       <span className="text-muted-foreground">{label}</span>
       <span className={`font-semibold tabular-nums ${valueClass}`}>{value}</span>
+    </span>
+  );
+}
+
+/** Per-project status breakdown shown in each group subheading. Mirrors the
+ * top summary strip but scoped to one project; zero-value chips are hidden. */
+function GroupStatusChips({ counts }: { counts: AudioStatusCounts }) {
+  const chips = [
+    { label: "Sin escanear", value: counts.sinEscanear, dotClass: "bg-gray-400", valueClass: "text-gray-600" },
+    { label: "Escaneados", value: counts.escaneados, dotClass: "bg-blue-600", valueClass: "text-blue-700" },
+    { label: "Procesando", value: counts.procesando, dotClass: "bg-yellow-500", valueClass: "text-yellow-600" },
+    { label: "Por Revisar", value: counts.porRevisar, dotClass: "bg-orange-500", valueClass: "text-orange-600" },
+    { label: "Revisados", value: counts.revisados, dotClass: "bg-emerald-600", valueClass: "text-emerald-700" },
+  ];
+  const visible = chips.filter((c) => c.value > 0);
+  if (visible.length === 0) return null;
+  return (
+    <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+      {visible.map((c) => (
+        <span key={c.label} className="inline-flex items-center gap-1.5">
+          <span className={`h-2 w-2 rounded-full ${c.dotClass}`} aria-hidden />
+          <span className="text-muted-foreground">{c.label}</span>
+          <span className={`font-semibold tabular-nums ${c.valueClass}`}>{c.value}</span>
+        </span>
+      ))}
     </span>
   );
 }

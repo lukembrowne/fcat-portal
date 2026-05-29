@@ -9,11 +9,19 @@ import type { AudioDeploymentRow } from "./actions";
 import { AudioDeploymentsShell } from "./audio-deployments-shell";
 import { parseThresholdParam } from "@/lib/audio-confidence";
 
+export interface AudioStatusCounts {
+  sinEscanear: number;
+  escaneados: number;
+  procesando: number;
+  porRevisar: number;
+  revisados: number;
+}
+
 export interface AudioProjectGroup {
   projectLabel: string;
   deployments: AudioDeploymentRow[];
   totalCount: number;
-  actionableCount: number;
+  counts: AudioStatusCounts;
 }
 
 function groupByProject(deployments: AudioDeploymentRow[]): AudioProjectGroup[] {
@@ -35,13 +43,11 @@ function groupByProject(deployments: AudioDeploymentRow[]): AudioProjectGroup[] 
       projectLabel,
       deployments: deps,
       totalCount: deps.length,
-      actionableCount: deps.filter((d) =>
-        ["unscanned", "scanned", "birdnet_processing", "analyzed"].includes(d.displayStatus)
-      ).length,
+      counts: computeStatusCounts(deps),
     }));
 }
 
-function computeStatusCounts(deployments: AudioDeploymentRow[]) {
+function computeStatusCounts(deployments: AudioDeploymentRow[]): AudioStatusCounts {
   let sinEscanear = 0;
   let escaneados = 0;
   let procesando = 0;

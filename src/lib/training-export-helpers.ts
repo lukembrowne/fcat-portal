@@ -365,17 +365,44 @@ export interface HashRow {
 }
 
 /**
+ * Crop-quality knobs that change the bytes of the exported crops (or which
+ * detections qualify) without changing the corpus rows. They MUST feed the
+ * content hash — otherwise two exports differing only in padding/quality/floor
+ * dedupe to `status: "unchanged"` and the second silently returns the first's
+ * crops. See computeContentHash.
+ */
+export interface QualityParams {
+  /** Minimum MegaDetector confidence a detection needs to be exported.
+   * Floor is 0.1 — detections below the 0.1 capture threshold are not stored. */
+  detectionConfidenceFloor: number;
+  /** Fraction of each bbox dimension added as padding before cropping. */
+  cropPadding: number;
+  /** Long-edge pixel size the crop is resized to. */
+  cropLongEdge: number;
+  /** JPEG quality (1–100) of the written crop. */
+  jpegQuality: number;
+}
+
+/**
  * Compute a deterministic SHA-256 over the canonical exporter inputs.
  *
  * JSON serialization (not pipe-joined) so user-typed `correctedSpecies`
  * containing `|` cannot collide with another label. Includes
  * SPLIT_STRATEGY_VERSION so any future change to split assignment
  * deliberately invalidates old hashes.
+ *
+ * The `quality` block makes crop-quality variants distinct exports: changing
+ * padding/long-edge/JPEG-quality (which don't alter `rows`) still yields a new
+ * hash and therefore a new version. Adding this block changes every prior
+ * hash's basis — the first export after this ships re-creates the dataset
+ * under a new version even if the corpus is unchanged (a one-time, harmless
+ * re-export).
  */
 export function computeContentHash(input: {
   rows: HashRow[];
   minExamples: number;
   classList: string[];
+  quality: QualityParams;
 }): string {
   const sortedRows = [...input.rows]
     .sort((a, b) => a.imageId - b.imageId)
@@ -384,9 +411,125 @@ export function computeContentHash(input: {
     splitStrategyVersion: SPLIT_STRATEGY_VERSION,
     minExamples: input.minExamples,
     classList: [...input.classList].sort(),
+    quality: {
+      detectionConfidenceFloor: input.quality.detectionConfidenceFloor,
+      cropPadding: input.quality.cropPadding,
+      cropLongEdge: input.quality.cropLongEdge,
+      jpegQuality: input.quality.jpegQuality,
+    },
     rows: sortedRows,
   });
   return crypto.createHash("sha256").update(canonical).digest("hex");
+}
+
+// ---------------------------------------------------------------------------
+// Per-crop metadata CSV (crops.csv)
+// ---------------------------------------------------------------------------
+
+/** One row of crops.csv — the provenance of a single exported crop. */
+export interface CropCsvRow {
+  /** Path relative to the version dir, e.g. "train/Panthera onca/12345.jpg". */
+  cropPath: string;
+  detectionId: number;
+  imageId: number;
+  deploymentId: number;
+  deploymentName: string;
+  split: Split;
+  /** The training label == folder name (correctedSpecies ?? species). */
+  label: string;
+  /** Raw classifier prediction (may differ from label when corrected). */
+  mlSpecies: string | null;
+  correctedSpecies: string | null;
+  verificationStatus: string;
+  /** MegaDetector confidence for this detection (the per-crop score). */
+  mdConfidence: number | null;
+  /** Species-classifier confidence for this detection. */
+  classifierConfidence: number | null;
+  /** Normalized bbox (0–1), pre-padding — as stored on the detection. */
+  bboxX: number;
+  bboxY: number;
+  bboxWidth: number;
+  bboxHeight: number;
+  detectionClass: number;
+  /** Detector model version, e.g. "MDV6-yolov9-c" or "manual". */
+  detectorModelVersion: string | null;
+}
+
+/** Stable column order for crops.csv. */
+export const CROPS_CSV_COLUMNS = [
+  "crop_path",
+  "detection_id",
+  "image_id",
+  "deployment_id",
+  "deployment_name",
+  "split",
+  "label",
+  "ml_species",
+  "corrected_species",
+  "verification_status",
+  "md_confidence",
+  "classifier_confidence",
+  "bbox_x",
+  "bbox_y",
+  "bbox_width",
+  "bbox_height",
+  "detection_class",
+  "detector_model_version",
+  "crop_padding",
+  "crop_long_edge",
+  "jpeg_quality",
+] as const;
+
+/** RFC-4180 field quoting: quote when the value contains comma, quote, CR or
+ * LF; double any embedded quotes. null/undefined render as an empty field. */
+export function toCsvField(value: string | number | null | undefined): string {
+  if (value === null || value === undefined) return "";
+  const s = String(value);
+  if (/[",\r\n]/.test(s)) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+}
+
+/**
+ * Build the full crops.csv text (header + one row per exported crop). The
+ * export-level quality params are denormalized onto every row so the file
+ * loads standalone into pandas without joining the manifest.
+ */
+export function buildCropsCsv(
+  rows: CropCsvRow[],
+  params: { cropPadding: number; cropLongEdge: number; jpegQuality: number },
+): string {
+  const lines: string[] = [CROPS_CSV_COLUMNS.join(",")];
+  for (const r of rows) {
+    lines.push(
+      [
+        toCsvField(r.cropPath),
+        toCsvField(r.detectionId),
+        toCsvField(r.imageId),
+        toCsvField(r.deploymentId),
+        toCsvField(r.deploymentName),
+        toCsvField(r.split),
+        toCsvField(r.label),
+        toCsvField(r.mlSpecies),
+        toCsvField(r.correctedSpecies),
+        toCsvField(r.verificationStatus),
+        toCsvField(r.mdConfidence),
+        toCsvField(r.classifierConfidence),
+        toCsvField(r.bboxX),
+        toCsvField(r.bboxY),
+        toCsvField(r.bboxWidth),
+        toCsvField(r.bboxHeight),
+        toCsvField(r.detectionClass),
+        toCsvField(r.detectorModelVersion),
+        toCsvField(params.cropPadding),
+        toCsvField(params.cropLongEdge),
+        toCsvField(params.jpegQuality),
+      ].join(","),
+    );
+  }
+  // Trailing newline so the file ends cleanly (POSIX text-file convention).
+  return lines.join("\n") + "\n";
 }
 
 /**
@@ -443,6 +586,17 @@ export function buildManifest(input: {
   counts: ManifestCounts;
   deployments: Array<{ id: number; split: Split; imageCount: number }>;
   warnings: string[];
+  /** Detector + crop-quality provenance for downstream ML consumers. */
+  pipeline: {
+    detectorModel: string;
+    /** Effective MegaDetector confidence floor applied for this export. */
+    detectionConfidenceFloor: number;
+    /** Capture-time threshold below which detections were never stored. */
+    detectionThresholdAtCapture: number;
+    cropPadding: number;
+    cropLongEdge: number;
+    jpegQuality: number;
+  };
 }): Record<string, unknown> {
   return {
     version: input.version,
@@ -456,5 +610,19 @@ export function buildManifest(input: {
     counts: input.counts,
     deployments: input.deployments,
     warnings: input.warnings,
+    // Provenance: which detector, threshold, and crop knobs produced these
+    // crops — so a collaborator can correlate crop quality with results.
+    pipeline: {
+      detector: {
+        model: input.pipeline.detectorModel,
+        library: "PytorchWildlife/MegaDetectorV6",
+      },
+      detectionConfidenceFloor: input.pipeline.detectionConfidenceFloor,
+      detectionThresholdAtCapture: input.pipeline.detectionThresholdAtCapture,
+      cropPadding: input.pipeline.cropPadding,
+      cropLongEdge: input.pipeline.cropLongEdge,
+      jpegQuality: input.pipeline.jpegQuality,
+    },
+    cropsCsv: "crops.csv",
   };
 }

@@ -425,6 +425,15 @@ export const cameraTrapTrainingDatasets = sqliteTable(
     droppedSpeciesJson: text("dropped_species_json").notNull(),
     deploymentsJson: text("deployments_json").notNull(),
     manifestPath: text("manifest_path").notNull(),
+    // Crop-quality knobs used for this export (nullable for pre-2026-05 rows).
+    detectionConfidenceFloor: real("detection_confidence_floor"),
+    cropPadding: real("crop_padding"),
+    cropLongEdge: integer("crop_long_edge"),
+    jpegQuality: integer("jpeg_quality"),
+    // Drive archive (set once the export is packaged + uploaded for sharing).
+    driveArchiveFileId: text("drive_archive_file_id"),
+    driveArchiveWebViewLink: text("drive_archive_web_view_link"),
+    archiveUploadedAt: integer("archive_uploaded_at", { mode: "timestamp" }),
   }
 );
 

@@ -564,7 +564,14 @@ const statements = [
     class_list_json TEXT NOT NULL,
     dropped_species_json TEXT NOT NULL,
     deployments_json TEXT NOT NULL,
-    manifest_path TEXT NOT NULL
+    manifest_path TEXT NOT NULL,
+    detection_confidence_floor REAL,
+    crop_padding REAL,
+    crop_long_edge INTEGER,
+    jpeg_quality INTEGER,
+    drive_archive_file_id TEXT,
+    drive_archive_web_view_link TEXT,
+    archive_uploaded_at INTEGER
   )`,
 
   // Camera Trap — Models (registered custom classifier weights)
@@ -786,6 +793,14 @@ const migrations = [
   // Project-scoped fan-out: which project a Shared Drive serves (2026-05-27).
   // One project per drive — routing + discovery are scoped to this.
   `ALTER TABLE shared_drives ADD COLUMN camera_trap_project_id INTEGER REFERENCES ct_projects(id)`,
+  // Training-export crop-quality knobs + Drive archive sharing (2026-05-28).
+  `ALTER TABLE camera_trap_training_datasets ADD COLUMN detection_confidence_floor REAL`,
+  `ALTER TABLE camera_trap_training_datasets ADD COLUMN crop_padding REAL`,
+  `ALTER TABLE camera_trap_training_datasets ADD COLUMN crop_long_edge INTEGER`,
+  `ALTER TABLE camera_trap_training_datasets ADD COLUMN jpeg_quality INTEGER`,
+  `ALTER TABLE camera_trap_training_datasets ADD COLUMN drive_archive_file_id TEXT`,
+  `ALTER TABLE camera_trap_training_datasets ADD COLUMN drive_archive_web_view_link TEXT`,
+  `ALTER TABLE camera_trap_training_datasets ADD COLUMN archive_uploaded_at INTEGER`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }

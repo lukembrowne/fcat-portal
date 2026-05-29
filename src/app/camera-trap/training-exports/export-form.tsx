@@ -20,6 +20,10 @@ import {
 } from "./actions";
 
 const DEFAULT_MIN_EXAMPLES = 50;
+const DEFAULT_CONFIDENCE_FLOOR = 0.1;
+const DEFAULT_CROP_PADDING = 0.05;
+const DEFAULT_CROP_LONG_EDGE = 512;
+const DEFAULT_JPEG_QUALITY = 90;
 const PREVIEW_DEBOUNCE_MS = 300;
 
 export function ExportForm() {
@@ -29,13 +33,21 @@ export function ExportForm() {
   const [error, setError] = useState<string | null>(null);
 
   const [minExamples, setMinExamples] = useState(DEFAULT_MIN_EXAMPLES);
+  // Crop-quality knobs (advanced). Only the confidence floor changes which
+  // detections qualify, so only it re-runs the preview.
+  const [confidenceFloor, setConfidenceFloor] = useState(
+    DEFAULT_CONFIDENCE_FLOOR,
+  );
+  const [cropPadding, setCropPadding] = useState(DEFAULT_CROP_PADDING);
+  const [cropLongEdge, setCropLongEdge] = useState(DEFAULT_CROP_LONG_EDGE);
+  const [jpegQuality, setJpegQuality] = useState(DEFAULT_JPEG_QUALITY);
   const [preview, setPreview] = useState<ExportPreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(true);
   const [previewError, setPreviewError] = useState<string | null>(null);
 
-  // Debounced preview fetch — re-runs whenever minExamples changes.
-  // Loading flag flips inside the timeout (not synchronously in the effect
-  // body) to avoid cascading renders per the React lint rule.
+  // Debounced preview fetch — re-runs whenever minExamples or the confidence
+  // floor changes. Loading flag flips inside the timeout (not synchronously in
+  // the effect body) to avoid cascading renders per the React lint rule.
   useEffect(() => {
     if (!Number.isFinite(minExamples) || minExamples < 1) return;
     let cancelled = false;
@@ -43,7 +55,7 @@ export function ExportForm() {
       if (cancelled) return;
       setPreviewLoading(true);
       setPreviewError(null);
-      const res = await getExportPreview(minExamples);
+      const res = await getExportPreview(minExamples, confidenceFloor);
       if (cancelled) return;
       if (res.success) {
         setPreview(res.data);
@@ -57,7 +69,7 @@ export function ExportForm() {
       cancelled = true;
       clearTimeout(handle);
     };
-  }, [minExamples]);
+  }, [minExamples, confidenceFloor]);
 
   function handleSubmit(formData: FormData) {
     setError(null);
@@ -81,29 +93,126 @@ export function ExportForm() {
         error={previewError}
       />
 
-      <form action={handleSubmit} className="flex items-end gap-3 mt-4">
-        <div className="flex-1 max-w-xs">
-          <Label htmlFor="minExamples" className="text-xs">
-            Mínimo de ejemplos por especie
-          </Label>
-          <Input
-            id="minExamples"
-            name="minExamples"
-            type="number"
-            min={1}
-            value={minExamples}
-            onChange={(e) => {
-              const next = Number.parseInt(e.target.value, 10);
-              if (Number.isFinite(next) && next >= 1) {
-                setMinExamples(next);
-              }
-            }}
-            disabled={isPending}
-          />
+      <form action={handleSubmit} className="mt-4">
+        <div className="flex items-end gap-3">
+          <div className="flex-1 max-w-xs">
+            <Label htmlFor="minExamples" className="text-xs">
+              Mínimo de ejemplos por especie
+            </Label>
+            <Input
+              id="minExamples"
+              name="minExamples"
+              type="number"
+              min={1}
+              value={minExamples}
+              onChange={(e) => {
+                const next = Number.parseInt(e.target.value, 10);
+                if (Number.isFinite(next) && next >= 1) {
+                  setMinExamples(next);
+                }
+              }}
+              disabled={isPending}
+            />
+          </div>
+          <Button type="submit" disabled={isPending || previewLoading}>
+            {isPending ? "Exportando…" : "Exportar"}
+          </Button>
         </div>
-        <Button type="submit" disabled={isPending || previewLoading}>
-          {isPending ? "Exportando…" : "Exportar"}
-        </Button>
+
+        <details className="mt-3 text-sm">
+          <summary className="cursor-pointer text-muted-foreground select-none">
+            Opciones avanzadas — calidad de recorte
+          </summary>
+          <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div>
+              <Label htmlFor="detectionConfidenceFloor" className="text-xs">
+                Confianza mínima (MegaDetector)
+              </Label>
+              <Input
+                id="detectionConfidenceFloor"
+                name="detectionConfidenceFloor"
+                type="number"
+                min={0.1}
+                max={1}
+                step={0.05}
+                value={confidenceFloor}
+                onChange={(e) => {
+                  const next = Number.parseFloat(e.target.value);
+                  if (Number.isFinite(next)) setConfidenceFloor(next);
+                }}
+                disabled={isPending}
+              />
+              <p className="mt-1 text-[11px] leading-tight text-muted-foreground">
+                Mínimo 0.1 — las detecciones por debajo de 0.1 no se almacenan
+                y requerirían reprocesar las imágenes.
+              </p>
+            </div>
+            <div>
+              <Label htmlFor="cropPadding" className="text-xs">
+                Padding del recorte
+              </Label>
+              <Input
+                id="cropPadding"
+                name="cropPadding"
+                type="number"
+                min={0}
+                max={1}
+                step={0.01}
+                value={cropPadding}
+                onChange={(e) => {
+                  const next = Number.parseFloat(e.target.value);
+                  if (Number.isFinite(next)) setCropPadding(next);
+                }}
+                disabled={isPending}
+              />
+              <p className="mt-1 text-[11px] leading-tight text-muted-foreground">
+                Fracción del bbox añadida como margen (0.05 = 5%).
+              </p>
+            </div>
+            <div>
+              <Label htmlFor="cropLongEdge" className="text-xs">
+                Lado largo (px)
+              </Label>
+              <Input
+                id="cropLongEdge"
+                name="cropLongEdge"
+                type="number"
+                min={32}
+                max={4096}
+                step={32}
+                value={cropLongEdge}
+                onChange={(e) => {
+                  const next = Number.parseInt(e.target.value, 10);
+                  if (Number.isFinite(next)) setCropLongEdge(next);
+                }}
+                disabled={isPending}
+              />
+            </div>
+            <div>
+              <Label htmlFor="jpegQuality" className="text-xs">
+                Calidad JPEG
+              </Label>
+              <Input
+                id="jpegQuality"
+                name="jpegQuality"
+                type="number"
+                min={1}
+                max={100}
+                step={1}
+                value={jpegQuality}
+                onChange={(e) => {
+                  const next = Number.parseInt(e.target.value, 10);
+                  if (Number.isFinite(next)) setJpegQuality(next);
+                }}
+                disabled={isPending}
+              />
+            </div>
+          </div>
+          <p className="mt-2 text-[11px] text-muted-foreground">
+            Cambiar cualquiera de estos valores genera una versión nueva del
+            exporte (no se considera idéntico al anterior).
+          </p>
+        </details>
       </form>
 
       {isPending && (

@@ -23,8 +23,11 @@
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import os from "node:os";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import sharp from "sharp";
-import { eq, and, inArray, sql } from "drizzle-orm";
+import { eq, and, inArray, gte, sql } from "drizzle-orm";
 
 import { db } from "@/db";
 import {
@@ -37,28 +40,57 @@ import {
 } from "@/db/schema";
 import { requireAdmin } from "@/lib/auth";
 import type { ActionResult } from "@/lib/types";
-import { downloadFileToBuffer } from "@/lib/drive-client";
+import {
+  downloadFileToBuffer,
+  uploadLocalFileToSharedDrive,
+  deleteDriveFile,
+} from "@/lib/drive-client";
+import { ML_DEFAULTS } from "@/lib/ml-defaults";
+import { recordEvent } from "@/lib/system-events";
 import { log } from "@/lib/log";
 import {
   speciesFolderName,
   computeContentHash,
   buildCounts,
   buildManifest,
+  buildCropsCsv,
   stratifyDeploymentSplits,
   selectIncludedClasses,
   findUncoveredLabels,
   SPLIT_STRATEGY_VERSION,
   STRATIFY_MIN_DEPLOYMENTS,
   type HashRow,
+  type CropCsvRow,
+  type QualityParams,
   type Split,
   type ForcedReassignment,
 } from "@/lib/training-export-helpers";
+
+const execFileAsync = promisify(execFile);
 
 const EXPORT_ROOT = path.join(process.cwd(), "data", "training-exports");
 const CROP_LONG_EDGE = 512;
 const BBOX_PADDING = 0.05;
 const JPEG_QUALITY = 90;
 const DEFAULT_MIN_EXAMPLES = 50;
+/** Floor for the detection-confidence knob. Detections below the 0.1
+ * capture threshold are never stored (MegaDetector runs at 0.1), so an
+ * export can only filter UP from here. */
+const MIN_CONFIDENCE_FLOOR = ML_DEFAULTS.confidenceThreshold; // 0.1
+/** Shared Drive folder that packaged export archives are uploaded to. */
+const TRAINING_EXPORT_DRIVE_FOLDER_ID =
+  process.env.TRAINING_EXPORT_DRIVE_FOLDER_ID ??
+  "11T9kj0Vgf584sFh1s9TYE11iL-Uu659c";
+
+/** Crop-quality + confidence knobs for an export. */
+type ExportQuality = QualityParams;
+
+const DEFAULT_QUALITY: ExportQuality = {
+  detectionConfidenceFloor: MIN_CONFIDENCE_FLOOR,
+  cropPadding: BBOX_PADDING,
+  cropLongEdge: CROP_LONG_EDGE,
+  jpegQuality: JPEG_QUALITY,
+};
 
 export interface ExportResult {
   datasetId: number;
@@ -137,6 +169,14 @@ interface CandidateRow {
   bboxWidth: number;
   bboxHeight: number;
   finalLabel: string;
+  // Per-crop provenance for crops.csv.
+  mlSpecies: string | null;
+  correctedSpecies: string | null;
+  verificationStatus: string;
+  detectionConfidence: number | null;
+  classifierConfidence: number | null;
+  detectionClass: number;
+  detectorModelVersion: string | null;
 }
 
 interface CollectedCandidates {
@@ -173,9 +213,11 @@ interface CollectedCandidates {
  */
 async function collectExportCandidates(
   minExamples: number,
+  detectionConfidenceFloor: number = MIN_CONFIDENCE_FLOOR,
 ): Promise<CollectedCandidates> {
   // 1. Pull every verified animal detection joined with its identification
-  //    and the parent image+deployment.
+  //    and the parent image+deployment. The confidence floor filters up from
+  //    the 0.1 capture threshold — raising it yields higher-quality crops.
   const rawRows = await db
     .select({
       detectionId: detections.id,
@@ -192,7 +234,10 @@ async function collectExportCandidates(
       species: identifications.species,
       correctedSpecies: identifications.correctedSpecies,
       verificationStatus: identifications.verificationStatus,
+      detectionConfidence: detections.detectionConfidence,
+      classifierConfidence: identifications.confidence,
       detectionClass: detections.detectionClass,
+      detectorModelVersion: detections.modelVersion,
       excluded: deployments.excluded,
     })
     .from(detections)
@@ -207,6 +252,7 @@ async function collectExportCandidates(
         inArray(identifications.verificationStatus, ["verified", "corrected"]),
         eq(detections.detectionClass, 0),
         eq(deployments.excluded, false),
+        gte(detections.detectionConfidence, detectionConfidenceFloor),
       ),
     );
 
@@ -223,6 +269,13 @@ async function collectExportCandidates(
     bboxWidth: r.bboxWidth,
     bboxHeight: r.bboxHeight,
     finalLabel: (r.correctedSpecies ?? r.species ?? "").trim(),
+    mlSpecies: r.species ?? null,
+    correctedSpecies: r.correctedSpecies ?? null,
+    verificationStatus: r.verificationStatus,
+    detectionConfidence: r.detectionConfidence ?? null,
+    classifierConfidence: r.classifierConfidence ?? null,
+    detectionClass: r.detectionClass,
+    detectorModelVersion: r.detectorModelVersion ?? null,
   }));
 
   // 2. Group by label, drop labels that fail either pre-filter:
@@ -445,15 +498,29 @@ async function needsSplitStrategyMigration(): Promise<boolean> {
  */
 export async function getExportPreview(
   minExamples: number,
+  detectionConfidenceFloor: number = MIN_CONFIDENCE_FLOOR,
 ): Promise<ActionResult<ExportPreview>> {
   await requireAdmin();
 
   if (!Number.isFinite(minExamples) || minExamples < 1) {
     return { success: false, error: "minExamples must be a positive integer" };
   }
+  if (
+    !Number.isFinite(detectionConfidenceFloor) ||
+    detectionConfidenceFloor < MIN_CONFIDENCE_FLOOR ||
+    detectionConfidenceFloor > 1
+  ) {
+    return {
+      success: false,
+      error: `El umbral de confianza debe estar entre ${MIN_CONFIDENCE_FLOOR} y 1.`,
+    };
+  }
 
   try {
-    const collected = await collectExportCandidates(minExamples);
+    const collected = await collectExportCandidates(
+      minExamples,
+      detectionConfidenceFloor,
+    );
 
     // Aggregate per-label-per-split counts AND per-label-per-split distinct
     // deployments in a single pass. The deployment sets let the UI show whether
@@ -561,10 +628,28 @@ export async function getExportPreview(
   }
 }
 
+/** Parse an optional numeric FormData field, falling back to a default. */
+function parseNumberField(
+  formData: FormData,
+  name: string,
+  fallback: number,
+  parseFn: (s: string) => number = Number.parseFloat,
+): number {
+  const raw = formData.get(name);
+  if (typeof raw !== "string" || raw.trim().length === 0) return fallback;
+  const n = parseFn(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 /**
  * Server action — export a versioned training dataset.
  *
- * Required form field: `minExamples` (integer, defaults to 50).
+ * Form fields (all optional, sensible defaults):
+ *   - `minExamples` (integer, default 50)
+ *   - `detectionConfidenceFloor` (float ≥ 0.1, default 0.1)
+ *   - `cropPadding` (float ≥ 0, default 0.05)
+ *   - `cropLongEdge` (integer ≥ 32, default 512)
+ *   - `jpegQuality` (integer 1–100, default 90)
  */
 export async function exportTrainingDataset(
   formData: FormData,
@@ -581,8 +666,65 @@ export async function exportTrainingDataset(
   }
   const minExamples = parsed;
 
+  // Crop-quality knobs (Phase 2). Validate ranges; confidence floor cannot go
+  // below the 0.1 capture threshold because lower detections were never stored.
+  const quality: ExportQuality = {
+    detectionConfidenceFloor: parseNumberField(
+      formData,
+      "detectionConfidenceFloor",
+      DEFAULT_QUALITY.detectionConfidenceFloor,
+    ),
+    cropPadding: parseNumberField(
+      formData,
+      "cropPadding",
+      DEFAULT_QUALITY.cropPadding,
+    ),
+    cropLongEdge: parseNumberField(
+      formData,
+      "cropLongEdge",
+      DEFAULT_QUALITY.cropLongEdge,
+      (s) => Number.parseInt(s, 10),
+    ),
+    jpegQuality: parseNumberField(
+      formData,
+      "jpegQuality",
+      DEFAULT_QUALITY.jpegQuality,
+      (s) => Number.parseInt(s, 10),
+    ),
+  };
+  if (
+    quality.detectionConfidenceFloor < MIN_CONFIDENCE_FLOOR ||
+    quality.detectionConfidenceFloor > 1
+  ) {
+    return {
+      success: false,
+      error: `El umbral de confianza debe estar entre ${MIN_CONFIDENCE_FLOOR} y 1. Las detecciones por debajo de ${MIN_CONFIDENCE_FLOOR} no se almacenan y requerirían reprocesar las imágenes.`,
+    };
+  }
+  if (quality.cropPadding < 0 || quality.cropPadding > 1) {
+    return {
+      success: false,
+      error: "El padding de recorte debe estar entre 0 y 1.",
+    };
+  }
+  if (quality.cropLongEdge < 32 || quality.cropLongEdge > 4096) {
+    return {
+      success: false,
+      error: "El lado largo del recorte debe estar entre 32 y 4096 px.",
+    };
+  }
+  if (quality.jpegQuality < 1 || quality.jpegQuality > 100) {
+    return {
+      success: false,
+      error: "La calidad JPEG debe estar entre 1 y 100.",
+    };
+  }
+
   try {
-    const collected = await collectExportCandidates(minExamples);
+    const collected = await collectExportCandidates(
+      minExamples,
+      quality.detectionConfidenceFloor,
+    );
 
     if (collected.totalCandidatesBeforeFilter === 0) {
       return {
@@ -646,6 +788,7 @@ export async function exportTrainingDataset(
       rows: hashRows,
       minExamples,
       classList,
+      quality,
     });
 
     // Short-circuit if an identical export already exists.
@@ -681,8 +824,10 @@ export async function exportTrainingDataset(
     const versionDir = path.join(EXPORT_ROOT, version);
     await fs.mkdir(versionDir, { recursive: true });
 
-    // Crop every kept detection to disk.
+    // Crop every kept detection to disk. crops.csv gets one row per crop that
+    // actually lands on disk (failed crops are excluded, matching the files).
     const warnings: string[] = [];
+    const csvRows: CropCsvRow[] = [];
     let written = 0;
 
     log.info(
@@ -700,8 +845,29 @@ export async function exportTrainingDataset(
       try {
         await fs.mkdir(outDir, { recursive: true });
         const buffer = await loadImageBytes(row);
-        await cropAndWrite(buffer, row, outPath);
+        await cropAndWrite(buffer, row, outPath, quality);
         written += 1;
+        csvRows.push({
+          // POSIX-style relative path (forward slashes) regardless of OS.
+          cropPath: [split, folderName, `${row.detectionId}.jpg`].join("/"),
+          detectionId: row.detectionId,
+          imageId: row.imageId,
+          deploymentId: row.deploymentId,
+          deploymentName: row.deploymentName,
+          split,
+          label: row.finalLabel,
+          mlSpecies: row.mlSpecies,
+          correctedSpecies: row.correctedSpecies,
+          verificationStatus: row.verificationStatus,
+          mdConfidence: row.detectionConfidence,
+          classifierConfidence: row.classifierConfidence,
+          bboxX: row.bboxX,
+          bboxY: row.bboxY,
+          bboxWidth: row.bboxWidth,
+          bboxHeight: row.bboxHeight,
+          detectionClass: row.detectionClass,
+          detectorModelVersion: row.detectorModelVersion,
+        });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         warnings.push(`detection ${row.detectionId}: ${msg}`);
@@ -758,10 +924,29 @@ export async function exportTrainingDataset(
       counts,
       deployments: deploymentSummaries,
       warnings,
+      pipeline: {
+        detectorModel: ML_DEFAULTS.detectorModel,
+        detectionConfidenceFloor: quality.detectionConfidenceFloor,
+        detectionThresholdAtCapture: MIN_CONFIDENCE_FLOOR,
+        cropPadding: quality.cropPadding,
+        cropLongEdge: quality.cropLongEdge,
+        jpegQuality: quality.jpegQuality,
+      },
     });
 
     const manifestPath = path.join(versionDir, "manifest.json");
     await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2));
+
+    // Per-crop provenance CSV (one row per crop on disk) for ML consumers.
+    const cropsCsvPath = path.join(versionDir, "crops.csv");
+    await fs.writeFile(
+      cropsCsvPath,
+      buildCropsCsv(csvRows, {
+        cropPadding: quality.cropPadding,
+        cropLongEdge: quality.cropLongEdge,
+        jpegQuality: quality.jpegQuality,
+      }),
+    );
 
     // Insert the dataset row in a synchronous transaction.
     const datasetRow = db.transaction((tx) => {
@@ -780,6 +965,10 @@ export async function exportTrainingDataset(
           droppedSpeciesJson: JSON.stringify(droppedSpecies),
           deploymentsJson: JSON.stringify(deploymentSummaries),
           manifestPath,
+          detectionConfidenceFloor: quality.detectionConfidenceFloor,
+          cropPadding: quality.cropPadding,
+          cropLongEdge: quality.cropLongEdge,
+          jpegQuality: quality.jpegQuality,
         })
         .returning()
         .get() as CameraTrapTrainingDataset;
@@ -797,6 +986,27 @@ export async function exportTrainingDataset(
       },
       "[training-export] done",
     );
+
+    await recordEvent({
+      source: "camera-trap",
+      eventType: "training_export.completed",
+      summary: `Exporte de entrenamiento ${version} creado — ${written} recortes, ${classList.length} clases`,
+      actorEmail: user.email,
+      targetType: "training_dataset",
+      targetId: datasetRow.id,
+      durationMs: Date.now() - startedAt,
+      details: {
+        version,
+        imageCount: written,
+        classCount: classList.length,
+        minExamples,
+        detectionConfidenceFloor: quality.detectionConfidenceFloor,
+        cropPadding: quality.cropPadding,
+        cropLongEdge: quality.cropLongEdge,
+        jpegQuality: quality.jpegQuality,
+        warnings: warnings.length,
+      },
+    });
 
     return {
       success: true,
@@ -838,13 +1048,14 @@ async function loadImageBytes(row: CandidateRow): Promise<Buffer> {
 }
 
 /**
- * Crop a normalized bbox out of an image with 5% padding, resize the long
- * edge to 512px, and write JPEG quality 90.
+ * Crop a normalized bbox out of an image with `cropPadding` padding, resize the
+ * long edge to `cropLongEdge` px, and write at `jpegQuality`.
  */
 async function cropAndWrite(
   buffer: Buffer,
   row: CandidateRow,
   outPath: string,
+  quality: ExportQuality,
 ): Promise<void> {
   const meta = await sharp(buffer).metadata();
   if (!meta.width || !meta.height) {
@@ -853,9 +1064,9 @@ async function cropAndWrite(
   const W = meta.width;
   const H = meta.height;
 
-  // Apply 5% padding around the bbox, then clamp to image bounds.
-  const padW = row.bboxWidth * BBOX_PADDING;
-  const padH = row.bboxHeight * BBOX_PADDING;
+  // Apply padding around the bbox, then clamp to image bounds.
+  const padW = row.bboxWidth * quality.cropPadding;
+  const padH = row.bboxHeight * quality.cropPadding;
   const x0 = Math.max(0, row.bboxX - padW);
   const y0 = Math.max(0, row.bboxY - padH);
   const x1 = Math.min(1, row.bboxX + row.bboxWidth + padW);
@@ -872,11 +1083,149 @@ async function cropAndWrite(
   await sharp(buffer)
     .extract({ left, top, width, height })
     .resize({
-      width: CROP_LONG_EDGE,
-      height: CROP_LONG_EDGE,
+      width: quality.cropLongEdge,
+      height: quality.cropLongEdge,
       fit: "inside",
       withoutEnlargement: false,
     })
-    .jpeg({ quality: JPEG_QUALITY })
+    .jpeg({ quality: quality.jpegQuality })
     .toFile(outPath);
+}
+
+export interface UploadArchiveResult {
+  version: string;
+  webViewLink: string;
+  sizeBytes: number;
+}
+
+/**
+ * Package a training-export version folder into a .tar.gz and upload it to the
+ * shared Drive folder so it can be downloaded/shared with collaborators.
+ *
+ * Streams the archive from disk (never buffers it in memory) and stores the
+ * resulting webViewLink on the dataset row. The archive inherits the Shared
+ * Drive's membership — there is no public link sharing.
+ */
+export async function packageAndUploadExport(
+  version: string,
+): Promise<ActionResult<UploadArchiveResult>> {
+  const user = await requireAdmin();
+
+  // Strict allowlist — `version` is interpolated into a tar arg and a path.
+  if (!/^v\d+$/.test(version)) {
+    return { success: false, error: "Versión inválida." };
+  }
+
+  // The dataset must exist in the DB (don't archive arbitrary directories).
+  const datasetRows = await db
+    .select()
+    .from(cameraTrapTrainingDatasets)
+    .where(eq(cameraTrapTrainingDatasets.version, version))
+    .limit(1);
+  if (datasetRows.length === 0) {
+    return { success: false, error: `No existe el exporte ${version}.` };
+  }
+  const dataset = datasetRows[0];
+
+  const versionDir = path.join(EXPORT_ROOT, version);
+  try {
+    const stat = await fs.stat(versionDir);
+    if (!stat.isDirectory()) throw new Error("not a directory");
+  } catch {
+    return {
+      success: false,
+      error: `La carpeta del exporte ${version} no está en el disco. Es posible que haya que regenerarlo.`,
+    };
+  }
+
+  // Build the archive in the OS temp dir (cleaned up in finally).
+  const tarPath = path.join(os.tmpdir(), `training-export-${version}.tar.gz`);
+  const startedAt = Date.now();
+
+  try {
+    log.info({ version, tarPath }, "[training-export] packaging archive");
+    // execFile (not exec) — no shell, so `version` cannot inject. -C changes
+    // into EXPORT_ROOT so the archive contains `<version>/...` paths.
+    await execFileAsync(
+      "tar",
+      ["-czf", tarPath, "-C", EXPORT_ROOT, version],
+      { maxBuffer: 1024 * 1024 },
+    );
+
+    // Date-prefix the Drive filename so archives sort chronologically in the
+    // Drive folder (avoids the lexical v1/v10/v2 interleave). The prefix is the
+    // export's creation date (stable across re-uploads), e.g. 2026-05-28-v10.tar.gz.
+    const datePrefix = dataset.createdAt.toISOString().slice(0, 10);
+    const archiveName = `${datePrefix}-${version}.tar.gz`;
+
+    const uploaded = await uploadLocalFileToSharedDrive(
+      tarPath,
+      archiveName,
+      "application/gzip",
+      TRAINING_EXPORT_DRIVE_FOLDER_ID,
+    );
+
+    // If a prior archive existed, delete it so the folder doesn't accumulate
+    // stale copies of the same version.
+    if (
+      dataset.driveArchiveFileId &&
+      dataset.driveArchiveFileId !== uploaded.id
+    ) {
+      try {
+        await deleteDriveFile(dataset.driveArchiveFileId);
+      } catch (err) {
+        log.warn(
+          { err, fileId: dataset.driveArchiveFileId },
+          "[training-export] could not delete prior archive (continuing)",
+        );
+      }
+    }
+
+    db.update(cameraTrapTrainingDatasets)
+      .set({
+        driveArchiveFileId: uploaded.id,
+        driveArchiveWebViewLink: uploaded.webViewLink,
+        archiveUploadedAt: new Date(),
+      })
+      .where(eq(cameraTrapTrainingDatasets.id, dataset.id))
+      .run();
+
+    await recordEvent({
+      source: "camera-trap",
+      eventType: "training_export.uploaded",
+      summary: `Exporte de entrenamiento ${version} empaquetado y subido a Drive`,
+      actorEmail: user.email,
+      targetType: "training_dataset",
+      targetId: dataset.id,
+      durationMs: Date.now() - startedAt,
+      details: {
+        version,
+        sizeBytes: uploaded.size,
+        driveFileId: uploaded.id,
+      },
+    });
+
+    log.info(
+      { version, sizeBytes: uploaded.size, elapsedMs: Date.now() - startedAt },
+      "[training-export] archive uploaded",
+    );
+
+    return {
+      success: true,
+      data: {
+        version,
+        webViewLink: uploaded.webViewLink,
+        sizeBytes: uploaded.size,
+      },
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.error({ err, version }, "[training-export] package/upload failed");
+    return {
+      success: false,
+      error: `No se pudo empaquetar/subir el exporte: ${msg}`,
+    };
+  } finally {
+    await fs.rm(tarPath, { force: true }).catch(() => {});
+  }
 }

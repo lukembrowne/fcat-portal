@@ -5,14 +5,26 @@ import {
   assignSplit,
   computeContentHash,
   buildCounts,
+  buildCropsCsv,
+  toCsvField,
+  CROPS_CSV_COLUMNS,
   stratifyDeploymentSplits,
   selectIncludedClasses,
   findUncoveredLabels,
   SPLIT_STRATEGY_VERSION,
   STRATIFY_MIN_DEPLOYMENTS,
   type HashRow,
+  type CropCsvRow,
+  type QualityParams,
   type Split,
 } from "@/lib/training-export-helpers";
+
+const DEFAULT_QUALITY: QualityParams = {
+  detectionConfidenceFloor: 0.1,
+  cropPadding: 0.05,
+  cropLongEdge: 512,
+  jpegQuality: 90,
+};
 
 describe("speciesSlug", () => {
   it("lowercases and joins with underscore", () => {
@@ -122,6 +134,7 @@ describe("computeContentHash", () => {
     rows: baseRows,
     minExamples: 50,
     classList: ["ocelot", "puma"],
+    quality: DEFAULT_QUALITY,
   };
 
   it("is deterministic across 10 runs on identical input", () => {
@@ -176,10 +189,51 @@ describe("computeContentHash", () => {
       { imageId: 2, finalLabel: "b|c", deploymentId: 1, split: "train" },
     ];
     expect(
-      computeContentHash({ rows: a, minExamples: 1, classList: ["a|b", "c"] }),
+      computeContentHash({
+        rows: a,
+        minExamples: 1,
+        classList: ["a|b", "c"],
+        quality: DEFAULT_QUALITY,
+      }),
     ).not.toBe(
-      computeContentHash({ rows: b, minExamples: 1, classList: ["a", "b|c"] }),
+      computeContentHash({
+        rows: b,
+        minExamples: 1,
+        classList: ["a", "b|c"],
+        quality: DEFAULT_QUALITY,
+      }),
     );
+  });
+
+  it("changes when ONLY a crop-quality knob changes (same corpus)", () => {
+    // The critical correctness guarantee: two exports differing only in
+    // padding must NOT dedupe as 'unchanged'. Same for long-edge, quality,
+    // and the confidence floor.
+    const base = computeContentHash(baseInput);
+    expect(
+      computeContentHash({
+        ...baseInput,
+        quality: { ...DEFAULT_QUALITY, cropPadding: 0.1 },
+      }),
+    ).not.toBe(base);
+    expect(
+      computeContentHash({
+        ...baseInput,
+        quality: { ...DEFAULT_QUALITY, cropLongEdge: 384 },
+      }),
+    ).not.toBe(base);
+    expect(
+      computeContentHash({
+        ...baseInput,
+        quality: { ...DEFAULT_QUALITY, jpegQuality: 80 },
+      }),
+    ).not.toBe(base);
+    expect(
+      computeContentHash({
+        ...baseInput,
+        quality: { ...DEFAULT_QUALITY, detectionConfidenceFloor: 0.5 },
+      }),
+    ).not.toBe(base);
   });
 });
 
@@ -202,6 +256,7 @@ describe("SPLIT_STRATEGY_VERSION", () => {
       rows: sample,
       minExamples: 50,
       classList: ["ocelot"],
+      quality: DEFAULT_QUALITY,
     });
     // Hash must be a 64-char hex string and stable over runs.
     expect(hash).toMatch(/^[0-9a-f]{64}$/);
@@ -209,6 +264,7 @@ describe("SPLIT_STRATEGY_VERSION", () => {
       rows: sample,
       minExamples: 50,
       classList: ["ocelot"],
+      quality: DEFAULT_QUALITY,
     });
     expect(again).toBe(hash);
   });
@@ -558,5 +614,85 @@ describe("findUncoveredLabels", () => {
       ["anchored_to_train_only", { train: 60, val: 0, test: 0 }],
     ]);
     expect(findUncoveredLabels(counts)).toEqual(["anchored_to_train_only"]);
+  });
+});
+
+describe("toCsvField", () => {
+  it("renders null/undefined as empty", () => {
+    expect(toCsvField(null)).toBe("");
+    expect(toCsvField(undefined)).toBe("");
+  });
+
+  it("passes through plain values without quoting", () => {
+    expect(toCsvField("ocelot")).toBe("ocelot");
+    expect(toCsvField(0.873)).toBe("0.873");
+    expect(toCsvField(42)).toBe("42");
+  });
+
+  it("quotes and escapes fields containing comma, quote, or newline", () => {
+    expect(toCsvField("a,b")).toBe('"a,b"');
+    expect(toCsvField('say "hi"')).toBe('"say ""hi"""');
+    expect(toCsvField("line1\nline2")).toBe('"line1\nline2"');
+  });
+});
+
+describe("buildCropsCsv", () => {
+  const params = { cropPadding: 0.05, cropLongEdge: 512, jpegQuality: 90 };
+  const row: CropCsvRow = {
+    cropPath: "train/Panthera onca/123.jpg",
+    detectionId: 123,
+    imageId: 45,
+    deploymentId: 7,
+    deploymentName: "Cámara, Río Verde",
+    split: "train",
+    label: "Panthera onca",
+    mlSpecies: "Puma concolor",
+    correctedSpecies: "Panthera onca",
+    verificationStatus: "corrected",
+    mdConfidence: 0.87,
+    classifierConfidence: 0.42,
+    bboxX: 0.1,
+    bboxY: 0.2,
+    bboxWidth: 0.3,
+    bboxHeight: 0.4,
+    detectionClass: 0,
+    detectorModelVersion: "MDV6-yolov9-c",
+  };
+
+  it("emits a header matching CROPS_CSV_COLUMNS", () => {
+    const csv = buildCropsCsv([], params);
+    expect(csv).toBe(CROPS_CSV_COLUMNS.join(",") + "\n");
+  });
+
+  it("writes one data row per crop with denormalized params", () => {
+    const csv = buildCropsCsv([row], params);
+    const lines = csv.trimEnd().split("\n");
+    expect(lines).toHaveLength(2);
+    // Deployment name has a comma → must be quoted.
+    expect(lines[1]).toContain('"Cámara, Río Verde"');
+    // Per-crop MD confidence + denormalized crop params appear.
+    expect(lines[1]).toContain("0.87");
+    expect(lines[1]).toContain("MDV6-yolov9-c");
+    expect(lines[1].endsWith(",0.05,512,90")).toBe(true);
+  });
+
+  it("renders null classifier/detector fields as empty cells", () => {
+    const csv = buildCropsCsv(
+      [
+        {
+          ...row,
+          // Comma-free name so the naive split below indexes cleanly.
+          deploymentName: "RioVerde",
+          mlSpecies: null,
+          classifierConfidence: null,
+          detectorModelVersion: null,
+        },
+      ],
+      params,
+    );
+    const cells = csv.trimEnd().split("\n")[1].split(",");
+    // ml_species (index 7) and classifier_confidence (index 11) empty.
+    expect(cells[7]).toBe("");
+    expect(cells[11]).toBe("");
   });
 });

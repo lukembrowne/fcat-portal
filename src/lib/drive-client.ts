@@ -1370,6 +1370,48 @@ export async function uploadFileToSharedDrive(
 }
 
 /**
+ * Upload a file from a LOCAL PATH to a Shared Drive folder, streaming from
+ * disk (so multi-GB archives never buffer in memory) and returning a
+ * shareable webViewLink. Mirrors uploadFileToSharedDrive but reads via
+ * createReadStream and requests the link field. The uploaded file inherits
+ * the destination Shared Drive's membership — there is no "anyone with link"
+ * sharing here.
+ */
+export async function uploadLocalFileToSharedDrive(
+  localPath: string,
+  filename: string,
+  mimeType: string,
+  parentFolderId: string
+): Promise<{ id: string; webViewLink: string; size: number }> {
+  const drive = getDrive();
+
+  const res = await withRetry(
+    () =>
+      drive.files.create({
+        requestBody: {
+          name: filename,
+          parents: [parentFolderId],
+        },
+        media: {
+          mimeType,
+          body: createReadStream(localPath),
+        },
+        fields: "id,name,size,webViewLink",
+        supportsAllDrives: true,
+      }),
+    `uploadLocalFileToSharedDrive(${filename})`,
+  );
+
+  return {
+    id: res.data.id!,
+    webViewLink:
+      res.data.webViewLink ??
+      `https://drive.google.com/file/d/${res.data.id}/view`,
+    size: Number(res.data.size ?? 0),
+  };
+}
+
+/**
  * Delete a file from Drive permanently. Used for cleanup on partial upload failure.
  */
 export async function deleteDriveFile(fileId: string): Promise<void> {

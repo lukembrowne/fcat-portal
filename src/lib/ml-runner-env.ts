@@ -47,7 +47,14 @@ export function buildClassifierEnv(
 
   let metrics: {
     backbone?: unknown;
-    transform?: { imageSize?: unknown; mean?: unknown; std?: unknown };
+    transform?: {
+      imageSize?: unknown;
+      mean?: unknown;
+      std?: unknown;
+      interpolation?: unknown;
+      antialias?: unknown;
+      resize?: unknown;
+    };
   };
   try {
     metrics = JSON.parse(activeModel.metricsJson);
@@ -83,10 +90,18 @@ export function buildClassifierEnv(
     CUSTOM_CLASSIFIER_WEIGHTS: weightsPath,
     CUSTOM_CLASSIFIER_CLASS_MAPPING: classMappingPath,
     CUSTOM_CLASSIFIER_BACKBONE: metrics.backbone,
+    // Forward the full preprocessing recipe. interpolation/antialias/resize
+    // are additive (contract v2.1); models registered before they existed
+    // (efficientnet_b0 @ 224) default to the old behavior — bilinear resize,
+    // antialias on, square squash — so they classify exactly as they did
+    // before. Newer models (EfficientNetV2-M @ 480) carry bicubic explicitly.
     CUSTOM_CLASSIFIER_TRANSFORM_JSON: JSON.stringify({
       imageSize: metrics.transform.imageSize,
       mean: metrics.transform.mean,
       std: metrics.transform.std,
+      interpolation: metrics.transform.interpolation ?? "bilinear",
+      antialias: metrics.transform.antialias ?? true,
+      resize: metrics.transform.resize ?? "squash",
     }),
   };
 }

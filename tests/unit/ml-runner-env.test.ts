@@ -44,6 +44,46 @@ describe("buildClassifierEnv", () => {
     expect(transform.std).toEqual([0.229, 0.224, 0.225]);
   });
 
+  it("defaults legacy models (no interpolation field) to bilinear/squash", () => {
+    const env = buildClassifierEnv({
+      id: 7,
+      modelDir: "/srv/data/models/v1",
+      classMappingJson: JSON.stringify(["a", "b"]),
+      metricsJson: JSON.stringify(validMetrics),
+    });
+    const transform = JSON.parse(env.CUSTOM_CLASSIFIER_TRANSFORM_JSON);
+    expect(transform.interpolation).toBe("bilinear");
+    expect(transform.antialias).toBe(true);
+    expect(transform.resize).toBe("squash");
+  });
+
+  it("forwards the full preprocessing recipe for EfficientNetV2-M models", () => {
+    const v2m = {
+      ...validMetrics,
+      backbone: "tf_efficientnetv2_m.in21k_ft_in1k",
+      transform: {
+        imageSize: 480,
+        mean: [0.5, 0.5, 0.5],
+        std: [0.5, 0.5, 0.5],
+        interpolation: "bicubic",
+        antialias: true,
+        resize: "squash",
+      },
+    };
+    const env = buildClassifierEnv({
+      id: 9,
+      modelDir: "/srv/data/models/v4",
+      classMappingJson: JSON.stringify(["a", "b"]),
+      metricsJson: JSON.stringify(v2m),
+    });
+    const transform = JSON.parse(env.CUSTOM_CLASSIFIER_TRANSFORM_JSON);
+    expect(transform.imageSize).toBe(480);
+    expect(transform.mean).toEqual([0.5, 0.5, 0.5]);
+    expect(transform.interpolation).toBe("bicubic");
+    expect(transform.antialias).toBe(true);
+    expect(transform.resize).toBe("squash");
+  });
+
   it("throws on invalid metrics JSON", () => {
     expect(() =>
       buildClassifierEnv({

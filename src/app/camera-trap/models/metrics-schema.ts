@@ -39,6 +39,12 @@ const TransformSchema = z.object({
   imageSize: z.number().int().positive(),
   mean: z.array(z.number()).length(3),
   std: z.array(z.number()).length(3),
+  // Additive (contract v2.1): the full preprocessing recipe so inference can
+  // reproduce training byte-for-byte. Optional — models registered before
+  // these existed default to bilinear/on/squash in buildClassifierEnv.
+  interpolation: z.enum(["bilinear", "bicubic", "nearest"]).optional(),
+  antialias: z.boolean().optional(),
+  resize: z.literal("squash").optional(),
 });
 
 const OverallSchema = z.object({

@@ -147,12 +147,16 @@ class TimmClassifier:
       CUSTOM_CLASSIFIER_WEIGHTS         path to weights.pt
       CUSTOM_CLASSIFIER_CLASS_MAPPING   path to class_mapping.json (ordered list)
       CUSTOM_CLASSIFIER_BACKBONE        timm model name, e.g. efficientnet_b0
-      CUSTOM_CLASSIFIER_TRANSFORM_JSON  {"imageSize": 224, "mean": [...], "std": [...]}
+      CUSTOM_CLASSIFIER_TRANSFORM_JSON  {"imageSize": 480, "mean": [...], "std": [...],
+                                         "interpolation": "bicubic", "antialias": true,
+                                         "resize": "squash"}
 
     Transform config is stored explicitly (not derived from
     timm.data.resolve_model_data_config defaults) so any non-default training
     augmentation choices are honored at inference time. Drift here = silent
-    accuracy regression.
+    accuracy regression. interpolation/antialias/resize are additive: models
+    registered before they existed default to bilinear/on/squash (the old
+    behavior), so legacy efficientnet_b0 @ 224 models are unaffected.
     """
 
     def __init__(self, model, class_list, device, transform, backbone):
@@ -170,6 +174,7 @@ class TimmClassifier:
         import torch
         import timm
         from torchvision import transforms
+        from torchvision.transforms import InterpolationMode
 
         weights_path = os.environ.get("CUSTOM_CLASSIFIER_WEIGHTS")
         class_mapping_path = os.environ.get("CUSTOM_CLASSIFIER_CLASS_MAPPING")
@@ -190,6 +195,24 @@ class TimmClassifier:
         image_size = int(transform_cfg["imageSize"])
         mean = list(transform_cfg["mean"])
         std = list(transform_cfg["std"])
+        # Additive fields (contract v2.1); default to the pre-existing behavior
+        # so legacy models classify identically. Must match the classifier
+        # repo's data.build_transforms exactly or accuracy silently drops.
+        _interp_modes = {
+            "bilinear": InterpolationMode.BILINEAR,
+            "bicubic": InterpolationMode.BICUBIC,
+            "nearest": InterpolationMode.NEAREST,
+        }
+        interp_name = transform_cfg.get("interpolation", "bilinear")
+        if interp_name not in _interp_modes:
+            raise RuntimeError(f"unknown interpolation {interp_name!r}")
+        interpolation = _interp_modes[interp_name]
+        antialias = bool(transform_cfg.get("antialias", True))
+        resize_mode = transform_cfg.get("resize", "squash")
+        if resize_mode != "squash":
+            raise RuntimeError(
+                f"unsupported resize mode {resize_mode!r} (only 'squash' is implemented)"
+            )
 
         # Build the model with the right number of classes BEFORE loading
         # weights so load_state_dict can be strict.
@@ -206,7 +229,11 @@ class TimmClassifier:
 
         transform = transforms.Compose([
             transforms.ToPILImage(),
-            transforms.Resize((image_size, image_size)),
+            transforms.Resize(
+                (image_size, image_size),
+                interpolation=interpolation,
+                antialias=antialias,
+            ),
             transforms.ToTensor(),
             transforms.Normalize(mean=mean, std=std),
         ])

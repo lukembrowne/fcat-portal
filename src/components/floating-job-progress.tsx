@@ -172,19 +172,30 @@ export function FloatingJobProgress() {
     isCompression || isRevert || isAudioCompression || isAudioRevert;
   const isDriveSync = jobType === "drive_sync" || jobType === "audio_sync";
   const isImageCache = jobType === "cache_deployment_images";
+  const isTrainingExport = jobType === "training_export";
+  const isTrainingExportUpload = jobType === "training_export_upload";
   const isAudioJob =
     isBirdnet ||
     isAcousticIndices ||
     isAudioAnalysis ||
     isAudioCompression ||
     isAudioRevert;
+  // These jobs have no /process or /results route — exclude from the linkable
+  // default so the bar doesn't render broken "Ver detalles" links.
   const isLinkable =
-    !isCompressionLike && !isDriveSync && !isAudioJob && !isImageCache;
+    !isCompressionLike &&
+    !isDriveSync &&
+    !isAudioJob &&
+    !isImageCache &&
+    !isTrainingExport &&
+    !isTrainingExportUpload;
   const unitLabel = isDriveSync
     ? "instalaciones"
     : isAudioJob
       ? "archivos"
-      : "imágenes";
+      : isTrainingExport
+        ? "recortes"
+        : "imágenes";
   const canCancel = activeJob?.canCancel ?? false;
   const dlTotal = sseData?.downloadTotal ?? activeJob?.downloadTotal ?? 0;
   const dlDone = sseData?.downloadedImages ?? activeJob?.downloadedImages ?? 0;

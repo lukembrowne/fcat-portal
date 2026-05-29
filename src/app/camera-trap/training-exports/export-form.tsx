@@ -16,7 +16,7 @@ import {
   exportTrainingDataset,
   getExportPreview,
   type ExportPreview,
-  type ExportResult,
+  type ExportDispatchResult,
 } from "./actions";
 
 const DEFAULT_MIN_EXAMPLES = 50;
@@ -29,7 +29,7 @@ const PREVIEW_DEBOUNCE_MS = 300;
 export function ExportForm() {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
-  const [result, setResult] = useState<ExportResult | null>(null);
+  const [result, setResult] = useState<ExportDispatchResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const [minExamples, setMinExamples] = useState(DEFAULT_MIN_EXAMPLES);
@@ -78,6 +78,11 @@ export function ExportForm() {
       const res = await exportTrainingDataset(formData);
       if (res.success) {
         setResult(res.data);
+        // A started export runs in the background — wake the floating progress
+        // bar so it picks the job up immediately instead of on its next poll.
+        if (res.data.kind === "started") {
+          window.dispatchEvent(new Event("job-started"));
+        }
         router.refresh();
       } else {
         setError(res.error);
@@ -215,12 +220,6 @@ export function ExportForm() {
         </details>
       </form>
 
-      {isPending && (
-        <p className="mt-3 text-xs text-muted-foreground">
-          Esto puede tardar varios minutos. No cierres la pestaña.
-        </p>
-      )}
-
       {error && (
         <div className="mt-3 rounded border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
           {error}
@@ -229,26 +228,21 @@ export function ExportForm() {
 
       {result && (
         <div className="mt-3 rounded border border-green-600/40 bg-green-600/10 p-3 text-sm">
-          <p className="font-semibold">
-            {result.status === "created"
-              ? `Exporte creado: ${result.version}`
-              : `Sin cambios — ya existía como ${result.version}`}
-          </p>
-          <p className="text-xs text-muted-foreground mt-1">
-            {result.imageCount.toLocaleString("es-EC")} imágenes ·{" "}
-            {result.classCount} clases
-          </p>
-          {result.warnings.length > 0 && (
-            <details className="mt-2 text-xs">
-              <summary className="cursor-pointer text-muted-foreground">
-                {result.warnings.length} advertencias durante el recorte
-              </summary>
-              <ul className="mt-1 ml-4 list-disc max-h-40 overflow-y-auto">
-                {result.warnings.slice(0, 50).map((w, i) => (
-                  <li key={i}>{w}</li>
-                ))}
-              </ul>
-            </details>
+          {result.kind === "started" ? (
+            <>
+              <p className="font-semibold">
+                Exporte {result.version} iniciado
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Generando recortes en segundo plano. Sigue el progreso en la
+                barra inferior — puedes cerrar esta pestaña o cancelarlo desde
+                ahí.
+              </p>
+            </>
+          ) : (
+            <p className="font-semibold">
+              Sin cambios — ya existía como {result.version}
+            </p>
           )}
         </div>
       )}

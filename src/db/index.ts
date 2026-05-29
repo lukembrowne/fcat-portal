@@ -151,6 +151,15 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
 // resetting when a job is recovered after a crash.
 const CAMERA_TRAP_JOB_TYPES = new Set(["ml", "ml_incremental", "compression", "revert_compression"]);
 
+// Training-export jobs run fire-and-forget OUTSIDE the queue, so the default
+// "reset to pending + drain queue" recovery would strand them at `pending`
+// forever (no dispatcher picks them up). Mark them `failed` on boot instead;
+// the partial folder persists and a re-run finishes fast via skip-existing.
+const TRAINING_EXPORT_JOB_TYPES = new Set([
+  "training_export",
+  "training_export_upload",
+]);
+
 /**
  * Reset jobs left in `processing` from a previous server lifecycle so they
  * resume on the next queue tick instead of being marked failed.
@@ -180,6 +189,26 @@ export function recoverStuckJobs() {
       .all();
 
     for (const job of stuckJobs) {
+      // Non-queueable export jobs: fail (don't re-queue) — see note above.
+      if (TRAINING_EXPORT_JOB_TYPES.has(job.jobType)) {
+        log.warn(
+          { jobId: job.id, jobType: job.jobType },
+          "[db] Failing interrupted training-export job (re-run to resume)"
+        );
+        database
+          .update(schema.processingJobs)
+          .set({
+            status: "failed",
+            completedAt: new Date(),
+            errorMessage:
+              "Exporte interrumpido por reinicio del servidor. Vuelve a ejecutarlo (los recortes ya generados se reutilizan).",
+            statusMessage: null,
+          })
+          .where(eq(schema.processingJobs.id, job.id))
+          .run();
+        continue;
+      }
+
       log.warn(
         {
           jobId: job.id,
@@ -255,6 +284,23 @@ export function recoverStuckJobs() {
       }
     } catch {
       // temp dir cleanup is best-effort
+    }
+
+    // Clean up orphaned training-export upload tars (a crash mid-upload leaves a
+    // `.upload-*.tar.gz` in data/training-exports; the version folders themselves
+    // must NOT be touched — they're the resume substrate).
+    try {
+      const exportRoot = path.join(process.cwd(), "data", "training-exports");
+      if (fs.existsSync(exportRoot)) {
+        for (const entry of fs.readdirSync(exportRoot)) {
+          if (entry.startsWith(".upload-") && entry.endsWith(".tar.gz")) {
+            fs.rmSync(path.join(exportRoot, entry), { force: true });
+            log.info({ entry }, "[db] Cleaned up orphaned export upload tar");
+          }
+        }
+      }
+    } catch {
+      // best-effort
     }
 
     // Drain the queue — pick the oldest pending job and start it. Lazy import

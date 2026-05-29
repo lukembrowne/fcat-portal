@@ -52,6 +52,10 @@ function fallbackDisplayName(jobType: string): string {
       return "Compresión de audio (FLAC)";
     case "revert_audio_compression":
       return "Reversión de compresión de audio";
+    case "training_export":
+      return "Exporte de entrenamiento";
+    case "training_export_upload":
+      return "Subida de exporte a Drive";
     default:
       return "Trabajo";
   }

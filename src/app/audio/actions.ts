@@ -778,6 +778,22 @@ export async function cancelProcessingJob(
     return cancelAudioCompressionJobAction(jobId);
   }
 
+  // Training-export jobs have NO deployment and NO subprocess — they must NOT
+  // go through camera-trap `cancelJob` (which would dereference a null
+  // deploymentId and delete detections by jobId). Cooperative cancel instead.
+  if (
+    job.jobType === JOB_TYPES.TRAINING_EXPORT ||
+    job.jobType === JOB_TYPES.TRAINING_EXPORT_UPLOAD
+  ) {
+    const { cancelTrainingExportJob } = await import(
+      "@/app/camera-trap/training-exports/actions"
+    );
+    const result = await cancelTrainingExportJob(jobId);
+    return result.success
+      ? { success: true, data: undefined }
+      : { success: false, error: result.error };
+  }
+
   // For camera trap jobs, delegate to camera-trap cancel
   const { cancelJob } = await import("@/app/camera-trap/actions");
   return cancelJob(jobId);

@@ -23,10 +23,10 @@
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import os from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import sharp from "sharp";
+import pLimit from "p-limit";
 import { eq, and, inArray, gte, sql } from "drizzle-orm";
 
 import { db } from "@/db";
@@ -36,9 +36,11 @@ import {
   identifications,
   deployments,
   cameraTrapTrainingDatasets,
+  processingJobs,
   type CameraTrapTrainingDataset,
+  type ProcessingJob,
 } from "@/db/schema";
-import { requireAdmin } from "@/lib/auth";
+import { requireAdmin, requirePermission } from "@/lib/auth";
 import type { ActionResult } from "@/lib/types";
 import {
   downloadFileToBuffer,
@@ -46,7 +48,12 @@ import {
   deleteDriveFile,
 } from "@/lib/drive-client";
 import { ML_DEFAULTS } from "@/lib/ml-defaults";
-import { recordEvent } from "@/lib/system-events";
+import {
+  recordEvent,
+  buildJobStartEvent,
+  buildJobCompletionEvent,
+} from "@/lib/system-events";
+import { JOB_TYPES } from "@/lib/job-types";
 import { log } from "@/lib/log";
 import {
   speciesFolderName,
@@ -81,6 +88,30 @@ const MIN_CONFIDENCE_FLOOR = ML_DEFAULTS.confidenceThreshold; // 0.1
 const TRAINING_EXPORT_DRIVE_FOLDER_ID =
   process.env.TRAINING_EXPORT_DRIVE_FOLDER_ID ??
   "11T9kj0Vgf584sFh1s9TYE11iL-Uu659c";
+/** How many source images to download from Drive in parallel during a crop
+ * run. Nearly every image is Drive-only (chunked ML deletes the full-res
+ * cache), so the crop loop is network-bound; a small pool turns ~1 crop/sec
+ * into 10-30x that. Conservative default because an unrelated ML job may be
+ * downloading at the same time. Env-tunable. */
+const EXPORT_DOWNLOAD_CONCURRENCY = Math.max(
+  1,
+  Number(process.env.CT_TRAINING_EXPORT_CONCURRENCY) || 8,
+);
+/** How often the crop loop writes its progress counter to the job row. The
+ * floating progress bar polls this; writing every crop would serialize against
+ * the SSE reader under busy_timeout, so we batch. */
+const PROGRESS_WRITE_EVERY = 50;
+
+/**
+ * On-disk folder name for an export: `<YYYY-MM-DD>-<version>` (e.g.
+ * `2026-05-29-v4`) so it sorts chronologically and matches the Drive archive
+ * name. Legacy exports created before this scheme keep their bare `vN` folder;
+ * the upload path always derives the real folder from the stored `manifestPath`,
+ * so both schemes archive correctly.
+ */
+function exportFolderName(version: string, createdAt: Date): string {
+  return `${createdAt.toISOString().slice(0, 10)}-${version}`;
+}
 
 /** Crop-quality + confidence knobs for an export. */
 type ExportQuality = QualityParams;
@@ -92,15 +123,17 @@ const DEFAULT_QUALITY: ExportQuality = {
   jpegQuality: JPEG_QUALITY,
 };
 
-export interface ExportResult {
-  datasetId: number;
-  version: string;
-  status: "created" | "unchanged";
-  imageCount: number;
-  classCount: number;
-  droppedSpecies: Record<string, number>;
-  warnings: string[];
-}
+/**
+ * Result of dispatching an export. The crop generation now runs as a tracked
+ * background job (`training_export`), so the action returns immediately:
+ * - `unchanged` — an identical export already exists (content-hash match); no
+ *   job was started.
+ * - `started` — a new `training_export` job is running; track it in the
+ *   floating progress bar via `jobId`.
+ */
+export type ExportDispatchResult =
+  | { kind: "unchanged"; datasetId: number; version: string }
+  | { kind: "started"; jobId: number; version: string };
 
 export interface ExportPreviewSpeciesRow {
   label: string;
@@ -653,7 +686,7 @@ function parseNumberField(
  */
 export async function exportTrainingDataset(
   formData: FormData,
-): Promise<ActionResult<ExportResult>> {
+): Promise<ActionResult<ExportDispatchResult>> {
   const user = await requireAdmin();
 
   const minExamplesRaw = formData.get("minExamples");
@@ -802,102 +835,329 @@ export async function exportTrainingDataset(
       const row = existing[0];
       return {
         success: true,
-        data: {
-          datasetId: row.id,
-          version: row.version,
-          status: "unchanged",
-          imageCount: row.imageCount,
-          classCount: row.classCount,
-          droppedSpecies: JSON.parse(row.droppedSpeciesJson),
-          warnings: [],
-        },
+        data: { kind: "unchanged", datasetId: row.id, version: row.version },
       };
     }
 
-    // Compute next monotonic version.
+    // Won the content-hash check. Claim the single-flight slot ATOMICALLY:
+    // better-sqlite3 transactions run synchronously on one connection, so this
+    // check-then-insert cannot interleave with another export's claim. Only the
+    // winner gets a job row; a concurrent caller gets `null` and bails.
+    const jobRow = db.transaction((tx) => {
+      const active = tx
+        .select({ id: processingJobs.id })
+        .from(processingJobs)
+        .where(
+          and(
+            eq(processingJobs.jobType, JOB_TYPES.TRAINING_EXPORT),
+            inArray(processingJobs.status, ["pending", "processing"]),
+          ),
+        )
+        .limit(1)
+        .all();
+      if (active.length > 0) return null;
+      return tx
+        .insert(processingJobs)
+        .values({
+          jobType: JOB_TYPES.TRAINING_EXPORT,
+          status: "processing",
+          totalImages: filtered.length,
+          processedImages: 0,
+          createdBy: user.email,
+          startedAt: new Date(),
+          statusMessage: "Preparando exporte…",
+        })
+        .returning()
+        .get() as ProcessingJob;
+    });
+
+    if (!jobRow) {
+      return {
+        success: false,
+        error:
+          "Ya hay un exporte de entrenamiento en curso. Espera a que termine.",
+      };
+    }
+
+    await recordEvent(buildJobStartEvent(jobRow));
+
+    // Allocate version + on-disk folder AFTER winning the claim, so two racing
+    // exports can never grab the same vN or write into the same folder. The
+    // folder is date-prefixed (`<YYYY-MM-DD>-vN`) to match the Drive archive
+    // name and sort chronologically.
+    const createdAt = new Date();
     const maxIdRow = await db
       .select({ maxId: sql<number | null>`max(id)` })
       .from(cameraTrapTrainingDatasets);
-    const nextNum = (maxIdRow[0]?.maxId ?? 0) + 1;
-    const version = `v${nextNum}`;
-
-    const versionDir = path.join(EXPORT_ROOT, version);
+    const version = `v${(maxIdRow[0]?.maxId ?? 0) + 1}`;
+    const versionDir = path.join(
+      EXPORT_ROOT,
+      exportFolderName(version, createdAt),
+    );
     await fs.mkdir(versionDir, { recursive: true });
 
-    // Crop every kept detection to disk. crops.csv gets one row per crop that
-    // actually lands on disk (failed crops are excluded, matching the files).
-    const warnings: string[] = [];
-    const csvRows: CropCsvRow[] = [];
-    let written = 0;
+    // Heavy work (download → crop → manifest → dataset insert) runs detached so
+    // the request returns immediately; progress + cancellation live on the job
+    // row and surface in the floating progress bar.
+    void processTrainingExportJobInternal({
+      jobId: jobRow.id,
+      filtered,
+      classList,
+      droppedSpecies,
+      splitByDeployment,
+      quality,
+      minExamples,
+      contentHash,
+      version,
+      versionDir,
+      createdAt,
+      createdBy: user.email,
+    }).catch((err) => {
+      // Last-resort net: the processor writes its own terminal row, so this
+      // only fires if that itself threw. Mark failed + emit, best-effort.
+      void markExportJobFailed(jobRow.id, err);
+    });
 
+    return {
+      success: true,
+      data: { kind: "started", jobId: jobRow.id, version },
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.error({ err }, "[training-export] dispatch failed");
+    return { success: false, error: msg };
+  }
+}
+
+interface ProcessExportArgs {
+  jobId: number;
+  filtered: CandidateRow[];
+  classList: string[];
+  droppedSpecies: Record<string, number>;
+  splitByDeployment: Map<number, Split>;
+  quality: ExportQuality;
+  minExamples: number;
+  contentHash: string;
+  version: string;
+  versionDir: string;
+  createdAt: Date;
+  createdBy: string;
+}
+
+/**
+ * Background crop generation for a `training_export` job. Downloads each source
+ * image ONCE (grouped by imageId) with bounded concurrency, crops every
+ * detection from it in-memory, and writes determinate progress to the job row.
+ * Cooperative cancellation: the loop polls the job status between images; the
+ * cancel action flips it to `cancelled` and owns the terminal event, so this
+ * function just stops and leaves the partial folder for a fast retry.
+ */
+async function processTrainingExportJobInternal(
+  args: ProcessExportArgs,
+): Promise<void> {
+  const {
+    jobId,
+    filtered,
+    classList,
+    droppedSpecies,
+    splitByDeployment,
+    quality,
+    minExamples,
+    contentHash,
+    version,
+    versionDir,
+    createdAt,
+    createdBy,
+  } = args;
+
+  const startedAt = Date.now();
+  let eventEmitted = false;
+  const emitTerminal = async (extras?: Record<string, unknown>) => {
+    if (eventEmitted) return;
+    eventEmitted = true;
+    const [latest] = await db
+      .select()
+      .from(processingJobs)
+      .where(eq(processingJobs.id, jobId))
+      .limit(1);
+    if (latest) await recordEvent(buildJobCompletionEvent(latest, extras));
+  };
+  const isCancelled = async (): Promise<boolean> => {
+    const [j] = await db
+      .select({ status: processingJobs.status })
+      .from(processingJobs)
+      .where(eq(processingJobs.id, jobId))
+      .limit(1);
+    return !j || j.status !== "processing";
+  };
+
+  try {
     log.info(
-      { version, crops: filtered.length, classes: classList.length },
+      {
+        jobId,
+        version,
+        crops: filtered.length,
+        classes: classList.length,
+        concurrency: EXPORT_DOWNLOAD_CONCURRENCY,
+      },
       "[training-export] starting export",
     );
-    const startedAt = Date.now();
 
-    for (const row of filtered) {
-      const split = splitByDeployment.get(row.deploymentId)!;
-      const folderName = speciesFolderName(row.finalLabel);
-      const outDir = path.join(versionDir, split, folderName);
-      const outPath = path.join(outDir, `${row.detectionId}.jpg`);
+    // Group candidates by source image so each Drive object downloads once.
+    // Keep each row's index in `filtered` so crops.csv stays deterministic
+    // regardless of download-completion order.
+    const byImage = new Map<number, { row: CandidateRow; idx: number }[]>();
+    filtered.forEach((row, idx) => {
+      const g = byImage.get(row.imageId);
+      if (g) g.push({ row, idx });
+      else byImage.set(row.imageId, [{ row, idx }]);
+    });
 
-      try {
-        await fs.mkdir(outDir, { recursive: true });
-        const buffer = await loadImageBytes(row);
-        await cropAndWrite(buffer, row, outPath, quality);
-        written += 1;
-        csvRows.push({
-          // POSIX-style relative path (forward slashes) regardless of OS.
-          cropPath: [split, folderName, `${row.detectionId}.jpg`].join("/"),
-          detectionId: row.detectionId,
-          imageId: row.imageId,
-          deploymentId: row.deploymentId,
-          deploymentName: row.deploymentName,
-          split,
-          label: row.finalLabel,
-          mlSpecies: row.mlSpecies,
-          correctedSpecies: row.correctedSpecies,
-          verificationStatus: row.verificationStatus,
-          mdConfidence: row.detectionConfidence,
-          classifierConfidence: row.classifierConfidence,
-          bboxX: row.bboxX,
-          bboxY: row.bboxY,
-          bboxWidth: row.bboxWidth,
-          bboxHeight: row.bboxHeight,
-          detectionClass: row.detectionClass,
-          detectorModelVersion: row.detectorModelVersion,
-        });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        warnings.push(`detection ${row.detectionId}: ${msg}`);
-        if (warnings.length <= 5) {
-          log.warn(
-            { detectionId: row.detectionId, err: msg },
-            "[training-export] crop failed for detection",
-          );
-        }
-      }
+    const csvSlots: (CropCsvRow | null)[] = new Array(filtered.length).fill(
+      null,
+    );
+    const warnings: string[] = [];
+    let written = 0;
+    let failedCrops = 0;
+    let processed = 0; // attempted (written + skipped + failed) — reaches total
+    let lastWriteAt = 0;
 
-      if (written > 0 && written % 200 === 0) {
-        const elapsed = (Date.now() - startedAt) / 1000;
-        const rate = written / elapsed;
-        const eta = Math.round((filtered.length - written) / rate);
-        log.info(
-          { written, total: filtered.length, ratePerSec: +rate.toFixed(1), etaSec: eta },
-          "[training-export] progress",
+    const tick = async (force = false): Promise<void> => {
+      if (!force && processed - lastWriteAt < PROGRESS_WRITE_EVERY) return;
+      lastWriteAt = processed;
+      // Write the ABSOLUTE counter (never processedImages + 1) so overlapping
+      // throttled writes from the pool are last-writer-wins-safe.
+      await db
+        .update(processingJobs)
+        .set({
+          processedImages: processed,
+          failedImages: failedCrops,
+          statusMessage: `Generando recortes... (${processed} de ${filtered.length})`,
+        })
+        .where(eq(processingJobs.id, jobId));
+      const elapsed = (Date.now() - startedAt) / 1000;
+      const rate = processed / Math.max(elapsed, 0.001);
+      log.info(
+        {
+          jobId,
+          processed,
+          total: filtered.length,
+          written,
+          failed: failedCrops,
+          ratePerSec: +rate.toFixed(1),
+          etaSec: Math.round((filtered.length - processed) / Math.max(rate, 0.001)),
+          rssMb: Math.round(process.memoryUsage().rss / 1048576),
+        },
+        "[training-export] progress",
+      );
+    };
+
+    const addWarning = (detectionId: number, msg: string) => {
+      warnings.push(`detection ${detectionId}: ${msg}`);
+      if (warnings.length <= 5) {
+        log.warn(
+          { jobId, detectionId, err: msg },
+          "[training-export] crop failed for detection",
         );
       }
+    };
+
+    const limit = pLimit(EXPORT_DOWNLOAD_CONCURRENCY);
+    let cancelled = false;
+
+    await Promise.all(
+      [...byImage.values()].map((group) =>
+        limit(async () => {
+          if (cancelled) return;
+          if (await isCancelled()) {
+            cancelled = true;
+            return;
+          }
+
+          let buffer: Buffer;
+          try {
+            buffer = await loadImageBytes(group[0].row);
+          } catch (err) {
+            // Download exhausted retries (404 / permanent) — withRetry already
+            // absorbed transient 429/5xx, so skip this image's whole group.
+            const msg = err instanceof Error ? err.message : String(err);
+            for (const { row } of group) {
+              addWarning(row.detectionId, msg);
+              failedCrops += 1;
+            }
+            processed += group.length;
+            await tick();
+            return;
+          }
+
+          for (const { row, idx } of group) {
+            const split = splitByDeployment.get(row.deploymentId)!;
+            const folderName = speciesFolderName(row.finalLabel);
+            const outDir = path.join(versionDir, split, folderName);
+            const outPath = path.join(outDir, `${row.detectionId}.jpg`);
+            try {
+              await fs.mkdir(outDir, { recursive: true });
+              await cropAndWriteAtomic(buffer, row, outPath, quality);
+              written += 1;
+              csvSlots[idx] = {
+                // POSIX-style relative path regardless of OS.
+                cropPath: [split, folderName, `${row.detectionId}.jpg`].join("/"),
+                detectionId: row.detectionId,
+                imageId: row.imageId,
+                deploymentId: row.deploymentId,
+                deploymentName: row.deploymentName,
+                split,
+                label: row.finalLabel,
+                mlSpecies: row.mlSpecies,
+                correctedSpecies: row.correctedSpecies,
+                verificationStatus: row.verificationStatus,
+                mdConfidence: row.detectionConfidence,
+                classifierConfidence: row.classifierConfidence,
+                bboxX: row.bboxX,
+                bboxY: row.bboxY,
+                bboxWidth: row.bboxWidth,
+                bboxHeight: row.bboxHeight,
+                detectionClass: row.detectionClass,
+                detectorModelVersion: row.detectorModelVersion,
+              };
+            } catch (err) {
+              // Disk-full is fatal for the whole job; anything else is a per-crop
+              // warning (skip + continue).
+              if (
+                err instanceof Error &&
+                (err as NodeJS.ErrnoException).code === "ENOSPC"
+              ) {
+                throw new Error("Sin espacio en disco al generar recortes.");
+              }
+              addWarning(
+                row.detectionId,
+                err instanceof Error ? err.message : String(err),
+              );
+              failedCrops += 1;
+            }
+            processed += 1;
+            await tick();
+          }
+        }),
+      ),
+    );
+
+    // Cancelled mid-run: the cancel action set status='cancelled' and emitted
+    // the terminal event. Leave the partial folder on disk for a fast retry.
+    if (cancelled || (await isCancelled())) {
+      log.info({ jobId, version, written }, "[training-export] cancelled");
+      return;
     }
 
-    // Build manifest + per-deployment counts.
+    await tick(true);
+
+    // Manifest + per-deployment counts (over the full candidate set).
     const counts = buildCounts(
       filtered.map((c) => ({
         finalLabel: c.finalLabel,
         split: splitByDeployment.get(c.deploymentId)!,
       })),
     );
-
     const perDeploymentCounts = new Map<number, number>();
     for (const c of filtered) {
       perDeploymentCounts.set(
@@ -916,8 +1176,8 @@ export async function exportTrainingDataset(
     const manifest = buildManifest({
       version,
       contentHash,
-      createdAt: new Date(),
-      createdBy: user.email,
+      createdAt,
+      createdBy,
       minExamplesThreshold: minExamples,
       classList: classList.map((label) => speciesFolderName(label)),
       droppedSpecies,
@@ -933,14 +1193,13 @@ export async function exportTrainingDataset(
         jpegQuality: quality.jpegQuality,
       },
     });
-
     const manifestPath = path.join(versionDir, "manifest.json");
     await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2));
 
-    // Per-crop provenance CSV (one row per crop on disk) for ML consumers.
-    const cropsCsvPath = path.join(versionDir, "crops.csv");
+    // Per-crop provenance CSV, in deterministic `filtered` order.
+    const csvRows = csvSlots.filter((r): r is CropCsvRow => r !== null);
     await fs.writeFile(
-      cropsCsvPath,
+      path.join(versionDir, "crops.csv"),
       buildCropsCsv(csvRows, {
         cropPadding: quality.cropPadding,
         cropLongEdge: quality.cropLongEdge,
@@ -948,14 +1207,24 @@ export async function exportTrainingDataset(
       }),
     );
 
-    // Insert the dataset row in a synchronous transaction.
-    const datasetRow = db.transaction((tx) => {
-      return tx
+    // Insert the dataset row AND flip the job to completed atomically, guarded
+    // by status='processing' so a last-instant cancel can't leave a completed
+    // dataset attached to a cancelled job.
+    const committed = db.transaction((tx) => {
+      const [j] = tx
+        .select({ status: processingJobs.status })
+        .from(processingJobs)
+        .where(eq(processingJobs.id, jobId))
+        .limit(1)
+        .all();
+      if (!j || j.status !== "processing") return null;
+      const ds = tx
         .insert(cameraTrapTrainingDatasets)
         .values({
           version,
           contentHash,
-          createdBy: user.email,
+          createdBy,
+          createdAt,
           imageCount: written,
           classCount: classList.length,
           minExamplesThreshold: minExamples,
@@ -972,13 +1241,28 @@ export async function exportTrainingDataset(
         })
         .returning()
         .get() as CameraTrapTrainingDataset;
+      tx.update(processingJobs)
+        .set({
+          status: "completed",
+          completedAt: new Date(),
+          statusMessage: null,
+          processedImages: filtered.length,
+        })
+        .where(eq(processingJobs.id, jobId))
+        .run();
+      return ds;
     });
 
-    const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
+    if (!committed) {
+      log.info({ jobId, version }, "[training-export] cancelled at finalize");
+      return;
+    }
+
     log.info(
       {
+        jobId,
         version,
-        elapsedSec: elapsed,
+        elapsedSec: ((Date.now() - startedAt) / 1000).toFixed(1),
         written,
         total: filtered.length,
         classes: classList.length,
@@ -987,43 +1271,62 @@ export async function exportTrainingDataset(
       "[training-export] done",
     );
 
-    await recordEvent({
-      source: "camera-trap",
-      eventType: "training_export.completed",
-      summary: `Exporte de entrenamiento ${version} creado — ${written} recortes, ${classList.length} clases`,
-      actorEmail: user.email,
-      targetType: "training_dataset",
-      targetId: datasetRow.id,
-      durationMs: Date.now() - startedAt,
-      details: {
-        version,
-        imageCount: written,
-        classCount: classList.length,
-        minExamples,
-        detectionConfidenceFloor: quality.detectionConfidenceFloor,
-        cropPadding: quality.cropPadding,
-        cropLongEdge: quality.cropLongEdge,
-        jpegQuality: quality.jpegQuality,
-        warnings: warnings.length,
-      },
+    await emitTerminal({
+      version,
+      imageCount: written,
+      classCount: classList.length,
+      minExamples,
+      warnings: warnings.length,
     });
-
-    return {
-      success: true,
-      data: {
-        datasetId: datasetRow.id,
-        version,
-        status: "created",
-        imageCount: written,
-        classCount: classList.length,
-        droppedSpecies,
-        warnings,
-      },
-    };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    log.error({ err }, "[training-export] failed");
-    return { success: false, error: msg };
+    log.error({ err, jobId, version }, "[training-export] job failed");
+    await db
+      .update(processingJobs)
+      .set({
+        status: "failed",
+        completedAt: new Date(),
+        errorMessage: msg,
+        statusMessage: null,
+      })
+      .where(eq(processingJobs.id, jobId));
+    await emitTerminal();
+  }
+}
+
+/**
+ * Last-resort terminal write for a fire-and-forget export/upload job whose
+ * processor threw before writing its own terminal row. Guarded so it never
+ * clobbers an already-terminal row, and emits the completion event once.
+ */
+async function markExportJobFailed(jobId: number, err: unknown): Promise<void> {
+  const msg = err instanceof Error ? err.message : String(err);
+  log.error({ err, jobId }, "[training-export] dispatch-level failure");
+  try {
+    await db
+      .update(processingJobs)
+      .set({
+        status: "failed",
+        completedAt: new Date(),
+        errorMessage: msg,
+        statusMessage: null,
+      })
+      .where(
+        and(
+          eq(processingJobs.id, jobId),
+          inArray(processingJobs.status, ["pending", "processing"]),
+        ),
+      );
+    const [latest] = await db
+      .select()
+      .from(processingJobs)
+      .where(eq(processingJobs.id, jobId))
+      .limit(1);
+    if (latest && latest.status === "failed") {
+      await recordEvent(buildJobCompletionEvent(latest));
+    }
+  } catch (e) {
+    log.error({ err: e, jobId }, "[training-export] could not mark job failed");
   }
 }
 
@@ -1050,13 +1353,27 @@ async function loadImageBytes(row: CandidateRow): Promise<Buffer> {
 /**
  * Crop a normalized bbox out of an image with `cropPadding` padding, resize the
  * long edge to `cropLongEdge` px, and write at `jpegQuality`.
+ *
+ * Crash-safe + idempotent: a complete crop already on disk (size > 0) is reused
+ * (so a retry after an interrupted export is fast), and a fresh crop is written
+ * to a `.tmp` sibling then atomically renamed — so a process killed mid-encode
+ * can never leave a truncated `.jpg` that a later run mistakes for done. The
+ * single-flight guard guarantees no concurrent writer, so the exists-check is
+ * race-free.
  */
-async function cropAndWrite(
+async function cropAndWriteAtomic(
   buffer: Buffer,
   row: CandidateRow,
   outPath: string,
   quality: ExportQuality,
 ): Promise<void> {
+  try {
+    const st = await fs.stat(outPath);
+    if (st.size > 0) return; // already written by a prior run
+  } catch {
+    // Not present — write it below.
+  }
+
   const meta = await sharp(buffer).metadata();
   if (!meta.width || !meta.height) {
     throw new Error("image has no dimensions");
@@ -1080,6 +1397,7 @@ async function cropAndWrite(
   if (left + width > W) width = W - left;
   if (top + height > H) height = H - top;
 
+  const tmpPath = `${outPath}.tmp`;
   await sharp(buffer)
     .extract({ left, top, width, height })
     .resize({
@@ -1089,34 +1407,34 @@ async function cropAndWrite(
       withoutEnlargement: false,
     })
     .jpeg({ quality: quality.jpegQuality })
-    .toFile(outPath);
+    .toFile(tmpPath);
+  await fs.rename(tmpPath, outPath);
 }
 
-export interface UploadArchiveResult {
-  version: string;
-  webViewLink: string;
-  sizeBytes: number;
+export interface UploadDispatchResult {
+  jobId: number;
 }
 
 /**
- * Package a training-export version folder into a .tar.gz and upload it to the
- * shared Drive folder so it can be downloaded/shared with collaborators.
- *
- * Streams the archive from disk (never buffers it in memory) and stores the
- * resulting webViewLink on the dataset row. The archive inherits the Shared
- * Drive's membership — there is no public link sharing.
+ * Dispatch a `training_export_upload` job: tar the export's version folder and
+ * stream the .tar.gz to the shared Drive folder. Returns immediately with a
+ * jobId; progress (indeterminate, phase via statusMessage) and cancellation
+ * live on the job row and surface in the floating progress bar.
  */
 export async function packageAndUploadExport(
   version: string,
-): Promise<ActionResult<UploadArchiveResult>> {
+): Promise<ActionResult<UploadDispatchResult>> {
   const user = await requireAdmin();
 
-  // Strict allowlist — `version` is interpolated into a tar arg and a path.
+  // Strict allowlist on the DB key (defense-in-depth; the tar arg is the folder
+  // basename derived from the stored manifestPath, run via execFile/no-shell).
   if (!/^v\d+$/.test(version)) {
     return { success: false, error: "Versión inválida." };
   }
 
-  // The dataset must exist in the DB (don't archive arbitrary directories).
+  // The dataset must exist (don't archive arbitrary directories). It only
+  // exists after the crop job's final insert, so this naturally blocks an
+  // upload of a version that is still mid-export.
   const datasetRows = await db
     .select()
     .from(cameraTrapTrainingDatasets)
@@ -1127,7 +1445,9 @@ export async function packageAndUploadExport(
   }
   const dataset = datasetRows[0];
 
-  const versionDir = path.join(EXPORT_ROOT, version);
+  // The real on-disk folder is the manifest's parent — works for both legacy
+  // `vN` folders and the new `<date>-vN` scheme.
+  const versionDir = path.dirname(dataset.manifestPath);
   try {
     const stat = await fs.stat(versionDir);
     if (!stat.isDirectory()) throw new Error("not a directory");
@@ -1138,35 +1458,142 @@ export async function packageAndUploadExport(
     };
   }
 
-  // Build the archive in the OS temp dir (cleaned up in finally).
-  const tarPath = path.join(os.tmpdir(), `training-export-${version}.tar.gz`);
-  const startedAt = Date.now();
+  // Atomic single-flight: one upload at a time.
+  const jobRow = db.transaction((tx) => {
+    const active = tx
+      .select({ id: processingJobs.id })
+      .from(processingJobs)
+      .where(
+        and(
+          eq(processingJobs.jobType, JOB_TYPES.TRAINING_EXPORT_UPLOAD),
+          inArray(processingJobs.status, ["pending", "processing"]),
+        ),
+      )
+      .limit(1)
+      .all();
+    if (active.length > 0) return null;
+    return tx
+      .insert(processingJobs)
+      .values({
+        jobType: JOB_TYPES.TRAINING_EXPORT_UPLOAD,
+        status: "processing",
+        totalImages: 0,
+        processedImages: 0,
+        createdBy: user.email,
+        startedAt: new Date(),
+        statusMessage: "Preparando subida…",
+      })
+      .returning()
+      .get() as ProcessingJob;
+  });
 
+  if (!jobRow) {
+    return {
+      success: false,
+      error: "Ya hay una subida de exporte en curso. Espera a que termine.",
+    };
+  }
+
+  await recordEvent(buildJobStartEvent(jobRow));
+
+  void processTrainingExportUploadJobInternal(jobRow.id, dataset.id).catch(
+    (err) => {
+      void markExportJobFailed(jobRow.id, err);
+    },
+  );
+
+  return { success: true, data: { jobId: jobRow.id } };
+}
+
+/**
+ * Background tar + upload for a `training_export_upload` job. Tar runs into the
+ * `data/` volume (not os.tmpdir() — a multi-GB archive could exhaust tmpfs) and
+ * is removed in `finally`. Upload progress is indeterminate; phases are shown
+ * via statusMessage. On cancel/failure the just-created Drive file is removed so
+ * a partial upload can't orphan, and the prior good archive is never deleted.
+ */
+async function processTrainingExportUploadJobInternal(
+  jobId: number,
+  datasetId: number,
+): Promise<void> {
+  const startedAt = Date.now();
+  let eventEmitted = false;
+  const emitTerminal = async (extras?: Record<string, unknown>) => {
+    if (eventEmitted) return;
+    eventEmitted = true;
+    const [latest] = await db
+      .select()
+      .from(processingJobs)
+      .where(eq(processingJobs.id, jobId))
+      .limit(1);
+    if (latest) await recordEvent(buildJobCompletionEvent(latest, extras));
+  };
+  const isCancelled = async (): Promise<boolean> => {
+    const [j] = await db
+      .select({ status: processingJobs.status })
+      .from(processingJobs)
+      .where(eq(processingJobs.id, jobId))
+      .limit(1);
+    return !j || j.status !== "processing";
+  };
+
+  let tarPath: string | null = null;
+  let uploadedId: string | null = null;
   try {
-    log.info({ version, tarPath }, "[training-export] packaging archive");
-    // execFile (not exec) — no shell, so `version` cannot inject. -C changes
-    // into EXPORT_ROOT so the archive contains `<version>/...` paths.
+    const [dataset] = await db
+      .select()
+      .from(cameraTrapTrainingDatasets)
+      .where(eq(cameraTrapTrainingDatasets.id, datasetId))
+      .limit(1);
+    if (!dataset) throw new Error("El exporte ya no existe.");
+
+    const versionDir = path.dirname(dataset.manifestPath);
+    const folderName = path.basename(versionDir);
+    const parentDir = path.dirname(versionDir);
+    // Defensive allowlist on the folder name that goes into the tar arg.
+    if (!/^(\d{4}-\d{2}-\d{2}-)?v\d+$/.test(folderName)) {
+      throw new Error(`Nombre de carpeta inesperado: ${folderName}`);
+    }
+
+    await db
+      .update(processingJobs)
+      .set({ statusMessage: "Empaquetando archivo…" })
+      .where(eq(processingJobs.id, jobId));
+
+    log.info(
+      { jobId, version: dataset.version, folderName },
+      "[training-export] packaging archive",
+    );
+    tarPath = path.join(EXPORT_ROOT, `.upload-${folderName}.tar.gz`);
+    // execFile (no shell). -C into the parent so the archive contains
+    // `<folderName>/...` — extracting yields a folder matching the archive name.
     await execFileAsync(
       "tar",
-      ["-czf", tarPath, "-C", EXPORT_ROOT, version],
+      ["-czf", tarPath, "-C", parentDir, folderName],
       { maxBuffer: 1024 * 1024 },
     );
 
-    // Date-prefix the Drive filename so archives sort chronologically in the
-    // Drive folder (avoids the lexical v1/v10/v2 interleave). The prefix is the
-    // export's creation date (stable across re-uploads), e.g. 2026-05-28-v10.tar.gz.
-    const datePrefix = dataset.createdAt.toISOString().slice(0, 10);
-    const archiveName = `${datePrefix}-${version}.tar.gz`;
+    if (await isCancelled()) {
+      log.info({ jobId }, "[training-export] upload cancelled during tar");
+      return;
+    }
 
+    await db
+      .update(processingJobs)
+      .set({ statusMessage: "Subiendo a Drive…" })
+      .where(eq(processingJobs.id, jobId));
+
+    const archiveName = `${folderName}.tar.gz`;
     const uploaded = await uploadLocalFileToSharedDrive(
       tarPath,
       archiveName,
       "application/gzip",
       TRAINING_EXPORT_DRIVE_FOLDER_ID,
     );
+    uploadedId = uploaded.id;
 
-    // If a prior archive existed, delete it so the folder doesn't accumulate
-    // stale copies of the same version.
+    // Delete the prior archive (if any) so the folder doesn't accumulate stale
+    // copies of the same version.
     if (
       dataset.driveArchiveFileId &&
       dataset.driveArchiveFileId !== uploaded.id
@@ -1181,51 +1608,116 @@ export async function packageAndUploadExport(
       }
     }
 
-    db.update(cameraTrapTrainingDatasets)
-      .set({
-        driveArchiveFileId: uploaded.id,
-        driveArchiveWebViewLink: uploaded.webViewLink,
-        archiveUploadedAt: new Date(),
-      })
-      .where(eq(cameraTrapTrainingDatasets.id, dataset.id))
-      .run();
-
-    await recordEvent({
-      source: "camera-trap",
-      eventType: "training_export.uploaded",
-      summary: `Exporte de entrenamiento ${version} empaquetado y subido a Drive`,
-      actorEmail: user.email,
-      targetType: "training_dataset",
-      targetId: dataset.id,
-      durationMs: Date.now() - startedAt,
-      details: {
-        version,
-        sizeBytes: uploaded.size,
-        driveFileId: uploaded.id,
-      },
+    // Persist the link + complete the job atomically, guarded by status so a
+    // last-instant cancel doesn't record a completed upload.
+    const committed = db.transaction((tx) => {
+      const [j] = tx
+        .select({ status: processingJobs.status })
+        .from(processingJobs)
+        .where(eq(processingJobs.id, jobId))
+        .limit(1)
+        .all();
+      if (!j || j.status !== "processing") return false;
+      tx.update(cameraTrapTrainingDatasets)
+        .set({
+          driveArchiveFileId: uploaded.id,
+          driveArchiveWebViewLink: uploaded.webViewLink,
+          archiveUploadedAt: new Date(),
+        })
+        .where(eq(cameraTrapTrainingDatasets.id, datasetId))
+        .run();
+      tx.update(processingJobs)
+        .set({
+          status: "completed",
+          completedAt: new Date(),
+          statusMessage: null,
+        })
+        .where(eq(processingJobs.id, jobId))
+        .run();
+      return true;
     });
 
+    if (!committed) {
+      // Cancelled at finalize — remove the just-uploaded file so it doesn't orphan.
+      if (uploadedId) await deleteDriveFile(uploadedId).catch(() => {});
+      log.info({ jobId }, "[training-export] upload cancelled at finalize");
+      return;
+    }
+
     log.info(
-      { version, sizeBytes: uploaded.size, elapsedMs: Date.now() - startedAt },
+      {
+        jobId,
+        version: dataset.version,
+        sizeBytes: uploaded.size,
+        elapsedMs: Date.now() - startedAt,
+      },
       "[training-export] archive uploaded",
     );
-
-    return {
-      success: true,
-      data: {
-        version,
-        webViewLink: uploaded.webViewLink,
-        sizeBytes: uploaded.size,
-      },
-    };
+    await emitTerminal({
+      version: dataset.version,
+      sizeBytes: uploaded.size,
+      driveFileId: uploaded.id,
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    log.error({ err, version }, "[training-export] package/upload failed");
-    return {
-      success: false,
-      error: `No se pudo empaquetar/subir el exporte: ${msg}`,
-    };
+    log.error({ err, jobId }, "[training-export] package/upload failed");
+    // A partial/failed upload must not orphan a stray file in Drive.
+    if (uploadedId) await deleteDriveFile(uploadedId).catch(() => {});
+    await db
+      .update(processingJobs)
+      .set({
+        status: "failed",
+        completedAt: new Date(),
+        errorMessage: `No se pudo empaquetar/subir el exporte: ${msg}`,
+        statusMessage: null,
+      })
+      .where(eq(processingJobs.id, jobId));
+    await emitTerminal();
   } finally {
-    await fs.rm(tarPath, { force: true }).catch(() => {});
+    if (tarPath) await fs.rm(tarPath, { force: true }).catch(() => {});
   }
+}
+
+/**
+ * Cancel a `training_export` / `training_export_upload` job. Cooperative: flips
+ * the row to `cancelled` (the running loop polls this) and emits the terminal
+ * event. Idempotent — cancelling an already-terminal job is a no-op success.
+ * These jobs have no subprocess (`pid` is null), so nothing to kill.
+ */
+export async function cancelTrainingExportJob(
+  jobId: number,
+): Promise<ActionResult<{ jobId: number }>> {
+  await requirePermission("camera-trap", "editor");
+
+  const [job] = await db
+    .select()
+    .from(processingJobs)
+    .where(eq(processingJobs.id, jobId))
+    .limit(1);
+  if (!job) {
+    return { success: false, error: "Trabajo no encontrado." };
+  }
+  if (
+    job.jobType !== JOB_TYPES.TRAINING_EXPORT &&
+    job.jobType !== JOB_TYPES.TRAINING_EXPORT_UPLOAD
+  ) {
+    return { success: false, error: "Este trabajo no se cancela aquí." };
+  }
+  if (job.status !== "pending" && job.status !== "processing") {
+    return { success: true, data: { jobId } }; // already terminal — no-op
+  }
+
+  await db
+    .update(processingJobs)
+    .set({ status: "cancelled", completedAt: new Date(), statusMessage: null })
+    .where(eq(processingJobs.id, jobId));
+
+  const [latest] = await db
+    .select()
+    .from(processingJobs)
+    .where(eq(processingJobs.id, jobId))
+    .limit(1);
+  if (latest) await recordEvent(buildJobCompletionEvent(latest));
+
+  return { success: true, data: { jobId } };
 }

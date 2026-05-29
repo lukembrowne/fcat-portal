@@ -94,6 +94,8 @@ export const JOB_LABELS: Record<JobType, string> = {
   revert_audio_compression: "Reversión de compresión FLAC",
   shared_drives_reconcile: "Reconciliación de Shared Drives",
   cache_deployment_images: "Caché de imágenes",
+  training_export: "Exporte de entrenamiento",
+  training_export_upload: "Subida de exporte",
 };
 
 const OUTCOME_VERBS: Record<TerminalOutcome, string> = {

@@ -27,7 +27,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import sharp from "sharp";
 import pLimit from "p-limit";
-import { eq, and, inArray, gte, sql } from "drizzle-orm";
+import { eq, and, inArray, gte, sql, isNotNull } from "drizzle-orm";
 
 import { db } from "@/db";
 import {
@@ -286,6 +286,21 @@ async function collectExportCandidates(
         eq(detections.detectionClass, 0),
         eq(deployments.excluded, false),
         gte(detections.detectionConfidence, detectionConfidenceFloor),
+        // Exclude detections whose source image can never be fetched. The crop
+        // loop downloads via `loadImageBytes`, which tries the local cache path
+        // first but REQUIRES a driveFileId as the durable fallback (the local
+        // cache is routinely deleted by chunked ML). A row with no driveFileId
+        // is unfetchable-by-construction: it would be counted in `filtered` yet
+        // never written to disk, inflating manifest.counts above the on-disk
+        // JPEG count (the v4 overshoot bug). Dropping it here keeps the preview,
+        // content hash, coverage guard, and disk in agreement.
+        //
+        // Hash-basis change: this removes rows from the set fed to
+        // computeContentHash, so every existing dataset's hash shifts once — the
+        // next export re-creates the dataset under a new version even on an
+        // unchanged corpus. Same one-time, harmless effect documented for the
+        // `quality` block in training-export-helpers.ts:computeContentHash.
+        isNotNull(images.driveFileId),
       ),
     );
 
@@ -1151,18 +1166,81 @@ async function processTrainingExportJobInternal(
 
     await tick(true);
 
-    // Manifest + per-deployment counts (over the full candidate set).
+    // Counts, manifest, and per-deployment summaries derive from the crops
+    // ACTUALLY written to disk (csvSlots non-null) — never the pre-fetch
+    // candidate set. A detection whose source image was unreachable at fetch
+    // time was skipped (see addWarning) and must not inflate counts above the
+    // on-disk JPEG count (the v4 overshoot bug). crops.csv already uses this set.
+    let writtenRows = csvSlots.filter((r): r is CropCsvRow => r !== null);
+
+    // Defensive coverage re-check over the WRITTEN set. The collection-time
+    // driveFileId pre-filter + the pre-fetch findUncoveredLabels guard already
+    // guarantee every surviving class has val+test coverage in `filtered`. The
+    // one residual failure mode is a TRANSIENT fetch failure (driveFileId
+    // present but Drive 404'd at fetch) that zeroes a class's only val/test
+    // crop. Shipping that re-trips the classifier's load_manifest assertion, so
+    // instead drop the class: remove it from classList + counts, prune its
+    // already-written crops, and record it under droppedSpecies. With the
+    // collection pre-filter in place this should essentially never fire.
+    const writtenPerLabelSplit = new Map<
+      string,
+      { train: number; val: number; test: number }
+    >();
+    for (const r of writtenRows) {
+      const c = writtenPerLabelSplit.get(r.label) ?? {
+        train: 0,
+        val: 0,
+        test: 0,
+      };
+      c[r.split] += 1;
+      writtenPerLabelSplit.set(r.label, c);
+    }
+    let finalClassList = classList;
+    const uncoveredAfterWrite = findUncoveredLabels(writtenPerLabelSplit).filter(
+      (label) => classList.includes(label),
+    );
+    if (uncoveredAfterWrite.length > 0) {
+      const dropSet = new Set(uncoveredAfterWrite);
+      for (const label of uncoveredAfterWrite) {
+        const c = writtenPerLabelSplit.get(label) ?? {
+          train: 0,
+          val: 0,
+          test: 0,
+        };
+        droppedSpecies[label] = c.train + c.val + c.test;
+        log.warn(
+          { jobId, version, label, counts: c },
+          "[training-export] post-write drop: surviving class lost val/test " +
+            "coverage to fetch failures. Dropping from classList, pruning crops.",
+        );
+        // Prune already-written crops for this class across all three splits.
+        const folderName = speciesFolderName(label);
+        await Promise.all(
+          (["train", "val", "test"] as const).map((split) =>
+            fs.rm(path.join(versionDir, split, folderName), {
+              recursive: true,
+              force: true,
+            }),
+          ),
+        );
+      }
+      finalClassList = classList.filter((l) => !dropSet.has(l));
+      writtenRows = writtenRows.filter((r) => !dropSet.has(r.label));
+    }
+
+    const writtenCount = writtenRows.length;
+
+    // Manifest + per-deployment counts (over the written set only). A
+    // deployment whose every crop failed contributes nothing here and is
+    // omitted from the summary.
     const counts = buildCounts(
-      filtered.map((c) => ({
-        finalLabel: c.finalLabel,
-        split: splitByDeployment.get(c.deploymentId)!,
-      })),
+      writtenRows.map((r) => ({ finalLabel: r.label, split: r.split })),
     );
     const perDeploymentCounts = new Map<number, number>();
-    for (const c of filtered) {
+    for (const r of writtenRows) {
       perDeploymentCounts.set(
-        c.deploymentId,
-        (perDeploymentCounts.get(c.deploymentId) ?? 0) + 1,
+        r.deploymentId,
+        (perDeploymentCounts.get(r.deploymentId) ?? 0) + 1,
       );
     }
     const deploymentSummaries = Array.from(perDeploymentCounts.entries())
@@ -1179,7 +1257,7 @@ async function processTrainingExportJobInternal(
       createdAt,
       createdBy,
       minExamplesThreshold: minExamples,
-      classList: classList.map((label) => speciesFolderName(label)),
+      classList: finalClassList.map((label) => speciesFolderName(label)),
       droppedSpecies,
       counts,
       deployments: deploymentSummaries,
@@ -1196,8 +1274,8 @@ async function processTrainingExportJobInternal(
     const manifestPath = path.join(versionDir, "manifest.json");
     await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2));
 
-    // Per-crop provenance CSV, in deterministic `filtered` order.
-    const csvRows = csvSlots.filter((r): r is CropCsvRow => r !== null);
+    // Per-crop provenance CSV, in deterministic order (written set).
+    const csvRows = writtenRows;
     await fs.writeFile(
       path.join(versionDir, "crops.csv"),
       buildCropsCsv(csvRows, {
@@ -1225,11 +1303,11 @@ async function processTrainingExportJobInternal(
           contentHash,
           createdBy,
           createdAt,
-          imageCount: written,
-          classCount: classList.length,
+          imageCount: writtenCount,
+          classCount: finalClassList.length,
           minExamplesThreshold: minExamples,
           classListJson: JSON.stringify(
-            classList.map((label) => speciesFolderName(label)),
+            finalClassList.map((label) => speciesFolderName(label)),
           ),
           droppedSpeciesJson: JSON.stringify(droppedSpecies),
           deploymentsJson: JSON.stringify(deploymentSummaries),
@@ -1263,9 +1341,9 @@ async function processTrainingExportJobInternal(
         jobId,
         version,
         elapsedSec: ((Date.now() - startedAt) / 1000).toFixed(1),
-        written,
+        written: writtenCount,
         total: filtered.length,
-        classes: classList.length,
+        classes: finalClassList.length,
         warnings: warnings.length,
       },
       "[training-export] done",
@@ -1273,8 +1351,8 @@ async function processTrainingExportJobInternal(
 
     await emitTerminal({
       version,
-      imageCount: written,
-      classCount: classList.length,
+      imageCount: writtenCount,
+      classCount: finalClassList.length,
       minExamples,
       warnings: warnings.length,
     });

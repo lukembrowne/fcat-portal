@@ -696,3 +696,152 @@ describe("buildCropsCsv", () => {
     expect(cells[11]).toBe("");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Regression: manifest counts must match what is WRITTEN to disk, not the
+// pre-fetch candidate set. Mirrors the count + coverage logic that
+// processTrainingExportJobInternal runs over the non-null csvSlots
+// ("writtenRows"). See docs/plans/2026-05-30-fix-training-export-counts-match-disk-plan.md.
+// ---------------------------------------------------------------------------
+
+/** Minimal CropCsvRow factory — only the fields the count logic reads matter. */
+function writtenRow(
+  detectionId: number,
+  label: string,
+  split: Split,
+  deploymentId: number,
+): CropCsvRow {
+  return {
+    cropPath: `${split}/${label}/${detectionId}.jpg`,
+    detectionId,
+    imageId: detectionId * 10,
+    deploymentId,
+    deploymentName: `dep-${deploymentId}`,
+    split,
+    label,
+    mlSpecies: label,
+    correctedSpecies: null,
+    verificationStatus: "verified",
+    mdConfidence: 0.9,
+    classifierConfidence: 0.8,
+    bboxX: 0,
+    bboxY: 0,
+    bboxWidth: 0.5,
+    bboxHeight: 0.5,
+    detectionClass: 0,
+    detectorModelVersion: "MDV6-yolov9-c",
+  };
+}
+
+/** The job's written-set per-label-per-split tally, extracted for assertions. */
+function perLabelSplit(
+  rows: CropCsvRow[],
+): Map<string, { train: number; val: number; test: number }> {
+  const m = new Map<string, { train: number; val: number; test: number }>();
+  for (const r of rows) {
+    const c = m.get(r.label) ?? { train: 0, val: 0, test: 0 };
+    c[r.split] += 1;
+    m.set(r.label, c);
+  }
+  return m;
+}
+
+describe("counts derived from the written set", () => {
+  it("counts.total equals the written-set size, not the candidate size", () => {
+    // 5 candidates for Ocelot; one source image was unreachable at fetch time
+    // (no driveFileId) so its crop was skipped — only 4 land on disk.
+    const candidateCount = 5;
+    const written = [
+      writtenRow(1, "Ocelot", "train", 10),
+      writtenRow(2, "Ocelot", "train", 10),
+      writtenRow(3, "Ocelot", "val", 11),
+      writtenRow(4, "Ocelot", "test", 12),
+      // detection 5 skipped — not present in the written set.
+    ];
+    const skipped = candidateCount - written.length;
+
+    const counts = buildCounts(
+      written.map((r) => ({ finalLabel: r.label, split: r.split })),
+    );
+
+    expect(counts.total).toBe(written.length); // 4, not 5
+    expect(counts.total + skipped).toBe(candidateCount);
+    // total reconciles with the per-split sum and the on-disk JPEG count.
+    expect(counts.train + counts.val + counts.test).toBe(counts.total);
+    expect(counts.perClass.Ocelot).toEqual({ train: 2, val: 1, test: 1 });
+  });
+
+  it("omits a deployment whose every crop failed from the per-deployment tally", () => {
+    // Deployment 99 contributed candidates but every one was skipped — it must
+    // not appear in the written-set-derived deployment summary.
+    const written = [
+      writtenRow(1, "Puma", "train", 10),
+      writtenRow(2, "Puma", "val", 11),
+      writtenRow(3, "Puma", "test", 12),
+      // deployment 99's crops all failed → absent here.
+    ];
+    const perDeployment = new Map<number, number>();
+    for (const r of written) {
+      perDeployment.set(r.deploymentId, (perDeployment.get(r.deploymentId) ?? 0) + 1);
+    }
+    expect(perDeployment.has(99)).toBe(false);
+    expect([...perDeployment.keys()].sort((a, b) => a - b)).toEqual([10, 11, 12]);
+  });
+});
+
+describe("written-set coverage re-check (bug #1 ↔ bug #2 interaction)", () => {
+  it("flags a surviving class that lost its only val crop to a fetch failure", () => {
+    // Tapir qualified pre-fetch (had a val crop), but the lone val source 404'd
+    // at fetch time, so the WRITTEN set has val=0 — which would re-trip the
+    // classifier's load_manifest assertion if shipped.
+    const written = [
+      writtenRow(1, "Tapirus bairdii", "train", 10),
+      writtenRow(2, "Tapirus bairdii", "train", 11),
+      // val crop skipped (transient 404) → no val row
+      writtenRow(3, "Tapirus bairdii", "test", 12),
+      writtenRow(4, "Cuniculus paca", "train", 20),
+      writtenRow(5, "Cuniculus paca", "val", 21),
+      writtenRow(6, "Cuniculus paca", "test", 22),
+    ];
+    const classList = ["Cuniculus paca", "Tapirus bairdii"];
+
+    const uncovered = findUncoveredLabels(perLabelSplit(written)).filter((l) =>
+      classList.includes(l),
+    );
+
+    expect(uncovered).toEqual(["Tapirus bairdii"]);
+
+    // After dropping the uncovered class, every survivor has 1/1/1 coverage.
+    const survivors = written.filter((r) => !uncovered.includes(r.label));
+    expect(findUncoveredLabels(perLabelSplit(survivors))).toEqual([]);
+  });
+
+  it("flags nothing when every written class keeps val+test coverage", () => {
+    const written = [
+      writtenRow(1, "Cuniculus paca", "train", 20),
+      writtenRow(2, "Cuniculus paca", "val", 21),
+      writtenRow(3, "Cuniculus paca", "test", 22),
+    ];
+    expect(findUncoveredLabels(perLabelSplit(written))).toEqual([]);
+  });
+});
+
+describe("cross-split contamination (written set)", () => {
+  it("never places a detectionId stem under more than one split", () => {
+    const written = [
+      writtenRow(1, "Ocelot", "train", 10),
+      writtenRow(2, "Ocelot", "val", 11),
+      writtenRow(3, "Puma", "test", 12),
+      writtenRow(4, "Puma", "train", 13),
+    ];
+    const splitsByStem = new Map<number, Set<Split>>();
+    for (const r of written) {
+      const set = splitsByStem.get(r.detectionId) ?? new Set<Split>();
+      set.add(r.split);
+      splitsByStem.set(r.detectionId, set);
+    }
+    for (const [, splits] of splitsByStem) {
+      expect(splits.size).toBe(1);
+    }
+  });
+});

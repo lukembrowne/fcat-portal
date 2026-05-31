@@ -24,7 +24,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { promises as fs } from "node:fs";
+import { promises as fs, createReadStream } from "node:fs";
 import path from "node:path";
 
 import { eq, and, ne, inArray, sql } from "drizzle-orm";
@@ -251,9 +251,10 @@ async function tryRegister(
   );
   if (!cmCheck.ok) return cmCheck;
 
-  // --- Read & hash weights (small enough; SHA-256 for audit trail) ---------
-  const weightsBytes = await fs.readFile(weightsPath);
-  const weightsSha256 = sha256Hex(weightsBytes);
+  // --- Hash weights (streamed) ---------------------------------------------
+  // BioCLIP weights.pt is ~2.5 GB; never slurp the whole file into one Buffer.
+  // Streaming keeps registration memory flat regardless of model size.
+  const weightsSha256 = await sha256File(weightsPath);
 
   // --- Parse metrics.json --------------------------------------------------
   const metricsRaw = await fs.readFile(metricsPath, "utf-8");
@@ -283,6 +284,22 @@ async function tryRegister(
     return { ok: false, error: { kind: "schema_violation", detail } };
   }
   const metrics: MetricsV2 = parsed.data;
+
+  // --- v3 integrity: verify weights against the producer-emitted hash -------
+  // A computed-but-unverified hash catches nothing. The producer (classifier
+  // train.py) emits "sha256:<hex>"; comparing it here turns a truncated scp of
+  // the 2.5 GB weights into a clean registration error instead of a strict-load
+  // explosion (or silent garbage predictions) at serve time. v2 omits the field.
+  if (metrics.weightsSha256) {
+    const expected = metrics.weightsSha256.replace(/^sha256:/, "");
+    if (expected !== weightsSha256) {
+      return {
+        ok: false,
+        error: { kind: "weights_hash_mismatch", expected, got: weightsSha256 },
+      };
+    }
+  }
+
   const metricsSha256 = sha256Hex(Buffer.from(metricsRaw));
 
   // --- Parse class_mapping.json --------------------------------------------
@@ -562,6 +579,19 @@ async function checkArtifact(
 
 function sha256Hex(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+/**
+ * Stream a file through SHA-256. Used for weights.pt, which is ~2.5 GB for a
+ * BioCLIP model — reading it into a single Buffer (fs.readFile) would spike
+ * memory and risk Node's max-Buffer limit. Returns bare hex (no "sha256:").
+ */
+async function sha256File(filePath: string): Promise<string> {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(filePath)) {
+    hash.update(chunk as Buffer);
+  }
+  return hash.digest("hex");
 }
 
 /**

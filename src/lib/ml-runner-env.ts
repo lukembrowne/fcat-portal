@@ -47,6 +47,7 @@ export function buildClassifierEnv(
 
   let metrics: {
     backbone?: unknown;
+    framework?: unknown;
     transform?: {
       imageSize?: unknown;
       mean?: unknown;
@@ -85,8 +86,15 @@ export function buildClassifierEnv(
   const weightsPath = `${activeModel.modelDir}/weights.pt`;
   const classMappingPath = `${activeModel.modelDir}/class_mapping.json`;
 
+  // Single dispatch discriminator: derive CLASSIFIER_MODEL from the (already
+  // schema-validated) framework. The Python side branches on this one key;
+  // we deliberately do NOT also forward a separate `framework` env var, so
+  // there's no way for the two to disagree. Absent framework → timm (v2).
+  const classifierModel =
+    metrics.framework === "open_clip" ? "custom_openclip" : "custom_timm";
+
   return {
-    CLASSIFIER_MODEL: "custom_timm",
+    CLASSIFIER_MODEL: classifierModel,
     CUSTOM_CLASSIFIER_WEIGHTS: weightsPath,
     CUSTOM_CLASSIFIER_CLASS_MAPPING: classMappingPath,
     CUSTOM_CLASSIFIER_BACKBONE: metrics.backbone,

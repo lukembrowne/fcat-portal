@@ -117,7 +117,7 @@ PYWARM
 
 # Check if venv already exists and has all required packages
 if [ -x "$ML_PYTHON" ]; then
-  if "$ML_PYTHON" -c "import PytorchWildlife; import librosa; import timm; import birdnet_analyzer; import maad; import scipy" 2>/dev/null; then
+  if "$ML_PYTHON" -c "import PytorchWildlife; import librosa; import timm; import open_clip; import birdnet_analyzer; import maad; import scipy" 2>/dev/null; then
     echo "[ml-setup] ML venv ready at $ML_VENV_DIR"
     warm_model_cache
     exit 0
@@ -141,8 +141,16 @@ fi
 echo "[ml-setup] Installing PytorchWildlife + missing runtime deps..."
 uv pip install --python "$ML_PYTHON" PytorchWildlife lightning omegaconf
 
-echo "[ml-setup] Installing timm (custom Chocó classifier)..."
+echo "[ml-setup] Installing timm (custom Chocó classifier, contract v2)..."
 uv pip install --python "$ML_PYTHON" timm
+
+# open_clip_torch reconstructs BioCLIP (contract v3) models — open_clip visual
+# trunk + linear head, loaded from a bare state_dict. Pulls huggingface_hub
+# transitively (needed to resolve hf-hub: backbones). CPU torch is already
+# installed above; a ViT-H/14 forward on CPU is heavy — see the Phase 2 cost
+# gate before enabling a v3 model in prod.
+echo "[ml-setup] Installing open_clip_torch (BioCLIP / custom Chocó classifier, contract v3)..."
+uv pip install --python "$ML_PYTHON" "open_clip_torch>=2.24,<3"
 
 echo "[ml-setup] Installing librosa + audio spectrogram deps..."
 uv pip install --python "$ML_PYTHON" librosa soundfile numpy matplotlib Pillow
@@ -161,8 +169,8 @@ echo "[ml-setup] Installing setuptools<75 (provides pkg_resources for yolov5)...
 uv pip install --python "$ML_PYTHON" --reinstall-package setuptools "setuptools<75"
 
 # Verify the import actually works
-echo "[ml-setup] Verifying PytorchWildlife + timm imports..."
-if "$ML_PYTHON" -c "import PytorchWildlife, timm; print('PytorchWildlife', PytorchWildlife.__version__, 'timm', timm.__version__)" 2>&1; then
+echo "[ml-setup] Verifying PytorchWildlife + timm + open_clip imports..."
+if "$ML_PYTHON" -c "import PytorchWildlife, timm, open_clip; print('PytorchWildlife', PytorchWildlife.__version__, 'timm', timm.__version__, 'open_clip', open_clip.__version__)" 2>&1; then
   echo "[ml-setup] ML venv ready!"
   warm_model_cache
 else

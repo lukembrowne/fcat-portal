@@ -118,6 +118,13 @@ def load_models(detector_version, classifier_name, device):
             except Exception as e:
                 emit({"type": "info", "message": f"custom_timm load failed: {e}"})
                 raise
+        elif classifier_name == "custom_openclip":
+            try:
+                classifier = OpenClipClassifier.from_env(device=device)
+                emit({"type": "info", "message": f"Loaded custom_openclip ({classifier.backbone}, {len(classifier.class_list)} classes) on {device}"})
+            except Exception as e:
+                emit({"type": "info", "message": f"custom_openclip load failed: {e}"})
+                raise
         else:
             classifier_class = getattr(pw_classification, classifier_name, None)
             if classifier_class:
@@ -137,114 +144,117 @@ def load_models(detector_version, classifier_name, device):
     return detector, classifier, device
 
 
-class TimmClassifier:
-    """Wrapper around a timm classifier loaded from local weights.
+def _custom_classifier_env():
+    """Read + validate the four CUSTOM_CLASSIFIER_* env vars (shared by both paths)."""
+    weights_path = os.environ.get("CUSTOM_CLASSIFIER_WEIGHTS")
+    class_mapping_path = os.environ.get("CUSTOM_CLASSIFIER_CLASS_MAPPING")
+    backbone = os.environ.get("CUSTOM_CLASSIFIER_BACKBONE")
+    transform_json = os.environ.get("CUSTOM_CLASSIFIER_TRANSFORM_JSON")
+    if not (weights_path and class_mapping_path and backbone and transform_json):
+        raise RuntimeError(
+            "custom classifier requires CUSTOM_CLASSIFIER_{WEIGHTS,CLASS_MAPPING,BACKBONE,TRANSFORM_JSON}"
+        )
+    return weights_path, class_mapping_path, backbone, transform_json
+
+
+def _load_class_list(class_mapping_path):
+    import json as _json
+    with open(class_mapping_path, "r") as f:
+        class_list = _json.load(f)
+    if not isinstance(class_list, list) or not all(isinstance(s, str) for s in class_list):
+        raise RuntimeError(
+            f"class_mapping.json must be a list of strings, got: {type(class_list).__name__}"
+        )
+    return class_list
+
+
+def _build_eval_transform(transform_cfg):
+    """Build the torchvision eval transform from a CUSTOM_CLASSIFIER_TRANSFORM_JSON dict.
+
+    Shared by the timm (v2) and open_clip (v3) paths — both drive preprocessing
+    entirely from the self-describing transform block. Must match the classifier
+    repo's data.build_transforms exactly (interpolation/antialias/resize) or
+    accuracy silently drops. interpolation/antialias/resize are additive
+    (contract v2.1+); models registered before they existed default to
+    bilinear/on/squash, so legacy efficientnet_b0 @ 224 models are unaffected.
+    BioCLIP (v3) carries bicubic + CLIP mean/std + squash @ 224 explicitly.
+    """
+    from torchvision import transforms
+    from torchvision.transforms import InterpolationMode
+
+    image_size = int(transform_cfg["imageSize"])
+    mean = list(transform_cfg["mean"])
+    std = list(transform_cfg["std"])
+    _interp_modes = {
+        "bilinear": InterpolationMode.BILINEAR,
+        "bicubic": InterpolationMode.BICUBIC,
+        "nearest": InterpolationMode.NEAREST,
+    }
+    interp_name = transform_cfg.get("interpolation", "bilinear")
+    if interp_name not in _interp_modes:
+        raise RuntimeError(f"unknown interpolation {interp_name!r}")
+    interpolation = _interp_modes[interp_name]
+    antialias = bool(transform_cfg.get("antialias", True))
+    resize_mode = transform_cfg.get("resize", "squash")
+    if resize_mode != "squash":
+        raise RuntimeError(
+            f"unsupported resize mode {resize_mode!r} (only 'squash' is implemented)"
+        )
+    return transforms.Compose([
+        transforms.ToPILImage(),
+        transforms.Resize(
+            (image_size, image_size),
+            interpolation=interpolation,
+            antialias=antialias,
+        ),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=mean, std=std),
+    ])
+
+
+def _check_free_disk(min_gb, probe_path=None):
+    """Fail fast if the box can't hold the HF cache + weights for reconstruction.
+
+    Building a BioCLIP arch downloads the ~2.5 GB hub checkpoint (overwritten by
+    the strict load) into the HF cache, on top of the ~2.5 GB weights.pt already
+    on disk. A mid-download disk-full leaves a corrupt cache and an opaque error;
+    this surfaces it cleanly instead.
+    """
+    import shutil
+
+    if probe_path is None:
+        probe_path = os.environ.get("HF_HOME") or os.path.expanduser("~")
+    # Walk up to the nearest existing ancestor (HF_HOME may not exist yet).
+    while probe_path and not os.path.exists(probe_path):
+        parent = os.path.dirname(probe_path)
+        if parent == probe_path:
+            break
+        probe_path = parent
+    free_gb = shutil.disk_usage(probe_path).free / (1024 ** 3)
+    if free_gb < min_gb:
+        raise RuntimeError(
+            f"insufficient free disk for open_clip reconstruction: "
+            f"{free_gb:.1f} GB free at {probe_path}, need ~{min_gb} GB (HF cache + weights)"
+        )
+
+
+class _CropClassifier:
+    """Shared crop-classifier wrapper: a model + ordered class list + eval transform.
 
     Matches the PytorchWildlife classifier protocol used by detections_from_result:
-    `single_image_classification(cropped_array) -> {"prediction": str, "confidence": float}`.
-
-    Loaded from env vars set by buildClassifierEnv() in ml-runner-env.ts:
-      CUSTOM_CLASSIFIER_WEIGHTS         path to weights.pt
-      CUSTOM_CLASSIFIER_CLASS_MAPPING   path to class_mapping.json (ordered list)
-      CUSTOM_CLASSIFIER_BACKBONE        timm model name, e.g. efficientnet_b0
-      CUSTOM_CLASSIFIER_TRANSFORM_JSON  {"imageSize": 480, "mean": [...], "std": [...],
-                                         "interpolation": "bicubic", "antialias": true,
-                                         "resize": "squash"}
-
-    Transform config is stored explicitly (not derived from
-    timm.data.resolve_model_data_config defaults) so any non-default training
-    augmentation choices are honored at inference time. Drift here = silent
-    accuracy regression. interpolation/antialias/resize are additive: models
-    registered before they existed default to bilinear/on/squash (the old
-    behavior), so legacy efficientnet_b0 @ 224 models are unaffected.
+    ``single_image_classification(cropped_array) -> {"prediction": str, "confidence": float}``.
+    Subclasses (TimmClassifier, OpenClipClassifier) differ ONLY in how ``from_env``
+    reconstructs the model; the transform, classify, and contract are identical.
     """
 
     def __init__(self, model, class_list, device, transform, backbone):
-        import torch  # local import — only fires if custom_timm is loaded
+        import torch  # local import — only fires if a custom classifier is loaded
         self._torch = torch
         self.model = model
         self.class_list = class_list
         self.device = device
         self.transform = transform
         self.backbone = backbone
-
-    @classmethod
-    def from_env(cls, device):
-        import json as _json
-        import torch
-        import timm
-        from torchvision import transforms
-        from torchvision.transforms import InterpolationMode
-
-        weights_path = os.environ.get("CUSTOM_CLASSIFIER_WEIGHTS")
-        class_mapping_path = os.environ.get("CUSTOM_CLASSIFIER_CLASS_MAPPING")
-        backbone = os.environ.get("CUSTOM_CLASSIFIER_BACKBONE")
-        transform_json = os.environ.get("CUSTOM_CLASSIFIER_TRANSFORM_JSON")
-
-        if not (weights_path and class_mapping_path and backbone and transform_json):
-            raise RuntimeError(
-                "custom_timm requires CUSTOM_CLASSIFIER_{WEIGHTS,CLASS_MAPPING,BACKBONE,TRANSFORM_JSON}"
-            )
-
-        with open(class_mapping_path, "r") as f:
-            class_list = _json.load(f)
-        if not isinstance(class_list, list) or not all(isinstance(s, str) for s in class_list):
-            raise RuntimeError(f"class_mapping.json must be a list of strings, got: {type(class_list).__name__}")
-
-        transform_cfg = _json.loads(transform_json)
-        image_size = int(transform_cfg["imageSize"])
-        mean = list(transform_cfg["mean"])
-        std = list(transform_cfg["std"])
-        # Additive fields (contract v2.1); default to the pre-existing behavior
-        # so legacy models classify identically. Must match the classifier
-        # repo's data.build_transforms exactly or accuracy silently drops.
-        _interp_modes = {
-            "bilinear": InterpolationMode.BILINEAR,
-            "bicubic": InterpolationMode.BICUBIC,
-            "nearest": InterpolationMode.NEAREST,
-        }
-        interp_name = transform_cfg.get("interpolation", "bilinear")
-        if interp_name not in _interp_modes:
-            raise RuntimeError(f"unknown interpolation {interp_name!r}")
-        interpolation = _interp_modes[interp_name]
-        antialias = bool(transform_cfg.get("antialias", True))
-        resize_mode = transform_cfg.get("resize", "squash")
-        if resize_mode != "squash":
-            raise RuntimeError(
-                f"unsupported resize mode {resize_mode!r} (only 'squash' is implemented)"
-            )
-
-        # Build the model with the right number of classes BEFORE loading
-        # weights so load_state_dict can be strict.
-        model = timm.create_model(backbone, pretrained=False, num_classes=len(class_list))
-        state = torch.load(weights_path, map_location="cpu")
-        # Tolerate either a bare state_dict or a checkpoint dict {state_dict: ...}
-        if isinstance(state, dict) and "state_dict" in state and not any(
-            k.startswith("conv") or k.startswith("blocks") or "." in k for k in state.keys()
-        ):
-            state = state["state_dict"]
-        model.load_state_dict(state, strict=True)
-        model.eval()
-        model = model.to(device)
-
-        transform = transforms.Compose([
-            transforms.ToPILImage(),
-            transforms.Resize(
-                (image_size, image_size),
-                interpolation=interpolation,
-                antialias=antialias,
-            ),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=mean, std=std),
-        ])
-
-        return cls(
-            model=model,
-            class_list=class_list,
-            device=device,
-            transform=transform,
-            backbone=backbone,
-        )
 
     def single_image_classification(self, cropped_array):
         """Classify a single cropped numpy array. Matches the PW protocol."""
@@ -260,6 +270,105 @@ class TimmClassifier:
             }
 
 
+class TimmClassifier(_CropClassifier):
+    """timm (contract v2) classifier loaded from local weights.
+
+    backbone is a timm model name (e.g. tf_efficientnetv2_m.in21k_ft_in1k), fed
+    to timm.create_model. Tolerates either a bare state_dict or a legacy nested
+    checkpoint. Env vars are set by buildClassifierEnv() in ml-runner-env.ts.
+    """
+
+    @classmethod
+    def from_env(cls, device):
+        import json as _json
+        import torch
+        import timm
+
+        weights_path, class_mapping_path, backbone, transform_json = _custom_classifier_env()
+        class_list = _load_class_list(class_mapping_path)
+        transform = _build_eval_transform(_json.loads(transform_json))
+
+        # Build with the right class count BEFORE loading so the load is strict.
+        model = timm.create_model(backbone, pretrained=False, num_classes=len(class_list))
+        state = torch.load(weights_path, map_location="cpu")
+        # Tolerate either a bare state_dict or a checkpoint dict {state_dict: ...}
+        if isinstance(state, dict) and "state_dict" in state and not any(
+            k.startswith("conv") or k.startswith("blocks") or "." in k for k in state.keys()
+        ):
+            state = state["state_dict"]
+        model.load_state_dict(state, strict=True)
+        model.eval().to(device)
+
+        return cls(
+            model=model,
+            class_list=class_list,
+            device=device,
+            transform=transform,
+            backbone=backbone,
+        )
+
+
+class OpenClipClassifier(_CropClassifier):
+    """BioCLIP / open_clip (contract v3) classifier loaded from local weights.
+
+    backbone is an open_clip spec (e.g. ``hf-hub:imageomics/bioclip-2.5-vith14``).
+    Reconstruction MIRRORS the classifier repo's models.OpenClipClassifier: the
+    open_clip visual trunk + a linear head, with submodule names ``trunk``/``head``
+    that are load-bearing because weights.pt keys are ``trunk.*``/``head.*`` and
+    the load is strict. The weights are a BARE state_dict — we deliberately do
+    NOT apply timm's checkpoint-unwrap heuristic (every v3 key contains '.').
+
+    Building the arch downloads the hub checkpoint into the HF cache (its weights
+    are discarded by the strict load); the producer-emitted weights.pt provides
+    the real parameters. Requires open_clip_torch + HF reachability (or a
+    pre-warmed cache) at first reconstruction.
+    """
+
+    @classmethod
+    def from_env(cls, device):
+        import json as _json
+        import torch
+        import torch.nn as nn
+        import open_clip
+
+        weights_path, class_mapping_path, backbone, transform_json = _custom_classifier_env()
+        class_list = _load_class_list(class_mapping_path)
+        transform = _build_eval_transform(_json.loads(transform_json))
+
+        _check_free_disk(min_gb=6)
+
+        oc_model, _, _ = open_clip.create_model_and_transforms(backbone)
+        trunk = oc_model.visual
+        embed_dim = int(getattr(trunk, "output_dim", None) or trunk.proj.shape[-1])
+
+        class _OpenClipModule(nn.Module):
+            # Mirror of classifier-repo models.OpenClipClassifier (trunk + head).
+            def __init__(self, trunk, embed_dim, num_classes):
+                super().__init__()
+                self.trunk = trunk
+                self.head = nn.Linear(embed_dim, num_classes)
+
+            def forward(self, x):
+                feats = self.trunk(x)
+                if isinstance(feats, (tuple, list)):
+                    feats = feats[0]  # pooled embedding is always first
+                return self.head(feats)
+
+        model = _OpenClipModule(trunk, embed_dim, len(class_list))
+        # Bare state_dict, strict — no unwrap heuristic (v3 is always bare).
+        state = torch.load(weights_path, map_location="cpu")
+        model.load_state_dict(state, strict=True)
+        model.eval().to(device)
+
+        return cls(
+            model=model,
+            class_list=class_list,
+            device=device,
+            transform=transform,
+            backbone=backbone,
+        )
+
+
 def load_image_safe(image_path):
     """Load a single image from disk. Returns dict with loaded data or error."""
     from PIL import Image
@@ -267,6 +376,10 @@ def load_image_safe(image_path):
 
     try:
         pil_img = Image.open(image_path).convert("RGB")
+        # EXIF note: converting to a numpy pixel array here drops all image
+        # metadata (incl. poaching-relevant GPS). Classifier crops are taken
+        # from this ndarray, so inference is already EXIF-free at this boundary
+        # — no explicit strip is needed (matches the producer's _strip_exif).
         return {
             "path": image_path,
             "array": np.array(pil_img),

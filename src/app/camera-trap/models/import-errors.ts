@@ -46,6 +46,11 @@ export type ImportError =
       detail: string;
     }
   | {
+      kind: "weights_hash_mismatch";
+      expected: string;
+      got: string;
+    }
+  | {
       kind: "class_alignment_mismatch";
       index: number;
       classMapping: string;
@@ -106,7 +111,9 @@ export function importErrorToSpanish(e: ImportError): string {
     case "contract_version_unsupported":
       return `Contrato obsoleto (${e.got}). Re-exportá con versión v2.`;
     case "schema_violation":
-      return `metrics.json no cumple el contrato v2: ${e.detail}.`;
+      return `metrics.json no cumple el contrato (v2/v3): ${e.detail}.`;
+    case "weights_hash_mismatch":
+      return `El hash de weights.pt no coincide con metrics.weightsSha256 (esperaba ${e.expected}, obtuvo ${e.got}). ¿Copia (scp) incompleta o archivo corrupto?`;
     case "class_alignment_mismatch":
       return `Las clases no coinciden en el índice ${e.index}: class_mapping.json="${e.classMapping}" vs metrics.classListOrdered="${e.classListOrdered}".`;
     case "class_count_mismatch":

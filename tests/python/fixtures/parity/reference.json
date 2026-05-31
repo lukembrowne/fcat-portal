@@ -1,0 +1,65 @@
+{
+  "backbone": "open_clip:ViT-B-32",
+  "numClasses": 25,
+  "seed": 1234,
+  "cropSize": {
+    "width": 96,
+    "height": 64
+  },
+  "transform": {
+    "imageSize": 224,
+    "mean": [
+      0.48145466,
+      0.4578275,
+      0.40821073
+    ],
+    "std": [
+      0.26862954,
+      0.26130258,
+      0.27577711
+    ],
+    "interpolation": "bicubic",
+    "antialias": true,
+    "resize": "squash"
+  },
+  "preprocessedShape": [
+    3,
+    224,
+    224
+  ],
+  "preprocessedSha256": "sha256:596601d4c53f31edde8162c7437584fd406fe17c5c6129dcfd375791ac5490f1",
+  "logits": [
+    0.29933,
+    -0.90619,
+    0.25817,
+    -0.23485,
+    0.18973,
+    0.09276,
+    -0.35783,
+    -0.00866,
+    -0.42239,
+    -0.71995,
+    -0.34838,
+    -0.1044,
+    1.25621,
+    -0.05617,
+    0.73663,
+    -0.55085,
+    0.68405,
+    0.71267,
+    -0.3152,
+    -1.00099,
+    0.62915,
+    0.65803,
+    0.2308,
+    -0.29563,
+    -0.18501
+  ],
+  "stateDictSha256": "sha256:cda1c9c96c69142ae14ac45851d8ded2434e544bdc00960b209d07ce31abbe6f",
+  "openClipVersion": "2.32.0",
+  "torchVersion": "2.11.0",
+  "tolerance": {
+    "preprocessed_atol": 1e-05,
+    "logits_atol": 0.001
+  }
+}

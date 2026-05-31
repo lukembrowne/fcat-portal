@@ -84,6 +84,48 @@ describe("buildClassifierEnv", () => {
     expect(transform.resize).toBe("squash");
   });
 
+  it("derives custom_openclip for a v3/open_clip (BioCLIP) model", () => {
+    const bioclip = {
+      ...validMetrics,
+      contract: { version: "v3" },
+      framework: "open_clip",
+      backbone: "hf-hub:imageomics/bioclip-2.5-vith14",
+      transform: {
+        imageSize: 224,
+        mean: [0.48145466, 0.4578275, 0.40821073],
+        std: [0.26862954, 0.26130258, 0.27577711],
+        interpolation: "bicubic",
+        antialias: true,
+        resize: "squash",
+      },
+    };
+    const env = buildClassifierEnv({
+      id: 11,
+      modelDir: "/srv/data/models/v4-bioclip",
+      classMappingJson: JSON.stringify(["a", "b"]),
+      metricsJson: JSON.stringify(bioclip),
+    });
+    // Single dispatch discriminator derived from framework.
+    expect(env.CLASSIFIER_MODEL).toBe("custom_openclip");
+    expect(env.CUSTOM_CLASSIFIER_BACKBONE).toBe(
+      "hf-hub:imageomics/bioclip-2.5-vith14",
+    );
+    const transform = JSON.parse(env.CUSTOM_CLASSIFIER_TRANSFORM_JSON);
+    expect(transform.imageSize).toBe(224);
+    expect(transform.interpolation).toBe("bicubic");
+    expect(transform.mean[0]).toBeCloseTo(0.48145466);
+  });
+
+  it("treats a model without framework as timm (v2 unchanged)", () => {
+    const env = buildClassifierEnv({
+      id: 12,
+      modelDir: "/srv/data/models/v1",
+      classMappingJson: JSON.stringify(["a", "b"]),
+      metricsJson: JSON.stringify(validMetrics),
+    });
+    expect(env.CLASSIFIER_MODEL).toBe("custom_timm");
+  });
+
   it("throws on invalid metrics JSON", () => {
     expect(() =>
       buildClassifierEnv({

@@ -337,7 +337,16 @@ class OpenClipClassifier(_CropClassifier):
 
         _check_free_disk(min_gb=6)
 
-        oc_model, _, _ = open_clip.create_model_and_transforms(backbone)
+        # Mirror the producer's models._build_open_clip prefix handling exactly:
+        #   hf-hub:<repo>   -> create_model_and_transforms(<full string>)  (loads hub)
+        #   open_clip:<arch> -> create_model_and_transforms(<arch>, pretrained=None)
+        # open_clip itself only understands hf-hub:; "open_clip:" is the contract's
+        # own convention for a plain (offline) arch. Production uses hf-hub:.
+        if backbone.startswith("open_clip:"):
+            arch = backbone[len("open_clip:"):]
+            oc_model, _, _ = open_clip.create_model_and_transforms(arch, pretrained=None)
+        else:
+            oc_model, _, _ = open_clip.create_model_and_transforms(backbone)
         trunk = oc_model.visual
         embed_dim = int(getattr(trunk, "output_dim", None) or trunk.proj.shape[-1])
 

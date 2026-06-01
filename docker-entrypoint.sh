@@ -13,6 +13,13 @@ export YOLO_CONFIG_DIR=/tmp/Ultralytics
 export TORCH_HOME=/app/data/ml-cache/torch
 mkdir -p "$TORCH_HOME"
 
+# Persist the HuggingFace cache for the same reason. A BioCLIP (contract v3)
+# classifier reconstructs via open_clip, which downloads its ~2.5 GB hub
+# checkpoint into HF_HOME. HOME is /tmp/ml-home (wiped each restart), so without
+# this the 2.5 GB re-downloads on every boot (and needs HF egress every time).
+export HF_HOME=/app/data/ml-cache/huggingface
+mkdir -p "$HF_HOME"
+
 # Ensure backup directory exists
 mkdir -p /app/data/backups
 

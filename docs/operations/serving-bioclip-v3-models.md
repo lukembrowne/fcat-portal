@@ -25,10 +25,12 @@ caught immediately.
    `OpenClipClassifier.from_env` does a pre-flight free-disk check (~6 GB) and
    fails fast with a clear message rather than corrupting the cache mid-download.
 
-3. **HF Hub reachability (or a pre-warmed cache).** First reconstruction resolves
-   `hf-hub:imageomics/bioclip-2.5-vith14` from huggingface.co. Pre-warm the HF
-   cache in the container build (alongside the existing TORCH_HOME warm-up) and
-   verify it loads offline, or confirm prod egress to huggingface.co.
+3. **HF Hub reachability + persistent cache.** First reconstruction resolves
+   `hf-hub:imageomics/bioclip-2.5-vith14` from huggingface.co. The cache is
+   persisted at `HF_HOME=/app/data/ml-cache/huggingface` (wired in
+   docker-entrypoint.sh + docker-compose.yml, mirroring TORCH_HOME) so the 2.5 GB
+   download survives restarts — `HOME` is `/tmp/ml-home`, which is wiped each
+   boot. Confirm prod egress to huggingface.co for the one-time download.
 
 ## ⛔ Before enabling a v3 model in prod — the cost gate
 

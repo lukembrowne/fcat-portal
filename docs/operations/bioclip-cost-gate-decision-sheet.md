@@ -19,18 +19,37 @@ serve a v3 model to users until this says **GO**.
 | Crops per image (avg) | `______` | from real camera-trap data (often 1–2) |
 | Expected peak burst | `______ images at once` | worst case: a camera dump |
 
-## Step 1 — Run the profiler on the droplet
+## Step 1 — Run the profiler on the droplet (INSIDE the container)
 
-In the ML venv, with prod thread settings:
+The ML venv lives **inside the container**, so run the profiler there with the
+same interpreter the model-server uses — that's what makes the numbers faithful
+(same CPU allocation, env, and torch build). Do NOT run it on the host.
 
 ```bash
-# First run downloads ~2.5 GB (BioCLIP) — needs ~5 GB free disk + HF egress.
-data/ml-venv/bin/python3 scripts/profile-bioclip-cost.py \
+# Faithful: exec into the running portal container, use the venv python.
+docker compose exec portal data/ml-venv/bin/python3 \
+    scripts/profile-bioclip-cost.py \
+    --ram-limit-gb <host RAM in GB> \
     --ram-headroom 0.8 \
     --latency-slo-ms <your SLO> \
     --target-imgs-per-s <your target> \
     --crops-per-image <your avg>
+
+# Or an isolated one-off (not competing with the live Node process for RAM):
+#   docker compose run --rm portal data/ml-venv/bin/python3 scripts/profile-bioclip-cost.py ...
 ```
+
+**Prerequisites (this deployment specifically):**
+- **`--ram-limit-gb` is required.** The container has no `mem_limit` set, so the
+  script can't auto-detect a ceiling. OOM risk is governed by **host RAM, shared
+  with the Node server** — budget against host RAM, and either run when the
+  portal is idle or watch `docker stats` for the combined total.
+- **Rebuild the image / venv first.** Containers built before open_clip was added
+  to `ensure-ml-venv.sh` won't have it; the readiness check reinstalls on next
+  boot, or `uv pip install open_clip_torch` into the live venv.
+- **First run downloads ~2.5 GB** into `HF_HOME=/app/data/ml-cache/huggingface`
+  (now persistent — see docker-entrypoint.sh). Needs ~5 GB free on the data
+  volume + HF egress, once.
 
 It loads MegaDetector **and** BioCLIP together (true co-residency), then prints
 machine spec, cold-start, P50/P95/P99 latency, peak RSS, and a GO/NO-GO verdict.

@@ -19,6 +19,10 @@ services:
       # docker-compose.override.yml replaces the entrypoint with a custom command
       # that never sources docker-entrypoint.sh.
       - TORCH_HOME=/app/data/ml-cache/torch
+      # Same, for the HuggingFace cache — a BioCLIP (v3) model downloads its
+      # ~2.5 GB checkpoint here; without a persistent path it re-downloads every
+      # restart (HOME is /tmp/ml-home, wiped each boot).
+      - HF_HOME=/app/data/ml-cache/huggingface
       - SUPER_ADMIN_EMAILS=lukebrowne@fcat-ecuador.org
       - ALLOWED_EMAILS_PATH=data/allowed_external_emails.txt
       - RESEND_API_KEY=${RESEND_API_KEY:-}

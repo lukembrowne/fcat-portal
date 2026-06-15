@@ -39,6 +39,17 @@ services:
       # OFF — the code (sharedDriveDiscoveryEnabled / sharedDriveRoutingEnabled)
       # treats an unset value as false. Flip discovery first.
     restart: unless-stopped
+    # RAM cap so a heavy ML job (BioCLIP ViT-H peaks ~8 GB resident) can't grow
+    # into the co-tenant containers (ODK Central + its postgres, ChocoForestWatch,
+    # etc.) on this shared 15.6 GB host and trigger a HOST-wide OOM kill — the
+    # failure mode behind the 2026-05-25 Central outage. With a limit the cgroup
+    # OOM killer kills a process INSIDE this container instead, isolating the
+    # blast radius. ~11 GB leaves ~3 GB headroom over the observed BioCLIP peak
+    # while keeping the host's other ~24 containers safe. memswap_limit ==
+    # mem_limit disables swap for this container: host swap is chronically full,
+    # and an ML job that swaps is useless — fail fast instead of thrashing.
+    mem_limit: 11g
+    memswap_limit: 11g
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000"]
       interval: 30s

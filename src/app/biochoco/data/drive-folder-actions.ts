@@ -10,7 +10,7 @@ import {
 } from "@/lib/odk-constants";
 import type { OdkSiteEntity } from "@/lib/odk-types";
 import { loadSchedule, updateScheduleRows } from "@/lib/sheets-client";
-import { createDeploymentFolder } from "@/lib/drive-client";
+import { createDeploymentFolder, resolveFolderDriveId } from "@/lib/drive-client";
 import { db } from "@/db";
 import { deployments, cameraTrapProjects } from "@/db/schema";
 import { eq } from "drizzle-orm";
@@ -25,6 +25,7 @@ import {
   attachReservationToDeployment,
   getDriveStatus,
   getDriveById,
+  getDriveByDriveId,
   type SelectionSuccess,
 } from "@/lib/shared-drives";
 
@@ -320,6 +321,19 @@ export async function createSingleDriveFolder(
     } catch (err) {
       if (reservation) releaseReservation(reservation.reservationId);
       throw err;
+    }
+
+    // When routing is OFF the folder is still created inside a Shared Drive but
+    // sharedDriveId is null — stamp it so the deployment is routable (the field
+    // uploader needs the host drive's 0A id). Resolve the new folder's real
+    // drive and match the registry. Best-effort; a null leaves it backfillable.
+    if (!sharedDriveId) {
+      try {
+        const driveId = await resolveFolderDriveId(folder.id);
+        if (driveId) sharedDriveId = (await getDriveByDriveId(driveId))?.id ?? null;
+      } catch (err) {
+        log.warn({ err, deploymentId }, "[Drive Folders] could not resolve shared drive for new folder");
+      }
     }
 
     // Update Sheets schedule if the deployment exists there

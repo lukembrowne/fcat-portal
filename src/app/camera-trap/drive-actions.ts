@@ -13,8 +13,9 @@ import {
   updateFileContent,
   getFileRevisions,
   downloadFileRevision,
+  resolveFolderDriveId,
 } from "@/lib/drive-client";
-import { getDiscoveryRootsForProject } from "@/lib/shared-drives";
+import { getDiscoveryRootsForProject, getDriveByDriveId } from "@/lib/shared-drives";
 import { matchOdkDeployments } from "./odk-actions";
 import {
   scanDeploymentImagesInternal,
@@ -256,6 +257,17 @@ export async function syncWithDrive(
           const result = await checkDeploymentUploads(dep.driveFolderId);
           if (result.success) {
             const uploads = result.data;
+            // This discovery path doesn't go through the routing reservation, so
+            // sharedDriveId is null on insert. Stamp it from the folder's real
+            // host drive (authoritative) so the deployment is routable for the
+            // field uploader. Best-effort; a miss stays backfillable.
+            let sharedDriveId: string | null = null;
+            try {
+              const driveId = await resolveFolderDriveId(dep.driveFolderId);
+              if (driveId) sharedDriveId = (await getDriveByDriveId(driveId))?.id ?? null;
+            } catch (err) {
+              log.warn({ err, name: dep.name }, "[Drive] could not resolve shared drive for discovered folder");
+            }
             await db
               .update(deployments)
               .set({
@@ -266,6 +278,7 @@ export async function syncWithDrive(
                 uploadAudioFolderId: uploads.subfolderIds.grabadoresDeAudio,
                 uploadIbuttonFolderId: uploads.subfolderIds.ibutton,
                 uploadCountsCheckedAt: sql`(unixepoch())`,
+                ...(sharedDriveId ? { sharedDriveId } : {}),
               })
               .where(eq(deployments.id, dep.id));
           }

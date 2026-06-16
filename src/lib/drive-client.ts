@@ -13,6 +13,16 @@ import path from "path";
 import { Readable } from "stream";
 import type { ActionResult } from "./types";
 import { log } from "@/lib/log";
+import {
+  DATA_TYPE_FOLDERS,
+  IMAGE_EXTENSIONS,
+  VIDEO_EXTENSIONS,
+  AUDIO_EXTENSIONS,
+  DATA_TYPE_EXTENSIONS,
+} from "./drive-routing";
+
+// Re-exported so existing consumers (e.g. audio sync) keep importing it from here.
+export { AUDIO_EXTENSIONS };
 
 // --- Types ---
 
@@ -39,12 +49,8 @@ interface FileStats {
   newestDate: string | null;
 }
 
-// Subfolder names on Google Drive (must match exactly)
-const DATA_TYPE_FOLDERS = {
-  camarasTrampas: "camaras_trampas",
-  grabadoresDeAudio: "grabadores_de_audio",
-  ibutton: "ibutton",
-} as const;
+// Subfolder names + extension routing now live in ./drive-routing (shared with
+// the field-upload endpoint). Imported above.
 
 // --- Auth ---
 
@@ -388,23 +394,8 @@ export interface DriveMediaResult {
 
 const FOLDER_ID_REGEX = /^[a-zA-Z0-9_-]+$/;
 
-const IMAGE_EXTENSIONS = new Set([
-  ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".tif",
-]);
-
-const VIDEO_EXTENSIONS = new Set([".mp4", ".avi", ".mov"]);
-
-export const AUDIO_EXTENSIONS = new Set([
-  ".wav", ".mp3", ".flac", ".wac", ".w4v", ".ogg", ".aac",
-]);
-
-const IBUTTON_EXTENSIONS = new Set([".xlsx"]);
-
-const DATA_TYPE_EXTENSIONS: Record<keyof typeof DATA_TYPE_FOLDERS, Set<string>> = {
-  camarasTrampas: new Set([...IMAGE_EXTENSIONS, ...VIDEO_EXTENSIONS]),
-  grabadoresDeAudio: AUDIO_EXTENSIONS,
-  ibutton: IBUTTON_EXTENSIONS,
-};
+// IMAGE/VIDEO/AUDIO/IBUTTON extension sets + DATA_TYPE_EXTENSIONS now live in
+// ./drive-routing (shared with the field-upload endpoint). Imported above.
 
 // ---------------------------------------------------------------------------
 // Camera Trap — Public API

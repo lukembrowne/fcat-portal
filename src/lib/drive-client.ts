@@ -95,6 +95,28 @@ export function extractFolderId(driveUrl: string): string | null {
 }
 
 /**
+ * Resolve which Shared Drive a folder/file physically lives in.
+ *
+ * Returns the `0A…` Shared Drive ID, or null if the item is in My Drive (no
+ * shared drive) or can't be read. Authoritative per-folder — used to map a
+ * deployment's existing upload folders to their host drive WITHOUT trusting any
+ * stored routing, so it stays correct when a project spans multiple drives.
+ */
+export async function resolveFolderDriveId(folderId: string): Promise<string | null> {
+  const drive = getDrive();
+  const res = await withRetry(
+    () =>
+      drive.files.get({
+        fileId: folderId,
+        fields: "driveId",
+        supportsAllDrives: true,
+      }),
+    `files.get.driveId(${folderId})`,
+  );
+  return res.data.driveId ?? null;
+}
+
+/**
  * Recursively count files whose extension matches the given set.
  * Skips `_frames/` subfolders (video frame uploads).
  * Caps recursion at depth 5 to prevent pathological nesting.

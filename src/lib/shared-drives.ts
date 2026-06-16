@@ -221,6 +221,21 @@ export async function getDriveById(id: string): Promise<SharedDrive | null> {
 }
 
 /**
+ * Look up a registry row by its Google Shared Drive ID (the `0A…` `drive_id`).
+ * Used to map a folder's resolved host drive back to a registry slug (e.g. when
+ * backfilling / stamping a deployment's `shared_drive_id`). Null = that drive
+ * isn't registered yet (register it in the admin UI first).
+ */
+export async function getDriveByDriveId(driveId: string): Promise<SharedDrive | null> {
+  const [row] = await db
+    .select()
+    .from(sharedDrives)
+    .where(sql`${sharedDrives.driveId} = ${driveId}`)
+    .limit(1);
+  return row ?? null;
+}
+
+/**
  * Root folder IDs of a project's non-archived drives. Reads still resolve via
  * supportsAllDrives regardless of status, so we include active + read-only +
  * unreachable (Promise.allSettled at the call site isolates a drive that

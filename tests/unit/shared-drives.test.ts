@@ -15,6 +15,7 @@ const {
   releaseReservation,
   getDriveStatus,
   getDriveRootIdsForProject,
+  getDriveByDriveId,
   DEPLOYMENT_QUOTA,
   DRIVE_ID_REGEX,
   sanitizeDriveError,
@@ -79,6 +80,19 @@ describe("DRIVE_ID_REGEX", () => {
     expect(DRIVE_ID_REGEX.test("1AItvDf3Hk9aLUk9PVA")).toBe(false); // folder-ish
     expect(DRIVE_ID_REGEX.test("0A")).toBe(false); // too short
     expect(DRIVE_ID_REGEX.test("not an id")).toBe(false);
+  });
+});
+
+describe("getDriveByDriveId", () => {
+  it("finds a registered drive by its 0A drive_id", async () => {
+    seedDrive({ id: "fcat-biochoco", driveId: "0AOtnoRpIvif6Uk9PVA" });
+    const row = await getDriveByDriveId("0AOtnoRpIvif6Uk9PVA");
+    expect(row?.id).toBe("fcat-biochoco");
+  });
+
+  it("returns null for an unregistered drive_id", async () => {
+    seedDrive({ id: "fcat-biochoco", driveId: "0AOtnoRpIvif6Uk9PVA" });
+    expect(await getDriveByDriveId("0AunknownDriveXyz")).toBeNull();
   });
 });
 

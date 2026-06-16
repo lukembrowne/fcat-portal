@@ -26,6 +26,7 @@ import {
   Pencil,
   PlusCircle,
   HardDriveDownload,
+  ImageOff,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -40,6 +41,7 @@ import { matchOdkDeployments } from "./odk-actions";
 import { CompressConfirmDialog } from "./compress-confirm-dialog";
 import { RevertConfirmDialog } from "./revert-confirm-dialog";
 import { DeleteConfirmDialog } from "./delete-confirm-dialog";
+import { DeleteImagesConfirmDialog } from "./delete-images-confirm-dialog";
 import { ProcessConfirmDialog } from "./process-confirm-dialog";
 import { ProcessIncrementalDialog } from "./process-incremental-dialog";
 import { BulkDeleteBlanksDialog } from "./results/[id]/bulk-delete-blanks-dialog";
@@ -110,6 +112,7 @@ export function DeploymentActionsMenu({
   const [compressDialogId, setCompressDialogId] = useState<number | null>(null);
   const [revertDialogId, setRevertDialogId] = useState<number | null>(null);
   const [deleteDialogId, setDeleteDialogId] = useState<number | null>(null);
+  const [deleteImagesId, setDeleteImagesId] = useState<number | null>(null);
   const [processDialogIds, setProcessDialogIds] = useState<number[] | null>(null);
   const [incrementalDialogId, setIncrementalDialogId] = useState<number | null>(null);
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
@@ -518,6 +521,25 @@ export function DeploymentActionsMenu({
             </>
           )}
 
+          {/* Delete images only — keep the installation (admin) */}
+          {isAdmin && hasImages && !isProcessing && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={() => setDeleteImagesId(deploymentId)}
+                className="text-destructive focus:text-destructive"
+              >
+                <ImageOff className="h-4 w-4 mr-2 shrink-0" />
+                <div>
+                  <div>Eliminar Imágenes</div>
+                  <p className="text-xs text-muted-foreground font-normal">
+                    Enviar todas las imágenes a la papelera de Drive (mantiene la instalación)
+                  </p>
+                </div>
+              </DropdownMenuItem>
+            </>
+          )}
+
           {/* Delete */}
           {!isProcessing && (
             <>
@@ -572,6 +594,13 @@ export function DeploymentActionsMenu({
         deploymentName={deploymentName}
         onClose={() => setDeleteDialogId(null)}
         onDeleted={handleDeleteSuccess}
+      />
+      <DeleteImagesConfirmDialog
+        deploymentId={deleteImagesId}
+        deploymentName={deploymentName}
+        totalImages={totalImages}
+        onClose={() => setDeleteImagesId(null)}
+        onDeleted={() => router.refresh()}
       />
       {bulkDeleteOpen && lastCompletedJobId && (
         <BulkDeleteBlanksDialog

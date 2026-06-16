@@ -2267,6 +2267,37 @@ export async function deleteImagesFromDrive(
   }
 }
 
+/**
+ * Delete ALL of a deployment's images from Drive + DB (admin), WITHOUT deleting
+ * the deployment itself. Thin wrapper over deleteImagesFromDrive — for removing
+ * a bad/test upload while keeping the installation. Images that already have
+ * detections are skipped by the underlying action (delete the processing job
+ * first if you need to remove those too). Drive deletes are soft (30-day trash).
+ */
+export async function deleteAllDeploymentImages(
+  deploymentId: number,
+): Promise<ActionResult<{ deleted: number; failed: number; skipped: number; total: number }>> {
+  const user = await requirePermission("camera-trap", "admin");
+  await requireDeploymentAccess(user, deploymentId);
+
+  const rows = await db
+    .select({ id: images.id })
+    .from(images)
+    .where(eq(images.deploymentId, deploymentId));
+  const ids = rows.map((r) => r.id);
+  if (ids.length === 0) {
+    return { success: true, data: { deleted: 0, failed: 0, skipped: 0, total: 0 } };
+  }
+
+  const res = await deleteImagesFromDrive(ids);
+  if (!res.success) return res;
+  const { deleted, failed } = res.data;
+  return {
+    success: true,
+    data: { deleted, failed, skipped: ids.length - deleted - failed, total: ids.length },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Bulk delete blank images
 // ---------------------------------------------------------------------------

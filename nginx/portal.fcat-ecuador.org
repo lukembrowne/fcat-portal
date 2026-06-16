@@ -92,6 +92,25 @@ server {
         # NO auth_request — token-validated at application level
     }
 
+    # ===== Field Uploader API (no oauth2 — Bearer-token validated in the app) =====
+    # The desktop field-uploader is a machine client; it can't do an interactive
+    # Google login. It authenticates with FIELD_UPLOAD_TOKEN (Bearer), checked in
+    # src/lib/field-upload-auth.ts (timing-safe) on every request, plus a per-IP
+    # app-level rate limit. So this path must bypass oauth2-proxy, exactly like
+    # /api/public/ above. Keeps the Authorization header (no auth_request to strip
+    # it); does NOT set X-Forwarded-Email (no user identity here).
+    location /api/field-upload/ {
+        limit_req zone=public_api burst=30 nodelay;
+        proxy_pass http://127.0.0.1:3003;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        # NO auth_request — token-validated at application level
+    }
+
     # ===== Main app - requires authentication =====
     location / {
         # Serve OG metadata to social crawlers without requiring auth

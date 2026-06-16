@@ -22,10 +22,12 @@
  * Content Manager MEMBER of each Shared Drive (folder sharing isn't enough).
  */
 
-import dotenv from "dotenv";
-// Load local dev env (no-op in Docker, where vars are injected by compose).
-dotenv.config({ path: ".env.local" });
-
+// Env (GOOGLE_SERVICE_ACCOUNT_KEY, optional DB_PATH) comes from the environment.
+// In Docker — the intended way to run this — compose injects it. We intentionally
+// do NOT import `dotenv`: it's a devDependency absent from the production
+// standalone image, so importing it crashes the script in the container. For a
+// local run outside Docker, export the vars first, e.g.:
+//   export $(grep -v '^#' .env.local | xargs)
 import Database from "better-sqlite3";
 import path from "path";
 import { google, type drive_v3 } from "googleapis";

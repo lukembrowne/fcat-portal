@@ -637,8 +637,12 @@ export const sharedDrives = sqliteTable(
     status: text("status", { enum: SHARED_DRIVE_STATUSES })
       .notNull()
       .default("registering"),
-    // Drive API ground truth (last reconcile)
+    // Drive API ground truth (last reconcile). Includes trashed items, because
+    // Google's 500K cap counts them until purged (matches the Drive UI warning).
     reconciledCount: integer("reconciled_count").notNull().default(0),
+    // Subset of reconciledCount currently in Trash (purgeable to reclaim
+    // capacity). Refreshed on the weekly full count only. Advisory.
+    trashedCount: integer("trashed_count").notNull().default(0),
     // In-flight reservations (sum of open reservation tokens; denormalized)
     pendingReservationsCount: integer("pending_reservations_count")
       .notNull()

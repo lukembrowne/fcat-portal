@@ -324,6 +324,116 @@ export function getProjectCapacities(): ProjectCapacity[] {
 }
 
 // ---------------------------------------------------------------------------
+// Capacity alerts (shared by the alert email cron + the in-portal admin banner)
+// ---------------------------------------------------------------------------
+
+export type CapacityAlertLevel = "soft" | "hard" | "stop";
+
+export type DriveCapacityAlert = {
+  id: string;
+  name: string;
+  projectName: string | null;
+  effectiveCount: number;
+  itemCap: number;
+  fillPct: number;
+  trashedCount: number;
+  level: CapacityAlertLevel;
+};
+
+export type ProjectProvisionAlert = {
+  projectId: number;
+  projectName: string;
+  fillPct: number;
+  /** False = no active drive with headroom (urgent). */
+  hasHeadroom: boolean;
+};
+
+export type SharedDriveCapacityAlerts = {
+  thresholds: { soft: number; hard: number; stop: number };
+  /** Non-archived drives whose effective fill is at/over the soft threshold. */
+  drives: DriveCapacityAlert[];
+  /** Projects that should provision their next drive soon. */
+  provisionProjects: ProjectProvisionAlert[];
+  /** Any drive at/over the HARD threshold, or any project with no headroom. */
+  hasCritical: boolean;
+};
+
+/**
+ * Single source of truth for "is a Shared Drive approaching its cap?" — used by
+ * the daily alert-email cron and the admin banner so both agree. Returns only
+ * drives/projects that have actually crossed a threshold (empty when healthy).
+ */
+export function getSharedDriveCapacityAlerts(): SharedDriveCapacityAlerts {
+  const soft = getSoftPct();
+  const hard = getHardPct();
+  const stop = getStopPct();
+
+  const projectNames = new Map<number, string>();
+  for (const p of db.all(sql`SELECT id, name FROM ct_projects`) as {
+    id: number;
+    name: string;
+  }[]) {
+    projectNames.set(p.id, p.name);
+  }
+
+  const driveRows = db.all(sql`
+    SELECT id, name, camera_trap_project_id AS pid, status, item_cap,
+           reconciled_count + pending_reservations_count AS effective,
+           trashed_count
+    FROM shared_drives
+    WHERE archived_at IS NULL AND status != 'registering'
+  `) as Array<{
+    id: string;
+    name: string;
+    pid: number | null;
+    status: string;
+    item_cap: number;
+    effective: number;
+    trashed_count: number;
+  }>;
+
+  const drives: DriveCapacityAlert[] = [];
+  for (const r of driveRows) {
+    const fillPct = r.item_cap > 0 ? r.effective / r.item_cap : 0;
+    if (fillPct < soft) continue;
+    const level: CapacityAlertLevel =
+      fillPct >= stop ? "stop" : fillPct >= hard ? "hard" : "soft";
+    drives.push({
+      id: r.id,
+      name: r.name,
+      projectName: r.pid != null ? projectNames.get(r.pid) ?? null : null,
+      effectiveCount: r.effective,
+      itemCap: r.item_cap,
+      fillPct,
+      trashedCount: r.trashed_count,
+      level,
+    });
+  }
+  drives.sort((a, b) => b.fillPct - a.fillPct);
+
+  const provisionProjects: ProjectProvisionAlert[] = [];
+  for (const c of getProjectCapacities()) {
+    const needsProvision =
+      !c.hasHeadroom ||
+      (c.emptiestActiveFill !== null && c.emptiestActiveFill >= soft);
+    if (!needsProvision) continue;
+    provisionProjects.push({
+      projectId: c.projectId,
+      projectName: projectNames.get(c.projectId) ?? `#${c.projectId}`,
+      fillPct: c.capTotal > 0 ? c.effectiveTotal / c.capTotal : 0,
+      hasHeadroom: c.hasHeadroom,
+    });
+  }
+  provisionProjects.sort((a, b) => b.fillPct - a.fillPct);
+
+  const hasCritical =
+    drives.some((d) => d.level !== "soft") ||
+    provisionProjects.some((p) => !p.hasHeadroom);
+
+  return { thresholds: { soft, hard, stop }, drives, provisionProjects, hasCritical };
+}
+
+// ---------------------------------------------------------------------------
 // Error sanitation (before persisting to last_health_status / event details)
 // ---------------------------------------------------------------------------
 

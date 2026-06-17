@@ -1501,14 +1501,30 @@ export async function getSharedDriveMetadata(
   };
 }
 
+export interface SharedDriveItemCount {
+  /** Every item that counts toward Google's 500K cap (incl. trashed). */
+  total: number;
+  /** Subset of `total` currently in Trash — purgeable to reclaim capacity. */
+  trashed: number;
+}
+
 /**
- * Full paginated item count of a Shared Drive (excludes trashed). Used for the
- * weekly full reconcile and the at-registration baseline. ~500 calls at 500K
- * items, so callers should bound concurrency (p-limit).
+ * Full paginated item count of a Shared Drive. Counts EVERYTHING that counts
+ * toward Google's 500,000-item cap: files + folders + items still in Trash
+ * (trashed items keep counting until Google purges them ~30 days later). We do
+ * NOT filter `trashed = false` here — that under-counted vs Google's own item
+ * cap, so the portal showed a lower % than the Drive UI warning. `trashed` is
+ * returned separately so the admin UI can show how much is reclaimable.
+ *
+ * Used for the weekly full reconcile and the at-registration baseline. ~500
+ * calls at 500K items, so callers should bound concurrency (p-limit).
  */
-export async function countSharedDriveItems(driveId: string): Promise<number> {
+export async function countSharedDriveItems(
+  driveId: string,
+): Promise<SharedDriveItemCount> {
   const drive = getDrive();
-  let count = 0;
+  let total = 0;
+  let trashed = 0;
   let pageToken: string | undefined;
   do {
     const res = await withRetry(
@@ -1516,8 +1532,9 @@ export async function countSharedDriveItems(driveId: string): Promise<number> {
         drive.files.list({
           corpora: "drive",
           driveId,
-          q: "trashed = false",
-          fields: "nextPageToken, files(id)",
+          // No `trashed` filter: Drive v3 returns trashed items too, which is
+          // what we want — they count toward the cap until purged.
+          fields: "nextPageToken, files(id, trashed)",
           pageSize: 1000,
           pageToken,
           supportsAllDrives: true,
@@ -1525,10 +1542,13 @@ export async function countSharedDriveItems(driveId: string): Promise<number> {
         }),
       `files.list(count ${driveId})`,
     );
-    count += res.data.files?.length ?? 0;
+    for (const f of res.data.files ?? []) {
+      total += 1;
+      if (f.trashed === true) trashed += 1;
+    }
     pageToken = res.data.nextPageToken ?? undefined;
   } while (pageToken);
-  return count;
+  return { total, trashed };
 }
 
 /** Opaque cursor for a Shared Drive's change feed (tokens never expire). */
@@ -1551,18 +1571,22 @@ export async function getChangesStartPageToken(
 }
 
 export interface SharedDriveChangesDelta {
-  /** net item delta = creates − (removes + newly-trashed) since the token. */
+  /** net item delta = creates − permanent removals since the token. */
   delta: number;
   /** cursor to persist for the next delta run. */
   newStartPageToken: string;
 }
 
 /**
- * Paginate the change feed from `pageToken`, accumulating a net item delta.
- * `includeRemoved` surfaces deletions; a file flipped to `trashed` also counts
- * as a removal (it no longer counts toward the 500K cap once trashed... it
- * actually still does until purged, but we treat trash as removed and let the
- * weekly full count correct the drift — documented in the plan).
+ * Paginate the change feed from `pageToken`, accumulating a net item delta that
+ * mirrors Google's item-cap accounting:
+ *   - `removed` (permanently deleted / purged) → −1 (no longer counts)
+ *   - `trashed` → 0 (still counts toward the cap until purged; already counted
+ *     at creation, so a trash event is net-zero)
+ *   - any other present file → +1 (over-counts on plain modifications, the
+ *     pre-existing accepted heuristic; the weekly full count corrects drift)
+ * Trash is NOT treated as a removal here (that under-counted vs Google).
+ * Per-drive `trashed_count` is refreshed only on the weekly full count.
  */
 export async function listSharedDriveChangesDelta(
   driveId: string,
@@ -1592,8 +1616,10 @@ export async function listSharedDriveChangesDelta(
     for (const change of res.data.changes ?? []) {
       const removed = change.removed === true;
       const trashed = change.file?.trashed === true;
-      if (removed || trashed) {
-        delta -= 1;
+      if (removed) {
+        delta -= 1; // permanently purged — no longer counts toward the cap
+      } else if (trashed) {
+        // Still counts until purged; already counted at creation → net zero.
       } else if (change.file?.id) {
         delta += 1;
       }

@@ -46,6 +46,7 @@ const SHARED_DRIVES_DDL = `
     camera_trap_project_id INTEGER,
     status TEXT NOT NULL DEFAULT 'registering' CHECK(status IN ('registering','active','read-only','unreachable')),
     reconciled_count INTEGER NOT NULL DEFAULT 0,
+    trashed_count INTEGER NOT NULL DEFAULT 0,
     pending_reservations_count INTEGER NOT NULL DEFAULT 0,
     item_cap INTEGER NOT NULL DEFAULT 500000,
     changes_page_token TEXT,

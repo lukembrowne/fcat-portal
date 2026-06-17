@@ -90,6 +90,12 @@ function CapacityBar({ row, thresholds }: { row: SharedDriveRow; thresholds: Thr
           </span>
         )}
       </div>
+      {row.trashedCount > 0 && (
+        <div className="mt-0.5 text-xs text-amber-700 tabular-nums">
+          🗑️ {row.trashedCount.toLocaleString("es-EC")} en papelera —
+          purgables para recuperar espacio
+        </div>
+      )}
     </div>
   );
 }
@@ -139,7 +145,9 @@ export default async function AdminSharedDrivesPage({
             proyecto grande puede ocupar varios drives. Las nuevas instalaciones
             se crean en el drive más lleno del proyecto que aún esté por debajo
             del {(thresholds.hard * 100).toFixed(0)}%. Las lecturas funcionan en
-            cualquier drive sin importar su estado.
+            cualquier drive sin importar su estado. El conteo incluye los
+            elementos en la papelera (igual que el límite de Google), así que
+            vaciar la papelera de un drive libera capacidad.
           </p>
         </div>
         <div className="flex shrink-0 gap-2">

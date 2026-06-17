@@ -128,8 +128,13 @@ async function reconcileOneDrive(
   const doFull = opts.isFullCount || !drive.changesPageToken;
   let after: number;
   let newPageToken: string;
+  // Trashed (purgeable) count is only re-measured on the full count; delta runs
+  // can't reliably track untrash/purge transitions, so carry the last value.
+  let trashedAfter = drive.trashedCount;
   if (doFull) {
-    after = await countSharedDriveItems(drive.driveId);
+    const counts = await countSharedDriveItems(drive.driveId);
+    after = counts.total;
+    trashedAfter = counts.trashed;
     newPageToken = await getChangesStartPageToken(drive.driveId);
   } else {
     const { delta, newStartPageToken } = await listSharedDriveChangesDelta(
@@ -159,6 +164,7 @@ async function reconcileOneDrive(
     tx.run(sql`
       UPDATE shared_drives
       SET reconciled_count = ${after},
+          trashed_count = ${trashedAfter},
           last_reconciled_at = datetime('now'),
           last_full_reconcile_at = ${doFull ? sql`datetime('now')` : sql`last_full_reconcile_at`},
           changes_page_token = ${newPageToken},

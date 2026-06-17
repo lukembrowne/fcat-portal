@@ -110,7 +110,7 @@ describe("runReconciliationJob — full path", () => {
   it("Sunday triggers a full count + token rotation", async () => {
     vi.setSystemTime(SUNDAY);
     seedDrive({ id: "a", reconciledCount: 5, changesPageToken: "old" });
-    countItems.mockResolvedValue(424_242);
+    countItems.mockResolvedValue({ total: 424_242, trashed: 33_420 });
     startToken.mockResolvedValue("fresh-token");
 
     await runReconciliationJob(insertReconcileJob());
@@ -118,6 +118,7 @@ describe("runReconciliationJob — full path", () => {
     const d = drive("a");
     expect(countItems).toHaveBeenCalled();
     expect(d.reconciled_count).toBe(424_242);
+    expect(d.trashed_count).toBe(33_420);
     expect(d.changes_page_token).toBe("fresh-token");
     expect(d.last_full_reconcile_at).not.toBeNull();
   });
@@ -125,7 +126,7 @@ describe("runReconciliationJob — full path", () => {
   it("a drive with no token does a full count even on a weekday", async () => {
     vi.setSystemTime(WEDNESDAY);
     seedDrive({ id: "a", reconciledCount: 0, changesPageToken: null });
-    countItems.mockResolvedValue(10);
+    countItems.mockResolvedValue({ total: 10, trashed: 0 });
     startToken.mockResolvedValue("tok");
 
     await runReconciliationJob(insertReconcileJob());
@@ -151,7 +152,7 @@ describe("runReconciliationJob — health + thresholds", () => {
   it("auto-flips to read-only and alerts when a drive crosses the stop threshold", async () => {
     vi.setSystemTime(SUNDAY);
     seedDrive({ id: "a", reconciledCount: 0, itemCap: 100_000, changesPageToken: null });
-    countItems.mockResolvedValue(96_000); // 96% ≥ 95% stop
+    countItems.mockResolvedValue({ total: 96_000, trashed: 0 }); // 96% ≥ 95% stop
     startToken.mockResolvedValue("tok");
 
     await runReconciliationJob(insertReconcileJob());
@@ -163,7 +164,7 @@ describe("runReconciliationJob — health + thresholds", () => {
   it("emits a soft-threshold warning between 75% and 85%", async () => {
     vi.setSystemTime(SUNDAY);
     seedDrive({ id: "a", reconciledCount: 0, itemCap: 100_000, changesPageToken: null });
-    countItems.mockResolvedValue(78_000); // 78%
+    countItems.mockResolvedValue({ total: 78_000, trashed: 0 }); // 78%
     startToken.mockResolvedValue("tok");
 
     await runReconciliationJob(insertReconcileJob());
@@ -195,7 +196,7 @@ describe("runReconciliationJob — reservation absorption", () => {
       .insert(schema.sharedDriveReservations)
       .values({ id: "r1", sharedDriveId: "a", quota: 40_000 })
       .run();
-    countItems.mockResolvedValue(40_000); // folder got created → now counted
+    countItems.mockResolvedValue({ total: 40_000, trashed: 0 }); // folder got created → now counted
     startToken.mockResolvedValue("tok");
 
     await runReconciliationJob(insertReconcileJob());

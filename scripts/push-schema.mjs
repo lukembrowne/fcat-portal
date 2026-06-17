@@ -223,6 +223,7 @@ const statements = [
     camera_trap_project_id INTEGER REFERENCES ct_projects(id),
     status TEXT NOT NULL DEFAULT 'registering' CHECK(status IN ('registering','active','read-only','unreachable')),
     reconciled_count INTEGER NOT NULL DEFAULT 0,
+    trashed_count INTEGER NOT NULL DEFAULT 0,
     pending_reservations_count INTEGER NOT NULL DEFAULT 0,
     item_cap INTEGER NOT NULL DEFAULT 500000,
     changes_page_token TEXT,
@@ -793,6 +794,9 @@ const migrations = [
   // Project-scoped fan-out: which project a Shared Drive serves (2026-05-27).
   // One project per drive — routing + discovery are scoped to this.
   `ALTER TABLE shared_drives ADD COLUMN camera_trap_project_id INTEGER REFERENCES ct_projects(id)`,
+  // Trash now counts toward reconciled_count (matches Google's cap); track the
+  // purgeable subset separately for the admin UI (2026-06-17).
+  `ALTER TABLE shared_drives ADD COLUMN trashed_count INTEGER NOT NULL DEFAULT 0`,
   // Training-export crop-quality knobs + Drive archive sharing (2026-05-28).
   `ALTER TABLE camera_trap_training_datasets ADD COLUMN detection_confidence_floor REAL`,
   `ALTER TABLE camera_trap_training_datasets ADD COLUMN crop_padding REAL`,

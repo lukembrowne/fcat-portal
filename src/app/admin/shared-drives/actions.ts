@@ -265,11 +265,12 @@ export async function registerDrive(input: {
 
   // Baseline the count synchronously (a fresh drive is near-empty → fast).
   try {
-    const count = await countSharedDriveItems(driveId);
+    const { total, trashed } = await countSharedDriveItems(driveId);
     const token = await getChangesStartPageToken(driveId);
     db.run(sql`
       UPDATE shared_drives
-      SET reconciled_count = ${count},
+      SET reconciled_count = ${total},
+          trashed_count = ${trashed},
           changes_page_token = ${token},
           last_reconciled_at = datetime('now'),
           last_full_reconcile_at = datetime('now'),

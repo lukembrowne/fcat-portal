@@ -6,6 +6,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar";
 import { SidebarNav } from "@/components/sidebar-nav";
 import { FloatingJobProgress } from "@/components/floating-job-progress";
+import { SharedDriveCapacityBanner } from "@/components/shared-drive-capacity-banner";
 import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
 
@@ -47,6 +48,7 @@ export default async function RootLayout({
                 <SidebarTrigger />
                 <span className="font-semibold">Portal FCAT</span>
               </header>
+              <SharedDriveCapacityBanner user={user} />
               <main className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-6 min-w-0">
                 <div className="mx-auto max-w-screen-2xl">{children}</div>
               </main>

@@ -156,6 +156,72 @@ export default async function AdminSharedDrivesPage({
         </div>
       </div>
 
+      <details className="mb-4 rounded border bg-muted/20 px-4 py-3 text-sm">
+        <summary className="cursor-pointer font-medium">
+          ¿Cómo aprovisionar un nuevo Shared Drive?
+        </summary>
+        <div className="mt-3 space-y-2 text-muted-foreground">
+          <p>
+            Cuando un drive se acerca al límite de 500.000 elementos (avisos a
+            partir del {(thresholds.soft * 100).toFixed(0)}%), crea uno nuevo y
+            regístralo aquí.
+          </p>
+          <ol className="list-decimal space-y-1 pl-5">
+            <li>
+              <strong>Crea un nuevo Shared Drive</strong> en Google (requiere un
+              administrador de Workspace), siguiendo la convención de nombres
+              (ej. <code>FCAT-BIOCHOCO-2</code>).
+            </li>
+            <li>
+              <strong>
+                Agrega dos miembros con rol «Administrador de contenido»
+              </strong>{" "}
+              (Content Manager) al drive — no basta con compartir una carpeta:
+              <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                <li>
+                  la <strong>cuenta de servicio</strong> del portal (el{" "}
+                  <code>client_email</code> de{" "}
+                  <code>GOOGLE_SERVICE_ACCOUNT_KEY</code>), necesaria para contar
+                  la capacidad y procesar los datos; y
+                </li>
+                <li>
+                  <strong>monitoreo@fcat-ecuador.org</strong> — la cuenta con la
+                  que el equipo de campo sube los datos.
+                </li>
+              </ul>
+            </li>
+            <li>
+              Copia el <strong>ID del drive</strong> (el segmento{" "}
+              <code>0A…</code> de la URL del drive).
+            </li>
+            <li>
+              Aquí: <strong>Registrar drive</strong> → pega el ID →{" "}
+              <strong>Verificar</strong> → selecciona el <strong>proyecto</strong>{" "}
+              → <strong>Registrar</strong>.
+            </li>
+            <li>
+              Marca el drive lleno como <strong>«Solo lectura»</strong> (en
+              Acciones) para que las nuevas instalaciones se creen en el nuevo
+              drive. Las instalaciones existentes no se mueven y las lecturas
+              siguen funcionando en cualquier drive.
+            </li>
+            <li>
+              Verifica que el enrutamiento por capacidad esté activo
+              (<code>SHARED_DRIVE_ROUTING_ENABLED=true</code>); de lo contrario
+              las carpetas nuevas se seguirían creando en el drive antiguo.
+            </li>
+          </ol>
+          <p>
+            Las carpetas de instalaciones nuevas se crean manualmente desde{" "}
+            <a href="/biochoco/data" className="underline hover:text-foreground">
+              BioChoco → Datos
+            </a>{" "}
+            («Crear carpeta»); solo en ese momento se enrutan a un drive. Guía
+            completa: <code>docs/operations/shared-drive-provisioning-runbook.md</code>.
+          </p>
+        </div>
+      </details>
+
       {projectCapacities.length > 0 && (
         <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {projectCapacities.map((c) => (

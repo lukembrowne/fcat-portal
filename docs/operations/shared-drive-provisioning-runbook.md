@@ -27,10 +27,12 @@ provision the next drive when the current one hits **50%**.
 
 1. In Google Drive, create a new Shared Drive named on the existing convention,
    e.g. **`FCAT-BIOCHOCO-2`**, **`FCAT-BIOCHOCO-3`**, …
-2. Add the portal **service account** (the `client_email` from
-   `GOOGLE_SERVICE_ACCOUNT_KEY`) as a member with the **Content Manager** role.
-   - Content Manager (not Viewer/Commenter) is required: the FLAC compression
-     pipeline writes file *revisions*, which needs write access.
+2. Add **two members** with the **Content Manager** role (not Viewer/Commenter —
+   the FLAC compression pipeline writes file *revisions*, which needs write access):
+   - the portal **service account** (the `client_email` from
+     `GOOGLE_SERVICE_ACCOUNT_KEY`) — needed for capacity counting + processing; and
+   - **`monitoreo@fcat-ecuador.org`** — the account the **field team uploads with**.
+     Without it, field uploads to deployments on this drive will fail.
 
 ### 2. Get the Shared Drive ID
 
@@ -145,5 +147,9 @@ backfills `biochoco_deployments.shared_drive_id`. Idempotent and re-runnable.
   routing — it under-counts frames, trash, and manual uploads.
 - **`pending_reservations_count`** is in-flight folder reservations
   (`DEPLOYMENT_QUOTA` = 40,000 each), trued up by reconcile.
-- Trashed files still count toward the cap until purged (~30 days); the delta treats
-  a trash as a removal and the weekly full count corrects the drift.
+- Trashed files still count toward the cap until purged (~30 days), so
+  `reconciled_count` **includes them** (matches Google's item-cap warning). The
+  delta only decrements on a permanent `removed`; a trash is net-zero. The
+  purgeable subset is tracked in `trashed_count` and shown on the admin page —
+  emptying a drive's Trash reclaims that capacity. `trashed_count` and the
+  trash-inclusive total are only re-measured on the **weekly Sunday full count**.

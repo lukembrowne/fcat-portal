@@ -137,20 +137,41 @@ describe("overdue installation (check 2)", () => {
 });
 
 describe("retrieved but no data (check 3)", () => {
-  it("flags retrieved deployments with all-zero counts", () => {
-    const d = makeDeployment({ counts: { camera: 0, audio: 0, ibutton: 0 } });
+  it("flags as error when nothing was ever scanned (genuine no-data)", () => {
+    const d = makeDeployment({
+      counts: { camera: 0, audio: 0, ibutton: 0 },
+      processingStatus: "unscanned",
+    });
     const f = runChecks([d], opts).find((x) => x.check === "retrieved_no_data");
     expect(f).toBeDefined();
     expect(f!.severity).toBe("error");
+    expect(f!.subtype).toBeUndefined();
   });
 
   it("treats null counts as zero", () => {
     const d = makeDeployment({
       counts: { camera: null, audio: null, ibutton: null },
+      processingStatus: "unscanned",
     });
     expect(
       runChecks([d], opts).some((x) => x.check === "retrieved_no_data")
     ).toBe(true);
+  });
+
+  it("downgrades to a count/DB mismatch warning when images were already scanned", () => {
+    // Stale cached count can read 0 even though the camera pipeline found images.
+    for (const status of ["scanned", "processed", "verified", "verified_empty"] as const) {
+      const d = makeDeployment({
+        counts: { camera: 0, audio: 0, ibutton: 0 },
+        processingStatus: status,
+      });
+      const f = runChecks([d], opts).find(
+        (x) => x.check === "retrieved_no_data"
+      );
+      expect(f, status).toBeDefined();
+      expect(f!.severity, status).toBe("warn");
+      expect(f!.subtype, status).toBe("count_db_mismatch");
+    }
   });
 
   it("does not fire when re-count failed (that's check 6 instead)", () => {
@@ -280,7 +301,10 @@ describe("processing health (check 8)", () => {
 describe("summarizeFindings", () => {
   it("counts by severity and check", () => {
     const deps = [
-      makeDeployment({ counts: { camera: 0, audio: 0, ibutton: 0 } }), // retrieved_no_data (error)
+      makeDeployment({
+        counts: { camera: 0, audio: 0, ibutton: 0 },
+        processingStatus: "unscanned",
+      }), // retrieved_no_data (error)
       makeDeployment({ latitude: null, longitude: null }), // missing_coordinates (error)
     ];
     const s = summarizeFindings(runChecks(deps, opts));

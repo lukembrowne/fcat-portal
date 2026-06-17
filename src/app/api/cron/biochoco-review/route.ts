@@ -7,9 +7,11 @@
  * production (via scripts/run-biochoco-review.mjs inside the container) and then
  * authors the Spanish report from the JSON.
  *
- * By default it does NOT force a live Drive re-count: the nightly-refresh cron
- * already keeps counts ~24h fresh, which is accurate enough for a monthly review.
- * Pass `?recount=true` to force a live re-count (slow — minutes).
+ * By default it FORCES a live Drive re-count (a few minutes) so the report
+ * reflects ground truth — the cached counts can be stale (the nightly refresh
+ * does not reliably update every deployment, and anything uploaded since the
+ * last nightly is invisible), which produced false "retrieved with no data"
+ * findings. Pass `?recount=false` to use the cached counts (fast).
  *
  * Auth: Bearer CRON_SECRET (timing-safe), matching the other cron routes
  * (nightly-refresh, portal-updates, …). The secret is the security boundary; we
@@ -35,7 +37,8 @@ async function handle(request: Request): Promise<Response> {
   }
 
   const url = new URL(request.url);
-  const recount = url.searchParams.get("recount") === "true";
+  // Default ON: only an explicit ?recount=false uses cached counts.
+  const recount = url.searchParams.get("recount") !== "false";
   const today = url.searchParams.get("today") ?? ecuadorToday();
 
   try {

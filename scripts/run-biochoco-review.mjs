@@ -12,8 +12,8 @@
  * API route (`/api/cron/biochoco-review`). CRON_SECRET stays in the container env
  * — it is never passed on the command line or exposed.
  *
- * Flags (passthrough): --recount (force a live Drive re-count, slow),
- *                      --today YYYY-MM-DD (override the reference date).
+ * Flags: --no-recount (use cached counts, fast — default is a live re-count),
+ *        --today YYYY-MM-DD (override the reference date).
  */
 
 const secret = process.env.CRON_SECRET;
@@ -23,12 +23,12 @@ if (!secret) {
 }
 
 const port = process.env.PORT || "3000";
-const recount = process.argv.includes("--recount");
+const recount = !process.argv.includes("--no-recount");
 const todayIdx = process.argv.indexOf("--today");
 const today = todayIdx >= 0 ? process.argv[todayIdx + 1] : undefined;
 
 const params = new URLSearchParams();
-if (recount) params.set("recount", "true");
+if (!recount) params.set("recount", "false");
 if (today) params.set("today", today);
 const qs = params.toString();
 const url = `http://localhost:${port}/api/cron/biochoco-review${qs ? `?${qs}` : ""}`;

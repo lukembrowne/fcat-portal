@@ -204,17 +204,39 @@ export function runChecks(
         const daysSince = d.actualRetrieveDate
           ? daysBetween(today, d.actualRetrieveDate)
           : null;
-        findings.push({
-          check: "retrieved_no_data",
-          severity: "error",
-          ...base(d),
-          summary: "Recuperada sin datos subidos en Drive",
-          evidence: {
-            actualRetrieveDate: d.actualRetrieveDate,
-            daysSinceRetrieval: daysSince,
-            counts: d.counts,
-          },
-        });
+        // Guard against false positives from stale cached counts: if the
+        // camera pipeline already discovered images (status beyond unscanned),
+        // data demonstrably exists — the zero is a count/cache mismatch, not
+        // missing data. Surface it as a warning instead of a hard error.
+        const hasCameraEvidence =
+          d.processingStatus != null && d.processingStatus !== "unscanned";
+        if (hasCameraEvidence) {
+          findings.push({
+            check: "retrieved_no_data",
+            subtype: "count_db_mismatch",
+            severity: "warn",
+            ...base(d),
+            summary:
+              "Conteo de Drive en 0 pero hay imágenes registradas (conteo desactualizado o datos en otra carpeta)",
+            evidence: {
+              actualRetrieveDate: d.actualRetrieveDate,
+              processingStatus: d.processingStatus,
+              counts: d.counts,
+            },
+          });
+        } else {
+          findings.push({
+            check: "retrieved_no_data",
+            severity: "error",
+            ...base(d),
+            summary: "Recuperada sin datos subidos en Drive",
+            evidence: {
+              actualRetrieveDate: d.actualRetrieveDate,
+              daysSinceRetrieval: daysSince,
+              counts: d.counts,
+            },
+          });
+        }
       }
     }
 

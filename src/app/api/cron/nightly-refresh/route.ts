@@ -35,8 +35,20 @@ import {
 } from "@/lib/camera-trap-sync-worker";
 import { processNextQueueable } from "@/lib/job-queue";
 import { JOB_TYPES } from "@/lib/job-types";
+import { buildPortalUpdatesPayload } from "@/lib/portal-updates/aggregator";
+import { buildPortalUpdatesBody } from "@/lib/portal-updates/email-template";
 
 export const dynamic = "force-dynamic";
+
+// Base URL for deployment links in the email. Matches the convention used by
+// the other cron email routes (shared-drive-alerts, research-reminders, etc.).
+const SITE_URL =
+  process.env.NEXT_PUBLIC_SITE_URL ?? "https://portal.fcat-ecuador.org";
+
+/** Wrap email cell HTML in an anchor (muted blue, no underline) to a portal page. */
+function emailLink(href: string, inner: string): string {
+  return `<a href="${href}" style="color:#2563eb;text-decoration:none">${inner}</a>`;
+}
 
 // Budgets carved out of the cron --max-time 600s wall: CT first, then audio,
 // with ~60s of slack left for snapshot + email. If either phase consistently
@@ -355,6 +367,22 @@ export async function POST(request: Request) {
     // table — the totals grow monotonically in practice.
     const audioReport = await collectAudioReport(prev?.date ?? null);
 
+    // Step 4c: gather the last-24h analysis-activity summary (formerly its own
+    // 7 AM "Actividad del Portal" email). Embedded as a section in this single
+    // daily email. A failure here must NOT block the data report.
+    let activityHtml: string | null = null;
+    try {
+      const windowEnd = new Date();
+      const windowStart = new Date(windowEnd.getTime() - 24 * 60 * 60 * 1000);
+      const activityPayload = await buildPortalUpdatesPayload(
+        windowStart,
+        windowEnd,
+      );
+      activityHtml = buildPortalUpdatesBody(activityPayload);
+    } catch (err) {
+      log.error({ err }, "[nightly] Failed to build activity summary — omitting section");
+    }
+
     // Step 5: Send email
     const RESEND_API_KEY = process.env.RESEND_API_KEY;
     const NIGHTLY_REPORT_EMAILS = process.env.NIGHTLY_REPORT_EMAILS;
@@ -367,6 +395,7 @@ export async function POST(request: Request) {
         results,
         delta,
         audioReport,
+        activityHtml,
       );
     } else {
       log.warn("[nightly] Email skipped — RESEND_API_KEY or NIGHTLY_REPORT_EMAILS not set");
@@ -650,6 +679,7 @@ async function sendReport(
   results: DeploymentResult[],
   delta: SnapshotDelta,
   audioReport: AudioReport,
+  activityHtml: string | null,
 ) {
   const resend = new Resend(apiKey);
   const fromEmail = process.env.RESEND_FROM_EMAIL ?? "portal@fcat-ecuador.org";
@@ -665,7 +695,7 @@ async function sendReport(
     ? `Completado con errores (${errors.length} fallos)`
     : "Completado";
 
-  const html = buildEmailHtml(date, statusLine, results, delta, errors, audioReport);
+  const html = buildEmailHtml(date, statusLine, results, delta, errors, audioReport, activityHtml);
 
   try {
     const { error } = await resend.emails.send({
@@ -713,7 +743,8 @@ function buildAudioSection(report: AudioReport): string {
       <td style="padding:6px 16px 6px 0;font-weight:600">Instalaciones analizadas</td>
       <td style="padding:6px 0">${report.birdnetJobsCompletedSincePrev === null ? "—" : `${report.birdnetJobsCompletedSincePrev.toLocaleString()}${report.previousSnapshotDate ? ` desde ${report.previousSnapshotDate}` : ""}`}</td>
     </tr>
-  </table>`;
+  </table>
+  <p style="color:#6b7280;font-size:12px;margin-top:6px;max-width:560px">«Archivos de audio» son los archivos ya indexados en el portal; puede ir por detrás de «Grabadores de audio» (subidos a Drive) mientras la sincronización de audio se pone al día.</p>`;
 }
 
 function buildEmailHtml(
@@ -723,6 +754,7 @@ function buildEmailHtml(
   delta: SnapshotDelta,
   errors: DeploymentResult[],
   audioReport: AudioReport,
+  activityHtml: string | null,
 ): string {
   const totalFiles = delta.totalCameras + delta.totalAudio + delta.totalIbutton;
   const totalSize = delta.totalCameraSizeBytes + delta.totalAudioSizeBytes + delta.totalIbuttonSizeBytes;
@@ -741,12 +773,27 @@ function buildEmailHtml(
   const deploymentTableRows = deploymentRows
     .map((r) => {
       const u = r.uploads!;
+      // Link the name + each count cell to its data type's page. Only link a
+      // count cell when its count > 0 (rows can carry a 0 in one category).
+      const nameCell = emailLink(`${SITE_URL}/camera-trap/${r.id}`, r.name);
+      const camCount = u.camarasTrampas ?? 0;
+      const audCount = u.grabadoresDeAudio ?? 0;
+      const ibtCount = u.ibutton ?? 0;
+      const camCell = camCount > 0
+        ? emailLink(`${SITE_URL}/camera-trap/${r.id}`, formatCountCell(u.camarasTrampas, r.previousCameraCount))
+        : formatCountCell(u.camarasTrampas, r.previousCameraCount);
+      const audCell = audCount > 0
+        ? emailLink(`${SITE_URL}/audio/${r.id}`, formatCountCell(u.grabadoresDeAudio, r.previousAudioCount))
+        : formatCountCell(u.grabadoresDeAudio, r.previousAudioCount);
+      const ibtCell = ibtCount > 0
+        ? emailLink(`${SITE_URL}/biochoco/ibutton/${r.id}`, formatCountCell(u.ibutton, r.previousIbuttonCount))
+        : formatCountCell(u.ibutton, r.previousIbuttonCount);
       return `<tr>
-        <td style="padding:6px 12px;border:1px solid #e5e7eb">${r.name}</td>
+        <td style="padding:6px 12px;border:1px solid #e5e7eb">${nameCell}</td>
         <td style="padding:6px 12px;border:1px solid #e5e7eb">${r.siteName ?? "—"}</td>
-        <td style="padding:6px 12px;border:1px solid #e5e7eb;text-align:right">${formatCountCell(u.camarasTrampas, r.previousCameraCount)}</td>
-        <td style="padding:6px 12px;border:1px solid #e5e7eb;text-align:right">${formatCountCell(u.grabadoresDeAudio, r.previousAudioCount)}</td>
-        <td style="padding:6px 12px;border:1px solid #e5e7eb;text-align:right">${formatCountCell(u.ibutton, r.previousIbuttonCount)}</td>
+        <td style="padding:6px 12px;border:1px solid #e5e7eb;text-align:right">${camCell}</td>
+        <td style="padding:6px 12px;border:1px solid #e5e7eb;text-align:right">${audCell}</td>
+        <td style="padding:6px 12px;border:1px solid #e5e7eb;text-align:right">${ibtCell}</td>
       </tr>`;
     })
     .join("\n");
@@ -784,7 +831,7 @@ function buildEmailHtml(
       .map((r) => {
         const u = r.uploads!;
         return `<tr>
-        <td style="padding:6px 12px;border:1px solid #bbf7d0">${r.name}</td>
+        <td style="padding:6px 12px;border:1px solid #bbf7d0">${emailLink(`${SITE_URL}/camera-trap/${r.id}`, r.name)}</td>
         <td style="padding:6px 12px;border:1px solid #bbf7d0">${r.siteName ?? "—"}</td>
         <td style="padding:6px 12px;border:1px solid #bbf7d0;text-align:right">${(u.camarasTrampas ?? 0).toLocaleString()}</td>
         <td style="padding:6px 12px;border:1px solid #bbf7d0;text-align:right">${(u.grabadoresDeAudio ?? 0).toLocaleString()}</td>
@@ -861,6 +908,10 @@ function buildEmailHtml(
     </tr>
     ${deploymentTableRows}
   </table>
+
+  ${activityHtml ? `
+  <h3 style="margin-top:32px;border-top:2px solid #e5e7eb;padding-top:16px">Actividad de análisis (últimas 24 h)</h3>
+  ${activityHtml}` : ""}
 
   ${errorSection}
 

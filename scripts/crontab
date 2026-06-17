@@ -15,8 +15,10 @@
 # Only sends when a drive is at/over the soft threshold; silent otherwise.
 0 6 * * * root . /etc/cron.d/portal-env && /usr/bin/curl -fsS -X POST -H "Authorization: Bearer $CRON_SECRET" --max-time 120 http://localhost:3000/api/cron/shared-drive-alerts >> /app/data/backups/cron.log 2>&1
 
-# Daily portal-updates email — analysis activity summary (7 AM Eastern, ~6-7 AM Ecuador)
-0 7 * * * root . /etc/cron.d/portal-env && /usr/bin/curl -fsS -X POST -H "Authorization: Bearer $CRON_SECRET" --max-time 120 http://localhost:3000/api/cron/portal-updates >> /app/data/backups/cron.log 2>&1
+# NOTE: The standalone /api/cron/portal-updates email (formerly 7 AM Eastern) is
+# now folded into the 1 AM nightly-refresh email as the "Actividad de análisis"
+# section — one daily BioChoco email instead of two. The portal-updates route
+# remains callable manually for ad-hoc activity sends.
 
 # Daily research application report reminders (8 AM Eastern)
 0 8 * * * root . /etc/cron.d/portal-env && /usr/bin/curl -fsS -X POST -H "Authorization: Bearer $CRON_SECRET" --max-time 120 http://localhost:3000/api/cron/research-reminders >> /app/data/backups/cron.log 2>&1

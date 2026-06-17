@@ -35,6 +35,26 @@ export function buildPortalUpdatesHtml(
   <h2 style="margin-bottom:4px">Actividad del Portal</h2>
   <p style="color:${COLOR_MUTED};margin-top:0;font-size:14px">Resumen de las últimas 24 horas — ${windowLabel}</p>`;
 
+  return `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1f2937;max-width:800px;margin:0 auto;padding:20px">
+${headerHtml}
+${buildPortalUpdatesBody(payload)}
+  <p style="color:#9ca3af;font-size:12px;margin-top:32px;border-top:1px solid ${TABLE_BORDER};padding-top:12px">portal.fcat-ecuador.org</p>
+</body>
+</html>`;
+}
+
+/**
+ * The inner activity HTML (summary table + per-project sections, or the
+ * "no activity" note) WITHOUT the `<html>`/`<body>` wrapper, header, or footer.
+ * Used both by `buildPortalUpdatesHtml` (standalone email) and by the nightly
+ * BioChoco email, which embeds this as a section under its own heading.
+ */
+export function buildPortalUpdatesBody(
+  payload: PortalUpdatesPayload,
+): string {
   const summaryHtml = `
   <h3 style="margin-top:24px">Resumen</h3>
   <table style="border-collapse:collapse;margin-top:8px">
@@ -64,16 +84,8 @@ export function buildPortalUpdatesHtml(
     ? `<p style="margin-top:24px;color:${COLOR_MUTED}">No hubo actividad nueva en este período.</p>`
     : payload.projects.map(renderProjectSection).join("\n");
 
-  return `<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"></head>
-<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1f2937;max-width:800px;margin:0 auto;padding:20px">
-${headerHtml}
-${summaryHtml}
-${bodyHtml}
-  <p style="color:#9ca3af;font-size:12px;margin-top:32px;border-top:1px solid ${TABLE_BORDER};padding-top:12px">portal.fcat-ecuador.org</p>
-</body>
-</html>`;
+  return `${summaryHtml}
+${bodyHtml}`;
 }
 
 function summaryRow(label: string, value: number, description: string): string {

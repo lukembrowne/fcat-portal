@@ -11,8 +11,11 @@
  * already keeps counts ~24h fresh, which is accurate enough for a monthly review.
  * Pass `?recount=true` to force a live re-count (slow — minutes).
  *
- * Auth: Bearer CRON_SECRET (timing-safe), localhost-only (rejects X-Forwarded-For),
- * mirroring the other cron routes.
+ * Auth: Bearer CRON_SECRET (timing-safe), matching the other cron routes
+ * (nightly-refresh, portal-updates, …). The secret is the security boundary; we
+ * intentionally do NOT add an X-Forwarded-For guard — in this deployment the
+ * in-container localhost:3000 call already carries XFF, so that guard would
+ * reject the legitimate trigger.
  *
  * Plan: docs/plans/2026-06-16-feat-biochoco-data-quality-review-skill-plan.md
  */
@@ -29,9 +32,6 @@ export const maxDuration = 800;
 async function handle(request: Request): Promise<Response> {
   if (!verifyCronSecret(request)) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
-  }
-  if (request.headers.get("x-forwarded-for")) {
-    return Response.json({ error: "Forbidden" }, { status: 403 });
   }
 
   const url = new URL(request.url);

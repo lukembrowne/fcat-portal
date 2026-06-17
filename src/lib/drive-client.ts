@@ -184,6 +184,22 @@ async function countFilesRecursive(
   return { count, totalBytes, newestDate };
 }
 
+/**
+ * Live recursive count of audio files directly under a given folder — e.g. a
+ * deployment's `grabadoresDeAudio` upload subfolder (`uploadAudioFolderId`).
+ *
+ * NOTE: pass the AUDIO subfolder here, NOT the deployment root. `checkDeploymentUploads`
+ * is the root-folder variant; calling it with the audio subfolder would look for a
+ * `grabadoresDeAudio` child that doesn't exist and return 0.
+ *
+ * Used by the overnight batch (`audio-batch.ts`) to detect an in-progress upload
+ * just before enqueuing, catching same-day uploads the nightly-cached count misses.
+ */
+export async function countAudioFilesInFolder(folderId: string): Promise<number> {
+  const stats = await countFilesRecursive(folderId, AUDIO_EXTENSIONS);
+  return stats.count;
+}
+
 export interface DriveFileInfo {
   id: string;
   name: string;

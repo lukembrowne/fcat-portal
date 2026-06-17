@@ -25,3 +25,16 @@
 
 # Monthly committee digest — 1st of each month at 9 AM Eastern
 0 9 1 * * root . /etc/cron.d/portal-env && /usr/bin/curl -fsS -X POST -H "Authorization: Bearer $CRON_SECRET" --max-time 120 http://localhost:3000/api/cron/committee-monthly-digest >> /app/data/backups/cron.log 2>&1
+
+# Overnight audio batch — clears the BirdNET/indices backlog during the quiet
+# Ecuador night. Fires once at 10 PM Ecuador; the route enqueues settled
+# never-processed deployments and the unified queue drains them. The picker's
+# UTC-5 window gate stops STARTING new batch jobs after 6 AM Ecuador (a running
+# one overruns to completion). CRON_TZ pins the fire to Ecuador so it can't
+# drift under US daylight saving (the container TZ is America/New_York).
+# --max-time covers the per-candidate Drive re-counts + enqueues, NOT the
+# overnight draining (the queue does that independently of this request).
+CRON_TZ=America/Guayaquil
+0 22 * * * root . /etc/cron.d/portal-env && /usr/bin/curl -fsS -X POST -H "Authorization: Bearer $CRON_SECRET" --max-time 1800 http://localhost:3000/api/cron/nightly-batch >> /app/data/backups/cron.log 2>&1
+# Reset TZ for any future entries added below (other jobs are Eastern-based).
+CRON_TZ=America/New_York

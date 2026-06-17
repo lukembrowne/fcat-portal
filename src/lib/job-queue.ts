@@ -23,6 +23,10 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { JOB_TYPES, type JobType } from "@/lib/job-types";
 import { log } from "@/lib/log";
 import { recordEvent, buildJobStartEvent } from "@/lib/system-events";
+import {
+  BATCH_CREATED_BY,
+  isWithinEcuadorNightWindow,
+} from "@/lib/audio-batch-eligibility";
 
 export const QUEUEABLE_JOB_TYPES = [
   JOB_TYPES.ML,
@@ -138,15 +142,25 @@ export async function processNextQueueable(): Promise<void> {
     try {
       if (await isQueueBusy()) return;
 
+      // Overnight-batch window gate: outside 10pm–6am Ecuador, batch-origin rows
+      // (`createdBy = 'cron@batch'`) are NOT eligible to start. This enforces the
+      // 6am cutoff on *starting* new batch jobs (a running one overruns to
+      // completion — no mid-job cancel). Origin-scoped + COALESCE so manual jobs
+      // (user email or NULL createdBy) are NEVER gated.
+      const conds = [
+        eq(processingJobs.status, "pending"),
+        inArray(processingJobs.jobType, [...QUEUEABLE_JOB_TYPES]),
+      ];
+      if (!isWithinEcuadorNightWindow(new Date())) {
+        conds.push(
+          sql`COALESCE(${processingJobs.createdBy}, '') != ${BATCH_CREATED_BY}`,
+        );
+      }
+
       const [next] = await db
         .select()
         .from(processingJobs)
-        .where(
-          and(
-            eq(processingJobs.status, "pending"),
-            inArray(processingJobs.jobType, [...QUEUEABLE_JOB_TYPES]),
-          ),
-        )
+        .where(and(...conds))
         .orderBy(processingJobs.createdAt, processingJobs.id)
         .limit(1);
       if (!next) return;

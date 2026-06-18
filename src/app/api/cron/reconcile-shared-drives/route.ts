@@ -5,8 +5,11 @@
  * SA access, and emits capacity / threshold events. Invoked nightly via curl
  * from inside the container (localhost only).
  *
- * Auth: Bearer CRON_SECRET (timing-safe). Localhost-only: rejects any request
- * carrying X-Forwarded-For (those came through the public oauth2-proxy path).
+ * Auth: Bearer CRON_SECRET (timing-safe), matching the other cron routes. The
+ * secret is the security boundary; we intentionally do NOT add an
+ * X-Forwarded-For guard — in this deployment the in-container localhost:3000
+ * call already carries XFF, so that guard rejected the legitimate nightly cron
+ * (silently 403'd every night). Same fix as commit 919f5ce (biochoco-review).
  * Single-flight: never enqueues a second reconcile while one is in flight.
  */
 
@@ -23,10 +26,6 @@ export const dynamic = "force-dynamic";
 export async function POST(request: Request) {
   if (!verifyCronSecret(request)) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
-  }
-  // Cron runs in-container against localhost; the public path would set XFF.
-  if (request.headers.get("x-forwarded-for")) {
-    return Response.json({ error: "Forbidden" }, { status: 403 });
   }
 
   try {

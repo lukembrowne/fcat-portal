@@ -8,7 +8,9 @@
  * recorded by the reconcile worker and visible at /admin/activity + the banner;
  * this cron is purely the push notification.
  *
- * Auth: Bearer CRON_SECRET (timing-safe). Localhost-only: rejects X-Forwarded-For.
+ * Auth: Bearer CRON_SECRET (timing-safe). No X-Forwarded-For guard — the
+ * in-container cron call carries XFF in this deployment, so that guard 403'd
+ * the legitimate trigger (same fix as commit 919f5ce / the reconcile route).
  * Recipients: SHARED_DRIVE_ALERT_EMAILS (csv), falling back to PORTAL_UPDATES_EMAILS.
  */
 
@@ -26,9 +28,6 @@ export const dynamic = "force-dynamic";
 export async function POST(request: Request) {
   if (!verifyCronSecret(request)) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
-  }
-  if (request.headers.get("x-forwarded-for")) {
-    return Response.json({ error: "Forbidden" }, { status: 403 });
   }
 
   const startTime = Date.now();

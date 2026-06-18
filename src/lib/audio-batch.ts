@@ -51,20 +51,29 @@ export async function selectBatchEligibleAudioDeployments(): Promise<{
       previousAudioCount: deployments.previousAudioCount,
       uploadNewestAudioDate: deployments.uploadNewestAudioDate,
       excluded: deployments.excluded,
+      // NOTE: the outer-table correlation MUST be written as the literal
+      // `biochoco_deployments.id`, NOT `${deployments.id}`. Drizzle renders an
+      // interpolated column inside a raw `sql` fragment UNQUALIFIED (`"id"`),
+      // and SQLite then binds that bare `id` to the SUBQUERY's own table
+      // (audio_files.id / biochoco_processing_jobs.id), not the outer
+      // deployment — making every subquery count 0 / MAX NULL. That silently
+      // made the whole batch report `no_audio` for every deployment in prod
+      // (2026-06-18). Qualifying with the literal table name correlates to the
+      // outer row. See gotcha_drizzle_correlated_subquery_bare_column.
       audioFileCount: sql<number>`(
         SELECT COUNT(*) FROM audio_files
-        WHERE audio_files.deployment_id = ${deployments.id}
+        WHERE audio_files.deployment_id = biochoco_deployments.id
       )`,
       isBirdnetProcessing: sql<number>`(
         SELECT COUNT(*) FROM biochoco_processing_jobs
-        WHERE deployment_id = ${deployments.id}
+        WHERE biochoco_processing_jobs.deployment_id = biochoco_deployments.id
         AND job_type IN ('birdnet', 'acoustic_indices', 'audio_analysis')
         AND status IN ('pending', 'processing')
       )`,
       // Unix SECONDS (raw aggregate — Drizzle's timestamp codec does not run).
       lastBirdnetAtSeconds: sql<number | null>`(
         SELECT MAX(completed_at) FROM biochoco_processing_jobs
-        WHERE deployment_id = ${deployments.id}
+        WHERE biochoco_processing_jobs.deployment_id = biochoco_deployments.id
         AND job_type IN ('birdnet', 'audio_analysis') AND status = 'completed'
       )`,
     })

@@ -274,9 +274,11 @@ export async function syncWithDrive(
                 uploadCameraCount: uploads.camarasTrampas,
                 uploadAudioCount: uploads.grabadoresDeAudio,
                 uploadIbuttonCount: uploads.ibutton,
+                uploadCalibrationCount: uploads.calibracionDeAudio ?? null,
                 uploadCameraFolderId: uploads.subfolderIds.camarasTrampas,
                 uploadAudioFolderId: uploads.subfolderIds.grabadoresDeAudio,
                 uploadIbuttonFolderId: uploads.subfolderIds.ibutton,
+                uploadCalibrationFolderId: uploads.subfolderIds.calibracionDeAudio ?? null,
                 uploadCountsCheckedAt: sql`(unixepoch())`,
                 ...(sharedDriveId ? { sharedDriveId } : {}),
               })

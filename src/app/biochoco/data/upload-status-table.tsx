@@ -85,16 +85,20 @@ function buildInitialCache(schedule: ScheduleRow[]): Map<string, DriveStatusResu
           camarasTrampas: row.uploadCameraCount ?? null,
           grabadoresDeAudio: row.uploadAudioCount ?? null,
           ibutton: row.uploadIbuttonCount ?? null,
+          calibracionDeAudio: row.uploadCalibrationCount ?? null,
           camarasTrampasSizeBytes: null,
           grabadoresDeAudioSizeBytes: null,
           ibuttonSizeBytes: null,
+          calibracionDeAudioSizeBytes: null,
           camarasTrampasNewestDate: null,
           grabadoresDeAudioNewestDate: null,
           ibuttonNewestDate: null,
+          calibracionDeAudioNewestDate: null,
           subfolderIds: {
             camarasTrampas: row.uploadCameraFolderId ?? null,
             grabadoresDeAudio: row.uploadAudioFolderId ?? null,
             ibutton: row.uploadIbuttonFolderId ?? null,
+            calibracionDeAudio: row.uploadCalibrationFolderId ?? null,
           },
         },
       });
@@ -127,7 +131,7 @@ function DataTypeCell({
 }: {
   parentFolderLink: string | null;
   driveStatus: DriveStatusResult | undefined;
-  dataTypeKey: "camarasTrampas" | "grabadoresDeAudio" | "ibutton";
+  dataTypeKey: "camarasTrampas" | "grabadoresDeAudio" | "ibutton" | "calibracionDeAudio";
   /** ODK-window QC for camera/audio modalities. Omit for iButton. */
   windowQc?: WindowQcResult;
   /** Singular noun for the file type, used in tooltip labels. */
@@ -302,10 +306,10 @@ function IbuttonCoverageMiniBadge({ coverage }: { coverage: CoverageResult }) {
 
 // --- Sorting ---
 
-type SortField = "deploymentId" | "siteId" | "status" | "actualDeployDate" | "actualRetrieveDate" | "uploadCameraCount" | "uploadAudioCount" | "uploadIbuttonCount" | "uploadNewestDate";
+type SortField = "deploymentId" | "siteId" | "status" | "actualDeployDate" | "actualRetrieveDate" | "uploadCameraCount" | "uploadAudioCount" | "uploadIbuttonCount" | "uploadCalibrationCount" | "uploadNewestDate";
 type SortDir = "asc" | "desc" | null;
 
-const NUMERIC_FIELDS = new Set<SortField>(["uploadCameraCount", "uploadAudioCount", "uploadIbuttonCount"]);
+const NUMERIC_FIELDS = new Set<SortField>(["uploadCameraCount", "uploadAudioCount", "uploadIbuttonCount", "uploadCalibrationCount"]);
 
 function sortRows(rows: ScheduleRow[], field: SortField, dir: SortDir): ScheduleRow[] {
   if (!dir) return rows;
@@ -624,6 +628,12 @@ export function UploadStatusTable({
                   </TableHead>
                   <TableHead className="text-center whitespace-nowrap">
                     <span className="inline-flex items-center gap-1">
+                      Calibración
+                      <SortButton field="uploadCalibrationCount" current={sortField} dir={sortDir} onSort={handleSort} />
+                    </span>
+                  </TableHead>
+                  <TableHead className="text-center whitespace-nowrap">
+                    <span className="inline-flex items-center gap-1">
                       Último Subida
                       <SortButton field="uploadNewestDate" current={sortField} dir={sortDir} onSort={handleSort} />
                     </span>
@@ -696,6 +706,14 @@ export function UploadStatusTable({
                           driveStatus={driveStatus}
                           dataTypeKey="ibutton"
                           ibuttonCoverage={qc?.ibutton}
+                        />
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <DataTypeCell
+                          parentFolderLink={parentLink}
+                          driveStatus={driveStatus}
+                          dataTypeKey="calibracionDeAudio"
+                          fileLabel="grabación"
                         />
                       </TableCell>
                       <TableCell className="text-center text-sm whitespace-nowrap text-muted-foreground">

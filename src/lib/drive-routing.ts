@@ -17,6 +17,16 @@ export const DATA_TYPE_FOLDERS = {
   ibutton: "ibutton",
 } as const;
 
+/**
+ * Extra subfolder created in every deployment folder for audio-calibration
+ * recordings. Deliberately NOT part of DATA_TYPE_FOLDERS / extension routing:
+ * calibration files share audio extensions with grabadores_de_audio, so the
+ * field uploader can't auto-route them — the field team drops them here by
+ * hand. Counted on the datos page (counting ALL files, not extension-filtered)
+ * but excluded from BirdNET and from the field-upload routing contract.
+ */
+export const AUDIO_CALIBRATION_FOLDER = "calibracion_de_audio";
+
 export const IMAGE_EXTENSIONS = new Set([
   ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".tif",
 ]);

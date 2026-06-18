@@ -24,9 +24,11 @@ export interface ScheduleRow {
   uploadCameraCount?: number | null;
   uploadAudioCount?: number | null;
   uploadIbuttonCount?: number | null;
+  uploadCalibrationCount?: number | null;
   uploadCameraFolderId?: string | null;
   uploadAudioFolderId?: string | null;
   uploadIbuttonFolderId?: string | null;
+  uploadCalibrationFolderId?: string | null;
   uploadCountsCheckedAt?: number | null; // unix timestamp
   uploadNewestDate?: string | null; // ISO date of most recent file across all data types
   // Field notes from DB (operational context — equipment issues, missing data)

@@ -758,6 +758,11 @@ const migrations = [
   `ALTER TABLE biochoco_deployments ADD COLUMN upload_newest_camera_date TEXT`,
   `ALTER TABLE biochoco_deployments ADD COLUMN upload_newest_audio_date TEXT`,
   `ALTER TABLE biochoco_deployments ADD COLUMN upload_newest_ibutton_date TEXT`,
+  // Audio-calibration subfolder — counted on the datos page only (2026-06-17)
+  `ALTER TABLE biochoco_deployments ADD COLUMN upload_calibration_count INTEGER`,
+  `ALTER TABLE biochoco_deployments ADD COLUMN upload_calibration_folder_id TEXT`,
+  `ALTER TABLE biochoco_deployments ADD COLUMN upload_calibration_size_bytes INTEGER`,
+  `ALTER TABLE biochoco_deployments ADD COLUMN upload_newest_calibration_date TEXT`,
   // Upload snapshots — size tracking (2026-04-02)
   `ALTER TABLE upload_count_snapshots ADD COLUMN total_camera_size_bytes INTEGER NOT NULL DEFAULT 0`,
   `ALTER TABLE upload_count_snapshots ADD COLUMN total_audio_size_bytes INTEGER NOT NULL DEFAULT 0`,

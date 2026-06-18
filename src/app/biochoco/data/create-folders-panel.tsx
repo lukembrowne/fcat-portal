@@ -201,7 +201,7 @@ export function CreateFoldersPanel() {
               <div className="border-t pt-4">
                 <p className="text-sm text-muted-foreground mb-2">
                   Esto creará carpetas en Google Drive con subcarpetas
-                  (camaras_trampas, grabadores_de_audio, ibutton).
+                  (camaras_trampas, grabadores_de_audio, ibutton, calibracion_de_audio).
                 </p>
                 <Button
                   onClick={handleCreate}

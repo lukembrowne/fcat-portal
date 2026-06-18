@@ -375,9 +375,11 @@ export async function createSingleDriveFolder(
           uploadCameraFolderId: folder.subfolderIds.camarasTrampas,
           uploadAudioFolderId: folder.subfolderIds.grabadoresDeAudio,
           uploadIbuttonFolderId: folder.subfolderIds.ibutton,
+          uploadCalibrationFolderId: folder.subfolderIds.calibracionDeAudio,
           uploadCameraCount: 0,
           uploadAudioCount: 0,
           uploadIbuttonCount: 0,
+          uploadCalibrationCount: 0,
           uploadCountsCheckedAt: new Date(),
         })
         .onConflictDoNothing();
@@ -492,9 +494,11 @@ export async function recreateDriveFolder(
           uploadCameraFolderId: folder.subfolderIds.camarasTrampas,
           uploadAudioFolderId: folder.subfolderIds.grabadoresDeAudio,
           uploadIbuttonFolderId: folder.subfolderIds.ibutton,
+          uploadCalibrationFolderId: folder.subfolderIds.calibracionDeAudio,
           uploadCameraCount: 0,
           uploadAudioCount: 0,
           uploadIbuttonCount: 0,
+          uploadCalibrationCount: 0,
           uploadCountsCheckedAt: new Date(),
         })
         .where(eq(deployments.name, deploymentId));

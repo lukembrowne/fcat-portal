@@ -9,6 +9,7 @@ import { describe, it, expect } from "vitest";
 import {
   buildRoutingConfig,
   DATA_TYPE_FOLDERS,
+  AUDIO_CALIBRATION_FOLDER,
   AUDIO_EXTENSIONS,
 } from "@/lib/drive-routing";
 
@@ -19,6 +20,14 @@ describe("drive-routing", () => {
       grabadoresDeAudio: "grabadores_de_audio",
       ibutton: "ibutton",
     });
+  });
+
+  it("exposes the audio-calibration folder name, kept OUT of the routing contract", () => {
+    expect(AUDIO_CALIBRATION_FOLDER).toBe("calibracion_de_audio");
+    // It must NOT leak into the field-uploader routing config.
+    expect(Object.values(buildRoutingConfig().subfolders)).not.toContain(
+      AUDIO_CALIBRATION_FOLDER,
+    );
   });
 
   it("builds the routing config with the three subfolders", () => {

@@ -15,6 +15,7 @@ import type { ActionResult } from "./types";
 import { log } from "@/lib/log";
 import {
   DATA_TYPE_FOLDERS,
+  AUDIO_CALIBRATION_FOLDER,
   IMAGE_EXTENSIONS,
   VIDEO_EXTENSIONS,
   AUDIO_EXTENSIONS,
@@ -30,16 +31,22 @@ export interface UploadStatus {
   camarasTrampas: number | null; // file count, null = subfolder not found or check failed
   grabadoresDeAudio: number | null;
   ibutton: number | null;
+  // Audio-calibration folder. Optional so the out-of-scope UploadStatus literal
+  // constructors (e.g. the nightly-refresh email path) compile unchanged.
+  calibracionDeAudio?: number | null;
   camarasTrampasSizeBytes: number | null;
   grabadoresDeAudioSizeBytes: number | null;
   ibuttonSizeBytes: number | null;
+  calibracionDeAudioSizeBytes?: number | null;
   camarasTrampasNewestDate: string | null;
   grabadoresDeAudioNewestDate: string | null;
   ibuttonNewestDate: string | null;
+  calibracionDeAudioNewestDate?: string | null;
   subfolderIds: {
     camarasTrampas: string | null;
     grabadoresDeAudio: string | null;
     ibutton: string | null;
+    calibracionDeAudio?: string | null;
   };
 }
 
@@ -117,13 +124,15 @@ export async function resolveFolderDriveId(folderId: string): Promise<string | n
 }
 
 /**
- * Recursively count files whose extension matches the given set.
+ * Recursively count files whose extension matches the given set. Pass
+ * `extensions = null` to count EVERY file regardless of extension (used for the
+ * manual calibration folder, which has no fixed file type).
  * Skips `_frames/` subfolders (video frame uploads).
  * Caps recursion at depth 5 to prevent pathological nesting.
  */
 async function countFilesRecursive(
   folderId: string,
-  extensions: Set<string>,
+  extensions: Set<string> | null,
   depth = 0
 ): Promise<FileStats> {
   if (depth > 5) return { count: 0, totalBytes: 0, newestDate: null };
@@ -155,7 +164,7 @@ async function countFilesRecursive(
         subfolders.push({ id: file.id, name: file.name });
       } else {
         const ext = path.extname(file.name).toLowerCase();
-        if (extensions.has(ext)) {
+        if (extensions === null || extensions.has(ext)) {
           count++;
           if (file.size) totalBytes += parseInt(file.size, 10);
           if (file.modifiedTime && (!newestDate || file.modifiedTime > newestDate)) {
@@ -331,16 +340,20 @@ export async function checkDeploymentUploads(
       camarasTrampas: null,
       grabadoresDeAudio: null,
       ibutton: null,
+      calibracionDeAudio: null,
       camarasTrampasSizeBytes: null,
       grabadoresDeAudioSizeBytes: null,
       ibuttonSizeBytes: null,
+      calibracionDeAudioSizeBytes: null,
       camarasTrampasNewestDate: null,
       grabadoresDeAudioNewestDate: null,
       ibuttonNewestDate: null,
+      calibracionDeAudioNewestDate: null,
       subfolderIds: {
         camarasTrampas: subfolderMap.get(DATA_TYPE_FOLDERS.camarasTrampas) ?? null,
         grabadoresDeAudio: subfolderMap.get(DATA_TYPE_FOLDERS.grabadoresDeAudio) ?? null,
         ibutton: subfolderMap.get(DATA_TYPE_FOLDERS.ibutton) ?? null,
+        calibracionDeAudio: subfolderMap.get(AUDIO_CALIBRATION_FOLDER) ?? null,
       },
     };
 
@@ -386,6 +399,23 @@ export async function checkDeploymentUploads(
         status[sizeKeyMap[key]] = stats ? stats.totalBytes : null;
         status[dateKeyMap[key]] = stats ? stats.newestDate : null;
       }
+    }
+
+    // Audio-calibration folder — counted separately from grabadoresDeAudio and
+    // NOT extension-filtered (it's a manual drop folder with no fixed file type).
+    const calibrationId = subfolderMap.get(AUDIO_CALIBRATION_FOLDER);
+    if (calibrationId) {
+      try {
+        const stats = await countFilesRecursive(calibrationId, null);
+        status.calibracionDeAudio = stats.count;
+        status.calibracionDeAudioSizeBytes = stats.totalBytes;
+        status.calibracionDeAudioNewestDate = stats.newestDate;
+      } catch (err) {
+        log.error({ err, folderId }, "[Drive] Error counting calibration files");
+      }
+    } else {
+      status.calibracionDeAudio = 0;
+      status.calibracionDeAudioSizeBytes = 0;
     }
 
     return { success: true, data: status };
@@ -778,7 +808,46 @@ export interface CreatedFolder {
     camarasTrampas: string | null;
     grabadoresDeAudio: string | null;
     ibutton: string | null;
+    calibracionDeAudio: string | null;
   };
+}
+
+/**
+ * Ensure a single named subfolder exists directly under a parent folder,
+ * returning its id (reusing an existing one if present). Idempotent. Used for
+ * the calibration folder backfill across already-created deployment folders.
+ */
+export async function ensureDeploymentSubfolder(
+  parentFolderId: string,
+  name: string,
+): Promise<string | null> {
+  const drive = getDrive();
+  const FOLDER_MIME = "application/vnd.google-apps.folder";
+
+  const existing = await withRetry(
+    () =>
+      drive.files.list({
+        q: `'${parentFolderId}' in parents and name = '${name.replace(/'/g, "\\'")}' and mimeType = '${FOLDER_MIME}' and trashed = false`,
+        fields: "files(id)",
+        pageSize: 1,
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+      }),
+    `files.list(subfolder ${name} in ${parentFolderId})`,
+  );
+  const existingId = existing.data.files?.[0]?.id;
+  if (existingId) return existingId;
+
+  const created = await withRetry(
+    () =>
+      drive.files.create({
+        requestBody: { name, mimeType: FOLDER_MIME, parents: [parentFolderId] },
+        fields: "id",
+        supportsAllDrives: true,
+      }),
+    `files.create(subfolder ${name} in ${parentFolderId})`,
+  );
+  return created.data.id ?? null;
 }
 
 /**
@@ -846,9 +915,15 @@ export async function createDeploymentFolder(
       .map((f) => [f.name, f.id])
   );
 
-  // Create missing subfolders, tracking IDs for all
+  // Create missing subfolders, tracking IDs for all. The calibration folder is
+  // created alongside the three routable data-type folders but kept under its
+  // own key (it is intentionally NOT part of DATA_TYPE_FOLDERS — see drive-routing).
   const subfolderIdMap = new Map<string, string>();
-  for (const [key, subName] of Object.entries(DATA_TYPE_FOLDERS)) {
+  const subfoldersToCreate: [string, string][] = [
+    ...Object.entries(DATA_TYPE_FOLDERS),
+    ["calibracionDeAudio", AUDIO_CALIBRATION_FOLDER],
+  ];
+  for (const [key, subName] of subfoldersToCreate) {
     const existingId = existingSubfolderMap.get(subName);
     if (existingId) {
       log.info({ subName }, "[Drive] Subfolder already exists");
@@ -879,6 +954,7 @@ export async function createDeploymentFolder(
       camarasTrampas: subfolderIdMap.get("camarasTrampas") ?? null,
       grabadoresDeAudio: subfolderIdMap.get("grabadoresDeAudio") ?? null,
       ibutton: subfolderIdMap.get("ibutton") ?? null,
+      calibracionDeAudio: subfolderIdMap.get("calibracionDeAudio") ?? null,
     },
   };
 }

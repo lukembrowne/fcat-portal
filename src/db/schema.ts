@@ -174,17 +174,23 @@ export const deployments = sqliteTable(
     uploadCameraCount: integer("upload_camera_count"),
     uploadAudioCount: integer("upload_audio_count"),
     uploadIbuttonCount: integer("upload_ibutton_count"),
+    // Audio-calibration folder (manual drop folder; counted on the datos page,
+    // not routed via the field uploader, not fed into BirdNET).
+    uploadCalibrationCount: integer("upload_calibration_count"),
     uploadCameraFolderId: text("upload_camera_folder_id"),
     uploadAudioFolderId: text("upload_audio_folder_id"),
     uploadIbuttonFolderId: text("upload_ibutton_folder_id"),
+    uploadCalibrationFolderId: text("upload_calibration_folder_id"),
     uploadCountsCheckedAt: integer("upload_counts_checked_at", { mode: "timestamp" }),
     // Upload cache — file sizes (bytes) and newest file dates
     uploadCameraSizeBytes: integer("upload_camera_size_bytes"),
     uploadAudioSizeBytes: integer("upload_audio_size_bytes"),
     uploadIbuttonSizeBytes: integer("upload_ibutton_size_bytes"),
+    uploadCalibrationSizeBytes: integer("upload_calibration_size_bytes"),
     uploadNewestCameraDate: text("upload_newest_camera_date"),
     uploadNewestAudioDate: text("upload_newest_audio_date"),
     uploadNewestIbuttonDate: text("upload_newest_ibutton_date"),
+    uploadNewestCalibrationDate: text("upload_newest_calibration_date"),
     // Previous-run upload counts (for per-deployment deltas in nightly email)
     previousCameraCount: integer("previous_camera_count"),
     previousAudioCount: integer("previous_audio_count"),

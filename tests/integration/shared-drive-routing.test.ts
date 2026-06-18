@@ -83,7 +83,7 @@ function setOdkFixtures() {
     id: "folder-new",
     name: DEPLOY_ID,
     webViewLink: "https://drive.google.com/x",
-    subfolderIds: { camarasTrampas: "c", grabadoresDeAudio: "g", ibutton: "i" },
+    subfolderIds: { camarasTrampas: "c", grabadoresDeAudio: "g", ibutton: "i", calibracionDeAudio: "k" },
   });
 }
 

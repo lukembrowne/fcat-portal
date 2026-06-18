@@ -18,11 +18,19 @@
  * runs in the standalone prod runner image without `--include=dev`.
  */
 
-import dotenv from "dotenv";
-dotenv.config({ path: ".env.local" });
 import path from "path";
 import Database from "better-sqlite3";
 import { google } from "googleapis";
+
+// Load .env.local for LOCAL runs. Inside the prod container the env is already
+// populated by docker compose, and `dotenv` is a devDependency pruned from the
+// standalone runner image — so this import is best-effort and skipped there.
+try {
+  const { config } = await import("dotenv");
+  config({ path: ".env.local" });
+} catch {
+  // dotenv not installed (prod container) — env already set by docker compose.
+}
 
 const CALIBRATION_FOLDER = "calibracion_de_audio";
 const FOLDER_MIME = "application/vnd.google-apps.folder";

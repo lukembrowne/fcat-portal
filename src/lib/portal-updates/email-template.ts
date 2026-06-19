@@ -88,6 +88,19 @@ export function buildPortalUpdatesBody(
 ${bodyHtml}`;
 }
 
+/**
+ * Just the per-project DETAIL sections (job tables + verification
+ * leaderboards), WITHOUT the summary metric table. Used by the nightly
+ * BioChoco email, which surfaces the activity totals in its own top dashboard
+ * and only needs the detail tables below. Returns "" when there's no activity.
+ */
+export function buildPortalActivityDetail(
+  payload: PortalUpdatesPayload,
+): string {
+  if (payload.projects.length === 0) return "";
+  return payload.projects.map(renderProjectSection).join("\n");
+}
+
 function summaryRow(label: string, value: number, description: string): string {
   const labelCell = `<strong>${label}</strong><div style="color:${COLOR_MUTED};font-size:12px;font-weight:400;margin-top:2px;max-width:480px">${description}</div>`;
   return `<tr>

@@ -47,6 +47,14 @@ import { ProcessIncrementalDialog } from "./process-incremental-dialog";
 import { BulkDeleteBlanksDialog } from "./results/[id]/bulk-delete-blanks-dialog";
 
 /**
+ * Hides the destructive "Eliminar Imágenes" (bulk-trash all images, keep the
+ * deployment) menu item. Disabled 2026-06-22 after it was mis-clicked from the
+ * adjacent "Eliminar vacías" during post-review cleanup. Flip to `true` to bring
+ * it back — everything it needs stays wired up.
+ */
+const SHOW_DELETE_ALL_IMAGES = false;
+
+/**
  * Shared "Acciones" dropdown menu used by both the deployments table row
  * and the deployment detail page header. Identical visual + functional UI
  * across both contexts so users see the same actions everywhere.
@@ -521,8 +529,16 @@ export function DeploymentActionsMenu({
             </>
           )}
 
-          {/* Delete images only — keep the installation (admin) */}
-          {isAdmin && hasImages && !isProcessing && (
+          {/* Delete images only — keep the installation (admin).
+             *
+             * Hidden (2026-06-22): this sat directly below "Eliminar vacías" with
+             * the same red/destructive styling, so it was easy to mis-click during
+             * post-review cleanup and bulk-trash a whole deployment's images. It's
+             * rarely used and recoverable straight from Drive trash, so it's gated
+             * off for now. To restore, set SHOW_DELETE_ALL_IMAGES = true above — the
+             * dialog, state and `deleteAllDeploymentImages` action stay fully wired.
+             * If it comes back, prefer a type-to-confirm over the plain confirm. */}
+          {SHOW_DELETE_ALL_IMAGES && isAdmin && hasImages && !isProcessing && (
             <>
               <DropdownMenuSeparator />
               <DropdownMenuItem

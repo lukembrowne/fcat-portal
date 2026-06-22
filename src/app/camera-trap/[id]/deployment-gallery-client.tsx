@@ -261,19 +261,10 @@ export function DeploymentGalleryClient({
             )}
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            {/* Verification progress */}
-            {sessionContext && sessionContext.verificationStats.total > 0 && (
-              <VerificationProgress
-                reviewed={
-                  sessionContext.verificationStats.total -
-                  sessionContext.verificationStats.unverified
-                }
-                total={sessionContext.verificationStats.total}
-              />
+            {/* Image-sequence progress */}
+            {totalImages > 0 && (
+              <SequenceProgress current={currentIndex + 1} total={totalImages} />
             )}
-            <span className="text-sm text-muted-foreground tabular-nums">
-              Imagen {currentIndex + 1} de {totalImages}
-            </span>
             <Button
               variant="outline"
               size="sm"
@@ -357,9 +348,9 @@ export function DeploymentGalleryClient({
   );
 }
 
-function VerificationProgress({ reviewed, total }: { reviewed: number; total: number }) {
-  const pct = Math.round((reviewed / total) * 100);
-  const isComplete = reviewed === total;
+function SequenceProgress({ current, total }: { current: number; total: number }) {
+  const pct = total > 0 ? Math.round((current / total) * 100) : 0;
+  const isComplete = current === total;
 
   return (
     <div className="flex items-center gap-2">
@@ -369,8 +360,8 @@ function VerificationProgress({ reviewed, total }: { reviewed: number; total: nu
           style={{ width: `${pct}%` }}
         />
       </div>
-      <span className={`text-xs tabular-nums ${isComplete ? "text-emerald-600 font-medium" : "text-muted-foreground"}`}>
-        {reviewed}/{total} revisadas
+      <span className={`text-sm tabular-nums ${isComplete ? "text-emerald-600 font-medium" : "text-muted-foreground"}`}>
+        Imagen {current} de {total}
       </span>
     </div>
   );

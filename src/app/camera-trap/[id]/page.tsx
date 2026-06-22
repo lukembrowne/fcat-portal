@@ -285,20 +285,13 @@ function buildReadyMessage(totalImages: number, totalVideos: number): string {
 }
 
 function ReviewProgress({ reviewed, total }: { reviewed: number; total: number }) {
-  const pct = total > 0 ? Math.round((reviewed / total) * 100) : 0;
   const isComplete = reviewed >= total;
 
   return (
     <div className="flex items-center gap-2">
       <span className="text-muted-foreground">·</span>
-      <div className="w-32 h-2 rounded-full bg-muted overflow-hidden">
-        <div
-          className={`h-full rounded-full transition-all ${isComplete ? "bg-emerald-500" : "bg-blue-500"}`}
-          style={{ width: `${pct}%` }}
-        />
-      </div>
       <span className={`tabular-nums ${isComplete ? "text-emerald-600 font-medium" : ""}`}>
-        {reviewed.toLocaleString()}/{total.toLocaleString()} revisadas
+        {reviewed.toLocaleString()}/{total.toLocaleString()} identificaciones revisadas
       </span>
     </div>
   );

@@ -197,8 +197,9 @@ export function DeploymentGalleryClient({
   }, [currentImageId, jobId, deploymentId, navigationIds]);
 
   // --- Prefetch wiring ---
+  // Mid-res tier (~1920px) for fast flipping — full-res stays for export/training.
   const buildImageUrl = useCallback(
-    (id: number) => `/api/ct-images/${id}?size=full`,
+    (id: number) => `/api/ct-images/${id}?size=annotate`,
     [],
   );
   const stableNavIds = useMemo(() => navigationIds ?? [], [navigationIds]);
@@ -304,7 +305,7 @@ export function DeploymentGalleryClient({
               // component doesn't remount mid-load — keeping local state
               // (selectedBoxId, zoom, etc.) intact for the visible image.
               key={displayedPayload!.image.id}
-              src={`/api/ct-images/${displayedPayload!.image.id}?size=full`}
+              src={`/api/ct-images/${displayedPayload!.image.id}?size=annotate`}
               alt={displayedPayload!.image.filename}
               boxes={displayedPayload!.boxes}
               detections={displayedPayload!.detections}

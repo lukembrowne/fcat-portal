@@ -15,8 +15,13 @@ vi.mock("@/lib/thumbnail", () => ({
   THUMBNAIL_DIR: "/tmp/thumbnails",
   THUMBNAIL_WIDTH: 400,
   THUMBNAIL_QUALITY: 80,
+  THUMB_TIER: { suffix: "", longEdge: 400, quality: 80 },
+  ANNOTATE_TIER: { suffix: "@1920", longEdge: 1920, quality: 80 },
   thumbnailPath: vi.fn(),
+  sizedPath: vi.fn(() => "/tmp/thumbnails/x.jpg"),
+  resizeForTier: vi.fn(async () => Buffer.from("deriv")),
   evictThumbnailsIfOverLimit: vi.fn(),
+  evictDerivativesIfOverLimit: vi.fn(),
 }));
 vi.mock("@/lib/log", () => ({ log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock("fs", () => ({ promises: { statfs: vi.fn(), access: vi.fn(), mkdir: vi.fn() } }));

@@ -6,6 +6,7 @@
  *
  * Usage:
  *   /api/ct-images/123?size=thumb    → cached thumbnail (400px, 80% JPEG)
+ *   /api/ct-images/123?size=annotate → cached mid-res (1920px, 80% JPEG)
  *   /api/ct-images/123?size=full     → full image from Drive (default)
  *   /api/ct-images/123?download=true → Content-Disposition: attachment
  */
@@ -19,7 +20,12 @@ import { eq } from "drizzle-orm";
 import { getCurrentUser } from "@/lib/auth";
 import { getUserCameraTrapProjects } from "@/lib/camera-trap-auth";
 import { downloadFileToBuffer } from "@/lib/drive-client";
-import { getOrGenerateThumbnail } from "@/lib/thumbnail";
+import {
+  getOrGenerateThumbnail,
+  getOrGenerateSized,
+  ANNOTATE_TIER,
+  maybeEvictDerivatives,
+} from "@/lib/thumbnail";
 import { log } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
@@ -124,6 +130,38 @@ export async function GET(
       });
     } catch (err) {
       log.error({ err, imageId }, "[ct-images] Thumbnail generation failed");
+      const status = isDriveNotFound(err) ? 404 : 502;
+      return NextResponse.json(
+        { error: status === 404 ? "File not found on Drive" : "Drive API error" },
+        { status }
+      );
+    }
+  }
+
+  // --- Annotation tier (1920px) ---
+  // Served to the annotation viewer: ~hundreds of KB instead of the ~19 MB
+  // original, visually identical at fit-to-screen. Same lazy-generate-and-cache
+  // path as thumbnails; full-res (?size=full) is unchanged for export/training.
+  if (size === "annotate") {
+    try {
+      const buf = await getOrGenerateSized(
+        ANNOTATE_TIER,
+        image.id,
+        image.deploymentId,
+        image.path,
+        image.driveFileId,
+        downloadFileToBuffer,
+      );
+      if (!buf) {
+        return NextResponse.json({ error: "No image source available" }, { status: 404 });
+      }
+      // Keep the derivative cache bounded without scanning on every request.
+      maybeEvictDerivatives();
+      return new NextResponse(new Uint8Array(buf), {
+        headers: { ...headers, "Content-Type": "image/jpeg" },
+      });
+    } catch (err) {
+      log.error({ err, imageId }, "[ct-images] Annotate generation failed");
       const status = isDriveNotFound(err) ? 404 : 502;
       return NextResponse.json(
         { error: status === 404 ? "File not found on Drive" : "Drive API error" },

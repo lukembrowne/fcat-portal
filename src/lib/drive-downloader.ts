@@ -14,17 +14,17 @@ import "server-only";
 
 import { promises as fs } from "fs";
 import path from "path";
-import sharp from "sharp";
 import { db } from "@/db";
 import { images, videos } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { downloadDeploymentImages } from "./drive-client";
 import {
   THUMBNAIL_DIR,
-  THUMBNAIL_WIDTH,
-  THUMBNAIL_QUALITY,
-  thumbnailPath,
-  evictThumbnailsIfOverLimit,
+  THUMB_TIER,
+  ANNOTATE_TIER,
+  sizedPath,
+  resizeForTier,
+  evictDerivativesIfOverLimit,
 } from "./thumbnail";
 import { log } from "@/lib/log";
 
@@ -99,41 +99,54 @@ export type ImageRow = typeof images.$inferSelect;
 export const CHUNKING_ENABLED =
   (process.env.CT_PROCESS_CHUNKING_ENABLED ?? "true") !== "false";
 
+/** Disposable derivative tiers warmed alongside the full-res download:
+ * 400px thumb (grids) + 1920px annotate (annotation viewer). Both read from the
+ * same in-memory full-res buffer, so a missing tier costs one extra resize. */
+const DERIVATIVE_TIERS = [THUMB_TIER, ANNOTATE_TIER];
+
 /**
- * Generate (and cache) thumbnails for already-downloaded full-res images. Shared
- * by the bulk download and the chunked loop. MUST run before any full-res file
- * is released — thumbnails are derived from the full-res file on disk.
+ * Generate (and cache) image derivatives (thumb + annotate) for
+ * already-downloaded full-res images. Shared by the bulk download and the
+ * chunked loop. MUST run before any full-res file is released — derivatives are
+ * resized from the full-res file on disk. Skips tiers already present, so
+ * re-runs are cheap and existing thumbnails are never regenerated.
  */
 async function generateThumbnails(
   deploymentId: number,
   entries: Array<{ imageId: number; localPath: string }>,
   onProgress?: (event: DownloadProgressEvent) => Promise<void>,
 ): Promise<void> {
-  const thumbDir = path.join(THUMBNAIL_DIR, String(deploymentId));
-  await fs.mkdir(thumbDir, { recursive: true });
+  const derivDir = path.join(THUMBNAIL_DIR, String(deploymentId));
+  await fs.mkdir(derivDir, { recursive: true });
 
   for (let i = 0; i < entries.length; i += THUMB_BATCH_SIZE) {
     const batch = entries.slice(i, i + THUMB_BATCH_SIZE);
     await Promise.all(
       batch.map(async ({ imageId, localPath }) => {
-        const tp = thumbnailPath(deploymentId, imageId);
-        try {
-          await fs.access(tp);
-        } catch {
-          // Thumbnail doesn't exist — generate from downloaded/cached image
+        // Determine which tiers are missing before reading the (large) source.
+        const missing: Array<{ cachePath: string; tier: typeof THUMB_TIER }> = [];
+        for (const tier of DERIVATIVE_TIERS) {
+          const cachePath = sizedPath(tier, deploymentId, imageId);
           try {
-            const imgData = await fs.readFile(localPath);
-            const thumb = await sharp(imgData)
-              .resize(THUMBNAIL_WIDTH)
-              .jpeg({ quality: THUMBNAIL_QUALITY })
-              .toBuffer();
-            await fs.writeFile(tp, thumb);
-          } catch (err) {
-            log.warn(
-              { err, imageId },
-              "[drive-downloader] Thumbnail generation failed"
-            );
+            await fs.access(cachePath);
+          } catch {
+            missing.push({ cachePath, tier });
           }
+        }
+        if (missing.length === 0) return;
+        try {
+          const imgData = await fs.readFile(localPath);
+          await Promise.all(
+            missing.map(async ({ cachePath, tier }) => {
+              const out = await resizeForTier(imgData, tier);
+              await fs.writeFile(cachePath, out);
+            }),
+          );
+        } catch (err) {
+          log.warn(
+            { err, imageId },
+            "[drive-downloader] Derivative generation failed"
+          );
         }
       })
     );
@@ -371,8 +384,8 @@ export async function downloadDeploymentForProcessing(
     "[drive-downloader] Thumbnails complete"
   );
 
-  // Keep the thumbnail cache under its disk budget (LRU, skips this deployment).
-  await evictThumbnailsIfOverLimit(deploymentId);
+  // Keep the derivative cache under its disk budget (LRU, skips this deployment).
+  await evictDerivativesIfOverLimit(deploymentId);
 
   return { cacheDir, downloaded, skipped: alreadyCached.size, failed };
 }

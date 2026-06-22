@@ -258,11 +258,11 @@ export function ImageAnnotationClient({
     const handles: { cancel(): void }[] = [];
     if (nextImageId) {
       router.prefetch(`/camera-trap/results/${jobId}/images/${nextImageId}`);
-      handles.push(preloadImage(`/api/ct-images/${nextImageId}?size=full`));
+      handles.push(preloadImage(`/api/ct-images/${nextImageId}?size=annotate`));
     }
     if (prevImageId) {
       router.prefetch(`/camera-trap/results/${jobId}/images/${prevImageId}`);
-      handles.push(preloadImage(`/api/ct-images/${prevImageId}?size=full`));
+      handles.push(preloadImage(`/api/ct-images/${prevImageId}?size=annotate`));
     }
     return () => {
       for (const h of handles) h.cancel();

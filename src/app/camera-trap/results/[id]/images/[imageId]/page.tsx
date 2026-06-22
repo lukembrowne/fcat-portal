@@ -68,7 +68,9 @@ export default async function ImageDetailPage({ params }: PageProps) {
   const nextImageId =
     currentIndex < imageIds.length - 1 ? imageIds[currentIndex + 1] : null;
 
-  const fullImageUrl = `/api/ct-images/${image.id}?size=full`;
+  // Annotation viewer uses the mid-res tier (~1920px, a few hundred KB) for fast
+  // flipping; visually identical at fit-to-screen. Full-res stays for export/training.
+  const viewerImageUrl = `/api/ct-images/${image.id}?size=annotate`;
 
   const boxes = rawDetections.map((det) => ({
     id: det.id,
@@ -164,7 +166,7 @@ export default async function ImageDetailPage({ params }: PageProps) {
       </div>
 
       <ImageAnnotationClient
-        src={fullImageUrl}
+        src={viewerImageUrl}
         alt={image.filename}
         boxes={boxes}
         detections={annotationDetections}

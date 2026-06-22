@@ -98,6 +98,13 @@ export function buildPortalActivityDetail(
   payload: PortalUpdatesPayload,
 ): string {
   if (payload.projects.length === 0) return "";
+  // Single project (the BioChoco nightly case): drop the project-name heading —
+  // it just collides with the "Cámaras trampa — Trabajos" / "Audio — Trabajos"
+  // sub-headings and reads as if audio jobs belong to a "Cámaras Trampa" group.
+  // Render the sub-sections directly. With multiple projects, keep the headings.
+  if (payload.projects.length === 1) {
+    return renderProjectInner(payload.projects[0]).join("\n");
+  }
   return payload.projects.map(renderProjectSection).join("\n");
 }
 
@@ -109,7 +116,8 @@ function summaryRow(label: string, value: number, description: string): string {
     </tr>`;
 }
 
-function renderProjectSection(project: ProjectActivity): string {
+/** The job + verification sub-sections for one project (no project heading). */
+function renderProjectInner(project: ProjectActivity): string[] {
   const sections: string[] = [];
 
   if (project.ctJobs.length > 0) {
@@ -140,10 +148,14 @@ function renderProjectSection(project: ProjectActivity): string {
     );
   }
 
+  return sections;
+}
+
+function renderProjectSection(project: ProjectActivity): string {
   return `
   <section style="margin-top:28px;border-top:2px solid ${TABLE_BORDER};padding-top:16px">
     <h3 style="margin:0 0 12px 0;color:#111827">${escapeHtml(project.projectName)}</h3>
-    ${sections.join("\n")}
+    ${renderProjectInner(project).join("\n")}
   </section>`;
 }
 

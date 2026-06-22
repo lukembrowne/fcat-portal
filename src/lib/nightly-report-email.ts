@@ -91,34 +91,6 @@ function emailLink(href: string, inner: string): string {
   return `<a href="${href}" style="color:#2563eb;text-decoration:none">${inner}</a>`;
 }
 
-function buildAudioSection(report: AudioReport): string {
-  return `
-  <h3 style="margin-top:32px">🎙️ Audio (BirdNET)</h3>
-  <table style="border-collapse:collapse;margin-top:8px">
-    <tr>
-      <td style="padding:6px 16px 6px 0;font-weight:600">Instalaciones con audio indexado</td>
-      <td style="padding:6px 0">${report.deploymentsWithAudio.toLocaleString()}</td>
-    </tr>
-    <tr>
-      <td style="padding:6px 16px 6px 0;font-weight:600">Archivos de audio</td>
-      <td style="padding:6px 0">${report.totalFiles.toLocaleString()}${formatNewSince(report.newFilesSincePrev, report.previousSnapshotDate)}</td>
-    </tr>
-    <tr>
-      <td style="padding:6px 16px 6px 0;font-weight:600">Detecciones BirdNET</td>
-      <td style="padding:6px 0">${report.totalDetections.toLocaleString()}${formatNewSince(report.newDetectionsSincePrev, report.previousSnapshotDate)}</td>
-    </tr>
-    <tr>
-      <td style="padding:6px 16px 6px 0;font-weight:600">Especies detectadas</td>
-      <td style="padding:6px 0">${report.totalSpecies.toLocaleString()}</td>
-    </tr>
-    <tr>
-      <td style="padding:6px 16px 6px 0;font-weight:600">Instalaciones analizadas</td>
-      <td style="padding:6px 0">${report.birdnetJobsCompletedSincePrev === null ? "—" : `${report.birdnetJobsCompletedSincePrev.toLocaleString()}${report.previousSnapshotDate ? ` desde ${report.previousSnapshotDate}` : ""}`}</td>
-    </tr>
-  </table>
-  <p style="color:#6b7280;font-size:12px;margin-top:6px;max-width:560px">«Archivos de audio» son los archivos ya indexados en el portal; puede ir por detrás de «Grabadores de audio» (subidos a Drive) mientras la sincronización de audio se pone al día.</p>`;
-}
-
 // --- Top "Resumen del día" dashboard --------------------------------------
 
 /** A label/value row in a dashboard mini-table. `value` may be HTML. */
@@ -197,7 +169,14 @@ function buildDashboard(
     "Totales acumulados",
     [
       metricRow("Almacenamiento", `${formatBytes(totalSize)} · ${totalFiles.toLocaleString()} archivos`),
-      metricRow("BirdNET", `${audioReport.totalDetections.toLocaleString()} detecciones · ${audioReport.totalSpecies.toLocaleString()} especies`),
+      metricRow(
+        "Audio indexado",
+        `${audioReport.totalFiles.toLocaleString()} archivos${formatNewSince(audioReport.newFilesSincePrev, audioReport.previousSnapshotDate)} · ${audioReport.deploymentsWithAudio.toLocaleString()} instalaciones`,
+      ),
+      metricRow(
+        "BirdNET",
+        `${audioReport.totalDetections.toLocaleString()} detecciones${formatNewSince(audioReport.newDetectionsSincePrev, audioReport.previousSnapshotDate)} · ${audioReport.totalSpecies.toLocaleString()} especies`,
+      ),
       metricRow("Instalaciones con datos", `${delta.deploymentsWithUploads} / ${delta.totalDeployments}`),
     ].join(""),
   );
@@ -208,6 +187,7 @@ function buildDashboard(
     ${datosGroup}
     ${actividadGroup}
     ${totalesGroup}
+    <p style="color:#9ca3af;font-size:11px;margin:12px 0 0 0;max-width:560px">«Audio indexado» = archivos ya procesados en el portal; puede ir por detrás de «Grabadores de audio» (subidos a Drive) mientras la sincronización se pone al día.</p>
   </div>`;
 }
 
@@ -345,8 +325,6 @@ export function buildEmailHtml(
   ${activityDetail ? `
   <h4 style="margin:16px 0 4px 0;font-size:14px;color:#374151">Trabajos y verificación (últimas 24 h)</h4>
   ${activityDetail}` : ""}
-
-  ${buildAudioSection(audioReport)}
 
   <h3 style="margin-top:24px">Por instalación</h3>
   <table style="border-collapse:collapse;width:100%;margin-top:8px">

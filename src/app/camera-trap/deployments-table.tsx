@@ -72,6 +72,26 @@ const POST_PROCESS_STATUSES = new Set([
 ]);
 
 /**
+ * Format a deployment's installation/retrieval date (`date_start`/`date_end`).
+ * These are stored as `YYYY-MM-DD` strings, so `new Date(str)` would parse them
+ * as UTC midnight and render one day early in es-EC (UTC-5). Build a local Date
+ * from the parts instead. Returns "—" when missing/unparseable.
+ */
+function formatDeploymentDate(v: string | null): string {
+  if (!v) return "—";
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(v);
+  const d = m
+    ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+    : new Date(v);
+  if (isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("es-EC", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+/**
  * Effective status for display/filtering. "Procesando" is derived from the live
  * isProcessing flag (active jobs), never from the stored status column. Falls
  * back to the lifecycle status, collapsing detection-less "processed" rows to
@@ -278,6 +298,26 @@ export function DeploymentsTable({
         ),
       },
       {
+        accessorKey: "dateStart",
+        header: "Instalación",
+        cell: ({ getValue }) => (
+          <span className="tabular-nums whitespace-nowrap text-muted-foreground">
+            {formatDeploymentDate(getValue<string | null>())}
+          </span>
+        ),
+        enableGlobalFilter: false,
+      },
+      {
+        accessorKey: "dateEnd",
+        header: "Recuperación",
+        cell: ({ getValue }) => (
+          <span className="tabular-nums whitespace-nowrap text-muted-foreground">
+            {formatDeploymentDate(getValue<string | null>())}
+          </span>
+        ),
+        enableGlobalFilter: false,
+      },
+      {
         accessorKey: "status",
         header: () => (
           <TooltipProvider>
@@ -307,65 +347,114 @@ export function DeploymentsTable({
           const showProgress = !d.isProcessing &&
             (d.status === "processed" || d.status === "verified") &&
             d.totalIdentifications != null && d.totalIdentifications > 0;
+          const imgs = d.totalImages;
+          const vids = d.totalVideos;
+          const hasImgs = imgs != null && imgs > 0;
+          const hasVids = vids != null && vids > 0;
+          const totalPending = (d.pendingImageCount ?? 0) + (d.pendingVideoCount ?? 0);
+          const showPending =
+            totalPending > 0 && POST_PROCESS_STATUSES.has(d.status);
+          const filesText = [
+            hasImgs ? `${imgs.toLocaleString()} img` : null,
+            hasVids ? `${vids.toLocaleString()} vid` : null,
+          ]
+            .filter(Boolean)
+            .join(", ");
+          const metaParts = [
+            showProgress ? `${d.reviewedCount ?? 0}/${d.totalIdentifications} revisadas` : null,
+            filesText || null,
+          ].filter(Boolean);
           return (
-            <span className="inline-flex items-center gap-1">
-              <StatusBadge status={displayStatus} type="deployment" />
-              {showProgress && (
-                <span className="text-[10px] text-muted-foreground tabular-nums">
-                  {d.reviewedCount ?? 0}/{d.totalIdentifications} revisadas
+            <div className="flex flex-col gap-1">
+              <span className="inline-flex items-center gap-1">
+                <StatusBadge status={displayStatus} type="deployment" />
+                {d.excluded && (
+                  <span className="inline-flex items-center rounded-full border border-destructive/30 bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium text-destructive">
+                    Excluida
+                  </span>
+                )}
+              </span>
+              {(metaParts.length > 0 || showPending) && (
+                <span className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground tabular-nums">
+                  {metaParts.length > 0 && <span>{metaParts.join(" · ")}</span>}
+                  {showPending && (
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span
+                            className="inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            +{totalPending} pendientes
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-xs">
+                          <p className="text-xs leading-relaxed">
+                            Archivos nuevos detectados que aún no han sido procesados.
+                            Usa &quot;Procesar nuevas&quot; en el menú de acciones para
+                            incluirlos sin perder las verificaciones existentes.
+                          </p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  )}
                 </span>
               )}
-              {d.excluded && (
-                <span className="inline-flex items-center rounded-full border border-destructive/30 bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium text-destructive">
-                  Excluida
-                </span>
-              )}
-            </span>
+            </div>
           );
         },
       },
       {
-        accessorKey: "totalImages",
-        header: "Archivos",
+        id: "compression",
+        // Sort by fraction compressed; deployments with no compressible JPEGs
+        // sort last in both directions (sortUndefined: "last").
+        accessorFn: (d) =>
+          d.compressibleImageCount > 0
+            ? d.compressedImageCount / d.compressibleImageCount
+            : undefined,
+        sortUndefined: "last",
+        header: () => (
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="inline-flex items-center gap-1">
+                  Compresión
+                  <Info className="h-3.5 w-3.5 text-muted-foreground" />
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="max-w-xs">
+                <p className="text-xs leading-relaxed">
+                  Imágenes JPEG comprimidas a calidad 85 (las originales se
+                  preservan como revisiones en Drive). Comprimir las
+                  instalaciones pendientes acelera la carga durante la
+                  anotación. Ordena por esta columna para ver primero lo que
+                  falta por comprimir.
+                </p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        ),
         cell: ({ row }) => {
-          const dep = row.original;
-          const imgs = dep.totalImages;
-          const vids = dep.totalVideos;
-          const hasImgs = imgs != null && imgs > 0;
-          const hasVids = vids != null && vids > 0;
-          const totalPending = (dep.pendingImageCount ?? 0) + (dep.pendingVideoCount ?? 0);
-          const showPending =
-            totalPending > 0 && POST_PROCESS_STATUSES.has(dep.status);
-          if (!hasImgs && !hasVids && !showPending) return "—";
+          const d = row.original;
+          const total = d.compressibleImageCount;
+          const done = d.compressedImageCount;
+          if (total === 0)
+            return <span className="text-muted-foreground">—</span>;
+          const pct = Math.round((done / total) * 100);
+          const full = done >= total;
+          const cls = full
+            ? "bg-emerald-100 text-emerald-800"
+            : done === 0
+              ? "bg-muted text-muted-foreground"
+              : "bg-amber-100 text-amber-800";
           return (
-            <span className="inline-flex items-center gap-1.5">
-              <span className="tabular-nums">
-                {hasImgs ? `${imgs.toLocaleString()} img` : ""}
-                {hasImgs && hasVids ? ", " : ""}
-                {hasVids ? `${vids.toLocaleString()} vid` : ""}
-                {!hasImgs && !hasVids ? "—" : ""}
-              </span>
-              {showPending && (
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span
-                        className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-800"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        +{totalPending} pendientes
-                      </span>
-                    </TooltipTrigger>
-                    <TooltipContent side="top" className="max-w-xs">
-                      <p className="text-xs leading-relaxed">
-                        Archivos nuevos detectados que aún no han sido procesados.
-                        Usa &quot;Procesar nuevas&quot; en el menú de acciones para
-                        incluirlos sin perder las verificaciones existentes.
-                      </p>
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              )}
+            <span
+              className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium tabular-nums ${cls}`}
+              title={`${done.toLocaleString()} de ${total.toLocaleString()} imágenes JPEG comprimidas (${pct}%)`}
+            >
+              {full
+                ? "Comprimida"
+                : `${done.toLocaleString()}/${total.toLocaleString()}`}
             </span>
           );
         },

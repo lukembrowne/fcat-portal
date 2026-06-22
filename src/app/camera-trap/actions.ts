@@ -1580,6 +1580,10 @@ export interface DeploymentRow {
   totalDetections: number | null;
   distinctSpecies: number | null;
   revertibleImageCount: number;
+  /** JPEG images (Drive-backed) already compressed to quality 85. */
+  compressedImageCount: number;
+  /** Total compressible JPEG images (Drive-backed) — the denominator for compression progress. */
+  compressibleImageCount: number;
   reviewedCount: number | null;
   totalIdentifications: number | null;
   pendingImageCount: number;
@@ -1676,6 +1680,31 @@ export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
     )
     .groupBy(images.deploymentId);
   const revertCountMap = new Map(revertibleCounts.map((r) => [r.deploymentId, r.cnt]));
+
+  // Batch: compression progress per deployment. JPEG-only (matching the
+  // compression action's `.jpg/.jpeg` filter) and Drive-backed (excludes
+  // extracted video frames). Drives the "Compresión" column on the table.
+  const jpegPredicate = sql`(lower(${images.filename}) like '%.jpg' or lower(${images.filename}) like '%.jpeg')`;
+  const compressionCounts = await db
+    .select({
+      deploymentId: images.deploymentId,
+      jpegTotal: sql<number>`sum(case when ${jpegPredicate} then 1 else 0 end)`,
+      jpegCompressed: sql<number>`sum(case when ${images.compressed} = 1 and ${jpegPredicate} then 1 else 0 end)`,
+    })
+    .from(images)
+    .where(
+      and(
+        inArray(images.deploymentId, deploymentIds),
+        sql`${images.driveFileId} IS NOT NULL`,
+      ),
+    )
+    .groupBy(images.deploymentId);
+  const compressionMap = new Map(
+    compressionCounts.map((r) => [
+      r.deploymentId,
+      { total: Number(r.jpegTotal), compressed: Number(r.jpegCompressed) },
+    ]),
+  );
 
   // Batch: pending image counts per deployment (for "new files since last process" badge)
   const pendingImageCounts = await db
@@ -1841,6 +1870,8 @@ export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
       totalDetections: completedJobId != null ? (detCountByDep.get(d.id) ?? 0) : null,
       distinctSpecies: completedJobId != null ? (specCountByDep.get(d.id) ?? 0) : null,
       revertibleImageCount: revertCountMap.get(d.id) ?? 0,
+      compressedImageCount: compressionMap.get(d.id)?.compressed ?? 0,
+      compressibleImageCount: compressionMap.get(d.id)?.total ?? 0,
       reviewedCount: verificationMap.get(d.id)?.reviewed ?? null,
       totalIdentifications: verificationMap.get(d.id)?.total ?? null,
       pendingImageCount: pendingImageCountMap.get(d.id) ?? 0,

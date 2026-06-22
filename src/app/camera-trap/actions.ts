@@ -63,6 +63,7 @@ import {
   findActiveCameraTrapJobIds,
   CAMERA_TRAP_ACTIVE_JOB_TYPES,
 } from "@/lib/job-locks";
+import { JOB_TYPES } from "@/lib/job-types";
 
 const CAMERA_TRAP_PATH = "/camera-trap";
 
@@ -3132,7 +3133,21 @@ export async function cancelQueue(): Promise<ActionResult<{ cancelled: number }>
   await requirePermission("camera-trap", "editor");
 
   try {
-    // Cancel the currently running job
+    // The `processing_jobs` table is a single shared queue across camera-trap
+    // AND audio jobs, and this "Cancelar cola" action is the only bulk-cancel
+    // entry point (the floating progress bar calls it), so it must still clear
+    // audio jobs too. The critical rule: cancelling a job must NEVER clobber a
+    // camera-trap deployment's status unless the job actually drives that
+    // status (ml / ml_incremental). The unconditional `status = "scanned"`
+    // write this used to do reset verified/processed deployments to
+    // "Por Procesar" whenever an audio batch was cancelled (2026-06-22).
+    const ctActiveTypes = new Set<string>(CAMERA_TRAP_ACTIVE_JOB_TYPES);
+
+    // Cancel the currently running job. Camera-trap jobs route through
+    // cancelJob (which restores deployment status correctly); any other type
+    // (audio sync/analysis, etc.) is stopped here without touching deployment
+    // status — routing it through cancelJob would wrongly revert its
+    // deployment.
     const [activeJob] = await db
       .select()
       .from(processingJobs)
@@ -3140,12 +3155,37 @@ export async function cancelQueue(): Promise<ActionResult<{ cancelled: number }>
       .limit(1);
 
     if (activeJob) {
-      await cancelJob(activeJob.id);
+      if (ctActiveTypes.has(activeJob.jobType)) {
+        await cancelJob(activeJob.id);
+      } else {
+        if (activeJob.pid) {
+          try {
+            process.kill(activeJob.pid, "SIGTERM");
+          } catch {
+            // Process may have already exited
+          }
+        }
+        await db
+          .update(processingJobs)
+          .set({ status: "cancelled", completedAt: new Date(), statusMessage: null })
+          .where(eq(processingJobs.id, activeJob.id));
+        const [cancelledActive] = await db
+          .select()
+          .from(processingJobs)
+          .where(eq(processingJobs.id, activeJob.id));
+        if (cancelledActive) {
+          await recordEvent(buildJobCompletionEvent(cancelledActive));
+        }
+      }
     }
 
-    // Mark all pending jobs as cancelled
+    // Mark all pending jobs (any type) as cancelled.
     const pendingJobs = await db
-      .select({ id: processingJobs.id, deploymentId: processingJobs.deploymentId })
+      .select({
+        id: processingJobs.id,
+        deploymentId: processingJobs.deploymentId,
+        jobType: processingJobs.jobType,
+      })
       .from(processingJobs)
       .where(eq(processingJobs.status, "pending"));
 
@@ -3165,17 +3205,47 @@ export async function cancelQueue(): Promise<ActionResult<{ cancelled: number }>
         await recordEvent(buildJobCompletionEvent(row));
       }
 
-      // Revert deployment statuses (drive_sync jobs have no deployment — skip)
-      const depIds = [
+      // Revert deployment status only for cancelled ML jobs (compression /
+      // cache jobs don't drive the scan lifecycle), and only conditionally:
+      // restore "processed" if a prior completed job exists, otherwise
+      // "scanned". A cancelled (re)scan must never discard an existing
+      // verification — leave verified/verified_empty deployments untouched.
+      const mlDepIds = [
         ...new Set(
-          pendingJobs.map((j) => j.deploymentId).filter((id): id is number => id != null)
+          pendingJobs
+            .filter(
+              (j) =>
+                (j.jobType === JOB_TYPES.ML ||
+                  j.jobType === JOB_TYPES.ML_INCREMENTAL) &&
+                j.deploymentId != null
+            )
+            .map((j) => j.deploymentId as number)
         ),
       ];
-      if (depIds.length > 0) {
+      for (const depId of mlDepIds) {
+        const [dep] = await db
+          .select({ status: deployments.status })
+          .from(deployments)
+          .where(eq(deployments.id, depId));
+        if (!dep || dep.status === "verified" || dep.status === "verified_empty") {
+          continue;
+        }
+        const previousCompleted = await db
+          .select({ id: processingJobs.id })
+          .from(processingJobs)
+          .where(
+            and(
+              eq(processingJobs.deploymentId, depId),
+              eq(processingJobs.status, "completed")
+            )
+          );
         await db
           .update(deployments)
-          .set({ status: "scanned", updatedAt: new Date() })
-          .where(inArray(deployments.id, depIds));
+          .set({
+            status: previousCompleted.length > 0 ? "processed" : "scanned",
+            updatedAt: new Date(),
+          })
+          .where(eq(deployments.id, depId));
       }
     }
 

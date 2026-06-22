@@ -33,6 +33,7 @@ import {
   Download,
   ChevronRight,
   ChevronDown,
+  Star,
 } from "lucide-react";
 import {
   Tooltip,
@@ -62,6 +63,12 @@ import { useRowRangeSelection } from "@/hooks/use-row-range-selection";
 /** localStorage key for remembering which project groups the user has collapsed
  * on the Instalaciones page. Per-device, non-sensitive UI preference. */
 const COLLAPSED_GROUPS_STORAGE_KEY = "fcat.cameratrap.collapsedProjects.v1";
+
+/** localStorage key for the user's personal "starred" installations — a private,
+ * per-browser work-tracking aid ("which ones am I working on / do next"). Stored
+ * client-side only (no DB), so stars don't sync across devices. Orthogonal to the
+ * deployment `status` pipeline field. */
+const STARRED_STORAGE_KEY = "fcat.cameratrap.starredDeployments.v1";
 
 /** Statuses where the deployment looks "done" but pending images may have
  * arrived after a re-scan. Drives the "+N pendientes" badge. */
@@ -180,6 +187,47 @@ export function DeploymentsTable({
       // Ignore quota / private-mode errors.
     }
   }, [collapsedGroups]);
+  // Personal "starred" installations, persisted to localStorage. Same SSR-safe
+  // hydrate-on-mount pattern as collapsedGroups above: start empty (matching the
+  // server render) and fill in after mount to avoid a hydration mismatch.
+  const [starredIds, setStarredIds] = useState<Set<number>>(() => new Set());
+  const [showOnlyStarred, setShowOnlyStarred] = useState(false);
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(STARRED_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        setStarredIds(
+          new Set(parsed.filter((x): x is number => typeof x === "number"))
+        );
+      }
+    } catch {
+      // Private mode, quota errors, or malformed JSON — fall back to empty.
+    }
+  }, []);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        STARRED_STORAGE_KEY,
+        JSON.stringify(Array.from(starredIds))
+      );
+    } catch {
+      // Ignore quota / private-mode errors.
+    }
+  }, [starredIds]);
+  const toggleStar = useCallback((id: number) => {
+    setStarredIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }, []);
+
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(lastDriveSyncAt);
   // Tick every 30s so the relative "hace X" label stays fresh without a refresh.
   const [, setNowTick] = useState(0);
@@ -204,8 +252,11 @@ export function DeploymentsTable({
     if (statusFilter) {
       data = data.filter((d) => deploymentMatchesStatusFilter(d, statusFilter));
     }
+    if (showOnlyStarred) {
+      data = data.filter((d) => starredIds.has(d.id));
+    }
     return data;
-  }, [initialDeployments, statusFilter]);
+  }, [initialDeployments, statusFilter, showOnlyStarred, starredIds]);
 
   // Build filtered groups from the server-provided groups + client filters
   const filteredGroups = useMemo(() => {
@@ -214,6 +265,9 @@ export function DeploymentsTable({
         let deps = g.deployments;
         if (statusFilter) {
           deps = deps.filter((d) => deploymentMatchesStatusFilter(d, statusFilter));
+        }
+        if (showOnlyStarred) {
+          deps = deps.filter((d) => starredIds.has(d.id));
         }
         if (globalFilter) {
           const lower = globalFilter.toLowerCase();
@@ -227,7 +281,7 @@ export function DeploymentsTable({
         return { ...g, deployments: deps, totalCount: deps.length };
       })
       .filter((g) => g.deployments.length > 0);
-  }, [groups, statusFilter, globalFilter]);
+  }, [groups, statusFilter, globalFilter, showOnlyStarred, starredIds]);
 
   const toggleGroup = useCallback((projectLabel: string) => {
     setCollapsedGroups((prev) => {
@@ -274,6 +328,55 @@ export function DeploymentsTable({
           />
         ),
         enableSorting: false,
+        enableGlobalFilter: false,
+      },
+      {
+        id: "starred",
+        // Accessor returns 1 for starred so the column sorts starred-first on the
+        // first (descending) click. sortDescFirst makes that the default direction.
+        accessorFn: (d) => (starredIds.has(d.id) ? 1 : 0),
+        sortDescFirst: true,
+        header: () => (
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Star className="h-4 w-4 text-muted-foreground" />
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="max-w-xs">
+                <p className="text-xs leading-relaxed">
+                  Marca tus instalaciones (las que estás revisando o quieres
+                  revisar pronto). Es una marca personal de este navegador.
+                  Ordena por esta columna o usa &quot;Solo destacadas&quot; para
+                  verlas juntas.
+                </p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        ),
+        cell: ({ row }) => {
+          const id = row.original.id;
+          const isStarred = starredIds.has(id);
+          return (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleStar(id);
+              }}
+              className="flex items-center justify-center text-muted-foreground transition-colors hover:text-amber-500"
+              aria-label={
+                isStarred ? "Quitar de destacadas" : "Marcar como destacada"
+              }
+              title={
+                isStarred ? "Quitar de destacadas" : "Marcar como destacada"
+              }
+            >
+              <Star
+                className={`h-4 w-4 ${isStarred ? "fill-amber-400 text-amber-400" : ""}`}
+              />
+            </button>
+          );
+        },
         enableGlobalFilter: false,
       },
     ];
@@ -522,7 +625,7 @@ export function DeploymentsTable({
     );
 
     return cols;
-  }, [canEdit, isAdmin, rangeSelection]);
+  }, [canEdit, isAdmin, rangeSelection, starredIds, toggleStar]);
 
   const table = useReactTable({
     data: filteredData,
@@ -747,6 +850,19 @@ export function DeploymentsTable({
         </div>
 
         <div className="ml-auto flex flex-wrap items-center gap-3">
+          <Button
+            variant={showOnlyStarred ? "default" : "outline"}
+            size="sm"
+            onClick={() => setShowOnlyStarred((v) => !v)}
+            className="h-9"
+            aria-pressed={showOnlyStarred}
+          >
+            <Star
+              className={`h-4 w-4 mr-1.5 ${showOnlyStarred ? "fill-current" : ""}`}
+            />
+            Solo destacadas
+          </Button>
+
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
@@ -971,7 +1087,7 @@ export function DeploymentsTable({
       {/* Row count */}
       <p className="text-sm text-muted-foreground">
         {table.getFilteredRowModel().rows.length} instalaciones
-        {(globalFilter || statusFilter) && " (filtradas)"}
+        {(globalFilter || statusFilter || showOnlyStarred) && " (filtradas)"}
       </p>
 
       {/* Batch dialogs */}

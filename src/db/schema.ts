@@ -560,6 +560,7 @@ export const EVENT_SOURCES = [
   "climate",
   "cron",
   "finance",
+  "grants",
   "odk",
   "shared-drives",
 ] as const;
@@ -1456,6 +1457,102 @@ export type NewResearchApplicationComment =
 
 export type ResearchReport = typeof researchReports.$inferSelect;
 export type NewResearchReport = typeof researchReports.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// Grant Tracking (Seguimiento de Subsidios)
+// ---------------------------------------------------------------------------
+
+export const grantStatusEnum = [
+  "to_research",
+  "in_prep",
+  "pending_decision",
+  "funded",
+  "rejected",
+  "passed",
+  "completed",
+] as const;
+export type GrantStatus = (typeof grantStatusEnum)[number];
+
+export const funderPriorityEnum = ["highest", "high", "medium", "low"] as const;
+export type FunderPriority = (typeof funderPriorityEnum)[number];
+
+export const funders = sqliteTable(
+  "funders",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    name: text("name").notNull(),
+    // Lowercased/trimmed/de-"the"d name; unique key for reliable grant↔funder matching.
+    nameNormalized: text("name_normalized").notNull(),
+    website: text("website"),
+    priority: text("priority", { enum: funderPriorityEnum }),
+    funderType: text("funder_type"),
+    focusAreas: text("focus_areas"),
+    relationshipManager: text("relationship_manager"),
+    relationshipStatus: text("relationship_status"),
+    nextSteps: text("next_steps"),
+    nextStepDue: integer("next_step_due", { mode: "timestamp" }),
+    contactName: text("contact_name"),
+    contactEmail: text("contact_email"),
+    fundingHistory: text("funding_history"),
+    description: text("description"),
+    notes: text("notes"),
+    irs990Link: text("irs990_link"),
+    guidestarLink: text("guidestar_link"),
+    foundationDirectoryLink: text("foundation_directory_link"),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+    updatedAt: integer("updated_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [
+    uniqueIndex("idx_funders_name_normalized").on(table.nameNormalized),
+    index("idx_funders_priority_name").on(table.priority, table.name),
+  ]
+);
+
+export const grants = sqliteTable(
+  "grants",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    funderId: integer("funder_id").references(() => funders.id, {
+      onDelete: "set null",
+    }),
+    // Original typed funder name; fallback display + manual-link target when funderId is null.
+    funderNameRaw: text("funder_name_raw"),
+    name: text("name").notNull(),
+    website: text("website"),
+    status: text("status", { enum: grantStatusEnum })
+      .notNull()
+      .default("to_research"),
+    amountRequested: real("amount_requested"),
+    amountAwarded: real("amount_awarded"),
+    dueDate: integer("due_date", { mode: "timestamp" }),
+    notifyBeforeDays: integer("notify_before_days").notNull().default(14),
+    checkRfpDate: integer("check_rfp_date", { mode: "timestamp" }),
+    lastNotifiedAt: integer("last_notified_at", { mode: "timestamp" }),
+    notes: text("notes"),
+    folderLink: text("folder_link"),
+    budgetLink: text("budget_link"),
+    proposalLink: text("proposal_link"),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+    updatedAt: integer("updated_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [
+    index("idx_grants_status_due").on(table.status, table.dueDate),
+    index("idx_grants_funder").on(table.funderId),
+  ]
+);
+
+export type Funder = typeof funders.$inferSelect;
+export type NewFunder = typeof funders.$inferInsert;
+export type Grant = typeof grants.$inferSelect;
+export type NewGrant = typeof grants.$inferInsert;
 
 // ---------------------------------------------------------------------------
 // Query helpers

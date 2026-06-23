@@ -15,6 +15,7 @@ const SOURCE_LABELS: Record<(typeof EVENT_SOURCES)[number], string> = {
   climate: "Clima",
   cron: "Tareas programadas",
   finance: "Finanzas",
+  grants: "Grants",
   odk: "ODK",
   "shared-drives": "Shared Drives",
 };

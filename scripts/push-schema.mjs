@@ -200,7 +200,7 @@ const statements = [
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     occurred_at INTEGER NOT NULL DEFAULT (unixepoch()),
     event_type TEXT NOT NULL,
-    source TEXT NOT NULL CHECK(source IN ('admin','audio','biochoco-overview','biochoco-tools','biochoco-resultados','camera-trap','climate','cron','finance','odk','shared-drives')),
+    source TEXT NOT NULL CHECK(source IN ('admin','audio','biochoco-overview','biochoco-tools','biochoco-resultados','camera-trap','climate','cron','finance','grants','odk','shared-drives')),
     severity TEXT NOT NULL DEFAULT 'info' CHECK(severity IN ('info','success','warn','error')),
     actor_email TEXT,
     project_id TEXT,
@@ -683,6 +683,56 @@ const statements = [
     submitted_at INTEGER NOT NULL DEFAULT (unixepoch())
   )`,
   `CREATE INDEX IF NOT EXISTS idx_research_reports_app_id ON research_reports(application_id)`,
+
+  // Grant Tracking (Seguimiento de Subsidios) — funders first (FK parent of grants)
+  `CREATE TABLE IF NOT EXISTS funders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    name_normalized TEXT NOT NULL,
+    website TEXT,
+    priority TEXT CHECK(priority IN ('highest','high','medium','low')),
+    funder_type TEXT,
+    focus_areas TEXT,
+    relationship_manager TEXT,
+    relationship_status TEXT,
+    next_steps TEXT,
+    next_step_due INTEGER,
+    contact_name TEXT,
+    contact_email TEXT,
+    funding_history TEXT,
+    description TEXT,
+    notes TEXT,
+    irs990_link TEXT,
+    guidestar_link TEXT,
+    foundation_directory_link TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_funders_name_normalized ON funders(name_normalized)`,
+  `CREATE INDEX IF NOT EXISTS idx_funders_priority_name ON funders(priority, name)`,
+
+  `CREATE TABLE IF NOT EXISTS grants (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    funder_id INTEGER REFERENCES funders(id) ON DELETE SET NULL,
+    funder_name_raw TEXT,
+    name TEXT NOT NULL,
+    website TEXT,
+    status TEXT NOT NULL DEFAULT 'to_research' CHECK(status IN ('to_research','in_prep','pending_decision','funded','rejected','passed','completed')),
+    amount_requested REAL,
+    amount_awarded REAL,
+    due_date INTEGER,
+    notify_before_days INTEGER NOT NULL DEFAULT 14 CHECK(notify_before_days >= 0),
+    check_rfp_date INTEGER,
+    last_notified_at INTEGER,
+    notes TEXT,
+    folder_link TEXT,
+    budget_link TEXT,
+    proposal_link TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_grants_status_due ON grants(status, due_date)`,
+  `CREATE INDEX IF NOT EXISTS idx_grants_funder ON grants(funder_id)`,
 ];
 
 for (const stmt of statements) {
@@ -1159,6 +1209,44 @@ try {
   console.error("Failed to migrate system_events source constraint (shared-drives):", err.message);
 }
 
+// --- Table recreation: add grants to system_events.source CHECK (2026-06-22) ---
+// recordEvent() swallows CHECK violations silently, so this MUST run on existing
+// prod DBs or grant audit events would vanish without error.
+try {
+  const tableInfo = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='system_events'")
+    .get();
+  if (tableInfo && !tableInfo.sql.includes("'grants'")) {
+    console.log("Migrating system_events table: adding grants to source CHECK...");
+    db.exec(`BEGIN TRANSACTION`);
+    db.exec(`CREATE TABLE system_events_new (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      occurred_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      event_type TEXT NOT NULL,
+      source TEXT NOT NULL CHECK(source IN ('admin','audio','biochoco-overview','biochoco-tools','biochoco-resultados','camera-trap','climate','cron','finance','grants','odk','shared-drives')),
+      severity TEXT NOT NULL DEFAULT 'info' CHECK(severity IN ('info','success','warn','error')),
+      actor_email TEXT,
+      project_id TEXT,
+      target_type TEXT,
+      target_id TEXT,
+      summary TEXT NOT NULL,
+      duration_ms INTEGER,
+      details TEXT
+    )`);
+    db.exec(`INSERT INTO system_events_new SELECT id, occurred_at, event_type, source, severity, actor_email, project_id, target_type, target_id, summary, duration_ms, details FROM system_events`);
+    db.exec(`DROP TABLE system_events`);
+    db.exec(`ALTER TABLE system_events_new RENAME TO system_events`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_system_events_occurred_at ON system_events(occurred_at)`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_system_events_source ON system_events(source)`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_system_events_event_type ON system_events(event_type)`);
+    db.exec(`COMMIT`);
+    console.log("  system_events.source CHECK now includes grants");
+  }
+} catch (err) {
+  try { db.exec(`ROLLBACK`); } catch { /* no active tx */ }
+  console.error("Failed to migrate system_events source constraint (grants):", err.message);
+}
+
 // Re-enable foreign keys after table recreations
 db.pragma("foreign_keys = ON");
 
@@ -1179,6 +1267,7 @@ const coreProjects = [
   ["monitoreo", "Monitoreo Programático", "Seguimiento de actividades sociales y programáticas de FCAT"],
   ["grabaciones", "Grabaciones", "Grabaciones de audio y detección de especies acústicas"],
   ["researcher-applications", "Aplicaciones de Investigadores", "Sistema de aplicación y revisión de investigadores externos"],
+  ["grants", "Seguimiento de Subsidios", "Seguimiento y gestión de subsidios, financiadores y plazos de solicitudes"],
 ];
 
 const insertProject = db.prepare(

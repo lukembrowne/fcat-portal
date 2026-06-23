@@ -722,9 +722,8 @@ const statements = [
     amount_requested REAL,
     amount_awarded REAL,
     due_date INTEGER,
-    notify_before_days INTEGER NOT NULL DEFAULT 14 CHECK(notify_before_days >= 0),
-    check_rfp_date INTEGER,
     last_notified_at INTEGER,
+    reminders_sent INTEGER NOT NULL DEFAULT 0,
     notes TEXT,
     folder_link TEXT,
     budget_link TEXT,
@@ -864,6 +863,13 @@ const migrations = [
 
   // Climate — per-cell QC flag provenance (raw value + reason, sparse JSON)
   `ALTER TABLE climate_readings ADD COLUMN qc_flags TEXT`,
+
+  // Grants — two-tier automatic reminders (30 + 14 days) replace the per-grant
+  // notify window; RFP-check date was inert. Drop both columns, add the counter
+  // (2026-06-23). DROP COLUMN needs SQLite ≥3.35 (better-sqlite3 ships it).
+  `ALTER TABLE grants ADD COLUMN reminders_sent INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE grants DROP COLUMN check_rfp_date`,
+  `ALTER TABLE grants DROP COLUMN notify_before_days`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }

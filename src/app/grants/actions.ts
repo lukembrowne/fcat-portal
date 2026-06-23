@@ -12,7 +12,7 @@ import {
 } from "@/db/schema";
 import { requirePermission } from "@/lib/auth";
 import { recordEvent } from "@/lib/system-events";
-import { FORECAST_WEIGHTS } from "@/lib/grants/constants";
+import { EDITABLE_GRANT_FIELDS, type EditableGrantField } from "@/lib/grants/constants";
 import type { ActionResult } from "@/lib/types";
 
 const PROJECT = "grants";
@@ -31,8 +31,6 @@ export interface GrantListItem {
   amountRequested: number | null;
   amountAwarded: number | null;
   dueDate: Date | null;
-  notifyBeforeDays: number;
-  checkRfpDate: Date | null;
   website: string | null;
   folderLink: string | null;
   budgetLink: string | null;
@@ -47,8 +45,6 @@ const SORTABLE_COLUMNS = {
   amount: grants.amountRequested,
   awarded: grants.amountAwarded,
   due: grants.dueDate,
-  notify: grants.notifyBeforeDays,
-  rfp: grants.checkRfpDate,
 } as const;
 
 export type SortColumn = keyof typeof SORTABLE_COLUMNS;
@@ -75,8 +71,6 @@ export async function getGrants(filters?: {
       amountRequested: grants.amountRequested,
       amountAwarded: grants.amountAwarded,
       dueDate: grants.dueDate,
-      notifyBeforeDays: grants.notifyBeforeDays,
-      checkRfpDate: grants.checkRfpDate,
       website: grants.website,
       folderLink: grants.folderLink,
       budgetLink: grants.budgetLink,
@@ -162,7 +156,6 @@ export interface GrantsSummaryData {
   fundedCount: number;
   fundedAmount: number;
   inPrepCount: number;
-  expectedPipeline: number;
 }
 
 /** Dashboard summary numbers (reproduces the n8n digest header). */
@@ -179,11 +172,9 @@ export async function getGrantsSummary(): Promise<GrantsSummaryData> {
     fundedCount: 0,
     fundedAmount: 0,
     inPrepCount: 0,
-    expectedPipeline: 0,
   };
   for (const r of rows) {
     const amt = r.amount ?? 0;
-    out.expectedPipeline += amt * (FORECAST_WEIGHTS[r.status] ?? 0);
     if (r.status === "pending_decision") {
       out.pendingCount++;
       out.pendingAmount += amt;
@@ -252,10 +243,6 @@ export async function saveGrant(
   }
   const status = statusRaw as GrantStatus;
 
-  let notifyBeforeDays = parseInt(String(formData.get("notifyBeforeDays") ?? "14"), 10);
-  if (isNaN(notifyBeforeDays) || notifyBeforeDays < 0) notifyBeforeDays = 14;
-  if (notifyBeforeDays > 365) notifyBeforeDays = 365;
-
   const funderIdRaw = formData.get("funderId");
   const funderId =
     funderIdRaw && String(funderIdRaw) !== ""
@@ -273,8 +260,6 @@ export async function saveGrant(
     amountRequested: parseAmount(formData.get("amountRequested")),
     amountAwarded: parseAmount(formData.get("amountAwarded")),
     dueDate: parseDate(formData.get("dueDate")),
-    notifyBeforeDays,
-    checkRfpDate: parseDate(formData.get("checkRfpDate")),
     notes: text(formData.get("notes")),
     folderLink: text(formData.get("folderLink")),
     budgetLink: text(formData.get("budgetLink")),
@@ -347,6 +332,138 @@ export async function updateGrantStatus(
     return {
       success: false,
       error: err instanceof Error ? err.message : "Failed to change the status.",
+    };
+  }
+}
+
+export interface UpdatedGrantField {
+  field: EditableGrantField;
+  /** Canonical stored value, serialized for the client. Dates as "YYYY-MM-DD". */
+  value: string | number | null;
+}
+
+function dateToInput(d: Date | null): string | null {
+  return d ? d.toISOString().slice(0, 10) : null;
+}
+
+/**
+ * Single-field write for the inline row editor. Each field is coerced + validated
+ * server-side (the action is directly reachable, so client constraints aren't trusted).
+ * Returns the canonical stored value so the cell can re-render formatted.
+ */
+export async function updateGrantField(
+  id: number,
+  field: string,
+  raw: string | null
+): Promise<ActionResult<UpdatedGrantField>> {
+  const user = await requirePermission(PROJECT, "editor");
+  if (!(EDITABLE_GRANT_FIELDS as readonly string[]).includes(field)) {
+    return { success: false, error: "Unknown field." };
+  }
+  const f = field as EditableGrantField;
+
+  const set: Partial<typeof grants.$inferInsert> = { updatedAt: new Date() };
+  let canonical: string | number | null = raw;
+
+  switch (f) {
+    case "name": {
+      const v = text(raw);
+      if (!v) return { success: false, error: "Grant name is required." };
+      set.name = v;
+      canonical = v;
+      break;
+    }
+    case "status": {
+      if (!grantStatusEnum.includes(raw as GrantStatus)) {
+        return { success: false, error: "Invalid status." };
+      }
+      set.status = raw as GrantStatus;
+      canonical = raw;
+      break;
+    }
+    case "amountRequested": {
+      const v = parseAmount(raw);
+      set.amountRequested = v;
+      canonical = v;
+      break;
+    }
+    case "amountAwarded": {
+      const v = parseAmount(raw);
+      set.amountAwarded = v;
+      canonical = v;
+      break;
+    }
+    case "dueDate": {
+      const d = parseDate(raw);
+      set.dueDate = d;
+      canonical = dateToInput(d);
+      break;
+    }
+    case "funderId": {
+      const fid = raw && raw !== "" ? parseInt(raw, 10) : null;
+      const v = fid && !isNaN(fid) ? fid : null;
+      set.funderId = v;
+      if (v) set.funderNameRaw = null; // linking a funder clears the one-off name
+      canonical = v;
+      break;
+    }
+    case "funderNameRaw": {
+      const v = text(raw);
+      set.funderNameRaw = v;
+      canonical = v;
+      break;
+    }
+    case "notes": {
+      const v = text(raw);
+      set.notes = v;
+      canonical = v;
+      break;
+    }
+    case "website": {
+      const v = text(raw);
+      set.website = v;
+      canonical = v;
+      break;
+    }
+    case "folderLink": {
+      const v = text(raw);
+      set.folderLink = v;
+      canonical = v;
+      break;
+    }
+    case "budgetLink": {
+      const v = text(raw);
+      set.budgetLink = v;
+      canonical = v;
+      break;
+    }
+    case "proposalLink": {
+      const v = text(raw);
+      set.proposalLink = v;
+      canonical = v;
+      break;
+    }
+  }
+
+  try {
+    await db.update(grants).set(set).where(eq(grants.id, id));
+    await recordEvent({
+      source: "grants",
+      projectId: PROJECT,
+      eventType: field === "status" ? "grant_status_changed" : "grant_updated",
+      actorEmail: user.email,
+      targetType: "grant",
+      targetId: id,
+      summary: `Grant #${id}: ${field} updated`,
+      details: { field: f },
+    });
+    revalidatePath("/grants");
+    revalidatePath(`/grants/${id}`);
+    return { success: true, data: { field: f, value: canonical } };
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : "Failed to save.",
     };
   }
 }

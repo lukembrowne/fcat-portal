@@ -26,8 +26,6 @@ export default async function NewGrantPage() {
           amountRequested: null,
           amountAwarded: null,
           dueDate: null,
-          notifyBeforeDays: 14,
-          checkRfpDate: null,
           notes: null,
           folderLink: null,
           budgetLink: null,

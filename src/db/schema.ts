@@ -1535,9 +1535,10 @@ export const grants = sqliteTable(
     amountRequested: real("amount_requested"),
     amountAwarded: real("amount_awarded"),
     dueDate: integer("due_date", { mode: "timestamp" }),
-    notifyBeforeDays: integer("notify_before_days").notNull().default(14),
-    checkRfpDate: integer("check_rfp_date", { mode: "timestamp" }),
     lastNotifiedAt: integer("last_notified_at", { mode: "timestamp" }),
+    // Count of reminder thresholds (GRANT_REMINDER_DAYS) already emailed for this
+    // grant. Each threshold fires once; the cron sends iff reminderLevel exceeds it.
+    remindersSent: integer("reminders_sent").notNull().default(0),
     notes: text("notes"),
     folderLink: text("folder_link"),
     budgetLink: text("budget_link"),

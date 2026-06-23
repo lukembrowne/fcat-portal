@@ -1,9 +1,14 @@
 import { describe, it, expect } from "vitest";
 import { grantStatusEnum } from "@/db/schema";
 import {
-  FORECAST_WEIGHTS,
   GRANT_STATUS_LABELS,
   GRANT_STATUS_COLORS,
+  GRANT_REMINDER_DAYS,
+  reminderLevel,
+  GRANT_DECIDED_STATUSES,
+  GRANT_SUCCESS_DENOMINATOR_STATUSES,
+  EDITABLE_GRANT_FIELDS,
+  EDITABLE_FUNDER_FIELDS,
   formatUsd,
   formatDate,
   toDateInput,
@@ -11,24 +16,11 @@ import {
 } from "@/lib/grants/constants";
 
 describe("grant status maps are exhaustive", () => {
-  it("FORECAST_WEIGHTS has every status (forecast never silently drops one)", () => {
-    for (const s of grantStatusEnum) {
-      expect(FORECAST_WEIGHTS[s]).toBeTypeOf("number");
-    }
-  });
   it("labels + colors cover every status", () => {
     for (const s of grantStatusEnum) {
       expect(GRANT_STATUS_LABELS[s]).toBeTruthy();
       expect(GRANT_STATUS_COLORS[s]).toBeTruthy();
     }
-  });
-  it("decided stages weight 0 except funded=1", () => {
-    expect(FORECAST_WEIGHTS.funded).toBe(1);
-    expect(FORECAST_WEIGHTS.rejected).toBe(0);
-    expect(FORECAST_WEIGHTS.passed).toBe(0);
-    expect(FORECAST_WEIGHTS.to_research).toBe(0);
-    expect(FORECAST_WEIGHTS.in_prep).toBeGreaterThan(0);
-    expect(FORECAST_WEIGHTS.pending_decision).toBeGreaterThan(FORECAST_WEIGHTS.in_prep);
   });
 });
 
@@ -61,15 +53,51 @@ describe("daysUntil", () => {
     expect(daysUntil(new Date("2026-06-20T12:00:00Z"), now)).toBe(-2);
     expect(daysUntil(null, now)).toBeNull();
   });
-  it("reminder window predicate: due within [0, notifyBeforeDays]", () => {
-    const now = new Date("2026-06-22T00:00:00Z");
-    const notify = 14;
-    const inWindow = (due: string) => {
-      const d = daysUntil(new Date(due), now)!;
-      return d >= 0 && d <= notify;
-    };
-    expect(inWindow("2026-06-30T00:00:00Z")).toBe(true); // 8 days out
-    expect(inWindow("2026-07-20T00:00:00Z")).toBe(false); // 28 days out
-    expect(inWindow("2026-06-20T00:00:00Z")).toBe(false); // already past
+});
+
+describe("reminderLevel (two-tier 30 + 14 day thresholds)", () => {
+  it("uses descending thresholds", () => {
+    expect([...GRANT_REMINDER_DAYS]).toEqual([30, 14]);
+  });
+  it("counts how many thresholds the days-remaining has entered", () => {
+    expect(reminderLevel(40)).toBe(0); // not due yet
+    expect(reminderLevel(30)).toBe(1); // just crossed 30-day
+    expect(reminderLevel(25)).toBe(1); // still only the 30-day
+    expect(reminderLevel(14)).toBe(2); // crossed 14-day
+    expect(reminderLevel(8)).toBe(2);
+    expect(reminderLevel(0)).toBe(2); // due today
+  });
+  it("treats overdue and missing dates as level 0 (no reminder)", () => {
+    expect(reminderLevel(-2)).toBe(0);
+    expect(reminderLevel(null)).toBe(0);
+  });
+});
+
+describe("success-rate denominator excludes passed grants", () => {
+  it("counts only grants we applied to and got a verdict on", () => {
+    expect([...GRANT_SUCCESS_DENOMINATOR_STATUSES].sort()).toEqual(
+      ["completed", "funded", "rejected"].sort()
+    );
+  });
+  it("excludes 'passed' (opportunities we chose not to pursue)", () => {
+    expect(GRANT_SUCCESS_DENOMINATOR_STATUSES).not.toContain("passed");
+    // ...even though 'passed' still counts as decided/out-of-pipeline elsewhere.
+    expect(GRANT_DECIDED_STATUSES).toContain("passed");
+  });
+});
+
+describe("editable field whitelists", () => {
+  it("grant fields no longer expose the removed notify/RFP columns", () => {
+    expect(EDITABLE_GRANT_FIELDS).not.toContain("notifyBeforeDays");
+    expect(EDITABLE_GRANT_FIELDS).not.toContain("checkRfpDate");
+    expect(EDITABLE_GRANT_FIELDS).toContain("status");
+    expect(EDITABLE_GRANT_FIELDS).toContain("dueDate");
+  });
+  it("funder fields whitelist the displayed columns, not derived/internal ones", () => {
+    expect(EDITABLE_FUNDER_FIELDS).toContain("name");
+    expect(EDITABLE_FUNDER_FIELDS).toContain("priority");
+    expect(EDITABLE_FUNDER_FIELDS).toContain("nextStepDue");
+    expect(EDITABLE_FUNDER_FIELDS).not.toContain("grantCount");
+    expect(EDITABLE_FUNDER_FIELDS).not.toContain("nameNormalized");
   });
 });

@@ -9,10 +9,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Badge } from "@/components/ui/badge";
 import {
   GRANT_STATUS_LABELS,
-  FORECAST_WEIGHTS,
+  GRANT_STATUS_COLORS,
   formatUsd,
+  TOTAL_KEY,
 } from "@/lib/grants/constants";
 
 function pct(v: number | null): string {
@@ -22,107 +24,92 @@ function pct(v: number | null): string {
 export default async function GrantAnalyticsPage() {
   await requirePermission("grants", "viewer");
   const a = await getGrantAnalytics();
+  const { matrix } = a;
+  const colKeys = [...matrix.years, TOTAL_KEY];
 
-  const maxYearReq = Math.max(1, ...a.byYear.map((y) => y.totalRequested));
+  function colLabel(key: string): string {
+    return key === TOTAL_KEY ? "Total" : key;
+  }
 
   return (
     <div className="space-y-8">
       <p className="text-muted-foreground text-sm">
-        Success rate, amounts by year, and pipeline forecast
+        Grant counts by stage and year, success rate, and funder hit rates
       </p>
 
-      {/* Pipeline forecast */}
+      {/* Stage × year matrix */}
       <section className="space-y-3">
-        <h2 className="text-lg font-semibold">Pipeline forecast</h2>
-        <div className="flex gap-3 flex-wrap">
-          <div className="rounded-lg border bg-card px-4 py-3 flex-1 min-w-[180px]">
-            <div className="text-2xl font-bold text-green-600">{formatUsd(a.forecast.totalWeighted)}</div>
-            <div className="text-xs text-muted-foreground">Expected value (weighted by stage)</div>
-          </div>
-          <div className="rounded-lg border bg-card px-4 py-3 flex-1 min-w-[180px]">
-            <div className="text-2xl font-bold">{formatUsd(a.forecast.activeRequested)}</div>
-            <div className="text-xs text-muted-foreground">Active requested (In Preparation + Pending Decision)</div>
-          </div>
-        </div>
-
-        <div className="rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground space-y-2">
-          <p>
-            <span className="font-medium text-foreground">Expected value</span> = Σ (amount requested ×
-            stage probability) across all grants. It estimates how much funding we can expect from the
-            current pipeline, discounting each grant by how likely it is to land.
-          </p>
-          <p>
-            <span className="font-medium text-foreground">Stage probabilities (assumptions):</span>{" "}
-            To Research {pct(FORECAST_WEIGHTS.to_research)}, In Preparation {pct(FORECAST_WEIGHTS.in_prep)},
-            Pending Decision {pct(FORECAST_WEIGHTS.pending_decision)}, Funded {pct(FORECAST_WEIGHTS.funded)}.
-            Rejected, Passed, and Completed contribute $0 (no longer open opportunities).
-          </p>
-          <p>
-            <span className="font-medium text-foreground">Active requested</span> is the raw (un-weighted)
-            total requested across grants currently In Preparation or Pending Decision.
-          </p>
-        </div>
-
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Stage</TableHead>
-              <TableHead className="text-right">Win prob.</TableHead>
-              <TableHead className="text-right">#</TableHead>
-              <TableHead className="text-right">Requested</TableHead>
-              <TableHead className="text-right">Expected value</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {a.forecast.rows.map((r) => (
-              <TableRow key={r.status}>
-                <TableCell>{GRANT_STATUS_LABELS[r.status]}</TableCell>
-                <TableCell className="text-right tabular-nums text-muted-foreground">
-                  {pct(FORECAST_WEIGHTS[r.status])}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">{r.count}</TableCell>
-                <TableCell className="text-right tabular-nums">{formatUsd(r.sumRequested)}</TableCell>
-                <TableCell className="text-right tabular-nums">{r.weighted > 0 ? formatUsd(r.weighted) : "—"}</TableCell>
+        <h2 className="text-lg font-semibold">By stage &amp; year</h2>
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Stage</TableHead>
+                {colKeys.map((k) => (
+                  <TableHead
+                    key={k}
+                    className={`text-right whitespace-nowrap ${k === TOTAL_KEY ? "font-semibold" : ""}`}
+                  >
+                    {colLabel(k)}
+                  </TableHead>
+                ))}
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </section>
-
-      {/* Win rate & $ by year */}
-      <section className="space-y-3">
-        <h2 className="text-lg font-semibold">By year</h2>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Year</TableHead>
-              <TableHead className="text-right">Total</TableHead>
-              <TableHead className="text-right">Funded</TableHead>
-              <TableHead className="text-right">Success rate</TableHead>
-              <TableHead className="text-right">Requested</TableHead>
-              <TableHead>&nbsp;</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {a.byYear.map((y) => (
-              <TableRow key={y.year}>
-                <TableCell className="font-medium">{y.year}</TableCell>
-                <TableCell className="text-right tabular-nums">{y.total}</TableCell>
-                <TableCell className="text-right tabular-nums">{y.funded}</TableCell>
-                <TableCell className="text-right tabular-nums">{pct(y.winRate)}</TableCell>
-                <TableCell className="text-right tabular-nums">{formatUsd(y.totalRequested)}</TableCell>
-                <TableCell className="w-[160px]">
-                  <div className="h-2 rounded bg-muted overflow-hidden">
-                    <div
-                      className="h-full bg-primary"
-                      style={{ width: `${(y.totalRequested / maxYearReq) * 100}%` }}
-                    />
-                  </div>
-                </TableCell>
+            </TableHeader>
+            <TableBody>
+              {matrix.statuses.map((s) => (
+                <TableRow key={s}>
+                  <TableCell>
+                    <Badge variant="secondary" className={GRANT_STATUS_COLORS[s]}>
+                      {GRANT_STATUS_LABELS[s]}
+                    </Badge>
+                  </TableCell>
+                  {colKeys.map((k) => {
+                    const n = matrix.counts[s][k] ?? 0;
+                    return (
+                      <TableCell
+                        key={k}
+                        className={`text-right tabular-nums ${k === TOTAL_KEY ? "font-semibold" : ""}`}
+                      >
+                        {n === 0 ? <span className="text-muted-foreground">—</span> : n}
+                      </TableCell>
+                    );
+                  })}
+                </TableRow>
+              ))}
+              {/* Totals */}
+              <TableRow className="border-t-2">
+                <TableCell className="font-medium">All grants</TableCell>
+                {colKeys.map((k) => (
+                  <TableCell
+                    key={k}
+                    className={`text-right tabular-nums font-medium ${k === TOTAL_KEY ? "font-semibold" : ""}`}
+                  >
+                    {matrix.totalsByYear[k] || <span className="text-muted-foreground">—</span>}
+                  </TableCell>
+                ))}
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+              {/* Success rate */}
+              <TableRow>
+                <TableCell className="font-medium">Success rate</TableCell>
+                {colKeys.map((k) => (
+                  <TableCell
+                    key={k}
+                    className={`text-right tabular-nums font-medium ${k === TOTAL_KEY ? "font-semibold" : ""}`}
+                  >
+                    {pct(matrix.successByYear[k])}
+                  </TableCell>
+                ))}
+              </TableRow>
+            </TableBody>
+          </Table>
+        </div>
+        <p className="text-xs text-muted-foreground max-w-2xl">
+          <span className="font-medium text-foreground">Success rate</span> = (Funded + Completed) ÷
+          grants we applied to and got a verdict on (Funded + Completed + Rejected).{" "}
+          <span className="font-medium text-foreground">Passed</span> grants (opportunities we chose not
+          to pursue) and undecided grants (To Research, In Preparation, Pending Decision) are excluded
+          from the calculation. Years are grouped by the grant&apos;s due date.
+        </p>
       </section>
 
       {/* Success rate by funder */}

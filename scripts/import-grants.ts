@@ -22,7 +22,6 @@ import { normalizeFunderName } from "../src/lib/grants/normalize";
 import {
   parseDateToSeconds,
   parseAmount,
-  parseDays,
   mapStatus,
   mapPriority,
 } from "../src/lib/grants/coerce";
@@ -115,11 +114,11 @@ function main() {
   const insertGrant = db.prepare(`
     INSERT INTO grants
       (funder_id, funder_name_raw, name, website, status, amount_requested,
-       amount_awarded, due_date, notify_before_days, check_rfp_date, notes,
+       amount_awarded, due_date, notes,
        folder_link, budget_link, proposal_link)
     VALUES
       (@funder_id, @funder_name_raw, @name, @website, @status, @amount_requested,
-       @amount_awarded, @due_date, @notify_before_days, @check_rfp_date, @notes,
+       @amount_awarded, @due_date, @notes,
        @folder_link, @budget_link, @proposal_link)
   `);
 
@@ -189,8 +188,6 @@ function main() {
         amount_requested: parseAmount(r["Amount Requested"]),
         amount_awarded: parseAmount(r["Amount Awarded"]), // column absent → null
         due_date: parseDateToSeconds(r["Due Date"]),
-        notify_before_days: parseDays(r["Notify Before (Days)"]),
-        check_rfp_date: parseDateToSeconds(r["Check RFP Date"]),
         notes: str(r["Notes"]),
         folder_link: str(r["Folder Link"]),
         budget_link: str(r["Budget Link"]),

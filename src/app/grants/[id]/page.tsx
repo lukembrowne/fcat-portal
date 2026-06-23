@@ -59,8 +59,6 @@ export default async function GrantDetailPage({
           amountRequested: g.amountRequested,
           amountAwarded: g.amountAwarded,
           dueDate: toDateInput(g.dueDate),
-          notifyBeforeDays: g.notifyBeforeDays,
-          checkRfpDate: toDateInput(g.checkRfpDate),
           notes: g.notes,
           folderLink: g.folderLink,
           budgetLink: g.budgetLink,

@@ -28,12 +28,17 @@ function Card({
 export async function GrantsSummary() {
   const s = await getGrantsSummary();
   return (
-    <div className="flex gap-3 flex-wrap">
-      <Card label="Awaiting decision" value={s.pendingCount} tone="pending" />
-      <Card label="Pending amount" value={formatUsd(s.pendingAmount)} tone="pending" />
-      <Card label="Grants funded" value={s.fundedCount} tone="success" />
-      <Card label="Total funded" value={formatUsd(s.fundedAmount)} tone="success" />
-      <Card label="Expected pipeline value" value={formatUsd(s.expectedPipeline)} />
+    <div className="space-y-2">
+      <div className="flex gap-3 flex-wrap">
+        <Card label="Grants awaiting decision" value={s.pendingCount} tone="pending" />
+        <Card label="Requested · awaiting decision" value={formatUsd(s.pendingAmount)} tone="pending" />
+        <Card label="Grants funded" value={s.fundedCount} tone="success" />
+        <Card label="Requested · funded grants" value={formatUsd(s.fundedAmount)} tone="success" />
+      </div>
+      <p className="text-xs text-muted-foreground">
+        All-time totals across every grant — not limited to the current year or active pipeline.
+        Dollar figures are the amounts <em>requested</em>.
+      </p>
     </div>
   );
 }

@@ -12,6 +12,11 @@ import {
 import { requirePermission } from "@/lib/auth";
 import { recordEvent } from "@/lib/system-events";
 import { normalizeFunderName } from "@/lib/grants/normalize";
+import {
+  EDITABLE_FUNDER_FIELDS,
+  GRANT_SUCCESS_DENOMINATOR_STATUSES,
+  type EditableFunderField,
+} from "@/lib/grants/constants";
 import type { ActionResult } from "@/lib/types";
 
 const PROJECT = "grants";
@@ -142,7 +147,9 @@ export async function getFunder(id: number) {
     .orderBy(desc(grants.dueDate))
     .all();
 
-  const DECIDED = new Set(["funded", "rejected", "passed", "completed"]);
+  // Success-rate denominator: grants we applied to and got a verdict on. Excludes
+  // "passed" (opportunities we chose not to pursue).
+  const DECIDED = new Set(GRANT_SUCCESS_DENOMINATOR_STATUSES);
   const metrics: FunderMetrics = {
     total: linkedGrants.length,
     decided: 0,
@@ -253,6 +260,95 @@ export async function saveFunder(
       };
     }
     return { success: false, error: msg || "Failed to save the funder." };
+  }
+}
+
+export interface UpdatedFunderField {
+  field: string;
+  /** Canonical stored value, serialized for the client. Dates as "YYYY-MM-DD". */
+  value: string | number | null;
+}
+
+/**
+ * Single-field write for the inline funders row editor — mirrors
+ * {@link updateGrantField}. Each field is coerced + validated server-side; the
+ * field name is whitelisted so a crafted call can't touch non-displayed columns.
+ * `name` is special: required, and recomputes `nameNormalized` (UNIQUE index).
+ */
+export async function updateFunderField(
+  id: number,
+  field: string,
+  raw: string | null
+): Promise<ActionResult<UpdatedFunderField>> {
+  const user = await requirePermission(PROJECT, "editor");
+  if (!(EDITABLE_FUNDER_FIELDS as readonly string[]).includes(field)) {
+    return { success: false, error: "Unknown field." };
+  }
+  const f = field as EditableFunderField;
+
+  const set: Partial<typeof funders.$inferInsert> = { updatedAt: new Date() };
+  let canonical: string | number | null = raw;
+
+  switch (f) {
+    case "name": {
+      const v = text(raw);
+      if (!v) return { success: false, error: "Funder name is required." };
+      set.name = v;
+      set.nameNormalized = normalizeFunderName(v);
+      canonical = v;
+      break;
+    }
+    case "priority": {
+      if (raw && raw !== "" && !funderPriorityEnum.includes(raw as FunderPriority)) {
+        return { success: false, error: "Invalid priority." };
+      }
+      const v = funderPriorityEnum.includes(raw as FunderPriority)
+        ? (raw as FunderPriority)
+        : null;
+      set.priority = v;
+      canonical = v;
+      break;
+    }
+    case "nextStepDue": {
+      const d = parseDate(raw);
+      set.nextStepDue = d;
+      canonical = d ? d.toISOString().slice(0, 10) : null;
+      break;
+    }
+    default: {
+      // All remaining whitelisted fields are free text / long text. The field
+      // name equals the Drizzle column property, so a dynamic set is safe here.
+      const v = text(raw);
+      (set as Record<string, unknown>)[f] = v;
+      canonical = v;
+      break;
+    }
+  }
+
+  try {
+    await db.update(funders).set(set).where(eq(funders.id, id));
+    await recordEvent({
+      source: "grants",
+      projectId: PROJECT,
+      eventType: "funder_updated",
+      actorEmail: user.email,
+      targetType: "funder",
+      targetId: id,
+      summary: `Funder #${id}: ${f} updated`,
+      details: { field: f },
+    });
+    revalidatePath("/grants/funders");
+    revalidatePath(`/grants/funders/${id}`);
+    return { success: true, data: { field: f, value: canonical } };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "";
+    if (msg.includes("UNIQUE") || msg.includes("unique")) {
+      return {
+        success: false,
+        error: "A funder with an equivalent name already exists.",
+      };
+    }
+    return { success: false, error: msg || "Failed to save." };
   }
 }
 

@@ -14,10 +14,10 @@ import {
 export const dynamic = "force-dynamic";
 
 /**
- * Cron: daily per-deadline reminders. Emails grants whose due date entered the
- * per-grant notify window (deterministic range) and haven't been notified yet.
- * Send-then-mark: lastNotifiedAt is set only after a successful send, so a crash
- * re-sends next day rather than silently skipping.
+ * Cron: daily two-tier deadline reminders. Emails active grants that have crossed
+ * a new reminder threshold (30 then 14 days out) since they were last notified.
+ * Send-then-mark: remindersSent/lastNotifiedAt are stamped only after a successful
+ * send, so a crash re-sends next day rather than silently skipping.
  * Auth: Bearer CRON_SECRET only (no XFF guard).
  */
 export async function POST(request: NextRequest) {
@@ -75,8 +75,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: false, error: "exception" }, { status: 500 });
   }
 
-  // Mark only after a confirmed successful send.
-  await markReminded(due.map((g) => g.id));
+  // Mark only after a confirmed successful send — record the level each grant
+  // reached so the next (more urgent) threshold can still fire later.
+  await markReminded(due.map((g) => ({ id: g.id, level: g.targetLevel })));
 
   await recordEvent({
     source: "grants",

@@ -20,8 +20,6 @@ export interface GrantFormInitial {
   amountRequested: number | null;
   amountAwarded: number | null;
   dueDate: string | null; // YYYY-MM-DD
-  notifyBeforeDays: number;
-  checkRfpDate: string | null; // YYYY-MM-DD
   notes: string | null;
   folderLink: string | null;
   budgetLink: string | null;
@@ -162,22 +160,6 @@ export function GrantForm({
               defaultValue={initial.amountAwarded ?? ""}
               className={inputCls}
             />
-          </Field>
-        </div>
-
-        <div className="grid grid-cols-2 gap-4">
-          <Field label="Notify before (days)" desc="Days before the deadline to send a reminder (0–365).">
-            <input
-              type="number"
-              name="notifyBeforeDays"
-              min={0}
-              max={365}
-              defaultValue={initial.notifyBeforeDays}
-              className={inputCls}
-            />
-          </Field>
-          <Field label="RFP check date" desc="When to revisit the funder's call for proposals.">
-            <input type="date" name="checkRfpDate" defaultValue={initial.checkRfpDate ?? ""} className={inputCls} />
           </Field>
         </div>
       </Section>

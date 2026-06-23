@@ -1,7 +1,7 @@
 import "server-only";
 
 import { Resend } from "resend";
-import { and, eq, inArray, isNull, isNotNull, not } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, not } from "drizzle-orm";
 import { db } from "@/db";
 import { userPermissions, grants, funders, type GrantStatus } from "@/db/schema";
 import {
@@ -10,6 +10,7 @@ import {
   formatUsd,
   formatDate,
   daysUntil,
+  reminderLevel,
 } from "@/lib/grants/constants";
 
 export function getGrantsResend() {
@@ -257,12 +258,19 @@ export function renderMonthlyDigestHtml(d: MonthlyDigestData, portalUrl: string)
 // Per-deadline reminders
 // ---------------------------------------------------------------------------
 
+/** A due grant plus the reminder level it has now reached (1 = 30-day, 2 = 14-day). */
+export interface DueReminder extends GrantRow {
+  targetLevel: number;
+}
+
 /**
- * Active, not-yet-notified grants whose due date falls inside their
- * per-grant notify window. Deterministic RANGE (not an equality on a moving
- * target) so a grant the cron misses by a day is still caught next run.
+ * Active grants that have crossed a new reminder threshold since they were last
+ * emailed. Each grant is included iff its current `reminderLevel` (count of
+ * GRANT_REMINDER_DAYS thresholds entered) exceeds `remindersSent`, so every
+ * threshold fires exactly once and a grant entered late only gets the still-
+ * applicable (most urgent) reminder. Overdue grants (level 0) are excluded.
  */
-export function getDueReminders(now: Date = new Date()): GrantRow[] {
+export function getDueReminders(now: Date = new Date()): DueReminder[] {
   const candidates = db
     .select({
       id: grants.id,
@@ -272,35 +280,41 @@ export function getDueReminders(now: Date = new Date()): GrantRow[] {
       status: grants.status,
       amountRequested: grants.amountRequested,
       dueDate: grants.dueDate,
-      notifyBeforeDays: grants.notifyBeforeDays,
+      remindersSent: grants.remindersSent,
     })
     .from(grants)
     .leftJoin(funders, eq(grants.funderId, funders.id))
     .where(
       and(
         isNotNull(grants.dueDate),
-        isNull(grants.lastNotifiedAt),
         not(inArray(grants.status, GRANT_DECIDED_STATUSES))
       )
     )
     .all();
 
   return candidates
-    .filter((g) => {
-      const days = daysUntil(g.dueDate, now);
-      // Deterministic range: fire once when due date enters [0, notifyBeforeDays].
-      return days != null && days >= 0 && days <= g.notifyBeforeDays;
+    .flatMap((g) => {
+      const level = reminderLevel(daysUntil(g.dueDate, now));
+      if (level <= g.remindersSent) return [];
+      return [{ ...toRow(g), targetLevel: level }];
     })
-    .map(toRow)
     .sort((a, b) => (a.dueDate?.getTime() ?? 0) - (b.dueDate?.getTime() ?? 0));
 }
 
-export async function markReminded(ids: number[], now: Date = new Date()): Promise<void> {
-  if (ids.length === 0) return;
-  await db
-    .update(grants)
-    .set({ lastNotifiedAt: now })
-    .where(inArray(grants.id, ids));
+/**
+ * Stamp each grant with the reminder level it reached (so the next still-higher
+ * threshold can fire later) and the send time. Sequential updates — small N.
+ */
+export async function markReminded(
+  updates: { id: number; level: number }[],
+  now: Date = new Date()
+): Promise<void> {
+  for (const u of updates) {
+    await db
+      .update(grants)
+      .set({ remindersSent: u.level, lastNotifiedAt: now })
+      .where(eq(grants.id, u.id));
+  }
 }
 
 export function renderRemindersHtml(rows: GrantRow[], portalUrl: string): string {

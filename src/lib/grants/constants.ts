@@ -47,6 +47,17 @@ export const GRANT_DECIDED_STATUSES: GrantStatus[] = [
   "completed",
 ];
 
+/**
+ * Statuses that count toward the success rate — grants we actually applied to
+ * and received a verdict on. Excludes "passed" (opportunities we deliberately
+ * chose not to pursue, so they shouldn't drag down the win rate).
+ */
+export const GRANT_SUCCESS_DENOMINATOR_STATUSES: GrantStatus[] = [
+  "funded",
+  "rejected",
+  "completed",
+];
+
 export const FUNDER_PRIORITY_LABELS: Record<FunderPriority, string> = {
   highest: "Highest",
   high: "High",
@@ -54,16 +65,75 @@ export const FUNDER_PRIORITY_LABELS: Record<FunderPriority, string> = {
   low: "Low",
 };
 
-/** Stage weights for the pipeline forecast (expected value). */
-export const FORECAST_WEIGHTS: Record<GrantStatus, number> = {
-  to_research: 0,
-  in_prep: 0.2,
-  pending_decision: 0.5,
-  funded: 1,
-  rejected: 0,
-  passed: 0,
-  completed: 0,
-};
+/**
+ * Two-tier automatic reminder thresholds (descending), in days before the due
+ * date. Every active grant emails the team once when it crosses each threshold —
+ * no per-grant config. Replaces the old per-grant `notifyBeforeDays` window.
+ */
+export const GRANT_REMINDER_DAYS = [30, 14] as const;
+
+/**
+ * How many reminder thresholds the grant has entered (0 if not due yet or
+ * overdue). e.g. days=40 → 0, 30 → 1, 25 → 1, 14 → 2, 8 → 2, 0 → 2, -2 → 0.
+ * The cron emails a grant iff this level exceeds the count already sent.
+ */
+export function reminderLevel(days: number | null): number {
+  if (days == null || days < 0) return 0;
+  return GRANT_REMINDER_DAYS.filter((t) => days <= t).length;
+}
+
+/**
+ * Fields the inline row editor on /grants is allowed to write. Whitelisted so a
+ * crafted call can't touch columns the table doesn't expose (id, createdAt, …).
+ * Lives here (not in the "use server" actions file, which may only export async
+ * functions) so both the action and the client cells can import it.
+ */
+export const EDITABLE_GRANT_FIELDS = [
+  "name",
+  "status",
+  "amountRequested",
+  "amountAwarded",
+  "dueDate",
+  "notes",
+  "website",
+  "folderLink",
+  "budgetLink",
+  "proposalLink",
+  "funderId",
+  "funderNameRaw",
+] as const;
+export type EditableGrantField = (typeof EDITABLE_GRANT_FIELDS)[number];
+
+/**
+ * Fields the inline row editor on /grants/funders is allowed to write. Same
+ * whitelist rationale as {@link EDITABLE_GRANT_FIELDS}. Non-displayed funder
+ * fields (research links, funding history) stay on the detail/edit form.
+ */
+export const EDITABLE_FUNDER_FIELDS = [
+  "name",
+  "priority",
+  "funderType",
+  "focusAreas",
+  "relationshipManager",
+  "relationshipStatus",
+  "nextSteps",
+  "nextStepDue",
+  "contactName",
+  "contactEmail",
+  "description",
+  "notes",
+  "website",
+  "fundingHistory",
+  "irs990Link",
+  "guidestarLink",
+  "foundationDirectoryLink",
+] as const;
+export type EditableFunderField = (typeof EDITABLE_FUNDER_FIELDS)[number];
+
+/** Analytics matrix column key for the all-years "Total" column. */
+export const TOTAL_KEY = "__total__";
+/** Analytics matrix bucket key for grants with no due date. */
+export const NO_DATE_KEY = "No date";
 
 export function formatUsd(amount: number | null | undefined): string {
   if (amount == null) return "—";

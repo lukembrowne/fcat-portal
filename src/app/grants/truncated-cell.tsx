@@ -1,38 +1,22 @@
-"use client";
-
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-
 /**
- * One-line cell that clamps long text and shows the full value on hover.
+ * Long-text table cell that reveals its full content by expanding the row
+ * vertically on hover (CSS only). Replaces the old popup-tooltip approach.
  *
- * Uses a Radix tooltip (not the native `title` attr) and a `relative z-10`
- * trigger so it sits ABOVE the table row's full-row link overlay
- * (`after:absolute after:inset-0`), which otherwise intercepts the hover.
+ * The cell is raised (`relative z-20`) ABOVE the row's full-row link overlay
+ * (`after:absolute after:inset-0` on the first cell). Without this the overlay
+ * sits on top of the notes, so (a) hovering the text never reaches it and
+ * (b) clicking to read the note navigates away instead. Raised above the
+ * overlay, the note is directly hoverable and selectable without navigating.
+ *
+ * Two hover triggers: `hover:` expands when the cursor is over the note itself;
+ * `group-hover:` (parent <TableRow> must have `group`) also expands when
+ * hovering anywhere else on the row.
  */
-export function TruncatedCell({
-  text,
-  className,
-}: {
-  text: string | null | undefined;
-  className?: string;
-}) {
+export function ExpandCell({ text }: { text: string | null | undefined }) {
   if (!text) return <span className="text-muted-foreground">—</span>;
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span
-          className={`relative z-10 block max-w-[220px] cursor-default truncate text-sm ${className ?? ""}`}
-        >
-          {text}
-        </span>
-      </TooltipTrigger>
-      <TooltipContent className="max-w-sm whitespace-pre-wrap break-words">
-        {text}
-      </TooltipContent>
-    </Tooltip>
+    <div className="relative z-20 max-w-[260px] cursor-text whitespace-pre-wrap text-sm line-clamp-2 hover:line-clamp-none group-hover:line-clamp-none">
+      {text}
+    </div>
   );
 }

@@ -143,12 +143,15 @@ describe("selectAndReserveSlot", () => {
   });
 
   it("never reserves past the hard threshold (default 85%)", () => {
-    // cap 100k → hard 85k. Each reservation = 40k. Two fit (80k), third refused.
+    // cap 100k → hard 85k. Each reservation = DEPLOYMENT_QUOTA; only as many as
+    // fit under 85k succeed, the next is refused.
     seedDrive({ id: "d", reconciledCount: 0, itemCap: 100_000 });
-    expect("error" in selectAndReserveSlot(PROJECT)).toBe(false);
-    expect("error" in selectAndReserveSlot(PROJECT)).toBe(false);
+    const maxFit = Math.floor(85_000 / DEPLOYMENT_QUOTA);
+    for (let i = 0; i < maxFit; i++) {
+      expect("error" in selectAndReserveSlot(PROJECT)).toBe(false);
+    }
     expect(selectAndReserveSlot(PROJECT)).toEqual({ error: "no_capacity" });
-    expect(pending("d")).toBe(2 * DEPLOYMENT_QUOTA);
+    expect(pending("d")).toBe(maxFit * DEPLOYMENT_QUOTA);
   });
 
   it("never lets concurrent-style repeated reservations exceed cap*hard", () => {
@@ -226,7 +229,7 @@ describe("selection query plan", () => {
       SELECT id FROM shared_drives
       WHERE status = 'active' AND archived_at IS NULL
         AND camera_trap_project_id = ${PROJECT}
-        AND (reconciled_count + pending_reservations_count + 40000) <= (item_cap * 0.85)
+        AND (reconciled_count + pending_reservations_count + ${DEPLOYMENT_QUOTA}) <= (item_cap * 0.85)
       ORDER BY (reconciled_count + pending_reservations_count) DESC, id ASC
       LIMIT 1
     `) as { detail: string }[];

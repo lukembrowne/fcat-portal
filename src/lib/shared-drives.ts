@@ -28,9 +28,22 @@ import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { sharedDrives, type SharedDrive, type SharedDriveStatus } from "@/db/schema";
 
-// Conservative per-deployment item cap (audio + camera-trap + frames + iButton
-// + folder overhead). Reserved up-front, trued up nightly by reconcile.
-export const DEPLOYMENT_QUOTA = 40_000;
+// Per-deployment item reservation (audio + camera-trap + frames + iButton +
+// folder overhead). Reserved up-front at folder-create, trued up nightly by
+// reconcile against the Drive-API ground truth. This is a SOFT reservation, not
+// a hard per-folder limit: under-reserving self-corrects on the next reconcile,
+// and the 95% read-only auto-flip backstops a runaway. Sized at 10k to match
+// observed reality (avg ~6.9k items/deployment, heaviest observed ~8.5k) so
+// batch folder-creation on a fresh drive doesn't hit a false "no capacity" wall
+// after only ~10 folders. Override with SHARED_DRIVE_DEPLOYMENT_QUOTA if needed.
+function intEnv(envName: string, fallback: number): number {
+  const raw = process.env[envName];
+  if (!raw) return fallback;
+  const n = Number(raw);
+  return Number.isInteger(n) && n > 0 ? n : fallback;
+}
+
+export const DEPLOYMENT_QUOTA = intEnv("SHARED_DRIVE_DEPLOYMENT_QUOTA", 10_000);
 
 // Validates a Google Shared Drive ID (starts with 0A). Folder IDs do NOT match
 // this — that's intentional, registration must be given the drive ID.

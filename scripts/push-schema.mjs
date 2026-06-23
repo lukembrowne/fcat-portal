@@ -378,6 +378,7 @@ const statements = [
     mean_wind_speed REAL,
     mean_wind_direction REAL,
     std_wind_dir REAL,
+    qc_flags TEXT,
     UNIQUE(timestamp, resolution)
   )`,
 
@@ -860,6 +861,9 @@ const migrations = [
   `ALTER TABLE camera_trap_training_datasets ADD COLUMN drive_archive_file_id TEXT`,
   `ALTER TABLE camera_trap_training_datasets ADD COLUMN drive_archive_web_view_link TEXT`,
   `ALTER TABLE camera_trap_training_datasets ADD COLUMN archive_uploaded_at INTEGER`,
+
+  // Climate — per-cell QC flag provenance (raw value + reason, sparse JSON)
+  `ALTER TABLE climate_readings ADD COLUMN qc_flags TEXT`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }

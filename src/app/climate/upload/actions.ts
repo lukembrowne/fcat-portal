@@ -7,6 +7,8 @@ import type { ClimateResolution } from "@/db/schema";
 import type { ActionResult } from "@/lib/types";
 import { parseTOA5File, detectAnomalies } from "./parser";
 import type { Anomaly, ParsedRow } from "./parser";
+import { QC_FLAG, serializeQcFlags } from "../qc";
+import type { QcFlagMap } from "../qc";
 import { revalidatePath } from "next/cache";
 import { sql } from "drizzle-orm";
 import { recordEvent } from "@/lib/system-events";
@@ -76,28 +78,41 @@ export async function previewDatFile(
   }
 }
 
-/** Apply anomaly nulling: set flagged fields to null on matching rows. */
-function applyAnomalyNulling(rows: ParsedRow[], anomalies: Anomaly[]): void {
-  // Build a map: row index → set of fields to null
-  const nullMap = new Map<number, Set<string>>();
+/**
+ * Apply anomaly QC: for every out-of-range cell, record the original value and
+ * an "R" (range) flag in a per-row qc_flags map, then NULL the working column
+ * so it is excluded from dashboards/aggregations. Nothing is destroyed — the
+ * raw value is preserved in the returned map.
+ *
+ * @returns Map of row index → qc_flags map for rows that had anomalies.
+ */
+function applyAnomalyFlags(
+  rows: ParsedRow[],
+  anomalies: Anomaly[]
+): Map<number, QcFlagMap> {
+  const flagsByRow = new Map<number, QcFlagMap>();
+
   for (const a of anomalies) {
     const idx = a.row - 1; // Convert 1-based to 0-based
-    if (!nullMap.has(idx)) nullMap.set(idx, new Set());
-    nullMap.get(idx)!.add(a.column);
+    if (idx < 0 || idx >= rows.length) continue;
+
+    if (!flagsByRow.has(idx)) flagsByRow.set(idx, {});
+    flagsByRow.get(idx)![a.column] = { flag: QC_FLAG.RANGE, raw: a.value };
+
+    // NULL the working column (a.column is the camelCase ParsedRow field).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (rows[idx] as any)[a.column] = null;
   }
 
-  for (const [idx, fields] of nullMap) {
-    if (idx < 0 || idx >= rows.length) continue;
-    for (const field of fields) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (rows[idx] as any)[field] = null;
-    }
-  }
+  return flagsByRow;
 }
 
 export async function commitDatFile(
   formData: FormData,
-  nullAnomalies = false
+  // Default to applying QC: out-of-range cells get an "R" flag (raw value
+  // preserved) and are excluded. Callers must opt out explicitly to keep
+  // anomalous values as-is — see the upload UI.
+  nullAnomalies = true
 ): Promise<ActionResult<{ rowCount: number; resolution: ClimateResolution }>> {
   const user = await requirePermission("climate", "editor");
 
@@ -121,14 +136,18 @@ export async function commitDatFile(
       };
     }
 
-    // If user chose to null anomalies, apply before inserting
+    // If user chose to null anomalies, flag + null them before inserting.
+    // flagsByRow maps a row index to its qc_flags map (raw value + reason).
+    let flagsByRow = new Map<number, QcFlagMap>();
     if (nullAnomalies) {
       const anomalies = detectAnomalies(result.rows);
-      applyAnomalyNulling(result.rows, anomalies);
+      flagsByRow = applyAnomalyFlags(result.rows, anomalies);
     }
 
     db.transaction((tx) => {
-      for (const row of result.rows) {
+      for (let i = 0; i < result.rows.length; i++) {
+        const row = result.rows[i];
+        const qcFlags = serializeQcFlags(flagsByRow.get(i) ?? {});
         tx.run(sql`
           INSERT INTO climate_readings (
             timestamp, resolution, record_num,
@@ -139,7 +158,8 @@ export async function commitDatFile(
             solar_avg, solar_max, solar_min,
             wind_dir_avg, wind_dir_max, wind_dir_min,
             wind_speed_avg, wind_speed_max, wind_speed_min,
-            mean_wind_speed, mean_wind_direction, std_wind_dir
+            mean_wind_speed, mean_wind_direction, std_wind_dir,
+            qc_flags
           ) VALUES (
             ${row.timestamp}, ${row.resolution}, ${row.recordNum},
             ${row.airTempAvg}, ${row.airTempMax}, ${row.airTempMin},
@@ -149,7 +169,8 @@ export async function commitDatFile(
             ${row.solarAvg}, ${row.solarMax}, ${row.solarMin},
             ${row.windDirAvg}, ${row.windDirMax}, ${row.windDirMin},
             ${row.windSpeedAvg}, ${row.windSpeedMax}, ${row.windSpeedMin},
-            ${row.meanWindSpeed ?? null}, ${row.meanWindDirection ?? null}, ${row.stdWindDir ?? null}
+            ${row.meanWindSpeed ?? null}, ${row.meanWindDirection ?? null}, ${row.stdWindDir ?? null},
+            ${qcFlags}
           )
           ON CONFLICT(timestamp, resolution) DO UPDATE SET
             record_num = excluded.record_num,
@@ -174,7 +195,8 @@ export async function commitDatFile(
             wind_speed_min = excluded.wind_speed_min,
             mean_wind_speed = excluded.mean_wind_speed,
             mean_wind_direction = excluded.mean_wind_direction,
-            std_wind_dir = excluded.std_wind_dir
+            std_wind_dir = excluded.std_wind_dir,
+            qc_flags = excluded.qc_flags
         `);
       }
 

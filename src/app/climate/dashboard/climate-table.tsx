@@ -287,7 +287,7 @@ export function ClimateTable({ filters, canEdit = false }: ClimateTableProps) {
         headers
           .map((h) => {
             const val = row[h];
-            const str = val == null ? "" : String(val);
+            const str = val == null ? "NA" : String(val);
             return `"${str.replace(/"/g, '""')}"`;
           })
           .join(",")

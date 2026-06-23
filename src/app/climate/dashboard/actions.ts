@@ -6,6 +6,13 @@ import { climateReadings, climateUploads, climateEdits } from "@/db/schema";
 import type { ClimateResolution } from "@/db/schema";
 import type { ActionResult } from "@/lib/types";
 import { sql } from "drizzle-orm";
+import {
+  QC_FLAG,
+  parseQcFlags,
+  serializeQcFlags,
+  exportFlag,
+  EXPORT_COLUMNS,
+} from "../qc";
 
 // Allowed sort columns — constrained union type for SQL injection prevention
 const ALLOWED_SORT_COLUMNS = [
@@ -479,29 +486,8 @@ export async function fetchClimateExportData(
   try {
     const { dateStart, dateEnd, resolution } = filters;
 
-    const rows = db
-      .select({
-        timestamp: climateReadings.timestamp,
-        air_temp_avg_c: climateReadings.airTempAvg,
-        air_temp_max_c: climateReadings.airTempMax,
-        air_temp_min_c: climateReadings.airTempMin,
-        humidity_avg_pct: climateReadings.humidityAvg,
-        humidity_max_pct: climateReadings.humidityMax,
-        humidity_min_pct: climateReadings.humidityMin,
-        pressure_avg: climateReadings.pressureAvg,
-        pressure_max: climateReadings.pressureMax,
-        pressure_min: climateReadings.pressureMin,
-        rain_mm_total: climateReadings.rainMm,
-        solar_avg_wm2: climateReadings.solarAvg,
-        solar_max_wm2: climateReadings.solarMax,
-        solar_min_wm2: climateReadings.solarMin,
-        wind_dir_avg_deg: climateReadings.windDirAvg,
-        wind_dir_max_deg: climateReadings.windDirMax,
-        wind_dir_min_deg: climateReadings.windDirMin,
-        wind_speed_avg_ms: climateReadings.windSpeedAvg,
-        wind_speed_max_ms: climateReadings.windSpeedMax,
-        wind_speed_min_ms: climateReadings.windSpeedMin,
-      })
+    const dbRows = db
+      .select()
       .from(climateReadings)
       .where(
         sql`resolution = ${resolution} AND timestamp >= ${dateStart} AND timestamp <= ${dateEnd}`
@@ -509,7 +495,22 @@ export async function fetchClimateExportData(
       .orderBy(sql`timestamp ASC`)
       .all();
 
-    return { success: true, data: { rows: rows as Record<string, unknown>[], count: rows.length } };
+    // Build publication-ready rows: each measured variable is emitted with its
+    // value followed by a <name>_flag column (G/M/R/Q). Missing values are
+    // rendered as the literal "NA" so there are no ambiguous blank cells.
+    const rows = dbRows.map((r) => {
+      const record = r as Record<string, unknown>;
+      const flags = parseQcFlags(record.qcFlags as string | null);
+      const out: Record<string, unknown> = { timestamp: record.timestamp };
+      for (const { key, field } of EXPORT_COLUMNS) {
+        const value = (record[field] as number | null) ?? null;
+        out[key] = value === null ? "NA" : value;
+        out[`${key}_flag`] = exportFlag(value, flags[field]);
+      }
+      return out;
+    });
+
+    return { success: true, data: { rows, count: rows.length } };
   } catch (e) {
     return {
       success: false,
@@ -563,10 +564,15 @@ export async function nullClimateValue(params: {
     const camelField = column.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
     const oldValue = (row[camelField] as number | null) ?? null;
 
+    // Merge a "Q" (manual-review) flag into qc_flags, preserving the raw value.
+    const flags = parseQcFlags(row.qcFlags as string | null);
+    flags[camelField] = { flag: QC_FLAG.MANUAL, raw: oldValue };
+    const qcFlags = serializeQcFlags(flags);
+
     db.transaction((tx) => {
       // Set the value to NULL — column name is validated against allowlist above
       tx.run(
-        sql`UPDATE climate_readings SET ${sql.raw(column)} = NULL WHERE timestamp = ${timestamp} AND resolution = ${resolution}`
+        sql`UPDATE climate_readings SET ${sql.raw(column)} = NULL, qc_flags = ${qcFlags} WHERE timestamp = ${timestamp} AND resolution = ${resolution}`
       );
 
       // Record the edit in the audit trail

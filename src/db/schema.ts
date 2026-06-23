@@ -877,6 +877,12 @@ export const climateReadings = sqliteTable(
     meanWindSpeed: real("mean_wind_speed"),
     meanWindDirection: real("mean_wind_direction"),
     stdWindDir: real("std_wind_dir"),
+    // Per-cell QC provenance. Sparse JSON map of field → { flag, raw }, e.g.
+    // {"air_temp_avg":{"flag":"R","raw":-8.82}}. Flag codes: R = removed
+    // (out of plausible range), Q = removed by manual review. The working
+    // numeric columns above are set to NULL when a cell is flagged; this
+    // column preserves the original value and the reason it was removed.
+    qcFlags: text("qc_flags"),
   },
   (table) => [
     uniqueIndex("idx_climate_readings_ts_res").on(

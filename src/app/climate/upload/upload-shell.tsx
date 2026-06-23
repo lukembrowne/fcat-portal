@@ -88,7 +88,7 @@ function ClimateUploadCard({
     }
 
     const anomalyNote = nullAnomalies && preview?.anomalies.length
-      ? ` (${preview.anomalies.length} valores anómalos convertidos a NULL)`
+      ? ` (${preview.anomalies.length} valores anómalos marcados con bandera QC "R" y excluidos; el valor original se conserva)`
       : "";
     setStatus("success");
     setMessage(
@@ -167,21 +167,27 @@ function ClimateUploadCard({
               <span className="ml-1">Vista Previa</span>
             </Button>
           ) : preview && preview.anomalies.length > 0 ? (
-            <div className="flex gap-1">
+            <div className="flex items-center gap-1">
               <Button onClick={() => handleCommit(true)} size="sm" variant="default">
                 <Upload className="h-4 w-4" />
-                <span className="ml-1">Convertir a NULL y subir</span>
-              </Button>
-              <Button onClick={() => handleCommit(false)} size="sm" variant="outline">
-                Mantener valores
+                <span className="ml-1">Marcar con bandera QC y subir</span>
               </Button>
               <Button onClick={handleReset} size="sm" variant="ghost">
                 Cancelar
               </Button>
+              {/* De-emphasized opt-out: import anomalies as-is (rarely needed). */}
+              <Button
+                onClick={() => handleCommit(false)}
+                size="sm"
+                variant="ghost"
+                className="text-xs text-muted-foreground"
+              >
+                Mantener valores sin marcar
+              </Button>
             </div>
           ) : (
             <div className="flex gap-1">
-              <Button onClick={() => handleCommit(false)} size="sm">
+              <Button onClick={() => handleCommit(true)} size="sm">
                 <Upload className="h-4 w-4" />
                 <span className="ml-1">Subir</span>
               </Button>
@@ -255,7 +261,7 @@ function ClimateUploadCard({
                   </div>
                 )}
                 <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">
-                  Puedes &quot;Convertir a NULL&quot; para anular estos valores, o &quot;Mantener valores&quot; para importarlos tal cual.
+                  Por defecto se recomienda &quot;Marcar con bandera QC&quot;: a estos valores se les asigna la bandera &quot;R&quot; y se excluyen, pero el valor original se conserva para trazabilidad. Solo usa &quot;Mantener valores sin marcar&quot; si estás seguro de que son correctos.
                 </p>
               </div>
             )}

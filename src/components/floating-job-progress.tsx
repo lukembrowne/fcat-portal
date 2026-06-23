@@ -25,7 +25,8 @@ interface SSEData {
 
 export function FloatingJobProgress() {
   const {
-    allJobs,
+    liveJobs,
+    scheduledJobs,
     processingJob,
     pendingJobs,
     totalQueueSize,
@@ -47,7 +48,7 @@ export function FloatingJobProgress() {
   const sseErrorCountRef = useRef(0);
   const [sseRetryTrigger, setSseRetryTrigger] = useState(0);
 
-  const activeJob = processingJob ?? allJobs[0] ?? null;
+  const activeJob = processingJob ?? liveJobs[0] ?? null;
 
   // Reset UI state when a new job is detected
   useEffect(() => {
@@ -153,9 +154,103 @@ export function FloatingJobProgress() {
     return () => clearInterval(id);
   }, [startedAtStr, isTerminalStatus]);
 
-  // Nothing to show
-  const hasJob = activeJob || (sseData && !dismissed);
-  if (!hasJob || dismissed) return null;
+  // Dismiss hides the widget entirely (reappears on reload / when a job starts).
+  if (dismissed) return null;
+
+  // Nothing is running or queued to run right now. If nightly-batch rows are
+  // parked for tonight, show them as "scheduled" instead of a fake active queue;
+  // otherwise there's nothing to show.
+  const hasLiveJob = !!(activeJob || sseData);
+  if (!hasLiveJob) {
+    if (scheduledJobs.length === 0) return null;
+    const count = scheduledJobs.length;
+    if (minimized) {
+      return (
+        <div className="fixed bottom-4 right-4 z-50">
+          <button
+            onClick={() => setMinimized(false)}
+            className="flex items-center gap-2 rounded-full px-4 py-2 shadow-lg border border-primary/30 text-sm font-medium bg-background hover:bg-accent transition-colors"
+          >
+            <Clock className="h-3.5 w-3.5 text-muted-foreground" />
+            <span>{count} programados para esta noche</span>
+            <ChevronUp className="h-3 w-3" />
+          </button>
+        </div>
+      );
+    }
+    return (
+      <div className="fixed bottom-4 right-4 z-50 w-80 rounded-lg border bg-background shadow-xl">
+        <div className="flex items-center justify-between px-3 py-2 border-b">
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium truncate">Lote nocturno</p>
+            <p className="text-xs text-muted-foreground">
+              {count} {count === 1 ? "deployment programado" : "deployments programados"} para esta noche
+            </p>
+          </div>
+          <div className="flex items-center gap-1 ml-2 shrink-0">
+            <button
+              onClick={() => setMinimized(true)}
+              className="p-1 rounded hover:bg-accent transition-colors"
+              title="Minimizar"
+            >
+              <Minus className="h-3.5 w-3.5 text-muted-foreground" />
+            </button>
+            <button
+              onClick={() => setDismissed(true)}
+              className="p-1 rounded hover:bg-accent transition-colors"
+              title="Cerrar"
+            >
+              <X className="h-3.5 w-3.5 text-muted-foreground" />
+            </button>
+          </div>
+        </div>
+        <div className="px-3 py-3 space-y-2.5">
+          <p className="flex items-center gap-1.5 text-sm font-medium leading-tight text-foreground">
+            <Clock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            Próxima ejecución: 22:00
+          </p>
+          <p className="text-xs text-muted-foreground leading-snug">
+            El procesamiento se reanuda automáticamente en la ventana nocturna
+            (22:00–06:00) y continúa donde quedó.
+          </p>
+          <div>
+            <div className="flex items-center justify-between gap-2">
+              <button
+                onClick={() => setShowQueue(!showQueue)}
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+              >
+                {showQueue ? (
+                  <ChevronUp className="h-3 w-3" />
+                ) : (
+                  <ChevronDown className="h-3 w-3" />
+                )}
+                {count} en espera
+              </button>
+              <Link
+                href="/admin/jobs"
+                className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+              >
+                Ver todos
+              </Link>
+            </div>
+            {showQueue && (
+              <div className="mt-1 space-y-1 max-h-48 overflow-y-auto">
+                {scheduledJobs.map((job) => (
+                  <div
+                    key={job.jobId}
+                    className="text-xs text-muted-foreground flex items-center gap-1.5 pl-4"
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40" />
+                    {job.displayName}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const jobId = sseData?.jobId || activeJob?.jobId;
   const displayName = activeJob?.displayName || "Trabajo";

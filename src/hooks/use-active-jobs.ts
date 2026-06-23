@@ -1,6 +1,10 @@
 "use client";
 
 import { useEffect, useState, useRef, useCallback } from "react";
+import {
+  BATCH_CREATED_BY,
+  isWithinEcuadorNightWindow,
+} from "@/lib/audio-batch-eligibility";
 
 export interface ActiveJob {
   jobId: number;
@@ -15,6 +19,7 @@ export interface ActiveJob {
   processedImages: number;
   statusMessage: string | null;
   startedAt: string | null;
+  createdBy: string | null;
   downloadedImages: number;
   downloadTotal: number;
   cachedImages: number;
@@ -33,10 +38,27 @@ export function useActiveJobs() {
   const lastJobIdRef = useRef<number | null>(null);
   const [newJobDetected, setNewJobDetected] = useState(0);
 
-  // Derived state
-  const processingJob = allJobs.find((j) => j.status === "processing") ?? null;
-  const pendingJobs = allJobs.filter((j) => j.status === "pending");
-  const totalQueueSize = allJobs.length;
+  // Window-aware split. Outside the 10pm–6am Ecuador window, the queue picker
+  // refuses to *start* nightly-batch rows (createdBy='cron@batch') — they're
+  // parked until tonight's 10pm cron resumes them (see job-queue.ts). Treating
+  // them as an active queue produces the misleading "Procesando 0 de N" all day,
+  // so we pull them out into `scheduledJobs` and let the widget label them as
+  // scheduled instead. Recomputed each poll (3s), so the boundary self-corrects.
+  const inNightWindow = isWithinEcuadorNightWindow(new Date());
+  const isParkedBatch = (j: ActiveJob) =>
+    j.status === "pending" && j.createdBy === BATCH_CREATED_BY;
+
+  const scheduledJobs = inNightWindow
+    ? []
+    : allJobs.filter(isParkedBatch);
+  const liveJobs = inNightWindow
+    ? allJobs
+    : allJobs.filter((j) => !isParkedBatch(j));
+
+  // Derived state (over live jobs only — parked batch rows are excluded above)
+  const processingJob = liveJobs.find((j) => j.status === "processing") ?? null;
+  const pendingJobs = liveJobs.filter((j) => j.status === "pending");
+  const totalQueueSize = liveJobs.length;
   const currentQueuePosition =
     processingJob && totalQueueSize > 1
       ? totalQueueSize - pendingJobs.length
@@ -128,6 +150,9 @@ export function useActiveJobs() {
 
   return {
     allJobs,
+    liveJobs,
+    scheduledJobs,
+    inNightWindow,
     processingJob,
     pendingJobs,
     totalQueueSize,

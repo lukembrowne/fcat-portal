@@ -55,6 +55,9 @@ export function BulkDeleteBlanksDialog({
     failed: number;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // When instalación/recogida images aren't designated, deletion is still allowed
+  // but the user must explicitly acknowledge it on the confirm step.
+  const [ackMissingTags, setAckMissingTags] = useState(false);
 
   // Fetch setup/retrieval tags and all counts once on mount
   useEffect(() => {
@@ -95,7 +98,16 @@ export function BulkDeleteBlanksDialog({
   const key = unionKey(confirmedBlankChecked, noDetectionsChecked, unverifiedDetectionsChecked);
   const totalCount = key && counts ? (counts.unionSizes[key] ?? 0) : 0;
   const noneSelected = !confirmedBlankChecked && !noDetectionsChecked && !unverifiedDetectionsChecked;
+  const tagsLoaded = setupTags !== null;
   const tagsReady = setupTags?.hasDeployment && setupTags?.hasRetrieval;
+  const missingTagsLabel =
+    setupTags && !tagsReady
+      ? !setupTags.hasDeployment && !setupTags.hasRetrieval
+        ? "instalación y recogida"
+        : !setupTags.hasDeployment
+          ? "instalación"
+          : "recogida"
+      : null;
 
   return (
     <Dialog
@@ -156,6 +168,30 @@ export function BulkDeleteBlanksDialog({
               </span>
             </div>
 
+            {tagsLoaded && !tagsReady && (
+              <div className="rounded-md border border-amber-300 bg-amber-50 p-3 space-y-2 text-sm text-amber-800">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="size-4 mt-0.5 shrink-0" />
+                  <p className="font-medium">
+                    No se han designado las imágenes de instalación/recogida (falta:{" "}
+                    {missingTagsLabel}). Las imágenes de instalación o recogida podrían
+                    eliminarse.
+                  </p>
+                </div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={ackMissingTags}
+                    onChange={(e) => setAckMissingTags(e.target.checked)}
+                    className="accent-primary"
+                  />
+                  <span className="text-xs">
+                    Entiendo y quiero eliminar de todos modos.
+                  </span>
+                </label>
+              </div>
+            )}
+
             {error && (
               <p className="text-sm text-destructive">{error}</p>
             )}
@@ -166,13 +202,10 @@ export function BulkDeleteBlanksDialog({
               <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
                 <AlertTriangle className="size-4 mt-0.5 shrink-0" />
                 <div>
-                  <p className="font-medium">Debe designar las imágenes de instalación y recogida antes de eliminar.</p>
+                  <p className="font-medium">No ha designado las imágenes de instalación y recogida.</p>
                   <p className="text-xs mt-1">
-                    {!setupTags.hasDeployment && !setupTags.hasRetrieval
-                      ? "Falta: instalación y recogida"
-                      : !setupTags.hasDeployment
-                        ? "Falta: instalación"
-                        : "Falta: recogida"}
+                    Falta: {missingTagsLabel}. Podrá continuar, pero se le pedirá una
+                    confirmación adicional.
                   </p>
                 </div>
               </div>
@@ -282,7 +315,7 @@ export function BulkDeleteBlanksDialog({
               </Button>
               <Button
                 onClick={() => setStep("confirm")}
-                disabled={isPending || noneSelected || totalCount === 0 || !tagsReady}
+                disabled={isPending || noneSelected || totalCount === 0}
               >
                 Siguiente
               </Button>
@@ -292,7 +325,7 @@ export function BulkDeleteBlanksDialog({
             <>
               <Button
                 variant="outline"
-                onClick={() => { setStep("select"); setError(null); }}
+                onClick={() => { setStep("select"); setError(null); setAckMissingTags(false); }}
                 disabled={isPending}
               >
                 Volver
@@ -300,7 +333,7 @@ export function BulkDeleteBlanksDialog({
               <Button
                 variant="destructive"
                 onClick={handleDelete}
-                disabled={isPending}
+                disabled={isPending || !tagsLoaded || (!tagsReady && !ackMissingTags)}
               >
                 {isPending
                   ? `Eliminando ${totalCount} imágenes...`

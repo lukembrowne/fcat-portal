@@ -1,5 +1,42 @@
 import { describe, it, expect } from "vitest";
-import { parseTOA5File, parseCSVLine } from "@/app/climate/upload/parser";
+import {
+  parseTOA5File,
+  parseCSVLine,
+  detectAnomalies,
+} from "@/app/climate/upload/parser";
+import type { ParsedRow } from "@/app/climate/upload/parser";
+
+/** Build a ParsedRow with all fields null, overriding the given ones. */
+function makeRow(overrides: Partial<ParsedRow>): ParsedRow {
+  return {
+    timestamp: "2025-03-01 11:00:00",
+    resolution: "hourly",
+    recordNum: 1,
+    airTempAvg: null,
+    airTempMax: null,
+    airTempMin: null,
+    humidityAvg: null,
+    humidityMax: null,
+    humidityMin: null,
+    pressureAvg: null,
+    pressureMax: null,
+    pressureMin: null,
+    rainMm: null,
+    solarAvg: null,
+    solarMax: null,
+    solarMin: null,
+    windDirAvg: null,
+    windDirMax: null,
+    windDirMin: null,
+    windSpeedAvg: null,
+    windSpeedMax: null,
+    windSpeedMin: null,
+    meanWindSpeed: null,
+    meanWindDirection: null,
+    stdWindDir: null,
+    ...overrides,
+  };
+}
 
 // --- Sample data matching real Campbell Scientific TOA5 format ---
 
@@ -227,5 +264,58 @@ describe("parseTOA5File", () => {
     const result = parseTOA5File("just some random text without headers");
     expect(result.rows).toHaveLength(0);
     expect(result.errors.length).toBeGreaterThan(0);
+  });
+});
+
+describe("detectAnomalies (site-tuned ranges)", () => {
+  it("flags a spurious cold temperature the old -10 floor let through", () => {
+    const anomalies = detectAnomalies([makeRow({ airTempAvg: -8.82 })]);
+    expect(anomalies).toHaveLength(1);
+    expect(anomalies[0].column).toBe("airTempAvg");
+    expect(anomalies[0].value).toBe(-8.82);
+    expect(anomalies[0].reason).toContain("[5, 45]");
+  });
+
+  it("accepts plausible tropical temperatures (5–45 °C)", () => {
+    const anomalies = detectAnomalies([
+      makeRow({ airTempAvg: 5, airTempMax: 45, airTempMin: 12.3 }),
+    ]);
+    expect(anomalies).toHaveLength(0);
+  });
+
+  it("flags station pressure outside 900–1000 hPa", () => {
+    const low = detectAnomalies([makeRow({ pressureAvg: 850 })]);
+    const ok = detectAnomalies([makeRow({ pressureAvg: 949.5 })]);
+    expect(low).toHaveLength(1);
+    expect(low[0].column).toBe("pressureAvg");
+    expect(ok).toHaveLength(0);
+  });
+
+  it("flags wind direction outside 0–360° (previously unchecked)", () => {
+    const bad = detectAnomalies([makeRow({ windDirAvg: 400 })]);
+    const ok = detectAnomalies([makeRow({ windDirAvg: 271.6 })]);
+    expect(bad).toHaveLength(1);
+    expect(bad[0].column).toBe("windDirAvg");
+    expect(ok).toHaveLength(0);
+  });
+
+  it("checks the vector-mean wind fields", () => {
+    const bad = detectAnomalies([
+      makeRow({ meanWindDirection: -5, meanWindSpeed: 99 }),
+    ]);
+    const cols = bad.map((a) => a.column).sort();
+    expect(cols).toEqual(["meanWindDirection", "meanWindSpeed"]);
+  });
+
+  it("keeps the solar ceiling permissive (no aggressive cap)", () => {
+    // Cloud-edge enhancement near the solar constant must NOT be flagged.
+    const ok = detectAnomalies([makeRow({ solarMax: 1959 })]);
+    const impossible = detectAnomalies([makeRow({ solarMax: 5000 })]);
+    expect(ok).toHaveLength(0);
+    expect(impossible).toHaveLength(1);
+  });
+
+  it("ignores null values", () => {
+    expect(detectAnomalies([makeRow({})])).toHaveLength(0);
   });
 });

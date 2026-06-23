@@ -18,6 +18,8 @@ import {
   type ExportPreview,
   type ExportDispatchResult,
 } from "./actions";
+// Type-only import (erased at build → no node:crypto in the client bundle).
+import type { PreviewDeltaRow } from "@/lib/training-export-helpers";
 
 const DEFAULT_MIN_EXAMPLES = 50;
 const DEFAULT_CONFIDENCE_FLOOR = 0.1;
@@ -250,17 +252,57 @@ export function ExportForm() {
   );
 }
 
+/** Inline +N / −N delta vs. the last export. Suppressed for a zero/absent
+ * delta. Sign is explicit (so it reads without color too); the magnitude is
+ * es-EC formatted. Hover shows the previous value. */
+function DeltaBadge({
+  delta,
+  previous,
+}: {
+  delta: number | null | undefined;
+  previous: number | null | undefined;
+}) {
+  if (delta == null || delta === 0) return null;
+  // U+2212 minus for a typographically consistent negative sign.
+  const sign = delta > 0 ? "+" : "−";
+  const text = `${sign}${Math.abs(delta).toLocaleString("es-EC")}`;
+  const color = delta > 0 ? "text-emerald-600" : "text-red-600";
+  const badge = <span className={`ml-1 text-xs font-medium ${color}`}>{text}</span>;
+  if (previous == null) return badge;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="cursor-help">{badge}</span>
+      </TooltipTrigger>
+      <TooltipContent side="top">
+        Antes: {previous.toLocaleString("es-EC")}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 function SplitCell({
   count,
   deployments,
   names,
+  delta,
+  previous,
 }: {
   count: number;
   deployments: number;
   names: string[];
+  delta?: number | null;
+  previous?: number | null;
 }) {
+  const deltaBadge = <DeltaBadge delta={delta} previous={previous} />;
+
   if (count === 0) {
-    return <span className="text-muted-foreground">0</span>;
+    return (
+      <span>
+        <span className="text-muted-foreground">0</span>
+        {deltaBadge}
+      </span>
+    );
   }
   const inner = (
     <span className="cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-2">
@@ -268,20 +310,76 @@ function SplitCell({
       <span className="text-xs text-muted-foreground">({deployments})</span>
     </span>
   );
-  if (deployments === 0 || names.length === 0) return inner;
+  const countEl =
+    deployments === 0 || names.length === 0 ? (
+      inner
+    ) : (
+      <Tooltip>
+        <TooltipTrigger asChild>{inner}</TooltipTrigger>
+        <TooltipContent side="left" className="max-w-xs">
+          <div className="font-medium mb-1">
+            {deployments}{" "}
+            {deployments === 1 ? "instalación" : "instalaciones"}
+          </div>
+          <div className="text-left leading-snug">{names.join(", ")}</div>
+        </TooltipContent>
+      </Tooltip>
+    );
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>{inner}</TooltipTrigger>
-      <TooltipContent side="left" className="max-w-xs">
-        <div className="font-medium mb-1">
-          {deployments}{" "}
-          {deployments === 1 ? "instalación" : "instalaciones"}
-        </div>
-        <div className="text-left leading-snug">
-          {names.join(", ")}
-        </div>
-      </TooltipContent>
-    </Tooltip>
+    <span>
+      {countEl}
+      {deltaBadge}
+    </span>
+  );
+}
+
+/** One per-species row of the preview table: counts + inline deltas vs. the
+ * last export. `new` classes get a badge; `removed` classes render muted as a
+ * ghost row (zero current, negative deltas) so removals stay visible. */
+function SpeciesDeltaRow({ row }: { row: PreviewDeltaRow }) {
+  const removed = row.status === "removed";
+  return (
+    <tr className={`border-t ${removed ? "text-muted-foreground/70" : ""}`}>
+      <td className="py-1 pr-3 italic font-mono text-xs">
+        {row.label}
+        {row.status === "new" && (
+          <span className="ml-1 not-italic font-sans rounded bg-emerald-100 px-1 text-[10px] font-medium text-emerald-700">
+            nuevo
+          </span>
+        )}
+      </td>
+      <td className="py-1 px-2 text-right tabular-nums">
+        <SplitCell
+          count={row.train}
+          deployments={row.trainDeployments}
+          names={row.trainDeploymentNames}
+          delta={row.delta?.train}
+          previous={row.baseline?.train}
+        />
+      </td>
+      <td className="py-1 px-2 text-right tabular-nums">
+        <SplitCell
+          count={row.val}
+          deployments={row.valDeployments}
+          names={row.valDeploymentNames}
+          delta={row.delta?.val}
+          previous={row.baseline?.val}
+        />
+      </td>
+      <td className="py-1 px-2 text-right tabular-nums">
+        <SplitCell
+          count={row.test}
+          deployments={row.testDeployments}
+          names={row.testDeploymentNames}
+          delta={row.delta?.test}
+          previous={row.baseline?.test}
+        />
+      </td>
+      <td className="py-1 pl-2 text-right tabular-nums font-semibold">
+        {row.total.toLocaleString("es-EC")}
+        <DeltaBadge delta={row.delta?.total} previous={row.baseline?.total} />
+      </td>
+    </tr>
   );
 }
 
@@ -314,6 +412,19 @@ function PreviewCard({
 
   const droppedEntries = Object.entries(preview.droppedSpecies).sort(
     (a, b) => b[1] - a[1],
+  );
+
+  // Current totals per split (ghost rows contribute 0, so this is the live
+  // candidate total) — used for the footer row alongside the footer delta.
+  const totals = preview.deltaRows.reduce(
+    (acc, row) => {
+      acc.train += row.train;
+      acc.val += row.val;
+      acc.test += row.test;
+      acc.total += row.total;
+      return acc;
+    },
+    { train: 0, val: 0, test: 0, total: 0 },
   );
 
   return (
@@ -372,6 +483,19 @@ function PreviewCard({
             Entre paréntesis: número de instalaciones distintas (hover para ver
             nombres).
           </p>
+          {preview.baseline ? (
+            <p className="text-xs text-muted-foreground mb-1">
+              Δ vs. último exporte {preview.baseline.version} ·{" "}
+              {new Date(preview.baseline.createdAt).toLocaleDateString("es-EC")}{" "}
+              · umbral {preview.baseline.minExamplesThreshold} ·{" "}
+              <span className="text-emerald-600">+más</span> /{" "}
+              <span className="text-red-600">−menos</span>
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground mb-1">
+              Sin exporte previo para comparar.
+            </p>
+          )}
           <table className="w-full text-sm">
             <thead className="text-left text-xs text-muted-foreground">
               <tr>
@@ -383,38 +507,47 @@ function PreviewCard({
               </tr>
             </thead>
             <tbody>
-              {preview.perSpecies.map((row) => (
-                <tr key={row.label} className="border-t">
-                  <td className="py-1 pr-3 italic font-mono text-xs">
-                    {row.label}
-                  </td>
-                  <td className="py-1 px-2 text-right tabular-nums">
-                    <SplitCell
-                      count={row.train}
-                      deployments={row.trainDeployments}
-                      names={row.trainDeploymentNames}
-                    />
-                  </td>
-                  <td className="py-1 px-2 text-right tabular-nums">
-                    <SplitCell
-                      count={row.val}
-                      deployments={row.valDeployments}
-                      names={row.valDeploymentNames}
-                    />
-                  </td>
-                  <td className="py-1 px-2 text-right tabular-nums">
-                    <SplitCell
-                      count={row.test}
-                      deployments={row.testDeployments}
-                      names={row.testDeploymentNames}
-                    />
-                  </td>
-                  <td className="py-1 pl-2 text-right tabular-nums font-semibold">
-                    {row.total.toLocaleString("es-EC")}
-                  </td>
-                </tr>
+              {preview.deltaRows.map((row) => (
+                <SpeciesDeltaRow key={row.folderName} row={row} />
               ))}
             </tbody>
+            {preview.deltaFooter && (
+              <tfoot>
+                <tr className="border-t-2 font-semibold">
+                  <td className="py-1 pr-3 text-xs text-muted-foreground">
+                    Total
+                  </td>
+                  <td className="py-1 px-2 text-right tabular-nums">
+                    {totals.train.toLocaleString("es-EC")}
+                    <DeltaBadge
+                      delta={preview.deltaFooter.train}
+                      previous={totals.train - preview.deltaFooter.train}
+                    />
+                  </td>
+                  <td className="py-1 px-2 text-right tabular-nums">
+                    {totals.val.toLocaleString("es-EC")}
+                    <DeltaBadge
+                      delta={preview.deltaFooter.val}
+                      previous={totals.val - preview.deltaFooter.val}
+                    />
+                  </td>
+                  <td className="py-1 px-2 text-right tabular-nums">
+                    {totals.test.toLocaleString("es-EC")}
+                    <DeltaBadge
+                      delta={preview.deltaFooter.test}
+                      previous={totals.test - preview.deltaFooter.test}
+                    />
+                  </td>
+                  <td className="py-1 pl-2 text-right tabular-nums">
+                    {totals.total.toLocaleString("es-EC")}
+                    <DeltaBadge
+                      delta={preview.deltaFooter.total}
+                      previous={totals.total - preview.deltaFooter.total}
+                    />
+                  </td>
+                </tr>
+              </tfoot>
+            )}
           </table>
         </div>
         </TooltipProvider>

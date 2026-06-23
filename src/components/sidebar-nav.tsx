@@ -123,6 +123,7 @@ export function SidebarNav({ user }: SidebarNavProps) {
   }
 
   const hasResearcherApps = hasProjectAccess(user, "researcher-applications");
+  const hasGrants = hasProjectAccess(user, "grants");
 
   const sections: NavSection[] = [
     { title: "Proyectos", items: projectItems },
@@ -209,6 +210,14 @@ export function SidebarNav({ user }: SidebarNavProps) {
       label: "Aplicaciones de Investigadores",
       href: "/research-applications",
       icon: "file-text",
+    });
+  }
+
+  if (hasGrants) {
+    adminItems.push({
+      label: "Grant Tracking",
+      href: "/grants",
+      icon: "dollar-sign",
     });
   }
 

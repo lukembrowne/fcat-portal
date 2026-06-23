@@ -61,6 +61,7 @@ import {
   buildCounts,
   buildManifest,
   buildCropsCsv,
+  buildPreviewDeltas,
   stratifyDeploymentSplits,
   selectIncludedClasses,
   findUncoveredLabels,
@@ -71,6 +72,9 @@ import {
   type QualityParams,
   type Split,
   type ForcedReassignment,
+  type ManifestCounts,
+  type PreviewDeltaRow,
+  type SplitTotals,
 } from "@/lib/training-export-helpers";
 
 const execFileAsync = promisify(execFile);
@@ -162,6 +166,19 @@ export interface ForcedReassignmentRow {
   to: Split;
 }
 
+/**
+ * The most recent completed export, used as the comparison baseline for the
+ * preview's per-class/per-split deltas. Sourced from that export's on-disk
+ * `manifest.json` (the DB row does not store per-class counts). Null when no
+ * prior export exists or its manifest could not be read.
+ */
+export interface ExportPreviewBaseline {
+  version: string;
+  /** ISO timestamp of the baseline export (for "vs. v7 · DD/MM/YYYY"). */
+  createdAt: string;
+  minExamplesThreshold: number;
+}
+
 export interface ExportPreview {
   minExamples: number;
   /** Mirrors STRATIFY_MIN_DEPLOYMENTS — surfaced for UI copy so the
@@ -187,6 +204,14 @@ export interface ExportPreview {
   /** Moves performed by the stratifier to guarantee val+test coverage for
    * species with >= STRATIFY_MIN_DEPLOYMENTS. */
   forcedReassignments: ForcedReassignmentRow[];
+  /** Metadata about the export the deltas compare against. Null when there is
+   * none (first export, or unreadable manifest) — the UI then shows no deltas. */
+  baseline: ExportPreviewBaseline | null;
+  /** Per-species rows merged with the baseline (current rows + "removed" ghost
+   * rows). When `baseline` is null these carry current counts with null deltas. */
+  deltaRows: PreviewDeltaRow[];
+  /** Footer totals delta (current − baseline). Null when `baseline` is null. */
+  deltaFooter: SplitTotals | null;
 }
 
 interface CandidateRow {
@@ -536,6 +561,70 @@ async function needsSplitStrategyMigration(): Promise<boolean> {
 }
 
 /**
+ * Load the most recent completed export as a comparison baseline for the
+ * preview deltas. Dataset rows are inserted only on successful finalize, so the
+ * highest `id` is the latest completed export. Per-class/per-split counts are
+ * NOT stored in the DB — they live only in the export's on-disk `manifest.json`
+ * — so read and parse it (same pattern as `needsSplitStrategyMigration`).
+ *
+ * Returns null and never throws when there is no prior export, the
+ * `manifestPath` is missing, the file is unreadable, or the manifest lacks
+ * `counts.perClass` (legacy/partial). The caller then shows no deltas.
+ */
+async function loadBaselineExport(): Promise<{
+  meta: ExportPreviewBaseline;
+  counts: ManifestCounts;
+} | null> {
+  const latest = await db
+    .select({
+      version: cameraTrapTrainingDatasets.version,
+      createdAt: cameraTrapTrainingDatasets.createdAt,
+      minExamplesThreshold: cameraTrapTrainingDatasets.minExamplesThreshold,
+      manifestPath: cameraTrapTrainingDatasets.manifestPath,
+    })
+    .from(cameraTrapTrainingDatasets)
+    .orderBy(sql`${cameraTrapTrainingDatasets.id} desc`)
+    .limit(1);
+
+  if (latest.length === 0 || !latest[0].manifestPath) return null;
+
+  try {
+    const raw = await fs.readFile(latest[0].manifestPath, "utf8");
+    const manifest = JSON.parse(raw) as { counts?: Partial<ManifestCounts> };
+    const counts = manifest.counts;
+    // Shape guard: legacy/partial manifests without per-class counts degrade
+    // to "no baseline" rather than crashing the preview.
+    if (
+      !counts ||
+      typeof counts.perClass !== "object" ||
+      counts.perClass === null
+    ) {
+      return null;
+    }
+    return {
+      meta: {
+        version: latest[0].version,
+        createdAt: latest[0].createdAt.toISOString(),
+        minExamplesThreshold: latest[0].minExamplesThreshold,
+      },
+      counts: {
+        total: counts.total ?? 0,
+        train: counts.train ?? 0,
+        val: counts.val ?? 0,
+        test: counts.test ?? 0,
+        perClass: counts.perClass,
+      },
+    };
+  } catch (err) {
+    log.warn(
+      { err, path: latest[0].manifestPath },
+      "[training-export] baseline manifest unreadable; preview deltas suppressed",
+    );
+    return null;
+  }
+}
+
+/**
  * Read-only preview of what the next export would contain, given a
  * `minExamples` threshold. Used by the training-exports page to show a
  * per-species-per-split sample table before the admin commits.
@@ -652,6 +741,14 @@ export async function getExportPreview(
         collected.labelDeployments.get(label)?.size ?? 0;
     }
 
+    // Compare against the most recent completed export so the preview can show
+    // per-class/per-split deltas (+N/−N) inline.
+    const baseline = await loadBaselineExport();
+    const { rows: deltaRows, footer: deltaFooter } = buildPreviewDeltas(
+      perSpecies,
+      baseline?.counts ?? null,
+    );
+
     return {
       success: true,
       data: {
@@ -667,6 +764,9 @@ export async function getExportPreview(
         migrationApplied: collected.migrationApplied,
         splitStrategyVersion: SPLIT_STRATEGY_VERSION,
         forcedReassignments,
+        baseline: baseline?.meta ?? null,
+        deltaRows,
+        deltaFooter,
       },
     };
   } catch (err) {

@@ -22,7 +22,7 @@ Internal web application for FCAT staff and collaborators. Domain: `portal.fcat-
 
 ## Conventions
 
-- **Language**: Spanish UI strings (hardcoded, no i18n library). English routes (`/camera-trap/`, `/admin/`).
+- **Language**: Spanish UI strings (hardcoded, no i18n library). English routes (`/camera-trap/`, `/admin/`). **Exception**: the Grant Tracking module (`/grants/**`, `src/lib/grants/**`, grant cron routes + emails) is intentionally in **English** so it can be shared with English-speaking collaborators — do not "fix" it back to Spanish.
 - **Types**: Use `ActionResult<T>` discriminated union for all action return types.
 - **FormData**: No `as string` casts on `FormData.get()` — always type-check properly.
 - **DB singleton**: Module-level variable (not `globalThis` only in dev).

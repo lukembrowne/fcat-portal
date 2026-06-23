@@ -62,6 +62,7 @@ import {
   findActiveCameraTrapJob,
   findActiveCameraTrapJobIds,
   CAMERA_TRAP_ACTIVE_JOB_TYPES,
+  CAMERA_TRAP_ML_JOB_TYPES,
 } from "@/lib/job-locks";
 import { JOB_TYPES } from "@/lib/job-types";
 
@@ -1604,7 +1605,9 @@ export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
 
   const deploymentIds = allDeployments.map((d) => d.id);
 
-  // Batch: latest job per deployment
+  // Batch: latest job per deployment. Filtered to camera-trap ML job types —
+  // camera-trap and audio share this table, so without the filter an audio
+  // job's completion would contaminate the camera-trap "last processed" view.
   const latestJobs = await db
     .select({
       deploymentId: processingJobs.deploymentId,
@@ -1613,12 +1616,18 @@ export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
       cnt: count(),
     })
     .from(processingJobs)
-    .where(inArray(processingJobs.deploymentId, deploymentIds))
+    .where(
+      and(
+        inArray(processingJobs.deploymentId, deploymentIds),
+        inArray(processingJobs.jobType, [...CAMERA_TRAP_ML_JOB_TYPES]),
+      ),
+    )
     .groupBy(processingJobs.deploymentId);
 
   const jobMap = new Map(latestJobs.map((j) => [j.deploymentId, j]));
 
-  // For each deployment that has jobs, get the actual latest job to get its status
+  // For each deployment that has jobs, get the actual latest job to get its
+  // status. ML-only (see above) so audio runs never become "Último Proceso".
   const latestJobStatuses = await db
     .select({
       deploymentId: processingJobs.deploymentId,
@@ -1626,7 +1635,12 @@ export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
       completedAt: processingJobs.completedAt,
     })
     .from(processingJobs)
-    .where(inArray(processingJobs.deploymentId, deploymentIds))
+    .where(
+      and(
+        inArray(processingJobs.deploymentId, deploymentIds),
+        inArray(processingJobs.jobType, [...CAMERA_TRAP_ML_JOB_TYPES]),
+      ),
+    )
     .orderBy(desc(processingJobs.createdAt));
 
   const latestStatusMap = new Map<number, { status: string; completedAt: Date | null }>();
@@ -1640,7 +1654,9 @@ export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
     }
   }
 
-  // Latest completed job ID per deployment (for direct "Ver Resultados" link)
+  // Latest completed job ID per deployment (for direct "Ver Resultados" link).
+  // ML-only: the results page only renders ML detections, and an audio job
+  // leaking here would point the link at a non-existent camera-trap result.
   const completedJobs = await db
     .select({
       id: processingJobs.id,
@@ -1650,6 +1666,7 @@ export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
     .where(
       and(
         inArray(processingJobs.deploymentId, deploymentIds),
+        inArray(processingJobs.jobType, [...CAMERA_TRAP_ML_JOB_TYPES]),
         eq(processingJobs.status, "completed")
       )
     )
@@ -3355,7 +3372,12 @@ export async function getDeployment(id: number) {
   // but the banner should reflect every detection on the deployment.
   // latestCompletedJob is still computed below for the return shape so the
   // "Resultados" button keeps linking to /camera-trap/results/{jobId}.
-  const latestCompletedJob = jobs.find((j) => j.status === "completed");
+  // ML-only: camera-trap and audio share this table, so an audio job must not
+  // become the deployment's "results" job or flip its status to processed.
+  const mlJobTypes = new Set<string>(CAMERA_TRAP_ML_JOB_TYPES);
+  const latestCompletedJob = jobs.find(
+    (j) => j.status === "completed" && mlJobTypes.has(j.jobType),
+  );
 
   const [detResult] = await db
     .select({ cnt: count() })

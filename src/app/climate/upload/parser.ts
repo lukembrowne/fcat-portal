@@ -107,24 +107,41 @@ export function parseCSVLine(line: string): string[] {
   return fields;
 }
 
-// Physically reasonable ranges for a tropical cloud forest weather station
+// Physically plausible ranges, site-tuned for the FCAT central weather station
+// (lowland/foothill tropical Chocó — it never freezes and never reaches desert
+// heat). Values outside these bounds are flagged as out-of-range (QC code "R").
+//
+// Notes on specific limits:
+//  - Temperature 5–45 °C: a tropical lowland site realistically sits ~12–40 °C;
+//    5/45 leaves margin while still catching sensor errors (e.g. a spurious
+//    −8.82 °C, which the old −10 floor let through).
+//  - Solar 0–2000 W/m²: only an absolute-impossibility ceiling. Genuine
+//    cloud-edge enhancement can briefly exceed the solar constant (~1361 W/m²),
+//    so no aggressive ceiling is applied — extremes are left for the user.
+//  - Wind direction 0–360°: previously unchecked; out-of-range bearings are
+//    sensor faults.
 const ANOMALY_RANGES: Record<string, { min: number; max: number; label: string }> = {
-  airTempAvg: { min: -10, max: 50, label: "Temperatura (°C)" },
-  airTempMax: { min: -10, max: 50, label: "Temperatura máx (°C)" },
-  airTempMin: { min: -10, max: 50, label: "Temperatura mín (°C)" },
+  airTempAvg: { min: 5, max: 45, label: "Temperatura (°C)" },
+  airTempMax: { min: 5, max: 45, label: "Temperatura máx (°C)" },
+  airTempMin: { min: 5, max: 45, label: "Temperatura mín (°C)" },
   humidityAvg: { min: 0, max: 100, label: "Humedad (%)" },
   humidityMax: { min: 0, max: 100, label: "Humedad máx (%)" },
   humidityMin: { min: 0, max: 100, label: "Humedad mín (%)" },
-  pressureAvg: { min: 500, max: 1100, label: "Presión (hPa)" },
-  pressureMax: { min: 500, max: 1100, label: "Presión máx (hPa)" },
-  pressureMin: { min: 500, max: 1100, label: "Presión mín (hPa)" },
+  pressureAvg: { min: 900, max: 1000, label: "Presión (hPa)" },
+  pressureMax: { min: 900, max: 1000, label: "Presión máx (hPa)" },
+  pressureMin: { min: 900, max: 1000, label: "Presión mín (hPa)" },
   rainMm: { min: 0, max: 200, label: "Lluvia (mm)" },
   solarAvg: { min: 0, max: 2000, label: "Solar (W/m²)" },
   solarMax: { min: 0, max: 2000, label: "Solar máx (W/m²)" },
   solarMin: { min: 0, max: 2000, label: "Solar mín (W/m²)" },
+  windDirAvg: { min: 0, max: 360, label: "Dirección del viento (°)" },
+  windDirMax: { min: 0, max: 360, label: "Dirección del viento máx (°)" },
+  windDirMin: { min: 0, max: 360, label: "Dirección del viento mín (°)" },
   windSpeedAvg: { min: 0, max: 60, label: "Viento (m/s)" },
   windSpeedMax: { min: 0, max: 60, label: "Viento máx (m/s)" },
   windSpeedMin: { min: 0, max: 60, label: "Viento mín (m/s)" },
+  meanWindSpeed: { min: 0, max: 60, label: "Viento medio vectorial (m/s)" },
+  meanWindDirection: { min: 0, max: 360, label: "Dirección media vectorial (°)" },
 };
 
 export interface Anomaly {

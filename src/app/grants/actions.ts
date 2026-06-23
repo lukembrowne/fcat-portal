@@ -1,0 +1,411 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
+import { db } from "@/db";
+import {
+  grants,
+  funders,
+  systemEvents,
+  grantStatusEnum,
+  type GrantStatus,
+} from "@/db/schema";
+import { requirePermission } from "@/lib/auth";
+import { recordEvent } from "@/lib/system-events";
+import { FORECAST_WEIGHTS } from "@/lib/grants/constants";
+import type { ActionResult } from "@/lib/types";
+
+const PROJECT = "grants";
+
+// ---------------------------------------------------------------------------
+// Reads (return bare data; requirePermission throws via redirect on failure)
+// ---------------------------------------------------------------------------
+
+export interface GrantListItem {
+  id: number;
+  name: string;
+  funderId: number | null;
+  funderName: string | null; // resolved funder record name, or null
+  funderNameRaw: string | null; // typed fallback when unlinked
+  status: GrantStatus;
+  amountRequested: number | null;
+  amountAwarded: number | null;
+  dueDate: Date | null;
+  notifyBeforeDays: number;
+  checkRfpDate: Date | null;
+  website: string | null;
+  folderLink: string | null;
+  budgetLink: string | null;
+  proposalLink: string | null;
+  notes: string | null;
+}
+
+const SORTABLE_COLUMNS = {
+  name: grants.name,
+  funder: funders.name,
+  status: grants.status,
+  amount: grants.amountRequested,
+  awarded: grants.amountAwarded,
+  due: grants.dueDate,
+  notify: grants.notifyBeforeDays,
+  rfp: grants.checkRfpDate,
+} as const;
+
+export type SortColumn = keyof typeof SORTABLE_COLUMNS;
+export type SortDirection = "asc" | "desc";
+
+export async function getGrants(filters?: {
+  status?: string;
+  funderId?: string;
+  search?: string;
+  needsLinking?: string;
+  sortBy?: string;
+  sortDir?: string;
+}): Promise<GrantListItem[]> {
+  await requirePermission(PROJECT, "viewer");
+
+  let query = db
+    .select({
+      id: grants.id,
+      name: grants.name,
+      funderId: grants.funderId,
+      funderName: funders.name,
+      funderNameRaw: grants.funderNameRaw,
+      status: grants.status,
+      amountRequested: grants.amountRequested,
+      amountAwarded: grants.amountAwarded,
+      dueDate: grants.dueDate,
+      notifyBeforeDays: grants.notifyBeforeDays,
+      checkRfpDate: grants.checkRfpDate,
+      website: grants.website,
+      folderLink: grants.folderLink,
+      budgetLink: grants.budgetLink,
+      proposalLink: grants.proposalLink,
+      notes: grants.notes,
+    })
+    .from(grants)
+    .leftJoin(funders, eq(grants.funderId, funders.id))
+    .$dynamic();
+
+  const where = [];
+  if (filters?.status && filters.status !== "all") {
+    where.push(eq(grants.status, filters.status as GrantStatus));
+  }
+  if (filters?.funderId) {
+    const fid = parseInt(filters.funderId, 10);
+    if (!isNaN(fid)) where.push(eq(grants.funderId, fid));
+  }
+  if (filters?.needsLinking === "1") {
+    where.push(isNull(grants.funderId));
+  }
+  if (filters?.search) {
+    const term = `%${filters.search}%`;
+    where.push(
+      sql`(${grants.name} LIKE ${term} OR ${grants.funderNameRaw} LIKE ${term} OR ${funders.name} LIKE ${term})`
+    );
+  }
+  if (where.length > 0) query = query.where(and(...where));
+
+  const sortCol = filters?.sortBy as SortColumn | undefined;
+  const sortDir = filters?.sortDir === "asc" ? "asc" : "desc";
+  const column =
+    sortCol && sortCol in SORTABLE_COLUMNS
+      ? SORTABLE_COLUMNS[sortCol]
+      : grants.dueDate;
+  const orderFn = sortDir === "asc" ? asc : desc;
+
+  // Stable id tiebreaker so pagination/sorting is deterministic.
+  return query.orderBy(orderFn(column), asc(grants.id)).all();
+}
+
+export async function getGrant(id: number) {
+  await requirePermission(PROJECT, "viewer");
+  const row = db
+    .select({
+      grant: grants,
+      funderName: funders.name,
+    })
+    .from(grants)
+    .leftJoin(funders, eq(grants.funderId, funders.id))
+    .where(eq(grants.id, id))
+    .get();
+  return row ?? null;
+}
+
+/** Most recent audit event for a grant — drives the "last updated by" subtext. */
+export async function getGrantActivity(
+  id: number
+): Promise<{ actorEmail: string | null; occurredAt: Date } | null> {
+  await requirePermission(PROJECT, "viewer");
+  const row = db
+    .select({
+      actorEmail: systemEvents.actorEmail,
+      occurredAt: systemEvents.occurredAt,
+    })
+    .from(systemEvents)
+    .where(
+      and(
+        eq(systemEvents.source, "grants"),
+        eq(systemEvents.targetType, "grant"),
+        eq(systemEvents.targetId, String(id))
+      )
+    )
+    .orderBy(desc(systemEvents.occurredAt))
+    .limit(1)
+    .get();
+  return row ?? null;
+}
+
+export interface GrantsSummaryData {
+  pendingCount: number;
+  pendingAmount: number;
+  fundedCount: number;
+  fundedAmount: number;
+  inPrepCount: number;
+  expectedPipeline: number;
+}
+
+/** Dashboard summary numbers (reproduces the n8n digest header). */
+export async function getGrantsSummary(): Promise<GrantsSummaryData> {
+  await requirePermission(PROJECT, "viewer");
+  const rows = db
+    .select({ status: grants.status, amount: grants.amountRequested })
+    .from(grants)
+    .all();
+
+  const out: GrantsSummaryData = {
+    pendingCount: 0,
+    pendingAmount: 0,
+    fundedCount: 0,
+    fundedAmount: 0,
+    inPrepCount: 0,
+    expectedPipeline: 0,
+  };
+  for (const r of rows) {
+    const amt = r.amount ?? 0;
+    out.expectedPipeline += amt * (FORECAST_WEIGHTS[r.status] ?? 0);
+    if (r.status === "pending_decision") {
+      out.pendingCount++;
+      out.pendingAmount += amt;
+    } else if (r.status === "funded") {
+      out.fundedCount++;
+      out.fundedAmount += amt;
+    } else if (r.status === "in_prep") {
+      out.inPrepCount++;
+    }
+  }
+  return out;
+}
+
+/** Lightweight funder list for the grant-form picker (serializable). */
+export async function getFunderOptions(): Promise<
+  { id: number; name: string }[]
+> {
+  await requirePermission(PROJECT, "viewer");
+  return db
+    .select({ id: funders.id, name: funders.name })
+    .from(funders)
+    .orderBy(asc(funders.name))
+    .all();
+}
+
+// ---------------------------------------------------------------------------
+// Mutations (return ActionResult<T>)
+// ---------------------------------------------------------------------------
+
+function parseAmount(v: FormDataEntryValue | null): number | null {
+  if (v == null) return null;
+  const cleaned = String(v).replace(/[^0-9.-]/g, "");
+  if (!cleaned || cleaned === "-" || cleaned === ".") return null;
+  const n = parseFloat(cleaned);
+  return isNaN(n) ? null : n;
+}
+
+function parseDate(v: FormDataEntryValue | null): Date | null {
+  if (v == null || String(v).trim() === "") return null;
+  // Store date-only fields at UTC midnight (matches the importer convention).
+  const d = new Date(`${String(v).trim()}T00:00:00Z`);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function text(v: FormDataEntryValue | null): string | null {
+  if (v == null) return null;
+  const s = String(v).trim();
+  return s === "" ? null : s;
+}
+
+export async function saveGrant(
+  _prev: ActionResult<{ id: number }> | null,
+  formData: FormData
+): Promise<ActionResult<{ id: number }>> {
+  const user = await requirePermission(PROJECT, "editor");
+
+  const idRaw = formData.get("id");
+  const id = idRaw ? parseInt(String(idRaw), 10) : null;
+
+  const name = text(formData.get("name"));
+  if (!name) return { success: false, error: "Grant name is required." };
+
+  const statusRaw = String(formData.get("status") ?? "to_research");
+  if (!grantStatusEnum.includes(statusRaw as GrantStatus)) {
+    return { success: false, error: "Invalid status." };
+  }
+  const status = statusRaw as GrantStatus;
+
+  let notifyBeforeDays = parseInt(String(formData.get("notifyBeforeDays") ?? "14"), 10);
+  if (isNaN(notifyBeforeDays) || notifyBeforeDays < 0) notifyBeforeDays = 14;
+  if (notifyBeforeDays > 365) notifyBeforeDays = 365;
+
+  const funderIdRaw = formData.get("funderId");
+  const funderId =
+    funderIdRaw && String(funderIdRaw) !== ""
+      ? parseInt(String(funderIdRaw), 10)
+      : null;
+  // Keep the typed name only when no funder record is linked.
+  const funderNameRaw = funderId ? null : text(formData.get("funderNameRaw"));
+
+  const values = {
+    funderId: funderId && !isNaN(funderId) ? funderId : null,
+    funderNameRaw,
+    name,
+    website: text(formData.get("website")),
+    status,
+    amountRequested: parseAmount(formData.get("amountRequested")),
+    amountAwarded: parseAmount(formData.get("amountAwarded")),
+    dueDate: parseDate(formData.get("dueDate")),
+    notifyBeforeDays,
+    checkRfpDate: parseDate(formData.get("checkRfpDate")),
+    notes: text(formData.get("notes")),
+    folderLink: text(formData.get("folderLink")),
+    budgetLink: text(formData.get("budgetLink")),
+    proposalLink: text(formData.get("proposalLink")),
+    updatedAt: new Date(),
+  };
+
+  try {
+    let savedId: number;
+    if (id) {
+      await db.update(grants).set(values).where(eq(grants.id, id));
+      savedId = id;
+    } else {
+      const inserted = await db
+        .insert(grants)
+        .values(values)
+        .returning({ id: grants.id });
+      savedId = inserted[0].id;
+    }
+
+    await recordEvent({
+      source: "grants",
+      projectId: PROJECT,
+      eventType: id ? "grant_updated" : "grant_created",
+      severity: "success",
+      actorEmail: user.email,
+      targetType: "grant",
+      targetId: savedId,
+      summary: `${id ? "Grant updated" : "Grant created"} · ${name}`,
+      details: { status, amountRequested: values.amountRequested },
+    });
+
+    revalidatePath("/grants");
+    revalidatePath(`/grants/${savedId}`);
+    return { success: true, data: { id: savedId } };
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : "Failed to save the grant.",
+    };
+  }
+}
+
+export async function updateGrantStatus(
+  id: number,
+  status: GrantStatus
+): Promise<ActionResult> {
+  const user = await requirePermission(PROJECT, "editor");
+  if (!grantStatusEnum.includes(status)) {
+    return { success: false, error: "Invalid status." };
+  }
+  try {
+    await db
+      .update(grants)
+      .set({ status, updatedAt: new Date() })
+      .where(eq(grants.id, id));
+    await recordEvent({
+      source: "grants",
+      projectId: PROJECT,
+      eventType: "grant_status_changed",
+      actorEmail: user.email,
+      targetType: "grant",
+      targetId: id,
+      summary: `Grant status changed → ${status}`,
+    });
+    revalidatePath("/grants");
+    revalidatePath(`/grants/${id}`);
+    return { success: true, data: undefined };
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : "Failed to change the status.",
+    };
+  }
+}
+
+export async function linkGrantFunder(
+  grantId: number,
+  funderId: number
+): Promise<ActionResult> {
+  const user = await requirePermission(PROJECT, "editor");
+  try {
+    await db
+      .update(grants)
+      .set({ funderId, funderNameRaw: null, updatedAt: new Date() })
+      .where(eq(grants.id, grantId));
+    await recordEvent({
+      source: "grants",
+      projectId: PROJECT,
+      eventType: "grant_funder_linked",
+      actorEmail: user.email,
+      targetType: "grant",
+      targetId: grantId,
+      summary: `Grant #${grantId} linked to funder #${funderId}`,
+    });
+    revalidatePath("/grants");
+    revalidatePath(`/grants/${grantId}`);
+    return { success: true, data: undefined };
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : "Failed to link the funder.",
+    };
+  }
+}
+
+export async function deleteGrant(id: number): Promise<ActionResult> {
+  const user = await requirePermission(PROJECT, "editor");
+  try {
+    const existing = db
+      .select({ name: grants.name })
+      .from(grants)
+      .where(eq(grants.id, id))
+      .get();
+    await db.delete(grants).where(eq(grants.id, id));
+    await recordEvent({
+      source: "grants",
+      projectId: PROJECT,
+      eventType: "grant_deleted",
+      severity: "warn",
+      actorEmail: user.email,
+      targetType: "grant",
+      targetId: id,
+      summary: `Grant deleted · ${existing?.name ?? `#${id}`}`,
+    });
+    revalidatePath("/grants");
+    return { success: true, data: undefined };
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : "Failed to delete the grant.",
+    };
+  }
+}

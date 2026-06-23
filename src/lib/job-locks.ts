@@ -62,6 +62,23 @@ export const CAMERA_TRAP_ACTIVE_JOB_TYPES = [
   JOB_TYPES.CACHE_DEPLOYMENT_IMAGES,
 ] as const satisfies readonly JobType[];
 
+/**
+ * Camera-trap ML inference job types — the subset of camera-trap jobs that
+ * actually produce detection results (and a `/camera-trap/results/{jobId}`
+ * page). Use this — NOT the table at large — to derive a deployment's "last
+ * processed" date, latest-completed-results job, and processed status.
+ *
+ * Camera-trap and audio share `biochoco_processing_jobs`, so querying the table
+ * without this filter lets an audio job (birdnet/audio_analysis/indices) that
+ * ran more recently masquerade as the camera-trap "last processed" job.
+ * Compression/cache jobs are camera-trap jobs but produce no results, so they
+ * are intentionally excluded here (they belong in CAMERA_TRAP_ACTIVE_JOB_TYPES).
+ */
+export const CAMERA_TRAP_ML_JOB_TYPES = [
+  JOB_TYPES.ML,
+  JOB_TYPES.ML_INCREMENTAL,
+] as const satisfies readonly JobType[];
+
 export async function findActiveCameraTrapJob(
   deploymentId: number,
 ): Promise<{ id: number; jobType: string } | null> {

@@ -6,6 +6,7 @@ import {
   computeContentHash,
   buildCounts,
   buildCropsCsv,
+  buildPreviewDeltas,
   toCsvField,
   CROPS_CSV_COLUMNS,
   stratifyDeploymentSplits,
@@ -17,6 +18,8 @@ import {
   type CropCsvRow,
   type QualityParams,
   type Split,
+  type ManifestCounts,
+  type PreviewSpeciesCounts,
 } from "@/lib/training-export-helpers";
 
 const DEFAULT_QUALITY: QualityParams = {
@@ -843,5 +846,157 @@ describe("cross-split contamination (written set)", () => {
     for (const [, splits] of splitsByStem) {
       expect(splits.size).toBe(1);
     }
+  });
+});
+
+describe("buildPreviewDeltas", () => {
+  // folderName === scientific name (speciesFolderName is ~identity for canonical
+  // names), so we set folderName explicitly to control the diff key.
+  function species(
+    label: string,
+    train: number,
+    val: number,
+    test: number,
+    folderName = label,
+  ): PreviewSpeciesCounts {
+    return {
+      label,
+      folderName,
+      train,
+      val,
+      test,
+      total: train + val + test,
+      trainDeployments: train > 0 ? 1 : 0,
+      valDeployments: val > 0 ? 1 : 0,
+      testDeployments: test > 0 ? 1 : 0,
+      trainDeploymentNames: train > 0 ? ["A"] : [],
+      valDeploymentNames: val > 0 ? ["B"] : [],
+      testDeploymentNames: test > 0 ? ["C"] : [],
+    };
+  }
+
+  function baselineCounts(
+    perClass: Record<string, { train: number; val: number; test: number }>,
+  ): ManifestCounts {
+    let train = 0;
+    let val = 0;
+    let test = 0;
+    for (const c of Object.values(perClass)) {
+      train += c.train;
+      val += c.val;
+      test += c.test;
+    }
+    return { total: train + val + test, train, val, test, perClass };
+  }
+
+  it("returns null deltas/footer when there is no baseline", () => {
+    const { rows, footer } = buildPreviewDeltas(
+      [species("Puma concolor", 10, 2, 3)],
+      null,
+    );
+    expect(footer).toBeNull();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].delta).toBeNull();
+    expect(rows[0].baseline).toBeNull();
+    expect(rows[0].train).toBe(10);
+  });
+
+  it("computes per-split and total deltas for a changed class", () => {
+    const { rows } = buildPreviewDeltas(
+      [species("Puma concolor", 12, 4, 5)],
+      baselineCounts({ "Puma concolor": { train: 10, val: 2, test: 5 } }),
+    );
+    const row = rows[0];
+    expect(row.status).toBe("changed");
+    expect(row.delta).toEqual({ train: 2, val: 2, test: 0, total: 4 });
+    expect(row.baseline).toEqual({ train: 10, val: 2, test: 5, total: 17 });
+  });
+
+  it("marks a class absent from the baseline as new (delta == full count)", () => {
+    const { rows } = buildPreviewDeltas(
+      [species("Tapirus bairdii", 7, 1, 2)],
+      baselineCounts({ "Puma concolor": { train: 10, val: 2, test: 5 } }),
+    );
+    const tapir = rows.find((r) => r.folderName === "Tapirus bairdii")!;
+    expect(tapir.status).toBe("new");
+    expect(tapir.delta).toEqual({ train: 7, val: 1, test: 2, total: 10 });
+  });
+
+  it("emits a removed ghost row for a baseline class absent now", () => {
+    const { rows } = buildPreviewDeltas(
+      [species("Puma concolor", 10, 2, 5)],
+      baselineCounts({
+        "Puma concolor": { train: 10, val: 2, test: 5 },
+        "Gone species": { train: 4, val: 1, test: 1 },
+      }),
+    );
+    const ghost = rows.find((r) => r.folderName === "Gone species")!;
+    expect(ghost.status).toBe("removed");
+    expect(ghost.total).toBe(0);
+    expect(ghost.delta).toEqual({ train: -4, val: -1, test: -1, total: -6 });
+  });
+
+  it("computes split-mix shifts independently (train +k / val −k)", () => {
+    const { rows } = buildPreviewDeltas(
+      [species("Puma concolor", 15, 0, 5)],
+      baselineCounts({ "Puma concolor": { train: 10, val: 5, test: 5 } }),
+    );
+    expect(rows[0].delta).toEqual({ train: 5, val: -5, test: 0, total: 0 });
+  });
+
+  it("treats a split missing from the baseline as 0, never NaN", () => {
+    const base: ManifestCounts = {
+      total: 10,
+      train: 10,
+      val: 0,
+      test: 0,
+      // perClass entry deliberately only carries train (legacy-ish shape).
+      perClass: { "Puma concolor": { train: 10, val: 0, test: 0 } },
+    };
+    const { rows } = buildPreviewDeltas(
+      [species("Puma concolor", 10, 3, 2)],
+      base,
+    );
+    expect(rows[0].delta).toEqual({ train: 0, val: 3, test: 2, total: 5 });
+    expect(Number.isNaN(rows[0].delta!.val)).toBe(false);
+  });
+
+  it("aggregates two labels that collapse to one folder name", () => {
+    const { rows } = buildPreviewDeltas(
+      [
+        species("Puma concolor", 5, 1, 1, "Puma concolor"),
+        species("Puma concolor (corr)", 3, 0, 1, "Puma concolor"),
+      ],
+      null,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].train).toBe(8);
+    expect(rows[0].val).toBe(1);
+    expect(rows[0].test).toBe(2);
+    expect(rows[0].total).toBe(11);
+  });
+
+  it("footer equals the sum of body row deltas (ghost rows included)", () => {
+    const { rows, footer } = buildPreviewDeltas(
+      [
+        species("Puma concolor", 12, 4, 5),
+        species("Tapirus bairdii", 7, 1, 2), // new
+      ],
+      baselineCounts({
+        "Puma concolor": { train: 10, val: 2, test: 5 },
+        "Gone species": { train: 4, val: 1, test: 1 }, // removed → ghost
+      }),
+    );
+    const sum = rows.reduce(
+      (acc, r) => {
+        acc.train += r.delta!.train;
+        acc.val += r.delta!.val;
+        acc.test += r.delta!.test;
+        acc.total += r.delta!.total;
+        return acc;
+      },
+      { train: 0, val: 0, test: 0, total: 0 },
+    );
+    expect(footer).toEqual(sum);
   });
 });

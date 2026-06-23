@@ -626,3 +626,209 @@ export function buildManifest(input: {
     cropsCsv: "crops.csv",
   };
 }
+
+/** Per-split + total counts, used for both baseline snapshots and deltas. */
+export interface SplitTotals {
+  train: number;
+  val: number;
+  test: number;
+  total: number;
+}
+
+/**
+ * One display row of the preview's per-species delta table: the current
+ * (candidate) counts for a class, plus how they compare to the most recent
+ * completed export. `delta`/`baseline` are null when there is no baseline to
+ * compare against (first export ever, or the baseline manifest was
+ * unreadable). `status` distinguishes a class that is new this time, gone
+ * since last time (a "ghost" row, all-zero current), or merely changed.
+ */
+export interface PreviewDeltaRow {
+  label: string;
+  folderName: string;
+  train: number;
+  val: number;
+  test: number;
+  total: number;
+  trainDeployments: number;
+  valDeployments: number;
+  testDeployments: number;
+  trainDeploymentNames: string[];
+  valDeploymentNames: string[];
+  testDeploymentNames: string[];
+  baseline: SplitTotals | null;
+  delta: SplitTotals | null;
+  status: "changed" | "new" | "removed";
+}
+
+export interface PreviewDeltaResult {
+  rows: PreviewDeltaRow[];
+  /** Footer deltas (current totals − baseline totals). Null when there is no
+   * baseline. Equals the sum of the body row deltas because removed classes
+   * are included as ghost rows. */
+  footer: SplitTotals | null;
+}
+
+/** Minimal current-preview row shape consumed by {@link buildPreviewDeltas}.
+ * `ExportPreviewSpeciesRow` is structurally compatible. */
+export interface PreviewSpeciesCounts {
+  label: string;
+  folderName: string;
+  train: number;
+  val: number;
+  test: number;
+  total: number;
+  trainDeployments: number;
+  valDeployments: number;
+  testDeployments: number;
+  trainDeploymentNames: string[];
+  valDeploymentNames: string[];
+  testDeploymentNames: string[];
+}
+
+function mergeDeploymentNames(a: string[], b: string[]): string[] {
+  return Array.from(new Set([...a, ...b])).sort((x, y) =>
+    x.localeCompare(y, "es"),
+  );
+}
+
+/**
+ * Merge the current preview's per-species rows with a baseline export's
+ * per-class-per-split counts (from a manifest's `counts.perClass`), keyed by
+ * the on-disk folder name. Pure — no DB/FS.
+ *
+ * - Current rows are aggregated by folder name first, so two labels that
+ *   normalize to the same folder never double-count or mis-key.
+ * - A class present now but absent in the baseline is `status:"new"` (its
+ *   delta equals its full current count).
+ * - A class present in the baseline but absent now becomes a `status:"removed"`
+ *   ghost row (all-zero current, negative deltas) so removals are visible and
+ *   the footer reconciles with the body.
+ * - Per-split deltas are computed independently; a split missing from the
+ *   baseline counts as 0 (never NaN).
+ * - When `baseline` is null, rows carry the current counts with null
+ *   deltas/baseline and `footer` is null (caller suppresses the delta column).
+ */
+export function buildPreviewDeltas(
+  perSpecies: PreviewSpeciesCounts[],
+  baseline: ManifestCounts | null,
+): PreviewDeltaResult {
+  // 1. Aggregate current rows by folder name (defensive against collisions).
+  const byFolder = new Map<string, PreviewSpeciesCounts>();
+  for (const row of perSpecies) {
+    const existing = byFolder.get(row.folderName);
+    if (!existing) {
+      byFolder.set(row.folderName, { ...row });
+      continue;
+    }
+    existing.train += row.train;
+    existing.val += row.val;
+    existing.test += row.test;
+    existing.total += row.total;
+    existing.trainDeploymentNames = mergeDeploymentNames(
+      existing.trainDeploymentNames,
+      row.trainDeploymentNames,
+    );
+    existing.valDeploymentNames = mergeDeploymentNames(
+      existing.valDeploymentNames,
+      row.valDeploymentNames,
+    );
+    existing.testDeploymentNames = mergeDeploymentNames(
+      existing.testDeploymentNames,
+      row.testDeploymentNames,
+    );
+    existing.trainDeployments = existing.trainDeploymentNames.length;
+    existing.valDeployments = existing.valDeploymentNames.length;
+    existing.testDeployments = existing.testDeploymentNames.length;
+  }
+
+  const rows: PreviewDeltaRow[] = [];
+  // Track baseline folders so leftovers become "removed" ghost rows.
+  const remainingBaseline = new Set<string>(
+    baseline ? Object.keys(baseline.perClass) : [],
+  );
+
+  for (const [folderName, cur] of byFolder) {
+    const base = baseline?.perClass[folderName];
+    remainingBaseline.delete(folderName);
+    const baseTotals: SplitTotals | null = baseline
+      ? {
+          train: base?.train ?? 0,
+          val: base?.val ?? 0,
+          test: base?.test ?? 0,
+          total: (base?.train ?? 0) + (base?.val ?? 0) + (base?.test ?? 0),
+        }
+      : null;
+    rows.push({
+      ...cur,
+      baseline: baseTotals,
+      delta: baseTotals
+        ? {
+            train: cur.train - baseTotals.train,
+            val: cur.val - baseTotals.val,
+            test: cur.test - baseTotals.test,
+            total: cur.total - baseTotals.total,
+          }
+        : null,
+      status: !baseline ? "changed" : base ? "changed" : "new",
+    });
+  }
+
+  // 2. Ghost rows for baseline-only classes (removed since last export).
+  if (baseline) {
+    for (const folderName of remainingBaseline) {
+      const base = baseline.perClass[folderName];
+      const baseTotal = base.train + base.val + base.test;
+      rows.push({
+        label: folderName,
+        folderName,
+        train: 0,
+        val: 0,
+        test: 0,
+        total: 0,
+        trainDeployments: 0,
+        valDeployments: 0,
+        testDeployments: 0,
+        trainDeploymentNames: [],
+        valDeploymentNames: [],
+        testDeploymentNames: [],
+        baseline: {
+          train: base.train,
+          val: base.val,
+          test: base.test,
+          total: baseTotal,
+        },
+        delta: {
+          train: -base.train,
+          val: -base.val,
+          test: -base.test,
+          total: -baseTotal,
+        },
+        status: "removed",
+      });
+    }
+  }
+
+  if (!baseline) return { rows, footer: null };
+
+  // Footer = current totals − baseline totals (== sum of body deltas, since
+  // ghost rows cover every baseline-only class).
+  let curTrain = 0;
+  let curVal = 0;
+  let curTest = 0;
+  for (const row of perSpecies) {
+    curTrain += row.train;
+    curVal += row.val;
+    curTest += row.test;
+  }
+  const curTotal = curTrain + curVal + curTest;
+  return {
+    rows,
+    footer: {
+      train: curTrain - baseline.train,
+      val: curVal - baseline.val,
+      test: curTest - baseline.test,
+      total: curTotal - baseline.total,
+    },
+  };
+}

@@ -273,6 +273,7 @@ export function EditableSelect({
   options,
   canEdit,
   action,
+  colors,
 }: {
   id: number;
   field: string;
@@ -280,13 +281,17 @@ export function EditableSelect({
   options: { value: string; label: string }[];
   canEdit: boolean;
   action?: FieldAction;
+  /** Optional per-value badge color classes (e.g. funder priority levels). */
+  colors?: Record<string, string>;
 }) {
   const { shown, save, pending, error } = useFieldSave<string | null>(id, field, value, action);
   const [editing, setEditing] = useState(false);
 
   const label = options.find((o) => o.value === shown)?.label ?? null;
   const badge = label ? (
-    <Badge variant="secondary">{label}</Badge>
+    <Badge variant="secondary" className={shown ? colors?.[shown] : undefined}>
+      {label}
+    </Badge>
   ) : (
     <span className="text-muted-foreground">—</span>
   );

@@ -18,7 +18,12 @@ import {
 import { SortIcon } from "@/components/sort-icon";
 import { EditableField, EditableSelect } from "../editable-cell";
 import { GrantsFilterBar } from "../grants-filter-bar";
-import { FUNDER_PRIORITY_LABELS, toDateInput } from "@/lib/grants/constants";
+import {
+  FUNDER_PRIORITY_LABELS,
+  FUNDER_PRIORITY_COLORS,
+  toDateInput,
+  formatDate,
+} from "@/lib/grants/constants";
 import { funderPriorityEnum } from "@/db/schema";
 
 /** Coerce a stored website value into a safe href (default to https://). */
@@ -149,6 +154,7 @@ export default async function FundersPage({
                 <TableHead>Website</TableHead>
                 <TableHead>Description</TableHead>
                 <TableHead>Notes</TableHead>
+                <SortableHeader column="updated" label="Last updated" currentSort={sortBy} currentDir={sortDir} params={params} />
                 <TableHead className="text-right">Grants</TableHead>
               </TableRow>
             </TableHeader>
@@ -185,6 +191,7 @@ export default async function FundersPage({
                       options={priorityOptions}
                       canEdit={canEdit}
                       action={updateFunderField}
+                      colors={FUNDER_PRIORITY_COLORS}
                     />
                   </TableCell>
                   <TableCell className="text-sm whitespace-nowrap">
@@ -252,6 +259,13 @@ export default async function FundersPage({
                   </TableCell>
                   <TableCell className="max-w-[200px]">
                     <EditableField id={f.id} field="notes" value={f.notes} kind="textarea" canEdit={canEdit} action={updateFunderField} placeholder="Notes" />
+                  </TableCell>
+                  <TableCell className="text-sm whitespace-nowrap text-muted-foreground">
+                    {f.updatedAt.getTime() !== f.createdAt.getTime() ? (
+                      formatDate(f.updatedAt)
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
                   </TableCell>
                   <TableCell className="text-right tabular-nums text-sm">{f.grantCount}</TableCell>
                 </TableRow>

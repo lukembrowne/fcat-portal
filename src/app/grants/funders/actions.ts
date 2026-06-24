@@ -41,15 +41,20 @@ export interface FunderListItem {
   fundingHistory: string | null;
   description: string | null;
   notes: string | null;
+  createdAt: Date;
+  updatedAt: Date;
   grantCount: number;
 }
 
 const SORTABLE_COLUMNS = {
   name: funders.name,
-  priority: funders.priority,
+  // Importance order (Low → Medium → High → Highest), not the enum's alphabetical
+  // default. Unset priority ranks below Low.
+  priority: sql`CASE ${funders.priority} WHEN 'low' THEN 1 WHEN 'medium' THEN 2 WHEN 'high' THEN 3 WHEN 'highest' THEN 4 ELSE 0 END`,
   type: funders.funderType,
   manager: funders.relationshipManager,
   nextStep: funders.nextStepDue,
+  updated: funders.updatedAt,
 } as const;
 
 export type FunderSortColumn = keyof typeof SORTABLE_COLUMNS;
@@ -80,6 +85,8 @@ export async function getFunders(filters?: {
       fundingHistory: funders.fundingHistory,
       description: funders.description,
       notes: funders.notes,
+      createdAt: funders.createdAt,
+      updatedAt: funders.updatedAt,
       grantCount: sql<number>`COUNT(${grants.id})`,
     })
     .from(funders)

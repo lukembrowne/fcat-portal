@@ -65,6 +65,14 @@ export const FUNDER_PRIORITY_LABELS: Record<FunderPriority, string> = {
   low: "Low",
 };
 
+/** Badge colors per priority level (hottest = highest). */
+export const FUNDER_PRIORITY_COLORS: Record<FunderPriority, string> = {
+  highest: "bg-red-100 text-red-800",
+  high: "bg-orange-100 text-orange-800",
+  medium: "bg-amber-100 text-amber-800",
+  low: "bg-slate-100 text-slate-700",
+};
+
 /**
  * Two-tier automatic reminder thresholds (descending), in days before the due
  * date. Every active grant emails the team once when it crosses each threshold —

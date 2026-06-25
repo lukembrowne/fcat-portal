@@ -179,18 +179,44 @@ const C = {
   amber: "#F57C00",
 };
 
+/** Inline anchor in the portal's email-blue (matches the BioChoco nightly email). */
+function emailLink(href: string, inner: string): string {
+  return `<a href="${href}" style="color:#2563eb;text-decoration:none">${inner}</a>`;
+}
+
+/**
+ * Full HTML document wrapper matching the BioChoco "house style"
+ * (`buildEmailHtml` in src/lib/nightly-report-email.ts): system font, dark-gray
+ * body, an h2 heading + muted subtitle line, and a small auto-generated footer.
+ * Kept English to match the rest of the grant module.
+ */
+function emailShell(title: string, subtitle: string, body: string): string {
+  return `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1f2937;max-width:800px;margin:0 auto;padding:20px">
+  <h2 style="margin-bottom:4px;color:${C.blue}">${title}</h2>
+  <p style="color:#6b7280;margin-top:0">${subtitle}</p>
+  ${body}
+  <p style="color:#9ca3af;font-size:12px;margin-top:32px">Generated automatically by FCAT Portal</p>
+</body>
+</html>`;
+}
+
 function table(headers: string[], rows: string[][], totalRow?: string[]): string {
-  const head = headers.map((h) => `<th align="left" style="padding:8px;border-bottom:2px solid #ddd;color:#555">${h}</th>`).join("");
+  const head = headers
+    .map((h) => `<th style="padding:8px 12px;border:1px solid #e5e7eb;text-align:left">${h}</th>`)
+    .join("");
   const body = rows
     .map(
       (r) =>
-        `<tr>${r.map((c) => `<td style="padding:8px;border-bottom:1px solid #eee">${c}</td>`).join("")}</tr>`
+        `<tr>${r.map((c) => `<td style="padding:6px 12px;border:1px solid #e5e7eb">${c}</td>`).join("")}</tr>`
     )
     .join("");
   const total = totalRow
-    ? `<tr style="font-weight:600;background:#f0f4f8">${totalRow.map((c) => `<td style="padding:8px;border-top:2px solid ${C.blue}">${c}</td>`).join("")}</tr>`
+    ? `<tr style="font-weight:600;background:#f0f4f8">${totalRow.map((c) => `<td style="padding:8px 12px;border:1px solid #e5e7eb;border-top:2px solid ${C.blue}">${c}</td>`).join("")}</tr>`
     : "";
-  return `<table style="width:100%;border-collapse:collapse;margin:8px 0 20px">${head ? `<tr>${head}</tr>` : ""}${body}${total}</table>`;
+  return `<table style="width:100%;border-collapse:collapse;margin:8px 0 20px">${head ? `<tr style="background:#f3f4f6">${head}</tr>` : ""}${body}${total}</table>`;
 }
 
 export function renderMonthlyDigestHtml(d: MonthlyDigestData, portalUrl: string): string {
@@ -220,9 +246,7 @@ export function renderMonthlyDigestHtml(d: MonthlyDigestData, portalUrl: string)
     formatUsd(y.totalRequested),
   ]);
 
-  return `
-  <div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.5;color:#333;max-width:860px;margin:0 auto;padding:20px">
-    <h1 style="color:${C.blue};border-bottom:3px solid ${C.blue};padding-bottom:10px">📊 Monthly Grant Summary — FCAT</h1>
+  const body = `
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin:20px 0">
       ${box(String(d.pendingCount), "Awaiting decision", C.amber)}
       ${box(formatUsd(d.pendingAmount), "Pending amount", C.amber)}
@@ -230,13 +254,13 @@ export function renderMonthlyDigestHtml(d: MonthlyDigestData, portalUrl: string)
       ${box(formatUsd(d.fundedAmount), "Total funded", C.green)}
     </div>
 
-    <h2 style="color:${C.green}">✏️ In Preparation</h2>
-    ${d.inPrep.length ? table(["Grant", "Funder", "Amount", "Due date"], grantRows(d.inPrep, true)) : `<p style="color:#888;font-style:italic">None in preparation.</p>`}
+    <h3 style="margin-top:28px;border-top:2px solid #e5e7eb;padding-top:16px;color:${C.green}">In Preparation</h3>
+    ${d.inPrep.length ? table(["Grant", "Funder", "Amount", "Due date"], grantRows(d.inPrep, true)) : `<p style="color:#6b7280;font-style:italic">None in preparation.</p>`}
 
-    <h2 style="color:${C.green}">🗓️ Due in the Next 30 Days</h2>
-    ${d.dueSoon.length ? table(["Grant", "Funder", "Amount", "Due date"], grantRows(d.dueSoon, true)) : `<p style="color:#888;font-style:italic">None due in 30 days.</p>`}
+    <h3 style="margin-top:24px;color:${C.green}">Due in the Next 30 Days</h3>
+    ${d.dueSoon.length ? table(["Grant", "Funder", "Amount", "Due date"], grantRows(d.dueSoon, true)) : `<p style="color:#6b7280;font-style:italic">None due in 30 days.</p>`}
 
-    <h2 style="color:${C.green}">⏳ Awaiting Decision</h2>
+    <h3 style="margin-top:24px;color:${C.green}">Awaiting Decision</h3>
     ${
       d.awaitingDecision.length
         ? table(
@@ -244,14 +268,16 @@ export function renderMonthlyDigestHtml(d: MonthlyDigestData, portalUrl: string)
             grantRows(d.awaitingDecision, false),
             ["Total pending", "", formatUsd(d.awaitingTotal)]
           )
-        : `<p style="color:#888;font-style:italic">None awaiting decision.</p>`
+        : `<p style="color:#6b7280;font-style:italic">None awaiting decision.</p>`
     }
 
-    <h2 style="color:${C.green}">📈 Statistics by Year</h2>
+    <h3 style="margin-top:24px;color:${C.green}">Statistics by Year</h3>
     ${table(["Year", "Funded", "Rejected", "Passed", "Completed", "Requested"], yearRows)}
 
-    <p style="margin-top:30px"><a href="${portalUrl}/grants" style="background:${C.blue};color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none">Open the portal</a></p>
-  </div>`;
+    <p style="margin-top:30px"><a href="${portalUrl}/grants" style="background:${C.blue};color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none">Open the portal</a></p>`;
+
+  const summary = `${d.pendingCount} awaiting decision · ${d.fundedCount} funded · ${formatUsd(d.fundedAmount)} total funded`;
+  return emailShell("Monthly Grant Summary — FCAT", summary, body);
 }
 
 // ---------------------------------------------------------------------------
@@ -318,18 +344,25 @@ export async function markReminded(
 }
 
 export function renderRemindersHtml(rows: GrantRow[], portalUrl: string): string {
-  const items = rows
-    .map((g) => {
-      const days = daysUntil(g.dueDate);
-      return `<li style="margin-bottom:10px"><a href="${portalUrl}/grants/${g.id}" style="color:${C.blue};font-weight:600">${g.name}</a> — ${g.funderLabel ?? "—"}<br/><span style="color:#721C24">Due ${formatDate(g.dueDate)} (in ${days} day(s))</span> · ${GRANT_STATUS_LABELS[g.status]} · ${formatUsd(g.amountRequested)}</li>`;
-    })
-    .join("");
+  const grantRows = rows.map((g) => {
+    const days = daysUntil(g.dueDate);
+    const dueCell =
+      days != null && days <= 7
+        ? `${formatDate(g.dueDate)} <span style="background:#F8D7DA;color:#721C24;padding:1px 6px;border-radius:10px;font-size:11px">${days}d</span>`
+        : `${formatDate(g.dueDate)} <span style="color:#6b7280">(in ${days} day(s))</span>`;
+    return [
+      emailLink(`${portalUrl}/grants/${g.id}`, g.name),
+      g.funderLabel ?? "—",
+      dueCell,
+      GRANT_STATUS_LABELS[g.status],
+      formatUsd(g.amountRequested),
+    ];
+  });
 
-  return `
-  <div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.5;color:#333;max-width:700px;margin:0 auto;padding:20px">
-    <h1 style="color:${C.blue}">⏰ Grant Deadline Reminder</h1>
-    <p>The following grants are approaching their deadline:</p>
-    <ul style="padding-left:18px">${items}</ul>
-    <p style="margin-top:24px"><a href="${portalUrl}/grants" style="background:${C.blue};color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none">Open the portal</a></p>
-  </div>`;
+  const body = `
+    ${table(["Grant", "Funder", "Due date", "Status", "Amount"], grantRows)}
+    <p style="margin-top:24px"><a href="${portalUrl}/grants" style="background:${C.blue};color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none">Open the portal</a></p>`;
+
+  const subtitle = `<span style="color:#dc2626;font-weight:600">${rows.length} grant(s)</span> approaching their deadline`;
+  return emailShell("Grant Deadline Reminder", subtitle, body);
 }

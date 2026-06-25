@@ -11,10 +11,14 @@ stdin (single JSON line):
    "total_files": 50, "sensitivity": 1.0, "overlap": 1.0}
 
 stdout (NDJSON):
+  {"type": "version", "value": "birdnet-analyzer@1.5.1; model=BirdNET_GLOBAL_6K_V2.4"}
   {"type": "info", "message": "..."}
   {"type": "progress", "index": 5, "total": 50}
   {"type": "result", "file": "recording.wav", "detections": [...]}
   {"type": "complete", "total_processed": 50, "total_detections": 312}
+
+Also supports `--print-version`: prints the model version string and exits
+without reading stdin (used by the backfill maintenance script).
 """
 
 import json
@@ -24,6 +28,7 @@ import csv
 import tempfile
 import shutil
 import subprocess
+import importlib.metadata
 from pathlib import Path
 from collections import defaultdict
 
@@ -32,7 +37,49 @@ def emit(obj):
     print(json.dumps(obj, ensure_ascii=False), flush=True)
 
 
+def get_model_version():
+    """Return a self-describing version string for the BirdNET model used.
+
+    Combines the installed birdnet-analyzer pip version with the underlying
+    TensorFlow model checkpoint name when available, e.g.
+    `birdnet-analyzer@1.5.1; model=BirdNET_GLOBAL_6K_V2.4`. Degrades
+    gracefully to package-only (or "unknown") if anything can't be read, so
+    a missing/renamed attribute never breaks an analysis run.
+    """
+    try:
+        pkg_version = importlib.metadata.version("birdnet-analyzer")
+    except importlib.metadata.PackageNotFoundError:
+        pkg_version = "unknown"
+    except Exception:
+        pkg_version = "unknown"
+
+    model_name = None
+    try:
+        from birdnet_analyzer import config as bn_config
+
+        model_name = getattr(bn_config, "MODEL_VERSION", None)
+        if not model_name:
+            model_path = getattr(bn_config, "MODEL_PATH", None)
+            if model_path:
+                # Strip directory + extension, e.g.
+                # "checkpoints/V2.4/BirdNET_GLOBAL_6K_V2.4_Model_FP16.tflite"
+                # -> "BirdNET_GLOBAL_6K_V2.4_Model_FP16"
+                model_name = os.path.splitext(os.path.basename(str(model_path)))[0]
+    except Exception:
+        model_name = None
+
+    if model_name:
+        return f"birdnet-analyzer@{pkg_version}; model={model_name}"
+    return f"birdnet-analyzer@{pkg_version}"
+
+
 def main():
+    # Backfill / introspection shortcut: print the version string and exit
+    # without reading stdin. Used by scripts/backfill-birdnet-model-version.mjs.
+    if "--print-version" in sys.argv[1:]:
+        print(get_model_version(), flush=True)
+        return
+
     raw = sys.stdin.readline().strip()
     if not raw:
         emit({"type": "error", "message": "No config received on stdin"})
@@ -51,6 +98,12 @@ def main():
     overlap = config.get("overlap", 1.0)
 
     emit({"type": "info", "message": f"Iniciando análisis BirdNET ({total_files} archivos, {threads} threads, lat={lat}, lon={lon}, week={week}, min_conf={min_conf})..."})
+
+    # Emit the real model version BEFORE any result message so the Node side
+    # can tag every detection/identification with it.
+    model_version = get_model_version()
+    emit({"type": "version", "value": model_version})
+    emit({"type": "info", "message": f"Versión del modelo: {model_version}"})
 
     # Count audio files in input dir to report
     audio_extensions = {".wav", ".mp3", ".flac", ".ogg", ".aac", ".m4a"}

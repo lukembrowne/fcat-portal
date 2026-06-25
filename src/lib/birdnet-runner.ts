@@ -96,7 +96,18 @@ interface NDJSONComplete {
   total_detections: number;
 }
 
-type NDJSONMessage = NDJSONProgress | NDJSONResult | NDJSONInfo | NDJSONError | NDJSONComplete;
+interface NDJSONVersion {
+  type: "version";
+  value: string;
+}
+
+type NDJSONMessage =
+  | NDJSONProgress
+  | NDJSONResult
+  | NDJSONInfo
+  | NDJSONError
+  | NDJSONComplete
+  | NDJSONVersion;
 
 export async function runBirdNETAnalysis(
   jobId: number,
@@ -124,6 +135,10 @@ export async function runBirdNETAnalysis(
     let lastError: string | null = null;
     const startedAt = Date.now();
     let lastProgressLoggedAt = 0;
+    // Real BirdNET version captured from the Python runner's "version" message,
+    // which arrives before any "result" message. Falls back to the bare package
+    // name if the message never arrives (e.g. older runner script).
+    let modelVersion = "birdnet-analyzer";
 
     // Store PID on job for cancellation
     if (proc.pid) {
@@ -156,6 +171,12 @@ export async function runBirdNETAnalysis(
     rl.on("line", async (line) => {
       try {
         const msg: NDJSONMessage = JSON.parse(line);
+
+        if (msg.type === "version") {
+          modelVersion = msg.value;
+          log.info({ jobId, modelVersion }, "[birdnet] model version");
+          return;
+        }
 
         if (msg.type === "info") {
           // Skip Python's chunk-local "Progreso: X/Y" message — it would
@@ -239,7 +260,7 @@ export async function runBirdNETAnalysis(
                 minFreq: 0,
                 maxFreq: 15000,
                 confidence: det.confidence,
-                modelVersion: "birdnet-analyzer",
+                modelVersion,
               })
               .returning();
 
@@ -247,7 +268,7 @@ export async function runBirdNETAnalysis(
               audioDetectionId: detection.id,
               species: det.scientific_name,
               confidence: det.confidence,
-              modelVersion: "birdnet-analyzer",
+              modelVersion,
               verificationStatus: "unverified",
             });
 

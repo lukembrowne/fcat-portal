@@ -140,6 +140,10 @@ async function reconcileOneDrive(
     const { delta, newStartPageToken } = await listSharedDriveChangesDelta(
       drive.driveId,
       drive.changesPageToken!,
+      // Start of this delta's window: count only files created since the last
+      // reconcile, so modifications / moves / a drive-wide permission change
+      // don't re-count already-counted items (the 2026-06-27 817K spike).
+      drive.lastReconciledAt,
     );
     after = Math.max(0, before + delta);
     newPageToken = newStartPageToken;

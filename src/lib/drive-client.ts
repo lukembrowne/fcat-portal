@@ -1675,19 +1675,38 @@ export interface SharedDriveChangesDelta {
  *   - `removed` (permanently deleted / purged) → −1 (no longer counts)
  *   - `trashed` → 0 (still counts toward the cap until purged; already counted
  *     at creation, so a trash event is net-zero)
- *   - any other present file → +1 (over-counts on plain modifications, the
- *     pre-existing accepted heuristic; the weekly full count corrects drift)
+ *   - a present file *created* in this window (`createdTime > since`) → +1
+ *   - any other present file (plain modification, move, rename, or a drive-wide
+ *     permission/membership change that re-emits a change per file) → 0
+ *
+ * The `createdTime` gate is what stops phantom inflation: Google's change feed
+ * emits an entry for ANY mutation, so a single member/permission change on the
+ * drive re-surfaces every file and the old "+1 per present file" heuristic
+ * counted hundreds of thousands of already-counted items as new (the FCAT-
+ * BIOCHOCO 817K spike, 2026-06-27). Comparing each file's creation time against
+ * the last reconcile boundary counts only genuinely new items.
+ *
+ * `since` is the start of this delta's window (the previous reconcile time). If
+ * null/unparseable we fall back to the legacy "+1 per present file" behavior so
+ * we never silently undercount — the weekly full count corrects any drift.
  * Trash is NOT treated as a removal here (that under-counted vs Google).
  * Per-drive `trashed_count` is refreshed only on the weekly full count.
  */
 export async function listSharedDriveChangesDelta(
   driveId: string,
   pageToken: string,
+  since: string | null,
 ): Promise<SharedDriveChangesDelta> {
   const drive = getDrive();
   let delta = 0;
   let token: string | undefined = pageToken;
   let newStartPageToken = pageToken;
+
+  // SQLite `datetime('now')` is space-separated UTC (e.g. "2026-06-27 08:01:04");
+  // Drive `createdTime` is RFC3339 (e.g. "2026-06-27T08:01:04.000Z"). Normalize
+  // the former to ISO so both parse to the same UTC instant.
+  const sinceMs = since ? Date.parse(since.replace(" ", "T") + "Z") : NaN;
+  const haveSince = Number.isFinite(sinceMs);
 
   do {
     const res = await withRetry(
@@ -1698,7 +1717,7 @@ export async function listSharedDriveChangesDelta(
           includeRemoved: true,
           pageSize: 1000,
           fields:
-            "nextPageToken, newStartPageToken, changes(removed, file(id, trashed, mimeType))",
+            "nextPageToken, newStartPageToken, changes(removed, file(id, trashed, mimeType, createdTime))",
           supportsAllDrives: true,
           includeItemsFromAllDrives: true,
         }),
@@ -1713,7 +1732,19 @@ export async function listSharedDriveChangesDelta(
       } else if (trashed) {
         // Still counts until purged; already counted at creation → net zero.
       } else if (change.file?.id) {
-        delta += 1;
+        if (!haveSince) {
+          // Legacy fallback: no reconcile boundary to compare against.
+          delta += 1;
+        } else {
+          const createdMs = change.file.createdTime
+            ? Date.parse(change.file.createdTime)
+            : NaN;
+          // Count only files created within this delta window. A modification,
+          // move, or drive-wide permission change leaves createdTime <= since.
+          if (Number.isFinite(createdMs) && createdMs > sinceMs) {
+            delta += 1;
+          }
+        }
       }
     }
 

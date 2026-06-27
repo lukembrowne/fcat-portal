@@ -95,7 +95,7 @@ describe("runReconciliationJob — delta path (weekday, token present)", () => {
     expect(d.reconciled_count).toBe(100_250);
     expect(d.changes_page_token).toBe("tok-2");
     expect(countItems).not.toHaveBeenCalled();
-    expect(delta).toHaveBeenCalledWith("0Aaxxxxxxxxxxxxxxx".slice(0, 18), "tok-1");
+    expect(delta).toHaveBeenCalledWith("0Aaxxxxxxxxxxxxxxx".slice(0, 18), "tok-1", null);
 
     const [job] = testDbRef.current
       .select()

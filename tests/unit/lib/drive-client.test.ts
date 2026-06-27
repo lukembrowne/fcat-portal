@@ -4,6 +4,7 @@ import { extractFolderId, isValidFolderId } from "@/lib/drive-client";
 // Mock googleapis before importing functions that use getDrive()
 const mockFilesList = vi.fn();
 const mockFilesGet = vi.fn();
+const mockChangesList = vi.fn();
 
 vi.mock("googleapis", () => {
   class MockGoogleAuth {}
@@ -14,6 +15,9 @@ vi.mock("googleapis", () => {
         files: {
           list: (...args: unknown[]) => mockFilesList(...args),
           get: (...args: unknown[]) => mockFilesGet(...args),
+        },
+        changes: {
+          list: (...args: unknown[]) => mockChangesList(...args),
         },
       }),
     },
@@ -34,6 +38,7 @@ vi.stubEnv("GOOGLE_SERVICE_ACCOUNT_KEY", Buffer.from(JSON.stringify({
 const {
   listDeploymentFolders,
   listImagesRecursive,
+  listSharedDriveChangesDelta,
 } = await import("@/lib/drive-client");
 
 describe("extractFolderId", () => {
@@ -276,5 +281,78 @@ describe("listImagesRecursive", () => {
 
     const images = await listImagesRecursive("deploy1");
     expect(images).toHaveLength(2);
+  });
+});
+
+describe("listSharedDriveChangesDelta", () => {
+  const SINCE = "2026-06-26 00:00:00"; // SQLite-style UTC boundary
+  const NEW = "2026-06-26T12:00:00.000Z"; // created after SINCE
+  const OLD = "2026-06-01T00:00:00.000Z"; // created before SINCE
+
+  beforeEach(() => {
+    mockChangesList.mockReset();
+  });
+
+  function onePage(changes: unknown[]) {
+    mockChangesList.mockResolvedValueOnce({
+      data: { changes, nextPageToken: null, newStartPageToken: "next-tok" },
+    });
+  }
+
+  it("counts only files created within the delta window", async () => {
+    onePage([
+      { file: { id: "a", trashed: false, createdTime: NEW } }, // +1 new
+      { file: { id: "b", trashed: false, createdTime: NEW } }, // +1 new
+      { file: { id: "c", trashed: false, createdTime: OLD } }, // 0 modified/moved
+    ]);
+
+    const { delta, newStartPageToken } = await listSharedDriveChangesDelta(
+      "0Adrive",
+      "tok",
+      SINCE,
+    );
+    expect(delta).toBe(2);
+    expect(newStartPageToken).toBe("next-tok");
+  });
+
+  it("ignores a drive-wide permission change that re-emits every existing file", async () => {
+    // The 2026-06-27 regression: a membership change resurfaced all files, each
+    // with an OLD createdTime. None should count.
+    onePage(
+      Array.from({ length: 500 }, (_, i) => ({
+        file: { id: `f${i}`, trashed: false, createdTime: OLD },
+      })),
+    );
+
+    const { delta } = await listSharedDriveChangesDelta("0Adrive", "tok", SINCE);
+    expect(delta).toBe(0);
+  });
+
+  it("decrements on permanent removal regardless of createdTime", async () => {
+    onePage([
+      { removed: true, fileId: "gone" }, // -1
+      { file: { id: "new", trashed: false, createdTime: NEW } }, // +1
+    ]);
+
+    const { delta } = await listSharedDriveChangesDelta("0Adrive", "tok", SINCE);
+    expect(delta).toBe(0);
+  });
+
+  it("treats a trash event as net-zero (still counts until purged)", async () => {
+    onePage([{ file: { id: "t", trashed: true, createdTime: NEW } }]);
+
+    const { delta } = await listSharedDriveChangesDelta("0Adrive", "tok", SINCE);
+    expect(delta).toBe(0);
+  });
+
+  it("falls back to +1-per-present-file when no since boundary is given", async () => {
+    onePage([
+      { file: { id: "a", trashed: false, createdTime: OLD } },
+      { file: { id: "b", trashed: false, createdTime: NEW } },
+      { removed: true, fileId: "x" },
+    ]);
+
+    const { delta } = await listSharedDriveChangesDelta("0Adrive", "tok", null);
+    expect(delta).toBe(1); // 2 present (+2) − 1 removed
   });
 });

@@ -490,3 +490,102 @@ describe("buildPortalUpdatesPayload — project filtering & sorting", () => {
     expect(payload.projects.find((p) => p.projectId === "finance")).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Verified deployments (sourced from system_events, not the verification rows)
+// ---------------------------------------------------------------------------
+
+function makeVerifyEvent(args: {
+  deploymentId: number;
+  deploymentName: string;
+  eventType:
+    | "verify_deployment"
+    | "verify_deployment_empty"
+    | "unverify_deployment";
+  actorEmail: string | null;
+  occurredAt: Date;
+}): void {
+  db.insert(schema.systemEvents)
+    .values({
+      source: "camera-trap",
+      eventType: args.eventType,
+      summary: `Instalación ${args.deploymentName}`,
+      actorEmail: args.actorEmail,
+      projectId: "camera-trap",
+      targetType: "deployment",
+      targetId: String(args.deploymentId),
+      details: JSON.stringify({ name: args.deploymentName }),
+      occurredAt: args.occurredAt,
+    })
+    .run();
+}
+
+describe("buildPortalUpdatesPayload — verified deployments", () => {
+  it("is empty when no verification events fall in the window", async () => {
+    const payload = await aggregator.buildPortalUpdatesPayload(WINDOW_START, NOW);
+    expect(payload.verifiedDeployments).toEqual([]);
+  });
+
+  it("lists in-window verify/verify_empty flips with actor + name, newest first", async () => {
+    makeVerifyEvent({
+      deploymentId: 11, deploymentName: "CCN-013_V1", eventType: "verify_deployment",
+      actorEmail: "monitoreo@x.com", occurredAt: inWindow(2),
+    });
+    makeVerifyEvent({
+      deploymentId: 12, deploymentName: "GIZ-004_V1", eventType: "verify_deployment_empty",
+      actorEmail: "alice@x.com", occurredAt: inWindow(5),
+    });
+
+    const payload = await aggregator.buildPortalUpdatesPayload(WINDOW_START, NOW);
+
+    expect(payload.verifiedDeployments).toEqual([
+      {
+        deploymentId: 12, deploymentName: "GIZ-004_V1", actorEmail: "alice@x.com",
+        empty: true, occurredAt: inWindow(5),
+      },
+      {
+        deploymentId: 11, deploymentName: "CCN-013_V1", actorEmail: "monitoreo@x.com",
+        empty: false, occurredAt: inWindow(2),
+      },
+    ]);
+  });
+
+  it("excludes events outside the window", async () => {
+    makeVerifyEvent({
+      deploymentId: 11, deploymentName: "OLD_V1", eventType: "verify_deployment",
+      actorEmail: "monitoreo@x.com", occurredAt: outsideWindow(),
+    });
+    const payload = await aggregator.buildPortalUpdatesPayload(WINDOW_START, NOW);
+    expect(payload.verifiedDeployments).toEqual([]);
+  });
+
+  it("collapses to the latest event per deployment and drops ones left reopened", async () => {
+    // Deployment 11: verified then reopened → dropped (latest is unverify).
+    makeVerifyEvent({
+      deploymentId: 11, deploymentName: "A_V1", eventType: "verify_deployment",
+      actorEmail: "alice@x.com", occurredAt: inWindow(1),
+    });
+    makeVerifyEvent({
+      deploymentId: 11, deploymentName: "A_V1", eventType: "unverify_deployment",
+      actorEmail: "bob@x.com", occurredAt: inWindow(3),
+    });
+    // Deployment 12: reopened then re-verified → kept once, with the later actor.
+    makeVerifyEvent({
+      deploymentId: 12, deploymentName: "B_V1", eventType: "unverify_deployment",
+      actorEmail: "alice@x.com", occurredAt: inWindow(1),
+    });
+    makeVerifyEvent({
+      deploymentId: 12, deploymentName: "B_V1", eventType: "verify_deployment",
+      actorEmail: "carol@x.com", occurredAt: inWindow(4),
+    });
+
+    const payload = await aggregator.buildPortalUpdatesPayload(WINDOW_START, NOW);
+
+    expect(payload.verifiedDeployments).toEqual([
+      {
+        deploymentId: 12, deploymentName: "B_V1", actorEmail: "carol@x.com",
+        empty: false, occurredAt: inWindow(4),
+      },
+    ]);
+  });
+});

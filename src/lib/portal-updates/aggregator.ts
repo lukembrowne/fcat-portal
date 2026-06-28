@@ -11,6 +11,7 @@ import {
   images,
   processingJobs,
   projects,
+  systemEvents,
 } from "@/db/schema";
 import { JOB_TYPES, type JobType } from "@/lib/job-types";
 import { JOB_LABELS } from "@/lib/system-events";
@@ -19,7 +20,16 @@ import type {
   LeaderboardRow,
   PortalUpdatesPayload,
   ProjectActivity,
+  VerifiedDeploymentRow,
 } from "./types";
+
+// Event types written by the deployment verification flips in
+// `src/app/camera-trap/actions.ts`. Kept in sync with the recordEvent calls there.
+const VERIFY_EVENT_TYPES = [
+  "verify_deployment",
+  "verify_deployment_empty",
+  "unverify_deployment",
+] as const;
 
 const AUDIO_JOB_TYPES = new Set<JobType>([
   JOB_TYPES.BIRDNET,
@@ -80,6 +90,7 @@ export async function buildPortalUpdatesPayload(
     audioVerifyByUser,
     audioVerifyByProject,
     projectRows,
+    verifiedDeployments,
   ] = await Promise.all([
     queryJobActivity(windowStart, windowEnd),
     queryCtVerifyByUser(windowStart, windowEnd),
@@ -87,6 +98,7 @@ export async function buildPortalUpdatesPayload(
     queryAudioVerifyByUser(windowStart, windowEnd),
     queryAudioVerifyByProject(windowStart, windowEnd),
     queryProjects(),
+    queryVerifiedDeployments(windowStart, windowEnd),
   ]);
 
   const projectsById = new Map(projectRows.map((p) => [p.id, p.name] as const));
@@ -135,6 +147,7 @@ export async function buildPortalUpdatesPayload(
     windowStart,
     windowEnd,
     projects: activeProjects,
+    verifiedDeployments,
     totalCtJobs,
     totalAudioJobs,
     totalCtVerifiedImages,
@@ -273,6 +286,71 @@ async function queryCtVerifyByProject(
     .all();
 
   return narrowProjectTotalRows(rows);
+}
+
+/**
+ * Deployments whose verification status was flipped within the window, sourced
+ * from the `system_events` activity log (written by markVerified /
+ * markVerifiedEmpty / undo* / the auto-complete path in camera-trap actions).
+ *
+ * Collapses to the latest event per deployment so a verify→reopen→verify churn
+ * shows once, and a deployment left reopened (last event = unverify) is dropped.
+ * Only reflects flips recorded after this feature shipped — older verifications
+ * have no event and won't appear.
+ */
+async function queryVerifiedDeployments(
+  windowStart: Date,
+  windowEnd: Date,
+): Promise<VerifiedDeploymentRow[]> {
+  const rows = await db
+    .select({
+      targetId: systemEvents.targetId,
+      eventType: systemEvents.eventType,
+      actorEmail: systemEvents.actorEmail,
+      details: systemEvents.details,
+      occurredAt: systemEvents.occurredAt,
+    })
+    .from(systemEvents)
+    .where(
+      and(
+        eq(systemEvents.source, "camera-trap"),
+        inArray(systemEvents.eventType, [...VERIFY_EVENT_TYPES]),
+        gte(systemEvents.occurredAt, windowStart),
+        lt(systemEvents.occurredAt, windowEnd),
+        isNotNull(systemEvents.targetId),
+      ),
+    )
+    .orderBy(systemEvents.occurredAt)
+    .all();
+
+  // Ascending order → last write per deployment wins.
+  const latestByDep = new Map<string, (typeof rows)[number]>();
+  for (const r of rows) {
+    if (r.targetId) latestByDep.set(r.targetId, r);
+  }
+
+  const out: VerifiedDeploymentRow[] = [];
+  for (const r of latestByDep.values()) {
+    if (r.eventType === "unverify_deployment") continue;
+    let name = "";
+    if (r.details) {
+      try {
+        const parsed = JSON.parse(r.details) as { name?: unknown };
+        if (typeof parsed.name === "string") name = parsed.name;
+      } catch {
+        // malformed details JSON — fall back to the empty name (renders as #id)
+      }
+    }
+    out.push({
+      deploymentId: Number(r.targetId),
+      deploymentName: name,
+      actorEmail: r.actorEmail,
+      empty: r.eventType === "verify_deployment_empty",
+      occurredAt: r.occurredAt,
+    });
+  }
+  out.sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime());
+  return out;
 }
 
 async function queryAudioVerifyByUser(

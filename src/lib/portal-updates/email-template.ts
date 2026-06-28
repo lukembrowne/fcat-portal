@@ -14,6 +14,7 @@ import type {
   LeaderboardRow,
   PortalUpdatesPayload,
   ProjectActivity,
+  VerifiedDeploymentRow,
 } from "./types";
 
 export function buildPortalUpdatesSubject(
@@ -84,8 +85,9 @@ export function buildPortalUpdatesBody(
     ? `<p style="margin-top:24px;color:${COLOR_MUTED}">No hubo actividad nueva en este período.</p>`
     : payload.projects.map(renderProjectSection).join("\n");
 
-  return `${summaryHtml}
-${bodyHtml}`;
+  const verifiedBlock = renderVerifiedDeploymentsBlock(payload.verifiedDeployments);
+
+  return [summaryHtml, bodyHtml, verifiedBlock].filter(Boolean).join("\n");
 }
 
 /**
@@ -97,15 +99,21 @@ ${bodyHtml}`;
 export function buildPortalActivityDetail(
   payload: PortalUpdatesPayload,
 ): string {
-  if (payload.projects.length === 0) return "";
   // Single project (the BioChoco nightly case): drop the project-name heading —
   // it just collides with the "Cámaras trampa — Trabajos" / "Audio — Trabajos"
   // sub-headings and reads as if audio jobs belong to a "Cámaras Trampa" group.
   // Render the sub-sections directly. With multiple projects, keep the headings.
+  let projectsHtml = "";
   if (payload.projects.length === 1) {
-    return renderProjectInner(payload.projects[0]).join("\n");
+    projectsHtml = renderProjectInner(payload.projects[0]).join("\n");
+  } else if (payload.projects.length > 1) {
+    projectsHtml = payload.projects.map(renderProjectSection).join("\n");
   }
-  return payload.projects.map(renderProjectSection).join("\n");
+
+  const verifiedBlock = renderVerifiedDeploymentsBlock(payload.verifiedDeployments);
+
+  if (!projectsHtml && !verifiedBlock) return "";
+  return [projectsHtml, verifiedBlock].filter(Boolean).join("\n");
 }
 
 function summaryRow(label: string, value: number, description: string): string {
@@ -244,6 +252,39 @@ function renderEstadoCell(job: JobDetail): string {
     return `<span style="color:${COLOR_NEGATIVE};font-weight:600">Fallido</span>${error}`;
   }
   return `<span style="color:${COLOR_POSITIVE};font-weight:600">Completado</span>`;
+}
+
+/**
+ * "Instalaciones verificadas" table — deployments whose status flipped to
+ * verified/verified_empty in the window, with who did it. Returns "" when none.
+ */
+function renderVerifiedDeploymentsBlock(rows: VerifiedDeploymentRow[]): string {
+  if (rows.length === 0) return "";
+
+  const body = rows
+    .map((r) => {
+      const tipo = r.empty
+        ? `<span style="color:${COLOR_MUTED}">Vacía (sin detecciones)</span>`
+        : "Verificada";
+      const name = r.deploymentName || `#${r.deploymentId}`;
+      return `<tr>
+        <td style="padding:6px 12px;border:1px solid ${TABLE_BORDER}">${escapeHtml(name)}</td>
+        <td style="padding:6px 12px;border:1px solid ${TABLE_BORDER}">${escapeHtml(r.actorEmail ?? "—")}</td>
+        <td style="padding:6px 12px;border:1px solid ${TABLE_BORDER}">${tipo}</td>
+      </tr>`;
+    })
+    .join("\n");
+
+  return `
+    <h4 style="margin:16px 0 4px 0;font-size:14px;color:#374151">Instalaciones verificadas (${rows.length})</h4>
+    <table style="border-collapse:collapse;width:100%;margin-top:8px;font-size:13px">
+      <tr style="background:${TABLE_HEADER_BG}">
+        <th style="padding:6px 12px;border:1px solid ${TABLE_BORDER};text-align:left">Instalación</th>
+        <th style="padding:6px 12px;border:1px solid ${TABLE_BORDER};text-align:left">Verificada por</th>
+        <th style="padding:6px 12px;border:1px solid ${TABLE_BORDER};text-align:left">Tipo</th>
+      </tr>
+      ${body}
+    </table>`;
 }
 
 function renderVerifyBlock(

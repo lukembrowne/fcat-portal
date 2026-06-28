@@ -2794,11 +2794,57 @@ export async function getDeploymentsCascadeStats(
 // ---------------------------------------------------------------------------
 
 /**
+ * Record a deployment verification status flip in the activity log
+ * (`system_events`), so `/admin/activity` and the nightly BioChoco email can
+ * show which deployments were verified and by whom. Covers both manual flips
+ * (markVerified / markVerifiedEmpty / undo*) and the auto-complete path.
+ * Best-effort — `recordEvent` swallows its own errors and never throws.
+ */
+async function recordDeploymentVerificationEvent(opts: {
+  deploymentId: number;
+  deploymentName: string;
+  eventType: "verify_deployment" | "verify_deployment_empty" | "unverify_deployment";
+  fromStatus: string;
+  toStatus: string;
+  actorEmail: string | null;
+  trigger: "manual" | "auto";
+}): Promise<void> {
+  const verb =
+    opts.eventType === "verify_deployment"
+      ? "verificada"
+      : opts.eventType === "verify_deployment_empty"
+        ? "marcada como vacía"
+        : "reabierta para revisión";
+  await recordEvent({
+    source: "camera-trap",
+    eventType: opts.eventType,
+    severity: opts.eventType === "unverify_deployment" ? "warn" : "success",
+    summary: `Instalación ${opts.deploymentName} ${verb}`,
+    actorEmail: opts.actorEmail,
+    projectId: "camera-trap",
+    targetType: "deployment",
+    targetId: opts.deploymentId,
+    details: {
+      name: opts.deploymentName,
+      from: opts.fromStatus,
+      to: opts.toStatus,
+      trigger: opts.trigger,
+    },
+  });
+}
+
+/**
  * Check if all identifications for a deployment have been reviewed.
  * If so, auto-transition from "processed" → "verified".
  * Returns true if the deployment was auto-completed.
+ *
+ * `actorEmail` is the user who triggered the underlying verify/reject/correct
+ * action — recorded as the actor on the auto-verification event.
  */
-async function maybeAutoCompleteDeployment(deploymentId: number): Promise<boolean> {
+async function maybeAutoCompleteDeployment(
+  deploymentId: number,
+  actorEmail: string | null,
+): Promise<boolean> {
   const [unverifiedResult] = await db
     .select({ cnt: count() })
     .from(identifications)
@@ -2824,7 +2870,7 @@ async function maybeAutoCompleteDeployment(deploymentId: number): Promise<boolea
   if ((totalResult?.cnt ?? 0) === 0) return false;
 
   const [deployment] = await db
-    .select({ status: deployments.status })
+    .select({ status: deployments.status, name: deployments.name })
     .from(deployments)
     .where(eq(deployments.id, deploymentId));
 
@@ -2834,6 +2880,16 @@ async function maybeAutoCompleteDeployment(deploymentId: number): Promise<boolea
     .update(deployments)
     .set({ status: "verified", updatedAt: new Date() })
     .where(eq(deployments.id, deploymentId));
+
+  await recordDeploymentVerificationEvent({
+    deploymentId,
+    deploymentName: deployment.name,
+    eventType: "verify_deployment",
+    fromStatus: "processed",
+    toStatus: "verified",
+    actorEmail,
+    trigger: "auto",
+  });
 
   return true;
 }
@@ -2866,6 +2922,16 @@ export async function markVerified(
       .update(deployments)
       .set({ status: "verified", updatedAt: new Date() })
       .where(eq(deployments.id, deploymentId));
+
+    await recordDeploymentVerificationEvent({
+      deploymentId,
+      deploymentName: deployment.name,
+      eventType: "verify_deployment",
+      fromStatus: "processed",
+      toStatus: "verified",
+      actorEmail: user.email,
+      trigger: "manual",
+    });
 
     revalidatePath(CAMERA_TRAP_PATH);
     return { success: true, data: undefined };
@@ -2905,6 +2971,16 @@ export async function undoVerified(
       .update(deployments)
       .set({ status: "processed", updatedAt: new Date() })
       .where(eq(deployments.id, deploymentId));
+
+    await recordDeploymentVerificationEvent({
+      deploymentId,
+      deploymentName: deployment.name,
+      eventType: "unverify_deployment",
+      fromStatus: "verified",
+      toStatus: "processed",
+      actorEmail: user.email,
+      trigger: "manual",
+    });
 
     revalidatePath(CAMERA_TRAP_PATH);
     return { success: true, data: undefined };
@@ -3018,6 +3094,16 @@ export async function markVerifiedEmpty(
       .set({ status: "verified_empty", updatedAt: new Date() })
       .where(eq(deployments.id, deploymentId));
 
+    await recordDeploymentVerificationEvent({
+      deploymentId,
+      deploymentName: deployment.name,
+      eventType: "verify_deployment_empty",
+      fromStatus: "processed",
+      toStatus: "verified_empty",
+      actorEmail: user.email,
+      trigger: "manual",
+    });
+
     revalidatePath(CAMERA_TRAP_PATH);
     return { success: true, data: undefined };
   } catch (error) {
@@ -3056,6 +3142,16 @@ export async function undoVerifiedEmpty(
       .update(deployments)
       .set({ status: "processed", updatedAt: new Date() })
       .where(eq(deployments.id, deploymentId));
+
+    await recordDeploymentVerificationEvent({
+      deploymentId,
+      deploymentName: deployment.name,
+      eventType: "unverify_deployment",
+      fromStatus: "verified_empty",
+      toStatus: "processed",
+      actorEmail: user.email,
+      trigger: "manual",
+    });
 
     revalidatePath(CAMERA_TRAP_PATH);
     return { success: true, data: undefined };
@@ -4352,7 +4448,7 @@ export async function verifyIdentification(
         )
       );
 
-    await maybeAutoCompleteDeployment(depId);
+    await maybeAutoCompleteDeployment(depId, user.email);
     revalidatePath(CAMERA_TRAP_PATH);
     return { success: true, data: undefined };
   } catch (error) {
@@ -4389,7 +4485,7 @@ export async function rejectIdentification(
         )
       );
 
-    await maybeAutoCompleteDeployment(depId);
+    await maybeAutoCompleteDeployment(depId, user.email);
     revalidatePath(CAMERA_TRAP_PATH);
     return { success: true, data: undefined };
   } catch (error) {
@@ -4428,7 +4524,7 @@ export async function correctIdentification(
         )
       );
 
-    await maybeAutoCompleteDeployment(depId);
+    await maybeAutoCompleteDeployment(depId, user.email);
     revalidatePath(CAMERA_TRAP_PATH);
     return { success: true, data: undefined };
   } catch (error) {
@@ -4476,7 +4572,7 @@ export async function bulkVerify(
       );
 
     for (const row of depRows) {
-      await maybeAutoCompleteDeployment(row.deploymentId);
+      await maybeAutoCompleteDeployment(row.deploymentId, user.email);
     }
     revalidatePath(CAMERA_TRAP_PATH);
     return { success: true, data: { count: identificationIds.length } };
@@ -4550,7 +4646,7 @@ export async function bulkVerifyByThreshold(
       })
       .where(inArray(identifications.id, ids));
 
-    await maybeAutoCompleteDeployment(job.deploymentId!);
+    await maybeAutoCompleteDeployment(job.deploymentId!, user.email);
     revalidatePath(CAMERA_TRAP_PATH);
     return { success: true, data: { count: ids.length } };
   } catch (error) {
@@ -5188,7 +5284,7 @@ export async function assignSpecies(
       }
     }
 
-    await maybeAutoCompleteDeployment(depId);
+    await maybeAutoCompleteDeployment(depId, user.email);
     revalidatePath(CAMERA_TRAP_PATH);
     return { success: true, data: undefined };
   } catch (error) {
@@ -5400,7 +5496,7 @@ export async function verifyAndAdvance(
     // deployment.
     let deploymentCompleted = false;
     if (nextId === null && !filtered) {
-      deploymentCompleted = await maybeAutoCompleteDeployment(job.deploymentId!);
+      deploymentCompleted = await maybeAutoCompleteDeployment(job.deploymentId!, user.email);
     }
 
     revalidatePath(CAMERA_TRAP_PATH);

@@ -161,6 +161,7 @@ function buildDashboard(
           metricRow("Trabajos audio", activity.totalAudioJobs.toLocaleString()),
           metricRow("Imágenes verificadas", activity.totalCtVerifiedImages.toLocaleString()),
           metricRow("Grabaciones verificadas", activity.totalAudioVerifiedFiles.toLocaleString()),
+          metricRow("Instalaciones verificadas", activity.verifiedDeployments.length.toLocaleString()),
         ].join("")
       : metricRow("Resumen de actividad", `<span style="color:#9ca3af;font-weight:400">No disponible</span>`),
   );

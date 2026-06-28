@@ -20,6 +20,15 @@ export type JobDetail = {
   errorMessage: string | null;
 };
 
+export type VerifiedDeploymentRow = {
+  deploymentId: number;
+  deploymentName: string;
+  actorEmail: string | null;
+  /** true → status flipped to `verified_empty` (no detections); false → `verified`. */
+  empty: boolean;
+  occurredAt: Date;
+};
+
 export type ProjectActivity = {
   projectId: string;
   projectName: string;
@@ -35,6 +44,12 @@ export type PortalUpdatesPayload = {
   windowStart: Date;
   windowEnd: Date;
   projects: ProjectActivity[];
+  /**
+   * Deployments whose status was flipped to verified/verified_empty in the
+   * window (sourced from `system_events`, latest event per deployment wins;
+   * deployments reopened by window's end are excluded). Newest first.
+   */
+  verifiedDeployments: VerifiedDeploymentRow[];
   totalCtJobs: number;
   totalAudioJobs: number;
   totalCtVerifiedImages: number;

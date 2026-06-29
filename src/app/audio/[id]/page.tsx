@@ -8,7 +8,10 @@ import {
   audioDetections,
   audioIdentifications,
   audioFiles,
+  species,
 } from "@/db/schema";
+import { aggregateAudioSpeciesForDeployment } from "@/db/effective-species";
+import type { SpeciesTableRow } from "./species-detection-table";
 import { eq, and, sql, desc, inArray, count as drizzleCount } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import { fetchAudioFiles } from "../actions";
@@ -159,7 +162,11 @@ export default async function AudioDetailPage({
     );
   const revertibleFileCount = revertibleRow?.cnt ?? 0;
 
-  // Get last completed BirdNET job stats
+  // Get last completed BirdNET job stats. BirdNET detections are produced by
+  // either a standalone `birdnet` job or the combined `audio_analysis` job —
+  // both call runBirdNETAnalysis(jobId, …) and stamp detections with their own
+  // job id. Match both (mirrors the canonical query in audio/actions.ts) so
+  // deployments analyzed via the combined job are not treated as "unanalyzed".
   const [lastBirdnetJob] = await db
     .select({
       id: processingJobs.id,
@@ -170,7 +177,7 @@ export default async function AudioDetailPage({
     .where(
       and(
         eq(processingJobs.deploymentId, deploymentId),
-        eq(processingJobs.jobType, "birdnet"),
+        inArray(processingJobs.jobType, ["birdnet", "audio_analysis"]),
         eq(processingJobs.status, "completed")
       )
     )
@@ -236,6 +243,35 @@ export default async function AudioDetailPage({
     ? { verified: birdnetStats.verified, total: birdnetStats.verified + birdnetStats.pending }
     : null;
 
+  // Per-species roster for the table below the raster. Honors the same ?conf=
+  // threshold so it updates with the confidence slider. Display names are joined
+  // from the species table (mirrors src/app/audio/species/actions.ts).
+  let speciesTableRows: SpeciesTableRow[] = [];
+  if (lastBirdnetJob) {
+    const aggregates = await aggregateAudioSpeciesForDeployment(
+      deploymentId,
+      threshold,
+    );
+    const names = aggregates.map((a) => a.scientificName);
+    const speciesRows = names.length
+      ? await db
+          .select()
+          .from(species)
+          .where(inArray(species.scientificName, names))
+      : [];
+    const byName = new Map(speciesRows.map((s) => [s.scientificName, s]));
+    speciesTableRows = aggregates.map((a) => {
+      const sp = byName.get(a.scientificName);
+      return {
+        scientificName: a.scientificName,
+        spanishName: sp?.spanishName ?? null,
+        commonName: sp?.commonName ?? null,
+        detectionCount: a.detectionCount,
+        avgConfidence: a.avgConfidence,
+      };
+    });
+  }
+
   return (
     <RecordingsShell
       deployment={deployment}
@@ -252,6 +288,8 @@ export default async function AudioDetailPage({
       uncompressedFileCount={uncompressedFileCount}
       revertibleFileCount={revertibleFileCount}
       reviewStats={reviewStats}
+      speciesRows={speciesTableRows}
+      speciesAnalyzed={!!lastBirdnetJob}
     />
   );
 }

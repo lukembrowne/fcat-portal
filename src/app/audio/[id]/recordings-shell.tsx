@@ -22,6 +22,10 @@ import {
   type RasterMetricKey,
 } from "@/lib/recordings-raster";
 import { RecordingsRaster } from "./recordings-raster";
+import {
+  SpeciesDetectionTable,
+  type SpeciesTableRow,
+} from "./species-detection-table";
 
 interface DeploymentInfo {
   id: number;
@@ -79,6 +83,8 @@ export function RecordingsShell({
   uncompressedFileCount = 0,
   revertibleFileCount = 0,
   reviewStats = null,
+  speciesRows = [],
+  speciesAnalyzed = false,
 }: {
   deployment: DeploymentInfo;
   files: AudioFileRow[];
@@ -94,6 +100,8 @@ export function RecordingsShell({
   uncompressedFileCount?: number;
   revertibleFileCount?: number;
   reviewStats?: { verified: number; total: number } | null;
+  speciesRows?: SpeciesTableRow[];
+  speciesAnalyzed?: boolean;
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -261,6 +269,17 @@ export function RecordingsShell({
             domain={domain}
             metricKey={metricKey}
             onClickCell={handleClickCell}
+          />
+        </div>
+      )}
+
+      {/* Species roster — updates with the confidence slider (?conf=) */}
+      {files.length > 0 && (
+        <div className="rounded-lg border bg-card px-4 py-3 space-y-2">
+          <h2 className="text-sm font-semibold">Especies detectadas</h2>
+          <SpeciesDetectionTable
+            species={speciesRows}
+            analyzed={speciesAnalyzed}
           />
         </div>
       )}

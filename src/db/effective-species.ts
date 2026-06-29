@@ -18,7 +18,7 @@
  * changes, this helper must change in lockstep.
  */
 
-import { sql, and, inArray, type SQL } from "drizzle-orm";
+import { sql, and, eq, inArray, type SQL } from "drizzle-orm";
 import { db } from "./index";
 import {
   identifications,
@@ -529,4 +529,123 @@ function mergeBranchRows(
     agg.projectIds = [...(projects.get(name) ?? [])].sort((a, b) => a - b);
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Per-deployment species roster
+// ---------------------------------------------------------------------------
+
+/** Per-species aggregate for a single audio deployment's species table. */
+export interface DeploymentSpeciesAggregate {
+  scientificName: string;
+  detectionCount: number;
+  /** Weighted mean of non-null BirdNET confidences; null when all rows are
+   *  manual annotations (confidence IS NULL). */
+  avgConfidence: number | null;
+}
+
+/** Raw per-branch row from the two effective-species queries below. */
+export interface DeploymentSpeciesBranchRow {
+  name: string | null;
+  count: number;
+  sumConf: number | null;
+  confCount: number;
+}
+
+/**
+ * Merge the active + corrected branch rows into one effective-species roster.
+ *
+ * Pure function (no DB) so the count/confidence math is unit-testable without a
+ * database harness. Rows with a null effective name are dropped. `avgConfidence`
+ * is the count-weighted mean of non-null confidences; species whose rows are all
+ * null-confidence (manual annotations) yield `null`, not `0`.
+ */
+export function mergeDeploymentSpeciesRows(
+  rows: DeploymentSpeciesBranchRow[]
+): DeploymentSpeciesAggregate[] {
+  const acc = new Map<
+    string,
+    { detectionCount: number; sumConf: number; confCount: number }
+  >();
+  for (const r of rows) {
+    if (!r.name) continue;
+    const e = acc.get(r.name) ?? {
+      detectionCount: 0,
+      sumConf: 0,
+      confCount: 0,
+    };
+    e.detectionCount += Number(r.count);
+    e.sumConf += Number(r.sumConf ?? 0);
+    e.confCount += Number(r.confCount ?? 0);
+    acc.set(r.name, e);
+  }
+  return [...acc.entries()].map(([scientificName, e]) => ({
+    scientificName,
+    detectionCount: e.detectionCount,
+    avgConfidence: e.confCount > 0 ? e.sumConf / e.confCount : null,
+  }));
+}
+
+/**
+ * Per-species detection counts + average confidence for ONE audio deployment at
+ * a given confidence threshold, using effective-species semantics.
+ *
+ * Mirrors `aggregateAudioBySpecies` but scoped to a single deployment and grouped
+ * by species only. Two index-eligible queries (active branch on `species`,
+ * corrected branch on `corrected_species`), each gated by the read-time
+ * confidence filter, merged in JS. Caller joins `species` for display names.
+ */
+export async function aggregateAudioSpeciesForDeployment(
+  deploymentId: number,
+  threshold: number
+): Promise<DeploymentSpeciesAggregate[]> {
+  const conf = applyConfidenceFilter(threshold);
+  const confCols = {
+    sumConf: sql<number | null>`SUM(${audioIdentifications.confidence})`,
+    confCount: sql<number>`SUM(CASE WHEN ${audioIdentifications.confidence} IS NOT NULL THEN 1 ELSE 0 END)`,
+  };
+
+  const activeRows = await db
+    .select({
+      name: audioIdentifications.species,
+      count: sql<number>`COUNT(*)`,
+      ...confCols,
+    })
+    .from(audioIdentifications)
+    .innerJoin(
+      audioDetections,
+      sql`${audioDetections.id} = ${audioIdentifications.audioDetectionId}`
+    )
+    .innerJoin(audioFiles, sql`${audioFiles.id} = ${audioDetections.audioFileId}`)
+    .where(
+      and(
+        eq(audioFiles.deploymentId, deploymentId),
+        activeIdentification(audioIdentifications),
+        conf
+      )
+    )
+    .groupBy(audioIdentifications.species);
+
+  const correctedRows = await db
+    .select({
+      name: audioIdentifications.correctedSpecies,
+      count: sql<number>`COUNT(*)`,
+      ...confCols,
+    })
+    .from(audioIdentifications)
+    .innerJoin(
+      audioDetections,
+      sql`${audioDetections.id} = ${audioIdentifications.audioDetectionId}`
+    )
+    .innerJoin(audioFiles, sql`${audioFiles.id} = ${audioDetections.audioFileId}`)
+    .where(
+      and(
+        eq(audioFiles.deploymentId, deploymentId),
+        correctedIdentification(audioIdentifications),
+        conf
+      )
+    )
+    .groupBy(audioIdentifications.correctedSpecies);
+
+  return mergeDeploymentSpeciesRows([...activeRows, ...correctedRows]);
 }

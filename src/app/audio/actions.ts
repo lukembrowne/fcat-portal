@@ -71,22 +71,15 @@ export interface AudioDeploymentRow {
   dateStart: string | null;
   dateEnd: string | null;
   ctProjectName: string | null;
-  latitude: number | null;
-  longitude: number | null;
-  uploadAudioCount: number | null;
   uploadAudioFolderId: string | null;
   audioFileCount: number;
-  lastScanned: Date | null;
   totalDetections: number;
   totalSpecies: number;
   verifiedCount: number;
   unverifiedCount: number;
-  lastBirdnetAt: Date | null;
   isBirdnetProcessing: boolean;
   excluded: boolean;
   displayStatus: string;
-  /** Number of audio_files where compressed=true AND filename LIKE %.flac (truly compressed). */
-  compressedFileCount: number;
   /** Number of audio_files where compressed=false (still WAV). */
   uncompressedFileCount: number;
   /** Number of compressed files revertible via in-portal action (priorRev anchor present). */
@@ -143,7 +136,12 @@ export async function fetchAudioDeployments(
   );
   const visible = applyConfidenceFilter(threshold);
 
-  const rows = await db
+  // Load the deployment rows once. Per-deployment stats are then computed with
+  // a small fixed set of batched GROUP BY queries (see below) instead of one
+  // correlated subquery per column per row — the latter re-scanned the large
+  // audio_identifications/audio_detections tables ~4x per deployment and was
+  // the cause of the ~20s page load. Mirrors camera-trap's getDeploymentsWithStats.
+  const baseRows = await db
     .select({
       id: deployments.id,
       name: deployments.name,
@@ -151,117 +149,105 @@ export async function fetchAudioDeployments(
       dateStart: deployments.dateStart,
       dateEnd: deployments.dateEnd,
       ctProjectName: cameraTrapProjects.name,
-      latitude: deployments.latitude,
-      longitude: deployments.longitude,
-      uploadAudioCount: deployments.uploadAudioCount,
       uploadAudioFolderId: deployments.uploadAudioFolderId,
       excluded: deployments.excluded,
-      audioFileCount: sql<number>`(
-        SELECT COUNT(*) FROM audio_files
-        WHERE audio_files.deployment_id = ${deployments.id}
-      )`,
-      lastScanned: sql<Date | null>`(
-        SELECT MAX(created_at) FROM audio_files
-        WHERE audio_files.deployment_id = ${deployments.id}
-      )`,
-      totalDetections: sql<number>`(
-        SELECT COUNT(*) FROM audio_identifications
-        INNER JOIN audio_detections ON audio_detections.id = audio_identifications.audio_detection_id
-        INNER JOIN audio_files ON audio_files.id = audio_detections.audio_file_id
-        WHERE audio_files.deployment_id = ${deployments.id}
-        AND ${visible}
-      )`,
-      totalSpecies: sql<number>`(
-        SELECT COUNT(DISTINCT audio_identifications.species) FROM audio_identifications
-        INNER JOIN audio_detections ON audio_detections.id = audio_identifications.audio_detection_id
-        INNER JOIN audio_files ON audio_files.id = audio_detections.audio_file_id
-        WHERE audio_files.deployment_id = ${deployments.id}
-        AND ${visible}
-      )`,
-      verifiedCount: sql<number>`(
-        SELECT COUNT(*) FROM audio_identifications
-        INNER JOIN audio_detections ON audio_detections.id = audio_identifications.audio_detection_id
-        INNER JOIN audio_files ON audio_files.id = audio_detections.audio_file_id
-        WHERE audio_files.deployment_id = ${deployments.id}
-        AND audio_identifications.verification_status = 'verified'
-      )`,
-      unverifiedCount: sql<number>`(
-        SELECT COUNT(*) FROM audio_identifications
-        INNER JOIN audio_detections ON audio_detections.id = audio_identifications.audio_detection_id
-        INNER JOIN audio_files ON audio_files.id = audio_detections.audio_file_id
-        WHERE audio_files.deployment_id = ${deployments.id}
-        AND audio_identifications.verification_status = 'unverified'
-        AND (audio_identifications.confidence IS NULL OR audio_identifications.confidence >= ${threshold})
-      )`,
-      lastBirdnetAt: sql<Date | null>`(
-        SELECT MAX(completed_at) FROM biochoco_processing_jobs
-        WHERE deployment_id = ${deployments.id}
-        AND job_type IN ('birdnet', 'audio_analysis') AND status = 'completed'
-      )`,
-      isBirdnetProcessing: sql<number>`(
-        SELECT COUNT(*) FROM biochoco_processing_jobs
-        WHERE deployment_id = ${deployments.id}
-        AND job_type IN ('birdnet', 'acoustic_indices', 'audio_analysis')
-        AND status IN ('pending', 'processing')
-      )`,
-      compressedFileCount: sql<number>`(
-        SELECT COUNT(*) FROM audio_files
-        WHERE audio_files.deployment_id = ${deployments.id}
-        AND audio_files.compressed = 1
-        AND lower(audio_files.filename) LIKE '%.flac'
-      )`,
-      uncompressedFileCount: sql<number>`(
-        SELECT COUNT(*) FROM audio_files
-        WHERE audio_files.deployment_id = ${deployments.id}
-        AND audio_files.compressed = 0
-        AND lower(audio_files.filename) LIKE '%.wav'
-        AND audio_files.drive_file_id IS NOT NULL
-      )`,
-      revertibleFileCount: sql<number>`(
-        SELECT COUNT(*) FROM audio_files
-        WHERE audio_files.deployment_id = ${deployments.id}
-        AND audio_files.compressed = 1
-        AND audio_files.original_drive_revision_id IS NOT NULL
-        AND audio_files.drive_file_id IS NOT NULL
-      )`,
-      isAudioCompressionProcessingRaw: sql<number>`(
-        SELECT COUNT(*) FROM biochoco_processing_jobs
-        WHERE deployment_id = ${deployments.id}
-        AND job_type IN ('audio_compression', 'revert_audio_compression')
-        AND status IN ('pending', 'processing')
-      )`,
     })
     .from(deployments)
     .leftJoin(
       cameraTrapProjects,
       eq(deployments.cameraTrapProjectId, cameraTrapProjects.id)
     )
-    .where(
-      and(
-        filter,
-        isNotNull(deployments.uploadAudioFolderId)
-      )
-    )
+    .where(and(filter, isNotNull(deployments.uploadAudioFolderId)))
     .orderBy(deployments.name);
 
-  // Compute displayStatus for each row
-  const enriched: AudioDeploymentRow[] = rows.map((row) => {
+  if (baseRows.length === 0) return { success: true, data: [] };
+
+  const ids = baseRows.map((r) => r.id);
+
+  // One pass over audio_files, grouped by deployment.
+  const fileStatsRows = await db
+    .select({
+      deploymentId: audioFiles.deploymentId,
+      audioFileCount: sql<number>`COUNT(*)`,
+      uncompressedFileCount: sql<number>`SUM(CASE WHEN ${audioFiles.compressed} = 0 AND lower(${audioFiles.filename}) LIKE '%.wav' AND ${audioFiles.driveFileId} IS NOT NULL THEN 1 ELSE 0 END)`,
+      revertibleFileCount: sql<number>`SUM(CASE WHEN ${audioFiles.compressed} = 1 AND ${audioFiles.originalDriveRevisionId} IS NOT NULL AND ${audioFiles.driveFileId} IS NOT NULL THEN 1 ELSE 0 END)`,
+    })
+    .from(audioFiles)
+    .where(inArray(audioFiles.deploymentId, ids))
+    .groupBy(audioFiles.deploymentId);
+  const fileStats = new Map(fileStatsRows.map((r) => [r.deploymentId, r]));
+
+  // One pass over the identifications -> detections -> files join, grouped by
+  // deployment. All four aggregates share the single join via conditional sums.
+  const detStatsRows = await db
+    .select({
+      deploymentId: audioFiles.deploymentId,
+      totalDetections: sql<number>`SUM(CASE WHEN ${visible} THEN 1 ELSE 0 END)`,
+      totalSpecies: sql<number>`COUNT(DISTINCT CASE WHEN ${visible} THEN ${audioIdentifications.species} END)`,
+      verifiedCount: sql<number>`SUM(CASE WHEN ${audioIdentifications.verificationStatus} = 'verified' THEN 1 ELSE 0 END)`,
+      unverifiedCount: sql<number>`SUM(CASE WHEN ${audioIdentifications.verificationStatus} = 'unverified' AND (${audioIdentifications.confidence} IS NULL OR ${audioIdentifications.confidence} >= ${threshold}) THEN 1 ELSE 0 END)`,
+    })
+    .from(audioIdentifications)
+    .innerJoin(
+      audioDetections,
+      eq(audioDetections.id, audioIdentifications.audioDetectionId)
+    )
+    .innerJoin(audioFiles, eq(audioFiles.id, audioDetections.audioFileId))
+    .where(inArray(audioFiles.deploymentId, ids))
+    .groupBy(audioFiles.deploymentId);
+  const detStats = new Map(detStatsRows.map((r) => [r.deploymentId, r]));
+
+  // One pass over the in-flight audio jobs, grouped by deployment.
+  const jobStatsRows = await db
+    .select({
+      deploymentId: processingJobs.deploymentId,
+      birdnetActive: sql<number>`SUM(CASE WHEN ${processingJobs.jobType} IN ('birdnet', 'acoustic_indices', 'audio_analysis') THEN 1 ELSE 0 END)`,
+      compressionActive: sql<number>`SUM(CASE WHEN ${processingJobs.jobType} IN ('audio_compression', 'revert_audio_compression') THEN 1 ELSE 0 END)`,
+    })
+    .from(processingJobs)
+    .where(
+      and(
+        inArray(processingJobs.deploymentId, ids),
+        inArray(processingJobs.status, ["pending", "processing"])
+      )
+    )
+    .groupBy(processingJobs.deploymentId);
+  const jobStats = new Map(jobStatsRows.map((r) => [r.deploymentId, r]));
+
+  const enriched: AudioDeploymentRow[] = baseRows.map((row) => {
+    const files = fileStats.get(row.id);
+    const det = detStats.get(row.id);
+    const jobs = jobStats.get(row.id);
+
+    const audioFileCount = files?.audioFileCount ?? 0;
+    const totalDetections = det?.totalDetections ?? 0;
+    const verifiedCount = det?.verifiedCount ?? 0;
+    const unverifiedCount = det?.unverifiedCount ?? 0;
+    const isBirdnetProcessing = (jobs?.birdnetActive ?? 0) > 0;
+
     let displayStatus: string;
-    if (row.audioFileCount === 0) {
+    if (audioFileCount === 0) {
       displayStatus = "unscanned";
-    } else if (row.isBirdnetProcessing > 0) {
+    } else if (isBirdnetProcessing) {
       displayStatus = "birdnet_processing";
-    } else if (row.totalDetections > 0) {
-      displayStatus = row.unverifiedCount === 0 && row.verifiedCount > 0 ? "reviewed" : "analyzed";
+    } else if (totalDetections > 0) {
+      displayStatus =
+        unverifiedCount === 0 && verifiedCount > 0 ? "reviewed" : "analyzed";
     } else {
       displayStatus = "scanned";
     }
 
-    const { isAudioCompressionProcessingRaw, ...rest } = row;
     return {
-      ...rest,
-      isBirdnetProcessing: row.isBirdnetProcessing > 0,
-      isAudioCompressionProcessing: isAudioCompressionProcessingRaw > 0,
+      ...row,
+      audioFileCount,
+      totalDetections,
+      totalSpecies: det?.totalSpecies ?? 0,
+      verifiedCount,
+      unverifiedCount,
+      uncompressedFileCount: files?.uncompressedFileCount ?? 0,
+      revertibleFileCount: files?.revertibleFileCount ?? 0,
+      isBirdnetProcessing,
+      isAudioCompressionProcessing: (jobs?.compressionActive ?? 0) > 0,
       displayStatus,
     };
   });

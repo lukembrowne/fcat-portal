@@ -14,6 +14,8 @@
 
 import type { UploadStatus } from "@/lib/drive-client";
 import {
+  SITE_URL,
+  emailLink,
   formatBytes,
   formatCountCell,
   formatNewSince,
@@ -80,16 +82,8 @@ export interface AudioReport {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-// Base URL for deployment links in the email. Matches the convention used by
-// the other cron email routes (shared-drive-alerts, research-reminders, etc.).
-const SITE_URL =
-  process.env.NEXT_PUBLIC_SITE_URL ?? "https://portal.fcat-ecuador.org";
-
-/** Wrap email cell HTML in an anchor (muted blue, no underline) to a portal page. */
-function emailLink(href: string, inner: string): string {
-  return `<a href="${href}" style="color:#2563eb;text-decoration:none">${inner}</a>`;
-}
+// `SITE_URL` + `emailLink` are shared with the portal-updates email via
+// `@/lib/email/format`.
 
 // --- Top "Resumen del día" dashboard --------------------------------------
 

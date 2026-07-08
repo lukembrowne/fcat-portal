@@ -19,6 +19,19 @@ export const COLOR_NEGATIVE = "#dc2626";
 export const COLOR_MUTED = "#6b7280";
 
 // ---------------------------------------------------------------------------
+// Portal links — base URL + anchor helper shared across the cron emails
+// ---------------------------------------------------------------------------
+
+/** Base URL for portal links in emails. Falls back to the production domain. */
+export const SITE_URL =
+  process.env.NEXT_PUBLIC_SITE_URL ?? "https://portal.fcat-ecuador.org";
+
+/** Wrap email cell HTML in an anchor (muted blue, no underline) to a portal page. */
+export function emailLink(href: string, inner: string): string {
+  return `<a href="${href}" style="color:#2563eb;text-decoration:none">${inner}</a>`;
+}
+
+// ---------------------------------------------------------------------------
 // Numbers, bytes, durations
 // ---------------------------------------------------------------------------
 

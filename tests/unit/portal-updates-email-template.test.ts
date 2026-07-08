@@ -54,6 +54,10 @@ describe("renderVerifiedDeploymentsBlock (via buildPortalActivityDetail)", () =>
     const html = buildPortalActivityDetail(payload({ verifiedDeployments: verified }));
     expect(html).toContain("Instalaciones verificadas (2)");
     expect(html).toContain("CCN-013_V1");
+    // deployment name links to the camera-trap annotation page
+    expect(html).toContain(
+      'href="https://portal.fcat-ecuador.org/camera-trap/121"',
+    );
     expect(html).toContain("monitoreo@fcat-ecuador.org");
     expect(html).toContain("Verificada");
     // verified_empty row: muted "Vacía" label + "—" actor fallback
@@ -75,6 +79,10 @@ describe("renderVerifiedDeploymentsBlock (via buildPortalActivityDetail)", () =>
       }),
     );
     expect(html).toContain("#7");
+    // still links even when falling back to the #id label
+    expect(html).toContain(
+      'href="https://portal.fcat-ecuador.org/camera-trap/7"',
+    );
   });
 
   it("includes the block in the standalone activity body too", () => {

@@ -2,8 +2,10 @@ import {
   COLOR_MUTED,
   COLOR_NEGATIVE,
   COLOR_POSITIVE,
+  SITE_URL,
   TABLE_BORDER,
   TABLE_HEADER_BG,
+  emailLink,
   escapeHtml,
   formatDate,
   formatDateTime,
@@ -267,8 +269,12 @@ function renderVerifiedDeploymentsBlock(rows: VerifiedDeploymentRow[]): string {
         ? `<span style="color:${COLOR_MUTED}">Vacía (sin detecciones)</span>`
         : "Verificada";
       const name = r.deploymentName || `#${r.deploymentId}`;
+      const nameLink = emailLink(
+        `${SITE_URL}/camera-trap/${r.deploymentId}`,
+        escapeHtml(name),
+      );
       return `<tr>
-        <td style="padding:6px 12px;border:1px solid ${TABLE_BORDER}">${escapeHtml(name)}</td>
+        <td style="padding:6px 12px;border:1px solid ${TABLE_BORDER}">${nameLink}</td>
         <td style="padding:6px 12px;border:1px solid ${TABLE_BORDER}">${escapeHtml(r.actorEmail ?? "—")}</td>
         <td style="padding:6px 12px;border:1px solid ${TABLE_BORDER}">${tipo}</td>
       </tr>`;

@@ -117,7 +117,7 @@ PYWARM
 
 # Check if venv already exists and has all required packages
 if [ -x "$ML_PYTHON" ]; then
-  if "$ML_PYTHON" -c "import PytorchWildlife; import librosa; import timm; import open_clip; import birdnet_analyzer; import maad; import scipy" 2>/dev/null; then
+  if "$ML_PYTHON" -c "import PytorchWildlife; import librosa; import timm; import open_clip; import birdnet_analyzer; import maad; import scipy; import rasterio; import pyproj; import shapely" 2>/dev/null; then
     echo "[ml-setup] ML venv ready at $ML_VENV_DIR"
     warm_model_cache
     exit 0
@@ -160,6 +160,11 @@ uv pip install --python "$ML_PYTHON" scikit-maad scipy
 
 echo "[ml-setup] Installing birdnet-analyzer..."
 uv pip install --python "$ML_PYTHON" birdnet-analyzer
+
+# Occupancy modeling covariate pipeline: raster sampling (forest cover, DEM),
+# coordinate projection for metric buffers, and AOI polygon geometry.
+echo "[ml-setup] Installing rasterio + pyproj + shapely (occupancy covariates)..."
+uv pip install --python "$ML_PYTHON" rasterio pyproj shapely
 
 # pkg_resources (from setuptools) is needed by yolov5 at runtime but:
 # 1. uv's resolver strips setuptools since nothing explicitly depends on it

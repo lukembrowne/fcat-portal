@@ -32,6 +32,12 @@
 # Monthly grant digest — 1st of each month at 10 AM Eastern (replaces the n8n workflow)
 0 10 1 * * root . /etc/cron.d/portal-env && /usr/bin/curl -fsS -X POST -H "Authorization: Bearer $CRON_SECRET" --max-time 120 http://localhost:3000/api/cron/grants-monthly >> /app/data/backups/cron.log 2>&1
 
+# Weekly occupancy modeling batch — refits every eligible species × stream.
+# Sunday 2 AM CONTAINER-LOCAL Eastern (Vixie cron ignores CRON_TZ; occupancy is
+# CPU-light — seconds per species — so it needs no night-window gating). Bearer
+# auth only (no XFF guard — the in-container cron call carries XFF).
+0 2 * * 0 root . /etc/cron.d/portal-env && /usr/bin/curl -fsS -X POST -H "Authorization: Bearer $CRON_SECRET" --max-time 1800 http://localhost:3000/api/cron/occupancy-batch >> /app/data/backups/cron.log 2>&1
+
 # Overnight audio batch — clears the BirdNET/indices backlog during the quiet
 # Ecuador night. The route enqueues settled never-processed deployments and the
 # unified queue drains them. The picker's UTC-5 window gate stops STARTING new

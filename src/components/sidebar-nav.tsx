@@ -179,6 +179,14 @@ export function SidebarNav({ user }: SidebarNavProps) {
     });
   }
 
+  if (hasCameraTrap) {
+    analysisItems.push({
+      label: "Ocupación",
+      href: "/ocupacion",
+      icon: "leaf",
+    });
+  }
+
   if (analysisItems.length > 0) {
     sections.push({ title: "Análisis", items: analysisItems });
   }

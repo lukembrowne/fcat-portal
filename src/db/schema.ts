@@ -1154,6 +1154,191 @@ export const acousticIndices = sqliteTable(
 );
 
 // ---------------------------------------------------------------------------
+// Occupancy modeling (single-season single-species via unmarked::occu)
+// ---------------------------------------------------------------------------
+//
+// One occupancy_runs row per weekly batch (or manual run); each run fits many
+// occupancy_models (species × stream). Species below the data-readiness gate
+// (src/lib/occupancy/eligibility.ts) still get a row with sufficientData=false +
+// Spanish reasons, so the /ocupacion page can show "datos insuficientes" and the
+// numbers can be watched as verification/fieldwork proceed. Coefficients live in
+// occupancy_covariate_effects; AOI grid predictions are stored as artifact paths
+// in occupancy_predictions (a colorized PNG for the Leaflet overlay + a psi/se
+// grid file for hover), never as per-cell rows. See
+// docs/brainstorms/2026-07-03-occupancy-modeling-requirements.md
+
+export const occupancyRuns = sqliteTable(
+  "occupancy_runs",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    status: text("status", {
+      enum: ["pending", "running", "completed", "failed"],
+    })
+      .notNull()
+      .default("pending"),
+    trigger: text("trigger", { enum: ["cron", "manual"] })
+      .notNull()
+      .default("manual"),
+    binWidthDays: integer("bin_width_days").notNull().default(5),
+    audioConfidenceThreshold: real("audio_confidence_threshold")
+      .notNull()
+      .default(0.7),
+    // JSON snapshot of the eligibility thresholds used this run (reproducibility).
+    thresholdsJson: text("thresholds_json"),
+    nModels: integer("n_models").notNull().default(0),
+    nEligible: integer("n_eligible").notNull().default(0),
+    durationMs: integer("duration_ms"),
+    notes: text("notes"),
+    createdBy: text("created_by"),
+    startedAt: integer("started_at", { mode: "timestamp" }),
+    completedAt: integer("completed_at", { mode: "timestamp" }),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [index("idx_occupancy_runs_status").on(table.status)]
+);
+
+export const occupancyModels = sqliteTable(
+  "occupancy_models",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    runId: integer("run_id")
+      .notNull()
+      .references(() => occupancyRuns.id, { onDelete: "cascade" }),
+    species: text("species").notNull(),
+    stream: text("stream", { enum: ["camera", "audio"] }).notNull(),
+    // Season label for the modeled window (e.g. "2026-01"); null = whole span.
+    season: text("season"),
+    // Data-readiness (populated for every species, eligible or not).
+    sufficientData: integer("sufficient_data", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    ineligibleReasonsJson: text("ineligible_reasons_json"),
+    nSites: integer("n_sites").notNull().default(0),
+    nSitesDetected: integer("n_sites_detected").notNull().default(0),
+    totalDetections: integer("total_detections").notNull().default(0),
+    nOccasions: integer("n_occasions").notNull().default(0),
+    naiveOccupancy: real("naive_occupancy"),
+    // Fitted outputs (null when sufficientData = false).
+    estimatedOccupancy: real("estimated_occupancy"),
+    occupancyLower: real("occupancy_lower"),
+    occupancyUpper: real("occupancy_upper"),
+    meanDetection: real("mean_detection"),
+    aic: real("aic"),
+    convergence: integer("convergence"),
+    psiFormula: text("psi_formula"),
+    detFormula: text("det_formula"),
+    fitSeconds: real("fit_seconds"),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [
+    uniqueIndex("idx_occupancy_models_run_species_stream").on(
+      table.runId,
+      table.species,
+      table.stream
+    ),
+    index("idx_occupancy_models_species").on(table.species),
+    index("idx_occupancy_models_stream").on(table.stream),
+  ]
+);
+
+export const occupancyCovariateEffects = sqliteTable(
+  "occupancy_covariate_effects",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    modelId: integer("model_id")
+      .notNull()
+      .references(() => occupancyModels.id, { onDelete: "cascade" }),
+    submodel: text("submodel", { enum: ["state", "det"] }).notNull(),
+    param: text("param").notNull(),
+    estimate: real("estimate").notNull(),
+    se: real("se"),
+    z: real("z"),
+    pValue: real("p_value"),
+  },
+  (table) => [index("idx_occupancy_effects_model").on(table.modelId)]
+);
+
+export const occupancyPredictions = sqliteTable(
+  "occupancy_predictions",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    modelId: integer("model_id")
+      .notNull()
+      .references(() => occupancyModels.id, { onDelete: "cascade" }),
+    // Colorized PNG for the Leaflet ImageOverlay over the Planet AOI.
+    artifactPath: text("artifact_path"),
+    // psi/se grid file (NDJSON) backing map hover.
+    gridDataPath: text("grid_data_path"),
+    nCells: integer("n_cells"),
+    psiMin: real("psi_min"),
+    psiMax: real("psi_max"),
+    // [minLng, minLat, maxLng, maxLat] JSON.
+    bboxJson: text("bbox_json"),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [uniqueIndex("idx_occupancy_predictions_model").on(table.modelId)]
+);
+
+// Per-run, per-stream snapshot of each site's raw covariate values, so a run is
+// reproducible and response curves / grid predictions can be standardized and
+// back-transformed with the same site moments the model was fit on (mean/sd are
+// recomputed from these raw values — not stored separately).
+export const occupancySiteCovariates = sqliteTable(
+  "occupancy_site_covariates",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    runId: integer("run_id")
+      .notNull()
+      .references(() => occupancyRuns.id, { onDelete: "cascade" }),
+    stream: text("stream", { enum: ["camera", "audio"] }).notNull(),
+    siteId: text("site_id").notNull(),
+    siteName: text("site_name"),
+    latitude: real("latitude"),
+    longitude: real("longitude"),
+    habitat: text("habitat"),
+    elevation: real("elevation"),
+    forestCover: real("forest_cover"),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [
+    index("idx_occupancy_site_covariates_run").on(table.runId, table.stream),
+  ]
+);
+
+// Public/donor share tokens for the simplified, read-only occupancy view.
+// One active token grants noindex, depth-free access to the modeled-species maps.
+export const occupancyPublicTokens = sqliteTable(
+  "occupancy_public_tokens",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    token: text("token").notNull().unique(),
+    label: text("label"),
+    createdBy: text("created_by").notNull(),
+    revokedAt: integer("revoked_at", { mode: "timestamp" }),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [index("idx_occupancy_public_tokens_token").on(table.token)]
+);
+
+export type OccupancyRun = typeof occupancyRuns.$inferSelect;
+export type OccupancyModel = typeof occupancyModels.$inferSelect;
+export type OccupancyCovariateEffect =
+  typeof occupancyCovariateEffects.$inferSelect;
+export type OccupancyPrediction = typeof occupancyPredictions.$inferSelect;
+export type OccupancySiteCovariate = typeof occupancySiteCovariates.$inferSelect;
+export type OccupancyPublicToken = typeof occupancyPublicTokens.$inferSelect;
+
+// ---------------------------------------------------------------------------
 // Share Tokens (public share links for camera trap deployments)
 // ---------------------------------------------------------------------------
 

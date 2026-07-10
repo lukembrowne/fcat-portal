@@ -97,6 +97,7 @@ export const JOB_LABELS: Record<JobType, string> = {
   training_export: "Exporte de entrenamiento",
   training_export_upload: "Subida de exporte",
   external_import: "Importación de imágenes externas",
+  occupancy_model: "Modelos de ocupación",
 };
 
 const OUTCOME_VERBS: Record<TerminalOutcome, string> = {

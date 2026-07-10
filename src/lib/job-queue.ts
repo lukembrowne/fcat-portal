@@ -40,6 +40,7 @@ export const QUEUEABLE_JOB_TYPES = [
   JOB_TYPES.REVERT_AUDIO_COMPRESSION,
   JOB_TYPES.AUDIO_SYNC,
   JOB_TYPES.CACHE_DEPLOYMENT_IMAGES,
+  JOB_TYPES.OCCUPANCY_MODEL,
 ] as const satisfies readonly JobType[];
 
 const QUEUEABLE_SET = new Set<string>(QUEUEABLE_JOB_TYPES);
@@ -280,6 +281,11 @@ async function dispatchClaimedJob(job: ProcessingJob): Promise<void> {
         job.deploymentId!,
         job.createdBy ?? "",
       );
+      return;
+    }
+    case JOB_TYPES.OCCUPANCY_MODEL: {
+      const m = await import("@/lib/occupancy/processor");
+      await m.processOccupancyJob(job.id);
       return;
     }
     default:

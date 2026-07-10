@@ -56,6 +56,8 @@ function fallbackDisplayName(jobType: string): string {
       return "Exporte de entrenamiento";
     case "training_export_upload":
       return "Subida de exporte a Drive";
+    case "occupancy_model":
+      return "Modelos de ocupación";
     default:
       return "Trabajo";
   }

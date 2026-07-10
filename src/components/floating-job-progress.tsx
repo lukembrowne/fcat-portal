@@ -269,6 +269,7 @@ export function FloatingJobProgress() {
   const isImageCache = jobType === "cache_deployment_images";
   const isTrainingExport = jobType === "training_export";
   const isTrainingExportUpload = jobType === "training_export_upload";
+  const isOccupancy = jobType === "occupancy_model";
   const isAudioJob =
     isBirdnet ||
     isAcousticIndices ||
@@ -276,21 +277,25 @@ export function FloatingJobProgress() {
     isAudioCompression ||
     isAudioRevert;
   // These jobs have no /process or /results route — exclude from the linkable
-  // default so the bar doesn't render broken "Ver detalles" links.
+  // default so the bar doesn't render broken "Ver detalles" links. Occupancy
+  // links to /ocupacion instead (handled separately below).
   const isLinkable =
     !isCompressionLike &&
     !isDriveSync &&
     !isAudioJob &&
     !isImageCache &&
     !isTrainingExport &&
-    !isTrainingExportUpload;
+    !isTrainingExportUpload &&
+    !isOccupancy;
   const unitLabel = isDriveSync
     ? "instalaciones"
     : isAudioJob
       ? "archivos"
       : isTrainingExport
         ? "recortes"
-        : "imágenes";
+        : isOccupancy
+          ? "modelos"
+          : "imágenes";
   const canCancel = activeJob?.canCancel ?? false;
   const dlTotal = sseData?.downloadTotal ?? activeJob?.downloadTotal ?? 0;
   const dlDone = sseData?.downloadedImages ?? activeJob?.downloadedImages ?? 0;
@@ -400,7 +405,9 @@ export function FloatingJobProgress() {
                         ? "Análisis acústico..."
                         : isDriveSync
                           ? "Sincronizando..."
-                          : `Trabajo #${jobId}`}
+                          : isOccupancy
+                            ? "Modelos de ocupación..."
+                            : `Trabajo #${jobId}`}
           </span>
           <ChevronUp className="h-3 w-3" />
         </button>
@@ -429,7 +436,9 @@ export function FloatingJobProgress() {
                         ? "Análisis acústico (BirdNET + índices)"
                         : isDriveSync
                           ? "Sincronización con Drive"
-                          : `Trabajo #${jobId}`}
+                          : isOccupancy
+                            ? "Modelos de ocupación"
+                            : `Trabajo #${jobId}`}
           </p>
         </div>
         <div className="flex items-center gap-1 ml-2 shrink-0">
@@ -580,6 +589,14 @@ export function FloatingJobProgress() {
                   Ver detalles
                 </Link>
               )}
+              {isOccupancy && (
+                <Link
+                  href="/ocupacion"
+                  className="inline-flex h-7 items-center rounded px-2 text-xs font-medium text-primary hover:bg-accent transition-colors"
+                >
+                  Ver ocupación
+                </Link>
+              )}
               {canCancel && (
                 <button
                   onClick={handleCancel}
@@ -638,6 +655,14 @@ export function FloatingJobProgress() {
               Imágenes almacenadas en caché
             </span>
           )}
+          {status === "completed" && isOccupancy && (
+            <Link
+              href="/ocupacion"
+              className="inline-flex h-7 items-center rounded px-2 text-xs font-medium text-green-600 hover:bg-green-50 dark:hover:bg-green-950/30 transition-colors"
+            >
+              Ver ocupación
+            </Link>
+          )}
           {(status === "failed" || status === "cancelled") && isLinkable && (
             <Link
               href={`/camera-trap/process?jobId=${jobId}`}
@@ -674,6 +699,11 @@ export function FloatingJobProgress() {
           {(status === "failed" || status === "cancelled") && isImageCache && (
             <span className="text-xs text-muted-foreground">
               {status === "failed" ? "Caché fallida" : "Caché cancelada"}
+            </span>
+          )}
+          {(status === "failed" || status === "cancelled") && isOccupancy && (
+            <span className="text-xs text-muted-foreground">
+              {status === "failed" ? "Modelado fallido" : "Modelado cancelado"}
             </span>
           )}
         </div>

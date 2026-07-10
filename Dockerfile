@@ -7,6 +7,44 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
+# --- R runtime for occupancy modeling (conda-forge; cross-arch) ---
+# Built once here and copied into the dev + runner stages. Why conda-forge and
+# not apt/CRAN: Debian's R is 4.2 (unmarked 1.5.x throws "invalid subscript type
+# 'list'" on it), and NO prebuilt modern-R unmarked binary exists for arm64
+# (CRAN's Debian repo + Posit P3M are amd64-only; host source builds hit the
+# OpenMP link error "___kmpc_critical"). conda-forge ships r-base 4.5 + all of
+# unmarked's heavy deps (Rcpp/RcppArmadillo/TMB/lme4/RcppEigen/jsonlite) as
+# native arm64 AND amd64 binaries. On amd64 r-unmarked itself is a binary too; on
+# arm64 only unmarked compiles from source — cleanly, against modern R +
+# conda's llvm-openmp. The runner is pointed here via OCCUPANCY_RSCRIPT_PATH.
+FROM base AS rbuild
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates bzip2 \
+    && rm -rf /var/lib/apt/lists/*
+RUN set -eux; \
+    ARCH="$(uname -m)"; \
+    case "$ARCH" in \
+      x86_64)  MSUB=linux-64 ;; \
+      aarch64) MSUB=linux-aarch64 ;; \
+      *) echo "unsupported arch $ARCH"; exit 1 ;; \
+    esac; \
+    mkdir -p /opt/micromamba/bin; \
+    curl -Ls "https://micro.mamba.pm/api/micromamba/${MSUB}/latest" \
+      | tar -xj -C /opt/micromamba/bin --strip-components=1 bin/micromamba; \
+    if [ "$MSUB" = linux-64 ]; then \
+      /opt/micromamba/bin/micromamba create -y -p /opt/rocc -c conda-forge \
+        r-base r-jsonlite r-unmarked; \
+    else \
+      /opt/micromamba/bin/micromamba create -y -p /opt/rocc -c conda-forge \
+        r-base r-jsonlite r-rcpp r-rcpparmadillo r-tmb r-lme4 r-rcppeigen r-pbapply \
+        c-compiler cxx-compiler make llvm-openmp; \
+      /opt/micromamba/bin/micromamba run -p /opt/rocc \
+        Rscript -e 'install.packages("unmarked", repos="https://cloud.r-project.org")'; \
+    fi; \
+    /opt/micromamba/bin/micromamba run -p /opt/rocc \
+      Rscript -e 'stopifnot(requireNamespace("unmarked", quietly=TRUE), requireNamespace("jsonlite", quietly=TRUE))'; \
+    /opt/micromamba/bin/micromamba clean -a -y; \
+    rm -rf /opt/micromamba
+
 # --- Dev (deps + ML tooling for development) ---
 FROM deps AS dev
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -14,6 +52,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 RUN curl -LsSf https://astral.sh/uv/install.sh | env INSTALLER_NO_MODIFY_PATH=1 sh \
     && mv /root/.local/bin/uv /usr/local/bin/uv
+# R runtime for occupancy modeling (see rbuild stage).
+COPY --from=rbuild /opt/rocc /opt/rocc
+ENV OCCUPANCY_RSCRIPT_PATH=/opt/rocc/bin/Rscript
 
 # --- Builder ---
 FROM base AS builder
@@ -32,6 +73,10 @@ ENV NODE_ENV=production
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-venv curl wget libgl1 libglib2.0-0 cron ffmpeg libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
+
+# R runtime for occupancy modeling (see rbuild stage).
+COPY --from=rbuild /opt/rocc /opt/rocc
+ENV OCCUPANCY_RSCRIPT_PATH=/opt/rocc/bin/Rscript
 
 # Timezone: US Eastern (for backup filenames and cron logs)
 ENV TZ=America/New_York

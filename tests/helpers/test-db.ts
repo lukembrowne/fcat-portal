@@ -380,6 +380,90 @@ const CAMERA_TRAP_DDL =
     computed_at INTEGER NOT NULL
   );
   CREATE UNIQUE INDEX idx_ai_audio_file ON acoustic_indices(audio_file_id);
+
+  CREATE TABLE occupancy_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    trigger TEXT NOT NULL DEFAULT 'manual',
+    bin_width_days INTEGER NOT NULL DEFAULT 5,
+    audio_confidence_threshold REAL NOT NULL DEFAULT 0.7,
+    thresholds_json TEXT,
+    n_models INTEGER NOT NULL DEFAULT 0,
+    n_eligible INTEGER NOT NULL DEFAULT 0,
+    duration_ms INTEGER,
+    notes TEXT,
+    created_by TEXT,
+    started_at INTEGER,
+    completed_at INTEGER,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+  CREATE TABLE occupancy_models (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL REFERENCES occupancy_runs(id) ON DELETE CASCADE,
+    species TEXT NOT NULL,
+    stream TEXT NOT NULL,
+    season TEXT,
+    sufficient_data INTEGER NOT NULL DEFAULT 0,
+    ineligible_reasons_json TEXT,
+    n_sites INTEGER NOT NULL DEFAULT 0,
+    n_sites_detected INTEGER NOT NULL DEFAULT 0,
+    total_detections INTEGER NOT NULL DEFAULT 0,
+    n_occasions INTEGER NOT NULL DEFAULT 0,
+    naive_occupancy REAL,
+    estimated_occupancy REAL,
+    occupancy_lower REAL,
+    occupancy_upper REAL,
+    mean_detection REAL,
+    aic REAL,
+    convergence INTEGER,
+    psi_formula TEXT,
+    det_formula TEXT,
+    fit_seconds REAL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+  CREATE UNIQUE INDEX idx_occupancy_models_run_species_stream ON occupancy_models(run_id, species, stream);
+  CREATE TABLE occupancy_covariate_effects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    model_id INTEGER NOT NULL REFERENCES occupancy_models(id) ON DELETE CASCADE,
+    submodel TEXT NOT NULL,
+    param TEXT NOT NULL,
+    estimate REAL NOT NULL,
+    se REAL,
+    z REAL,
+    p_value REAL
+  );
+  CREATE TABLE occupancy_predictions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    model_id INTEGER NOT NULL REFERENCES occupancy_models(id) ON DELETE CASCADE,
+    artifact_path TEXT,
+    grid_data_path TEXT,
+    n_cells INTEGER,
+    psi_min REAL,
+    psi_max REAL,
+    bbox_json TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+  CREATE TABLE occupancy_site_covariates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL REFERENCES occupancy_runs(id) ON DELETE CASCADE,
+    stream TEXT NOT NULL,
+    site_id TEXT NOT NULL,
+    site_name TEXT,
+    latitude REAL,
+    longitude REAL,
+    habitat TEXT,
+    elevation REAL,
+    forest_cover REAL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+  CREATE TABLE occupancy_public_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token TEXT NOT NULL UNIQUE,
+    label TEXT,
+    created_by TEXT NOT NULL,
+    revoked_at INTEGER,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
 `;
 
 export function createTestDb() {

@@ -27,7 +27,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import sharp from "sharp";
 import pLimit from "p-limit";
-import { eq, and, inArray, gte, sql, isNotNull } from "drizzle-orm";
+import { eq, and, or, inArray, gte, sql, isNotNull } from "drizzle-orm";
 
 import { db } from "@/db";
 import {
@@ -35,6 +35,7 @@ import {
   images,
   identifications,
   deployments,
+  externalImages,
   cameraTrapTrainingDatasets,
   processingJobs,
   type CameraTrapTrainingDataset,
@@ -43,11 +44,11 @@ import {
 import { requireAdmin, requirePermission } from "@/lib/auth";
 import type { ActionResult } from "@/lib/types";
 import {
-  downloadFileToBuffer,
   uploadLocalFileToSharedDrive,
   deleteDriveFile,
 } from "@/lib/drive-client";
 import { ML_DEFAULTS } from "@/lib/ml-defaults";
+import { loadImageBytes } from "@/lib/external/image-bytes";
 import {
   recordEvent,
   buildJobStartEvent,
@@ -148,6 +149,8 @@ export interface ExportPreviewSpeciesRow {
   folderName: string;
   total: number;
   train: number;
+  /** Portion of `train` sourced from external (e.g. LILA) data. */
+  trainExternal: number;
   val: number;
   test: number;
   trainDeployments: number;
@@ -235,6 +238,13 @@ interface CandidateRow {
   classifierConfidence: number | null;
   detectionClass: number;
   detectorModelVersion: string | null;
+  /** True for imported non-FCAT (e.g. LILA) images. */
+  isExternal: boolean;
+  /** Source dataset slug for external images; null for FCAT. */
+  sourceDataset: string | null;
+  /** Original LILA frame URL — used to lazily re-download a cleared external
+   *  cache entry at export time; null for FCAT or pre-provenance rows. */
+  sourceUrl: string | null;
 }
 
 interface CollectedCandidates {
@@ -297,6 +307,9 @@ async function collectExportCandidates(
       detectionClass: detections.detectionClass,
       detectorModelVersion: detections.modelVersion,
       excluded: deployments.excluded,
+      isExternal: images.isExternal,
+      sourceDataset: externalImages.sourceDataset,
+      sourceUrl: externalImages.sourceUrl,
     })
     .from(detections)
     .innerJoin(images, eq(images.id, detections.imageId))
@@ -305,6 +318,7 @@ async function collectExportCandidates(
       eq(identifications.detectionId, detections.id),
     )
     .innerJoin(deployments, eq(deployments.id, images.deploymentId))
+    .leftJoin(externalImages, eq(externalImages.imageId, images.id))
     .where(
       and(
         inArray(identifications.verificationStatus, ["verified", "corrected"]),
@@ -325,7 +339,15 @@ async function collectExportCandidates(
         // next export re-creates the dataset under a new version even on an
         // unchanged corpus. Same one-time, harmless effect documented for the
         // `quality` block in training-export-helpers.ts:computeContentHash.
-        isNotNull(images.driveFileId),
+        //
+        // External (LILA) images are the exception: they have no driveFileId
+        // but DO have a durable local `path` under data/external/ (never the
+        // ephemeral ML cache), so they are fetchable via loadImageBytes. Admit
+        // them through the second branch.
+        or(
+          isNotNull(images.driveFileId),
+          and(eq(images.isExternal, true), isNotNull(images.path)),
+        ),
       ),
     );
 
@@ -349,6 +371,9 @@ async function collectExportCandidates(
     classifierConfidence: r.classifierConfidence ?? null,
     detectionClass: r.detectionClass,
     detectorModelVersion: r.detectorModelVersion ?? null,
+    isExternal: Boolean(r.isExternal),
+    sourceDataset: r.sourceDataset ?? null,
+    sourceUrl: r.sourceUrl ?? null,
   }));
 
   // 2. Group by label, drop labels that fail either pre-filter:
@@ -357,6 +382,13 @@ async function collectExportCandidates(
   //      balanced into train+val+test even after stratification
   const labelCounts = new Map<string, number>();
   const labelDeployments = new Map<string, Set<number>>();
+  // Coverage gate counts LOCAL deployments only: external (LILA) data augments
+  // train but can never supply val/test, so it must not help a class clear the
+  // ≥3-deployment / 1-1-1 coverage requirement (honest-eval invariant, KTD5).
+  // The min-examples gate still uses the combined count (labelCounts) so a new
+  // class like brocket can reach the example threshold via external train data —
+  // it only survives if LOCAL data still covers val+test.
+  const labelDeploymentsLocal = new Map<string, Set<number>>();
   for (const c of candidates) {
     if (!c.finalLabel) continue;
     labelCounts.set(c.finalLabel, (labelCounts.get(c.finalLabel) ?? 0) + 1);
@@ -364,11 +396,17 @@ async function collectExportCandidates(
       labelDeployments.set(c.finalLabel, new Set<number>());
     }
     labelDeployments.get(c.finalLabel)!.add(c.deploymentId);
+    if (!c.isExternal) {
+      if (!labelDeploymentsLocal.has(c.finalLabel)) {
+        labelDeploymentsLocal.set(c.finalLabel, new Set<number>());
+      }
+      labelDeploymentsLocal.get(c.finalLabel)!.add(c.deploymentId);
+    }
   }
 
   const { classList, droppedSpecies } = selectIncludedClasses({
     labelCounts,
-    labelDeployments,
+    labelDeployments: labelDeploymentsLocal,
     minExamples,
     minDeployments: STRATIFY_MIN_DEPLOYMENTS,
   });
@@ -670,6 +708,9 @@ export async function getExportPreview(
       string,
       { train: Set<string>; val: Set<string>; test: Set<string> }
     >();
+    // External (LILA) train images per class, so the preview can show
+    // "FCAT (+N LILA)" in the train column. External are train-only.
+    const perLabelTrainExternal = new Map<string, number>();
     for (const row of collected.filtered) {
       const split = collected.splitByDeployment.get(row.deploymentId);
       if (!split) continue;
@@ -680,6 +721,13 @@ export async function getExportPreview(
       };
       existingCounts[split] += 1;
       perLabelCounts.set(row.finalLabel, existingCounts);
+
+      if (split === "train" && row.isExternal) {
+        perLabelTrainExternal.set(
+          row.finalLabel,
+          (perLabelTrainExternal.get(row.finalLabel) ?? 0) + 1,
+        );
+      }
 
       const existingDeps = perLabelDeployments.get(row.finalLabel) ?? {
         train: new Set<string>(),
@@ -707,6 +755,7 @@ export async function getExportPreview(
           folderName: speciesFolderName(label),
           total: splitCounts.train + splitCounts.val + splitCounts.test,
           train: splitCounts.train,
+          trainExternal: perLabelTrainExternal.get(label) ?? 0,
           val: splitCounts.val,
           test: splitCounts.test,
           trainDeployments: depSets.train.size,
@@ -1209,14 +1258,22 @@ async function processTrainingExportJobInternal(
             const split = splitByDeployment.get(row.deploymentId)!;
             const folderName = speciesFolderName(row.finalLabel);
             const outDir = path.join(versionDir, split, folderName);
-            const outPath = path.join(outDir, `${row.detectionId}.jpg`);
+            // Encode source in external filenames so origin is obvious on disk;
+            // FCAT crops keep the bare detectionId name (no churn). Stems stay
+            // globally unique (external are train-only), so the classifier's
+            // cross-split contamination check is unaffected.
+            const cropFile =
+              row.isExternal && row.sourceDataset
+                ? `lila-${row.sourceDataset}-${row.detectionId}.jpg`
+                : `${row.detectionId}.jpg`;
+            const outPath = path.join(outDir, cropFile);
             try {
               await fs.mkdir(outDir, { recursive: true });
               await cropAndWriteAtomic(buffer, row, outPath, quality);
               written += 1;
               csvSlots[idx] = {
                 // POSIX-style relative path regardless of OS.
-                cropPath: [split, folderName, `${row.detectionId}.jpg`].join("/"),
+                cropPath: [split, folderName, cropFile].join("/"),
                 detectionId: row.detectionId,
                 imageId: row.imageId,
                 deploymentId: row.deploymentId,
@@ -1234,6 +1291,7 @@ async function processTrainingExportJobInternal(
                 bboxHeight: row.bboxHeight,
                 detectionClass: row.detectionClass,
                 detectorModelVersion: row.detectorModelVersion,
+                sourceDataset: row.sourceDataset,
               };
             } catch (err) {
               // Disk-full is fatal for the whole job; anything else is a per-crop
@@ -1334,8 +1392,52 @@ async function processTrainingExportJobInternal(
     // deployment whose every crop failed contributes nothing here and is
     // omitted from the summary.
     const counts = buildCounts(
-      writtenRows.map((r) => ({ finalLabel: r.label, split: r.split })),
+      writtenRows.map((r) => ({
+        finalLabel: r.label,
+        split: r.split,
+        isExternal: r.sourceDataset != null,
+      })),
     );
+
+    // Per-source totals + manifest provenance for external (LILA) data.
+    const externalByDataset = new Map<string, number>();
+    for (const r of writtenRows) {
+      if (r.sourceDataset) {
+        externalByDataset.set(
+          r.sourceDataset,
+          (externalByDataset.get(r.sourceDataset) ?? 0) + 1,
+        );
+      }
+    }
+    const externalCount = writtenRows.filter((r) => r.sourceDataset != null).length;
+    const fcatCount = writtenCount - externalCount;
+
+    let externalSources: Array<{
+      dataset: string;
+      imageCount: number;
+      license: string | null;
+    }> = [];
+    if (externalByDataset.size > 0) {
+      const licRows = await db
+        .select({
+          dataset: externalImages.sourceDataset,
+          license: externalImages.license,
+        })
+        .from(externalImages);
+      const licByDataset = new Map<string, string | null>();
+      for (const lr of licRows) {
+        if (!licByDataset.has(lr.dataset)) {
+          licByDataset.set(lr.dataset, lr.license ?? null);
+        }
+      }
+      externalSources = Array.from(externalByDataset.entries())
+        .map(([dataset, imageCount]) => ({
+          dataset,
+          imageCount,
+          license: licByDataset.get(dataset) ?? null,
+        }))
+        .sort((a, b) => a.dataset.localeCompare(b.dataset));
+    }
     const perDeploymentCounts = new Map<number, number>();
     for (const r of writtenRows) {
       perDeploymentCounts.set(
@@ -1370,6 +1472,7 @@ async function processTrainingExportJobInternal(
         cropLongEdge: quality.cropLongEdge,
         jpegQuality: quality.jpegQuality,
       },
+      externalSources,
     });
     const manifestPath = path.join(versionDir, "manifest.json");
     await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2));
@@ -1404,6 +1507,8 @@ async function processTrainingExportJobInternal(
           createdBy,
           createdAt,
           imageCount: writtenCount,
+          fcatImageCount: fcatCount,
+          externalImageCount: externalCount,
           classCount: finalClassList.length,
           minExamplesThreshold: minExamples,
           classListJson: JSON.stringify(
@@ -1512,21 +1617,6 @@ async function markExportJobFailed(jobId: number, err: unknown): Promise<void> {
  * Resolve image bytes — local path first, Drive fallback. Mirrors the
  * pattern used by the image proxy and ml-runner.
  */
-async function loadImageBytes(row: CandidateRow): Promise<Buffer> {
-  if (row.imagePath) {
-    try {
-      return await fs.readFile(row.imagePath);
-    } catch {
-      // Fall through to Drive.
-    }
-  }
-  if (!row.driveFileId) {
-    throw new Error(
-      `image ${row.imageId} (${row.filename}) has no local path and no driveFileId`,
-    );
-  }
-  return await downloadFileToBuffer(row.driveFileId);
-}
 
 /**
  * Crop a normalized bbox out of an image with `cropPadding` padding, resize the

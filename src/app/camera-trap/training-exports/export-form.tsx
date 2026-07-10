@@ -287,14 +287,26 @@ function SplitCell({
   names,
   delta,
   previous,
+  external,
 }: {
   count: number;
   deployments: number;
   names: string[];
   delta?: number | null;
   previous?: number | null;
+  /** External (LILA) images included in this count; shown as a "+N LILA" badge. */
+  external?: number;
 }) {
   const deltaBadge = <DeltaBadge delta={delta} previous={previous} />;
+  const externalBadge =
+    external && external > 0 ? (
+      <span
+        className="ml-1 text-[10px] font-medium text-amber-600"
+        title="Imágenes externas (LILA) incluidas en train"
+      >
+        +{external.toLocaleString("es-EC")} LILA
+      </span>
+    ) : null;
 
   if (count === 0) {
     return (
@@ -328,6 +340,7 @@ function SplitCell({
   return (
     <span>
       {countEl}
+      {externalBadge}
       {deltaBadge}
     </span>
   );
@@ -355,6 +368,7 @@ function SpeciesDeltaRow({ row }: { row: PreviewDeltaRow }) {
           names={row.trainDeploymentNames}
           delta={row.delta?.train}
           previous={row.baseline?.train}
+          external={row.trainExternal}
         />
       </td>
       <td className="py-1 px-2 text-right tabular-nums">

@@ -170,6 +170,7 @@ const CAMERA_TRAP_DDL =
     upload_newest_ibutton_date TEXT,
     upload_newest_calibration_date TEXT,
     training_split TEXT,
+    is_external INTEGER NOT NULL DEFAULT 0,
     previous_camera_count INTEGER,
     previous_audio_count INTEGER,
     previous_ibutton_count INTEGER,
@@ -240,7 +241,8 @@ const CAMERA_TRAP_DDL =
     starred_at INTEGER,
     compressed INTEGER NOT NULL DEFAULT 0,
     original_file_size INTEGER,
-    setup_tag TEXT
+    setup_tag TEXT,
+    is_external INTEGER NOT NULL DEFAULT 0
   );
 
   CREATE TABLE biochoco_detections (
@@ -267,6 +269,18 @@ const CAMERA_TRAP_DDL =
     verified_by TEXT,
     verified_at INTEGER,
     classifier_model_id INTEGER
+  );
+
+  CREATE TABLE biochoco_external_images (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    image_id INTEGER NOT NULL REFERENCES biochoco_images(id) ON DELETE CASCADE,
+    source_dataset TEXT NOT NULL,
+    source_image_id TEXT NOT NULL,
+    source_url TEXT,
+    original_taxon TEXT,
+    license TEXT,
+    mapped_species_id INTEGER REFERENCES biochoco_species(id) ON DELETE SET NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
   CREATE TABLE biochoco_species (

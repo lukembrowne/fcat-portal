@@ -146,6 +146,19 @@ const statements = [
     verified_at INTEGER
   )`,
 
+  // BioChoco — External Images (provenance for imported non-FCAT data, e.g. LILA)
+  `CREATE TABLE IF NOT EXISTS biochoco_external_images (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    image_id INTEGER NOT NULL REFERENCES biochoco_images(id) ON DELETE CASCADE,
+    source_dataset TEXT NOT NULL,
+    source_image_id TEXT NOT NULL,
+    source_url TEXT,
+    original_taxon TEXT,
+    license TEXT,
+    mapped_species_id INTEGER REFERENCES biochoco_species(id) ON DELETE SET NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+
   // BioChoco — Videos (camera trap video files)
   `CREATE TABLE IF NOT EXISTS biochoco_videos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -861,6 +874,13 @@ const migrations = [
   `ALTER TABLE camera_trap_training_datasets ADD COLUMN drive_archive_web_view_link TEXT`,
   `ALTER TABLE camera_trap_training_datasets ADD COLUMN archive_uploaded_at INTEGER`,
 
+  // External-image provenance flags — LILA import (2026-06-29).
+  `ALTER TABLE biochoco_deployments ADD COLUMN is_external INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE biochoco_images ADD COLUMN is_external INTEGER NOT NULL DEFAULT 0`,
+  // Per-source export totals surfaced in the history table (2026-06-29).
+  `ALTER TABLE camera_trap_training_datasets ADD COLUMN fcat_image_count INTEGER`,
+  `ALTER TABLE camera_trap_training_datasets ADD COLUMN external_image_count INTEGER`,
+
   // Climate — per-cell QC flag provenance (raw value + reason, sparse JSON)
   `ALTER TABLE climate_readings ADD COLUMN qc_flags TEXT`,
 
@@ -879,6 +899,11 @@ for (const m of migrations) {
 const postMigrationIndexes = [
   `CREATE INDEX IF NOT EXISTS idx_biochoco_images_starred ON biochoco_images(starred) WHERE starred = 1`,
   `CREATE INDEX IF NOT EXISTS idx_audio_detections_job ON audio_detections(job_id)`,
+
+  // External-image provenance lookups + idempotency (LILA import) (2026-06-29)
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_biochoco_external_images_image_id ON biochoco_external_images(image_id)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_biochoco_external_images_source ON biochoco_external_images(source_dataset, source_image_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_biochoco_external_images_dataset ON biochoco_external_images(source_dataset)`,
 
   // Species detection browser — partial indexes for effective-species aggregation.
   // Split the active vs. corrected branches so each gets a sargable predicate

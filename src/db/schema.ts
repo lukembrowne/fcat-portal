@@ -198,6 +198,12 @@ export const deployments = sqliteTable(
     previousCountsCheckedAt: integer("previous_counts_checked_at", { mode: "timestamp" }),
     // Training split assignment for custom classifier (write-once, set by exporter)
     trainingSplit: text("training_split", { enum: ["train", "val", "test"] }),
+    // External (non-FCAT) provenance: true for synthetic deployments holding
+    // imported LILA images. One per source dataset, pinned to the train split,
+    // and skipped by split-hash + stratification (see the exporter).
+    isExternal: integer("is_external", { mode: "boolean" })
+      .notNull()
+      .default(false),
     // Which Shared Drive hosts this deployment's data (multi-drive fan-out).
     // Nullable: legacy rows + rows with NULL driveFolderId stay NULL. Routing
     // sets it on rows it creates. ON DELETE RESTRICT in push-schema.mjs.
@@ -306,6 +312,10 @@ export const images = sqliteTable(
     starredBy: text("starred_by"),
     starredAt: integer("starred_at", { mode: "timestamp" }),
     setupTag: text("setup_tag"),  // 'deployment' | 'retrieval' | null
+    // Mirror of the deployment's external flag, for fast filtering of crops.
+    isExternal: integer("is_external", { mode: "boolean" })
+      .notNull()
+      .default(false),
   },
   (table) => [
     index("idx_biochoco_images_deployment_id").on(table.deploymentId),
@@ -411,6 +421,44 @@ export const identifications = sqliteTable(
 );
 
 // ---------------------------------------------------------------------------
+// External Images (provenance for imported non-FCAT training data, e.g. LILA)
+// ---------------------------------------------------------------------------
+
+export const externalImages = sqliteTable(
+  "biochoco_external_images",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    imageId: integer("image_id")
+      .notNull()
+      .references(() => images.id, { onDelete: "cascade" }),
+    // Source dataset slug, e.g. "orinoquia" | "wcs".
+    sourceDataset: text("source_dataset").notNull(),
+    // Original image id within the source dataset; idempotency key with dataset.
+    sourceImageId: text("source_image_id").notNull(),
+    sourceUrl: text("source_url"),
+    // Taxon as labeled by the source, before mapping to our canonical class.
+    originalTaxon: text("original_taxon"),
+    license: text("license"),
+    // Canonical class this image was mapped into (FK to species when resolvable).
+    mappedSpeciesId: integer("mapped_species_id").references(
+      () => species.id,
+      { onDelete: "set null" }
+    ),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [
+    uniqueIndex("idx_biochoco_external_images_image_id").on(table.imageId),
+    uniqueIndex("idx_biochoco_external_images_source").on(
+      table.sourceDataset,
+      table.sourceImageId
+    ),
+    index("idx_biochoco_external_images_dataset").on(table.sourceDataset),
+  ]
+);
+
+// ---------------------------------------------------------------------------
 // Camera Trap — Training Datasets (versioned exports for custom classifier)
 // ---------------------------------------------------------------------------
 
@@ -425,6 +473,9 @@ export const cameraTrapTrainingDatasets = sqliteTable(
       .default(sql`(unixepoch())`),
     createdBy: text("created_by").notNull(),
     imageCount: integer("image_count").notNull(),
+    // Per-source split of imageCount (nullable for pre-LILA exports).
+    fcatImageCount: integer("fcat_image_count"),
+    externalImageCount: integer("external_image_count"),
     classCount: integer("class_count").notNull(),
     minExamplesThreshold: integer("min_examples_threshold").notNull(),
     classListJson: text("class_list_json").notNull(),
@@ -1222,6 +1273,9 @@ export type NewDetection = typeof detections.$inferInsert;
 
 export type Identification = typeof identifications.$inferSelect;
 export type NewIdentification = typeof identifications.$inferInsert;
+
+export type ExternalImage = typeof externalImages.$inferSelect;
+export type NewExternalImage = typeof externalImages.$inferInsert;
 
 export type CameraTrapTrainingDataset =
   typeof cameraTrapTrainingDatasets.$inferSelect;

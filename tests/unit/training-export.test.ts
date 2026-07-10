@@ -486,8 +486,20 @@ describe("buildCounts", () => {
     // perClass is keyed by the on-disk folder name (canonical species name
     // with spaces preserved), matching what the exporter writes to disk and
     // what the model server returns at inference time.
-    expect(counts.perClass.Ocelot).toEqual({ train: 2, val: 1, test: 0 });
-    expect(counts.perClass.Puma).toEqual({ train: 1, val: 0, test: 1 });
+    expect(counts.perClass.Ocelot).toEqual({
+      train: 2,
+      val: 1,
+      test: 0,
+      trainFcat: 2,
+      trainExternal: 0,
+    });
+    expect(counts.perClass.Puma).toEqual({
+      train: 1,
+      val: 0,
+      test: 1,
+      trainFcat: 1,
+      trainExternal: 0,
+    });
   });
 
   it("uses canonical species names (spaces, diacritics) as perClass keys", () => {
@@ -660,6 +672,7 @@ describe("buildCropsCsv", () => {
     bboxHeight: 0.4,
     detectionClass: 0,
     detectorModelVersion: "MDV6-yolov9-c",
+    sourceDataset: null,
   };
 
   it("emits a header matching CROPS_CSV_COLUMNS", () => {
@@ -733,6 +746,7 @@ function writtenRow(
     bboxHeight: 0.5,
     detectionClass: 0,
     detectorModelVersion: "MDV6-yolov9-c",
+    sourceDataset: null,
   };
 }
 
@@ -771,7 +785,13 @@ describe("counts derived from the written set", () => {
     expect(counts.total + skipped).toBe(candidateCount);
     // total reconciles with the per-split sum and the on-disk JPEG count.
     expect(counts.train + counts.val + counts.test).toBe(counts.total);
-    expect(counts.perClass.Ocelot).toEqual({ train: 2, val: 1, test: 1 });
+    expect(counts.perClass.Ocelot).toEqual({
+      train: 2,
+      val: 1,
+      test: 1,
+      trainFcat: 2,
+      trainExternal: 0,
+    });
   });
 
   it("omits a deployment whose every crop failed from the per-deployment tally", () => {

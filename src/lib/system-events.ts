@@ -96,6 +96,7 @@ export const JOB_LABELS: Record<JobType, string> = {
   cache_deployment_images: "Caché de imágenes",
   training_export: "Exporte de entrenamiento",
   training_export_upload: "Subida de exporte",
+  external_import: "Importación de imágenes externas",
 };
 
 const OUTCOME_VERBS: Record<TerminalOutcome, string> = {

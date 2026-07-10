@@ -23,6 +23,7 @@ export const JOB_TYPES = {
   CACHE_DEPLOYMENT_IMAGES: "cache_deployment_images",
   TRAINING_EXPORT: "training_export",
   TRAINING_EXPORT_UPLOAD: "training_export_upload",
+  EXTERNAL_IMPORT: "external_import",
 } as const;
 
 export type JobType = (typeof JOB_TYPES)[keyof typeof JOB_TYPES];

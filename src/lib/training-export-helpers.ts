@@ -453,6 +453,8 @@ export interface CropCsvRow {
   detectionClass: number;
   /** Detector model version, e.g. "MDV6-yolov9-c" or "manual". */
   detectorModelVersion: string | null;
+  /** Source dataset slug for external (e.g. LILA) crops; null for FCAT. */
+  sourceDataset: string | null;
 }
 
 /** Stable column order for crops.csv. */
@@ -475,6 +477,7 @@ export const CROPS_CSV_COLUMNS = [
   "bbox_height",
   "detection_class",
   "detector_model_version",
+  "source_dataset",
   "crop_padding",
   "crop_long_edge",
   "jpeg_quality",
@@ -522,6 +525,7 @@ export function buildCropsCsv(
         toCsvField(r.bboxHeight),
         toCsvField(r.detectionClass),
         toCsvField(r.detectorModelVersion),
+        toCsvField(r.sourceDataset),
         toCsvField(params.cropPadding),
         toCsvField(params.cropLongEdge),
         toCsvField(params.jpegQuality),
@@ -540,32 +544,61 @@ export interface ManifestCounts {
   train: number;
   val: number;
   test: number;
-  perClass: Record<string, { train: number; val: number; test: number }>;
+  /** External (non-FCAT) image total — by invariant all in the train split.
+   * Optional: a baseline parsed from a pre-LILA manifest won't carry it. */
+  external?: number;
+  perClass: Record<
+    string,
+    {
+      train: number;
+      val: number;
+      test: number;
+      /** Train split broken out by source (optional for legacy manifests).
+       * val/test are always FCAT. */
+      trainFcat?: number;
+      trainExternal?: number;
+    }
+  >;
 }
 
 /**
  * Aggregate per-class-per-split counts from a row list. Used both for the
- * manifest and for sanity-checking the export.
+ * manifest and for sanity-checking the export. `isExternal` (default false)
+ * splits the train count into FCAT vs external — external rows are train-only
+ * by construction (their synthetic deployments are pinned to train).
  */
 export function buildCounts(
-  rows: Array<{ finalLabel: string; split: Split }>,
+  rows: Array<{ finalLabel: string; split: Split; isExternal?: boolean }>,
 ): ManifestCounts {
   const counts: ManifestCounts = {
     total: rows.length,
     train: 0,
     val: 0,
     test: 0,
+    external: 0,
     perClass: {},
   };
   for (const row of rows) {
     counts[row.split] += 1;
+    if (row.isExternal) counts.external = (counts.external ?? 0) + 1;
     // Key by the same folder name the exporter writes to disk, so the
     // manifest's perClass map matches the dataset's directory structure.
     const className = speciesFolderName(row.finalLabel);
     if (!counts.perClass[className]) {
-      counts.perClass[className] = { train: 0, val: 0, test: 0 };
+      counts.perClass[className] = {
+        train: 0,
+        val: 0,
+        test: 0,
+        trainFcat: 0,
+        trainExternal: 0,
+      };
     }
-    counts.perClass[className][row.split] += 1;
+    const pc = counts.perClass[className];
+    pc[row.split] += 1;
+    if (row.split === "train") {
+      if (row.isExternal) pc.trainExternal = (pc.trainExternal ?? 0) + 1;
+      else pc.trainFcat = (pc.trainFcat ?? 0) + 1;
+    }
   }
   return counts;
 }
@@ -597,6 +630,12 @@ export function buildManifest(input: {
     cropLongEdge: number;
     jpegQuality: number;
   };
+  /** External data provenance, one entry per contributing source dataset. */
+  externalSources?: Array<{
+    dataset: string;
+    imageCount: number;
+    license: string | null;
+  }>;
 }): Record<string, unknown> {
   return {
     version: input.version,
@@ -622,6 +661,10 @@ export function buildManifest(input: {
       cropPadding: input.pipeline.cropPadding,
       cropLongEdge: input.pipeline.cropLongEdge,
       jpegQuality: input.pipeline.jpegQuality,
+      // Present only when external (e.g. LILA) data contributed to this export.
+      ...(input.externalSources && input.externalSources.length > 0
+        ? { externalSources: input.externalSources }
+        : {}),
     },
     cropsCsv: "crops.csv",
   };
@@ -647,6 +690,8 @@ export interface PreviewDeltaRow {
   label: string;
   folderName: string;
   train: number;
+  /** Portion of `train` sourced from external (e.g. LILA) data. */
+  trainExternal?: number;
   val: number;
   test: number;
   total: number;
@@ -675,6 +720,8 @@ export interface PreviewSpeciesCounts {
   label: string;
   folderName: string;
   train: number;
+  /** Portion of `train` sourced from external (e.g. LILA) data. */
+  trainExternal?: number;
   val: number;
   test: number;
   total: number;
@@ -722,6 +769,7 @@ export function buildPreviewDeltas(
       continue;
     }
     existing.train += row.train;
+    existing.trainExternal = (existing.trainExternal ?? 0) + (row.trainExternal ?? 0);
     existing.val += row.val;
     existing.test += row.test;
     existing.total += row.total;
@@ -783,6 +831,7 @@ export function buildPreviewDeltas(
         label: folderName,
         folderName,
         train: 0,
+        trainExternal: 0,
         val: 0,
         test: 0,
         total: 0,

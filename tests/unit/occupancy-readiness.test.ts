@@ -58,4 +58,13 @@ describe("computeReadiness", () => {
     expect(report.nSitesWithCoords).toBe(4);
     expect(report.confidenceThreshold).toBe(0.7);
   });
+
+  it("surfaces the no-capture-date drop count (defaults to 0)", () => {
+    const s = sites(5);
+    expect(computeReadiness(s, [], { stream: "camera" }).detectionsDroppedNoDate).toBe(0);
+    expect(
+      computeReadiness(s, [], { stream: "camera", detectionsDroppedNoDate: 42 })
+        .detectionsDroppedNoDate,
+    ).toBe(42);
+  });
 });

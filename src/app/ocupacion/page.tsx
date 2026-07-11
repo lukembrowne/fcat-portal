@@ -65,6 +65,12 @@ function StreamSection({
             muestreo válida (sin fechas de instalación/retiro ni fechas legibles en los archivos).
           </p>
         ) : null}
+        {report.detectionsDroppedNoDate > 0 ? (
+          <p className="text-xs text-amber-700 dark:text-amber-400">
+            {report.detectionsDroppedNoDate} detección(es) sin fecha de captura resoluble
+            (nombre de archivo sin fecha, sin EXIF ni fecha de archivo) quedaron fuera del análisis.
+          </p>
+        ) : null}
         <ReadinessTable rows={report.species} stream={stream} modeled={modeled} />
       </CardContent>
     </Card>
@@ -177,7 +183,7 @@ export default async function OccupancyPage() {
 
       <StreamSection
         title="Cámaras trampa"
-        subtitle="Solo detecciones verificadas o corregidas."
+        subtitle="Solo instalaciones verificadas (imágenes confirmadas) y no excluidas; solo detecciones verificadas o corregidas."
         report={camera}
         dropped={cameraSitesDropped}
         stream="camera"
@@ -186,7 +192,7 @@ export default async function OccupancyPage() {
 
       <StreamSection
         title="Grabaciones de audio"
-        subtitle={`Detecciones con confianza ≥ ${(audio.confidenceThreshold ?? 0.7).toFixed(2)} (o verificadas). La confianza de BirdNET no es una probabilidad y varía entre especies — umbral global como primer criterio.`}
+        subtitle={`Mismas instalaciones verificadas y no excluidas que cámaras trampa. Detecciones con confianza ≥ ${(audio.confidenceThreshold ?? 0.7).toFixed(2)} (o verificadas). La confianza de BirdNET no es una probabilidad y varía entre especies — umbral global como primer criterio.`}
         report={audio}
         dropped={audioSitesDropped}
         stream="audio"
@@ -196,10 +202,11 @@ export default async function OccupancyPage() {
       <footer className="text-xs text-muted-foreground border-t pt-4 space-y-1">
         <p>
           <strong>Métodos:</strong> ocasiones de {camera.binWidth} días; sitio = instalación;
-          ventana de muestreo por fechas de instalación/retiro (ODK) o, en su defecto, por las
-          fechas de captura leídas de los nombres de archivo. Umbrales de elegibilidad:
-          ≥{t.minSites} sitios, ≥{t.minSitesDetected} sitios con detección, ≥{t.minDetections}{" "}
-          detecciones, ≥{t.minOccasions} ocasiones.
+          ventana de muestreo por fechas de instalación/retiro (ODK) unida a las fechas de captura
+          (nombre de archivo, EXIF o fecha de archivo). Las <em>ocasiones</em> son el ancho de la
+          matriz de muestreo (máximo entre sitios), por eso son iguales para todas las especies.
+          Umbrales de elegibilidad: ≥{t.minSites} sitios, ≥{t.minSitesDetected} sitios con detección,
+          ≥{t.minDetections} detecciones, ≥{t.minOccasions} ocasiones.
         </p>
         <p>Generado: {new Date(generatedAt).toLocaleString("es-EC")}</p>
       </footer>

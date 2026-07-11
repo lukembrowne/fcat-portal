@@ -2,11 +2,16 @@
  * Capture-date resolution for occupancy occasion binning.
  *
  * Spike finding (2026-07-03): `biochoco_images.exif_timestamp` is populated for
- * only ~20 of 23,304 images, so the reliable capture-date source is the
- * filename (camera-trap filenames embed `YYYYMMDD`, e.g.
- * `"Uno - 20130708 - MFDC0007.JPG"`). We parse the filename first and fall back
- * to exif when present. A UTC calendar day is all occupancy needs — occasion
- * bins are day-granular, so we deliberately discard sub-day time and timezone.
+ * only ~50 of 133k images. Legacy camera-trap filenames embed `YYYYMMDD` (e.g.
+ * `"Uno - 20130708 - MFDC0007.JPG"`), but current field data uses dateless
+ * time-of-day filenames (e.g. `"084348_0101.jpg"`). For those, the only usable
+ * capture-day signal is `biochoco_images.file_modified` (Unix seconds), which
+ * tracks true capture day: on prod (2026-07-10) dep 121's 2,121 images spread
+ * over 30 distinct file_modified days aligned to its 30-day deployment window —
+ * a bulk-upload time would collapse to 1–2 days, so this is capture time, not
+ * upload time. Resolution order: filename → exif → file_modified. A UTC calendar
+ * day is all occupancy needs — occasion bins are day-granular, so we deliberately
+ * discard sub-day time and timezone.
  */
 
 /** A capture date reduced to a UTC calendar day (midnight UTC). */
@@ -68,17 +73,34 @@ export function parseCaptureDayFromExif(
 }
 
 /**
- * Resolve an image's capture day, filename first (see module note), exif as
- * fallback. Returns null when neither yields a plausible date — callers must
- * treat that as an excluded image with an explicit reason, never a silent drop.
+ * Parse a Unix-seconds file-modification time into a UTC calendar day. Reuses
+ * `toUtcDay`'s 2000–2100 bound so a 0/garbage epoch (→ 1970) is rejected rather
+ * than binned as a real occasion.
+ */
+export function parseCaptureDayFromFileModified(
+  fileModified: number | null | undefined,
+): CaptureDay | null {
+  if (fileModified == null || !Number.isFinite(fileModified)) return null;
+  const d = new Date(fileModified * 1000);
+  if (Number.isNaN(d.getTime())) return null;
+  return toUtcDay(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate());
+}
+
+/**
+ * Resolve an image's capture day: filename first (see module note), then exif,
+ * then file_modified (the only signal for dateless current filenames). Returns
+ * null when none yields a plausible date — callers must treat that as an excluded
+ * image with an explicit reason, never a silent drop.
  */
 export function resolveCaptureDay(image: {
   filename?: string | null;
   exifTimestamp?: string | null;
+  fileModified?: number | null;
 }): CaptureDay | null {
   return (
     parseCaptureDayFromFilename(image.filename) ??
-    parseCaptureDayFromExif(image.exifTimestamp)
+    parseCaptureDayFromExif(image.exifTimestamp) ??
+    parseCaptureDayFromFileModified(image.fileModified)
   );
 }
 

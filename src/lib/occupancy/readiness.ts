@@ -52,6 +52,9 @@ export interface ReadinessReport {
   nSitesWithCoords: number;
   nSpecies: number;
   nEligibleSpecies: number;
+  /** Detections discarded because no capture day could be resolved (0 for a
+   *  healthy stream). Surfaced so a silent "0 species" can never recur unseen. */
+  detectionsDroppedNoDate: number;
   species: ReadinessSpeciesRow[];
 }
 
@@ -60,6 +63,8 @@ export interface ReadinessOptions {
   binWidth?: number;
   confidenceThreshold?: number;
   thresholds?: EligibilityThresholds;
+  /** Passed through from the fetch layer for surfacing in the report. */
+  detectionsDroppedNoDate?: number;
 }
 
 export function computeReadiness(
@@ -110,6 +115,7 @@ export function computeReadiness(
     nSitesWithCoords: sites.filter((s) => s.latitude != null && s.longitude != null).length,
     nSpecies: rows.length,
     nEligibleSpecies: rows.filter((r) => r.eligible).length,
+    detectionsDroppedNoDate: opts.detectionsDroppedNoDate ?? 0,
     species: rows,
   };
 }

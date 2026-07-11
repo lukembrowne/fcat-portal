@@ -41,7 +41,7 @@ const DDL = `
   );
   CREATE TABLE biochoco_images (
     id INTEGER PRIMARY KEY AUTOINCREMENT, deployment_id INTEGER NOT NULL, filename TEXT NOT NULL,
-    status TEXT, exif_timestamp TEXT
+    status TEXT, exif_timestamp TEXT, file_modified INTEGER
   );
   CREATE TABLE biochoco_detections (
     id INTEGER PRIMARY KEY AUTOINCREMENT, image_id INTEGER NOT NULL, bbox_x REAL, bbox_y REAL,

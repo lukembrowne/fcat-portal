@@ -64,6 +64,10 @@ export interface DetectionFrame {
   totalDetections: number;
   /** Naive occupancy = detected / surveyed (0 when nothing surveyed). */
   naiveOccupancy: number;
+  /** Detection events for a site not in this frame's pool (excluded). */
+  nUnknownSite: number;
+  /** Detection events whose capture day fell outside their site's window. */
+  nOutOfWindow: number;
 }
 
 export interface BuildOptions {
@@ -89,8 +93,12 @@ export function buildDetectionFrame(
   // events outside a site's window (out-of-window detections are excluded, never
   // silently folded into occasion 0).
   const eventsBySite = new Map<string, CaptureDay[]>();
+  let nUnknownSite = 0;
   for (const ev of events) {
-    if (!layouts.has(ev.siteId)) continue;
+    if (!layouts.has(ev.siteId)) {
+      nUnknownSite++;
+      continue;
+    }
     const arr = eventsBySite.get(ev.siteId);
     if (arr) arr.push(ev.captureDay);
     else eventsBySite.set(ev.siteId, [ev.captureDay]);
@@ -103,6 +111,7 @@ export function buildDetectionFrame(
   let nSitesSurveyed = 0;
   let nSitesDetected = 0;
   let totalDetections = 0;
+  let nOutOfWindow = 0;
 
   for (const site of sites) {
     const layout = layouts.get(site.siteId)!;
@@ -116,7 +125,10 @@ export function buildDetectionFrame(
     let siteDetections = 0;
     for (const day of eventsBySite.get(site.siteId) ?? []) {
       const idx = occasionIndexForDay(layout, day, binWidth);
-      if (idx === null) continue; // out of window
+      if (idx === null) {
+        nOutOfWindow++; // out of window
+        continue;
+      }
       row[idx] = 1;
       siteDetections++;
     }
@@ -149,5 +161,7 @@ export function buildDetectionFrame(
     nSitesDetected,
     totalDetections,
     naiveOccupancy: nSitesSurveyed > 0 ? nSitesDetected / nSitesSurveyed : 0,
+    nUnknownSite,
+    nOutOfWindow,
   };
 }

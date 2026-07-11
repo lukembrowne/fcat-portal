@@ -38,7 +38,12 @@ const COLUMNS: { key: SortKey; label: string; numeric: boolean; title?: string }
     numeric: true,
     title: "Detecciones dentro de la ventana de muestreo (ocasiones), no el total histórico",
   },
-  { key: "maxOccasions", label: "Ocasiones", numeric: true },
+  {
+    key: "maxOccasions",
+    label: "Ocasiones",
+    numeric: true,
+    title: "Ancho de la matriz de muestreo (máx. de ocasiones entre sitios) — igual para todas las especies por diseño, no una cantidad por especie",
+  },
   { key: "naiveOccupancy", label: "Ocupación ingenua", numeric: true },
   {
     key: "modeledP",

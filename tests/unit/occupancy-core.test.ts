@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   parseCaptureDayFromFilename,
   parseCaptureDayFromExif,
+  parseCaptureDayFromFileModified,
   resolveCaptureDay,
   daysBetween,
   addDays,
@@ -69,6 +70,39 @@ describe("capture-date", () => {
   it("parseCaptureDayFromExif handles bad input", () => {
     expect(parseCaptureDayFromExif("not-a-date")).toBeNull();
     expect(parseCaptureDayFromExif(null)).toBeNull();
+  });
+
+  it("falls back to file_modified for dateless filenames + no exif", () => {
+    // 1777038230 = 2026-04-24 (prod dep-121 shape: HHMMSS_seq filename, no exif)
+    const d = resolveCaptureDay({
+      filename: "084348_0101.jpg",
+      exifTimestamp: null,
+      fileModified: 1777038230,
+    });
+    expect(d).toEqual(utc(2026, 4, 24));
+  });
+
+  it("prefers filename date over file_modified (legacy precedence)", () => {
+    const d = resolveCaptureDay({
+      filename: "x - 20240101 - y.jpg",
+      fileModified: 1777038230, // 2026-04-24
+    });
+    expect(d).toEqual(utc(2024, 1, 1));
+  });
+
+  it("returns null when filename, exif and file_modified are all absent", () => {
+    expect(resolveCaptureDay({ filename: "084348_0101.jpg" })).toBeNull();
+    expect(resolveCaptureDay({ filename: "084348_0101.jpg", fileModified: null })).toBeNull();
+  });
+
+  it("parseCaptureDayFromFileModified reduces to a UTC day and rejects garbage epochs", () => {
+    expect(parseCaptureDayFromFileModified(1777038230)).toEqual(utc(2026, 4, 24));
+    // 0 → 1970, outside the 2000–2100 sanity bound → rejected
+    expect(parseCaptureDayFromFileModified(0)).toBeNull();
+    expect(parseCaptureDayFromFileModified(null)).toBeNull();
+    expect(parseCaptureDayFromFileModified(Number.NaN)).toBeNull();
+    // same UTC day regardless of sub-day time (13:43 and 15:59 of 2026-04-24)
+    expect(parseCaptureDayFromFileModified(1777046399)).toEqual(utc(2026, 4, 24));
   });
 
   it("daysBetween / addDays are whole-day exact", () => {
@@ -175,6 +209,9 @@ describe("detection-history", () => {
     const frame = buildDetectionFrame(sites, events, { binWidth: 5 });
     expect(frame.totalDetections).toBe(0);
     expect(frame.y[0]).toEqual([0, 0, 0]);
+    // discards are counted, not silently dropped
+    expect(frame.nOutOfWindow).toBe(2); // the two A events outside the window
+    expect(frame.nUnknownSite).toBe(1); // the "unknown" site event
   });
 
   it("computes naive occupancy and per-site rollups", () => {

@@ -60,6 +60,7 @@ export async function getOccupancyReadiness(
     const camera = computeReadiness(cam.sites, cam.detections, {
       stream: "camera",
       binWidth,
+      detectionsDroppedNoDate: cam.detectionsDroppedNoDate,
     });
 
     const aud = fetchOccupancyInputs("audio", { confidenceThreshold });
@@ -67,6 +68,7 @@ export async function getOccupancyReadiness(
       stream: "audio",
       binWidth,
       confidenceThreshold,
+      detectionsDroppedNoDate: aud.detectionsDroppedNoDate,
     });
 
     return {

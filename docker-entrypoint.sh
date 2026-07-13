@@ -37,8 +37,19 @@ else
   exit 1
 fi
 
-# Export env vars for cron jobs (Debian cron doesn't inherit Docker env)
-echo "CRON_SECRET=${CRON_SECRET}" > /etc/cron.d/portal-env
+# Export env vars for cron jobs (Debian cron doesn't inherit Docker env).
+# CRON_SECRET authenticates the curl-based crons; the SPACES_* vars +
+# BACKUP_OFFLOAD_ENABLED let the hourly backup cron's s3cmd offload to the
+# DigitalOcean Space (the backup cron line sources this file — see scripts/crontab).
+{
+  echo "CRON_SECRET=${CRON_SECRET}"
+  echo "BACKUP_OFFLOAD_ENABLED=${BACKUP_OFFLOAD_ENABLED:-false}"
+  echo "SPACES_ENDPOINT=${SPACES_ENDPOINT:-}"
+  echo "SPACES_REGION=${SPACES_REGION:-}"
+  echo "SPACES_BUCKET=${SPACES_BUCKET:-}"
+  echo "SPACES_KEY=${SPACES_KEY:-}"
+  echo "SPACES_SECRET=${SPACES_SECRET:-}"
+} > /etc/cron.d/portal-env
 chmod 0600 /etc/cron.d/portal-env
 
 # Start cron daemon (Debian — auto-backgrounds, reads /etc/cron.d/)

@@ -122,6 +122,36 @@ export async function findActiveCameraTrapJobIds(
 }
 
 /**
+ * Deployment IDs from `ids` that have ANY active (pending/processing) job —
+ * camera-trap OR audio. Used by the orphaned-cache sweep to decide which
+ * `ct-images/{id}` directories are safe to delete: a busy deployment's cache is
+ * never touched. One indexed query instead of N per-row lookups.
+ */
+export async function findBusyDeploymentIds(
+  ids: number[],
+): Promise<Set<number>> {
+  if (ids.length === 0) return new Set();
+  const rows = await db
+    .select({ deploymentId: processingJobs.deploymentId })
+    .from(processingJobs)
+    .where(
+      and(
+        inArray(processingJobs.deploymentId, ids),
+        inArray(processingJobs.jobType, [
+          ...CAMERA_TRAP_ACTIVE_JOB_TYPES,
+          ...AUDIO_JOB_TYPES,
+        ]),
+        inArray(processingJobs.status, ["pending", "processing"]),
+      ),
+    );
+  const busy = new Set<number>();
+  for (const r of rows) {
+    if (r.deploymentId != null) busy.add(r.deploymentId);
+  }
+  return busy;
+}
+
+/**
  * Count concurrent AUDIO_COMPRESSION jobs across all deployments. Used to
  * enforce a global "only one at a time" cap so the admin can't accidentally
  * saturate the droplet by queuing every deployment.

@@ -69,9 +69,10 @@ FROM base AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
-# System deps: python3 for ML, curl for uv, libgl1/libglib2 for OpenCV, cron for backups, libsndfile1 for librosa
+# System deps: python3 for ML, curl for uv, libgl1/libglib2 for OpenCV, cron for backups, libsndfile1 for librosa,
+# s3cmd to offload DB backups to a DigitalOcean Space (S3-compatible; python-based, no npm dep to survive the standalone prune)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 python3-venv curl wget libgl1 libglib2.0-0 cron ffmpeg libsndfile1 \
+    python3 python3-venv curl wget libgl1 libglib2.0-0 cron ffmpeg libsndfile1 s3cmd \
     && rm -rf /var/lib/apt/lists/*
 
 # R runtime for occupancy modeling (see rbuild stage).

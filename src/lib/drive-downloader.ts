@@ -27,6 +27,7 @@ import {
   evictDerivativesIfOverLimit,
 } from "./thumbnail";
 import { log } from "@/lib/log";
+import { findBusyDeploymentIds } from "@/lib/job-locks";
 
 const TEMP_BASE = path.join(process.cwd(), "data", "tmp");
 const CACHE_BASE = path.join(process.cwd(), "data", "cache", "ct-images");
@@ -871,4 +872,104 @@ export async function evictIfOverLimit(currentDeploymentId: number): Promise<voi
   } catch {
     // Cache eviction is best-effort
   }
+}
+
+/**
+ * Reclaim orphaned `ct-images/{id}` directories — cache left behind by a
+ * failed/cancelled run. Unlike `evictIfOverLimit`, this is NOT gated on the
+ * cache cap (an orphan is reclaimable at any size because nothing is using it)
+ * and it does NOT run at download time — it runs from the daily disk-maintenance
+ * cron so a stuck job can never strand disk indefinitely.
+ *
+ * A directory is only deleted when its deployment has NO active/pending job
+ * (camera-trap OR audio). For deleted dirs the matching `images.path` rows are
+ * nulled so the image proxy falls back to Drive. Best-effort: never throws.
+ */
+export async function sweepOrphanedCache(): Promise<{
+  removed: number;
+  bytes: number;
+  deployments: number[];
+}> {
+  const result = { removed: 0, bytes: 0, deployments: [] as number[] };
+  let entries: string[];
+  try {
+    entries = await fs.readdir(CACHE_BASE);
+  } catch {
+    return result; // cache dir doesn't exist yet
+  }
+
+  // Resolve directory names to deployment IDs.
+  const dirIds: number[] = [];
+  for (const entry of entries) {
+    const dirPath = path.join(CACHE_BASE, entry);
+    let stat;
+    try {
+      stat = await fs.stat(dirPath);
+    } catch {
+      continue;
+    }
+    if (!stat.isDirectory()) continue;
+    const id = parseInt(entry, 10);
+    if (Number.isNaN(id) || String(id) !== entry) continue; // skip non-id dirs
+    dirIds.push(id);
+  }
+  if (dirIds.length === 0) return result;
+
+  const busy = await findBusyDeploymentIds(dirIds);
+
+  for (const id of dirIds) {
+    if (busy.has(id)) continue; // active/pending job — never touch its cache
+
+    const dirPath = path.join(CACHE_BASE, String(id));
+
+    // Sum the directory size (for reporting) before deleting.
+    let dirSize = 0;
+    try {
+      const files = await fs.readdir(dirPath);
+      for (const file of files) {
+        try {
+          dirSize += (await fs.stat(path.join(dirPath, file))).size;
+        } catch {
+          // file vanished mid-scan
+        }
+      }
+    } catch {
+      continue;
+    }
+
+    // Null cache paths so the proxy falls back to Drive.
+    try {
+      const depImages = await db
+        .select()
+        .from(images)
+        .where(eq(images.deploymentId, id));
+      for (const img of depImages) {
+        if (img.path && img.path.includes("/cache/ct-images/")) {
+          await db
+            .update(images)
+            .set({ path: null })
+            .where(eq(images.id, img.id));
+        }
+      }
+    } catch {
+      // If we can't null paths, skip deletion — don't leave dangling paths.
+      continue;
+    }
+
+    try {
+      await fs.rm(dirPath, { recursive: true, force: true });
+    } catch {
+      continue;
+    }
+
+    result.removed++;
+    result.bytes += dirSize;
+    result.deployments.push(id);
+    log.info(
+      { deploymentId: id, sizeMb: +(dirSize / 1024 / 1024).toFixed(1) },
+      "[drive-downloader] Swept orphaned cache for deployment",
+    );
+  }
+
+  return result;
 }

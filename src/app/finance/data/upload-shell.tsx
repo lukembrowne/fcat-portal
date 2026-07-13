@@ -1,16 +1,15 @@
 "use client";
 
-import { useState, useRef, useId } from "react";
+import { useState, useRef, useId, type ReactNode } from "react";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Upload, CheckCircle, AlertCircle, Loader2 } from "lucide-react";
 import {
   commitLibroMayor,
-  commitBudget,
-  commitCategoryLink,
   commitSueldos,
   previewLibroMayor,
 } from "./actions";
+import { BudgetUploadCard } from "./budget-upload-card";
 
 interface LastUpload {
   fileName: string;
@@ -31,7 +30,7 @@ function UploadCard({
   onUpload,
 }: {
   title: string;
-  description: string;
+  description: ReactNode;
   accept: string;
   lastUpload: LastUpload | null;
   onUpload: (formData: FormData) => Promise<{ success: boolean; message: string }>;
@@ -149,7 +148,48 @@ export function UploadShell({ lastUploads }: UploadShellProps) {
       <div className="grid gap-4 sm:grid-cols-2">
         <UploadCard
           title="Libro Mayor (CSV)"
-          description="Exportar desde Link Systems → Contabilidad → Reportes → Libro Mayor. Archivo CSV separado por tabulaciones."
+          description={
+            <div className="space-y-2">
+              <p>Cómo exportar el reporte desde Link Systems:</p>
+              <ol className="list-decimal space-y-1 pl-4">
+                <li>
+                  Ingrese a{" "}
+                  <a
+                    href="https://mipymelink.site/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-medium underline underline-offset-2"
+                  >
+                    mipymelink.site
+                  </a>
+                </li>
+                <li>Control Financiamiento → Contabilidad</li>
+                <li>Reportes → Libro Mayor</li>
+                <li>
+                  Seleccione el rango de fechas (el primer día disponible en Link
+                  es el 1 de enero de 2023)
+                </li>
+                <li>
+                  Escriba <span className="font-medium">9</span> en «Cuentas»
+                  para incluir todas las transacciones
+                </li>
+                <li>
+                  Descargue con la opción{" "}
+                  <span className="font-medium">«Exportar a csv con punto»</span>{" "}
+                  (usa formato 000.00 en vez de 000,00). Aunque diga CSV,
+                  descarga un archivo Excel separado por tabulaciones.
+                </li>
+                <li>
+                  Guárdelo como CSV con la fecha en el nombre, en la carpeta{" "}
+                  <span className="font-medium">data/transactions</span> — por
+                  ejemplo{" "}
+                  <span className="font-mono text-xs">
+                    LibroMayor - 2024_12.csv
+                  </span>
+                </li>
+              </ol>
+            </div>
+          }
           accept=".csv"
           lastUpload={lastUploads.libro_mayor}
           onUpload={async (formData) => {
@@ -180,40 +220,7 @@ export function UploadShell({ lastUploads }: UploadShellProps) {
           }}
         />
 
-        <UploadCard
-          title="Presupuesto Anual (Excel)"
-          description='Archivo Excel con hojas "Revenue and Summary" y "Expenses Detail".'
-          accept=".xlsx,.xls"
-          lastUpload={lastUploads.budget}
-          onUpload={async (formData) => {
-            formData.set("year", String(new Date().getFullYear()));
-            const result = await commitBudget(formData);
-            if (!result.success) {
-              return { success: false, message: result.error };
-            }
-            return {
-              success: true,
-              message: `${result.data.itemCount} categorías de presupuesto importadas`,
-            };
-          }}
-        />
-
-        <UploadCard
-          title="Vinculación de Categorías (Excel)"
-          description="Mapeo entre categorías del presupuesto y categorías del sistema contable Link."
-          accept=".xlsx,.xls"
-          lastUpload={lastUploads.category_map}
-          onUpload={async (formData) => {
-            const result = await commitCategoryLink(formData);
-            if (!result.success) {
-              return { success: false, message: result.error };
-            }
-            return {
-              success: true,
-              message: `${result.data.mappingCount} mapeos de categorías importados`,
-            };
-          }}
-        />
+        <BudgetUploadCard lastUpload={lastUploads.budget} />
 
         <UploadCard
           title="Sueldos (Excel)"

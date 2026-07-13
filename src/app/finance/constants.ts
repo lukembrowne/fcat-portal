@@ -65,7 +65,7 @@ export const BUDGET_CATEGORIES = [
   "Vehicles",
   "New construction",
   "Loan repayment",
-  "Luquidaciones",
+  "Liquidaciones",
 ] as const;
 
 /** Salary-related expense categories in the accounting system */

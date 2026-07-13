@@ -1,11 +1,12 @@
 import { requirePermission } from "@/lib/auth";
-import { fetchBudgetData } from "./actions";
+import { fetchBudgetData, fetchCategoryLinkEditorData } from "./actions";
 import { DashboardShell } from "./dashboard-shell";
 
 export default async function BudgetPage() {
   await requirePermission("finance", "viewer");
 
   const result = await fetchBudgetData();
+  const editorResult = await fetchCategoryLinkEditorData();
 
   if (!result.success) {
     return (
@@ -19,5 +20,10 @@ export default async function BudgetPage() {
     );
   }
 
-  return <DashboardShell data={result.data} />;
+  return (
+    <DashboardShell
+      data={result.data}
+      editor={editorResult.success ? editorResult.data : null}
+    />
+  );
 }

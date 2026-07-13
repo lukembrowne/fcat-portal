@@ -2,10 +2,17 @@
 
 import { MetricsRow } from "./metrics-row";
 import { BudgetTable } from "./budget-table";
-import { UnlinkedTables } from "./unlinked-tables";
-import type { BudgetData } from "./actions";
+import { UnlinkedBudgetCard } from "./unlinked-tables";
+import { CategoryLinkEditor } from "./category-link-editor";
+import type { BudgetData, CategoryLinkEditorData } from "./actions";
 
-export function DashboardShell({ data }: { data: BudgetData }) {
+export function DashboardShell({
+  data,
+  editor,
+}: {
+  data: BudgetData;
+  editor: CategoryLinkEditorData | null;
+}) {
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold">Presupuesto</h1>
@@ -17,12 +24,14 @@ export function DashboardShell({ data }: { data: BudgetData }) {
         overUnderAmount={data.overUnderAmount}
       />
       <BudgetTable rows={data.budgetRows} />
-      {(data.unlinkedAccounting.length > 0 ||
-        data.unlinkedBudget.length > 0) && (
-        <UnlinkedTables
-          unlinkedAccounting={data.unlinkedAccounting}
-          unlinkedBudget={data.unlinkedBudget}
+      {editor && (
+        <CategoryLinkEditor
+          rows={editor.rows}
+          budgetCategoryOptions={editor.budgetCategoryOptions}
         />
+      )}
+      {data.unlinkedBudget.length > 0 && (
+        <UnlinkedBudgetCard unlinkedBudget={data.unlinkedBudget} />
       )}
     </div>
   );

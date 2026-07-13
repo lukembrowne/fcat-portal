@@ -96,10 +96,6 @@ vi.mock("@/app/finance/lib/parse-budget", () => ({
   parseBudgetExcel: vi.fn(),
 }));
 
-vi.mock("@/app/finance/lib/parse-category-link", () => ({
-  parseCategoryLinkExcel: vi.fn(),
-}));
-
 vi.mock("@/app/finance/lib/parse-sueldos", () => ({
   parseSueldosExcel: vi.fn(),
 }));
@@ -225,6 +221,7 @@ describe("action permission guards", () => {
         ["fetchRevenueData", financeRevenue.fetchRevenueData, [2026]],
         ["fetchExpenseData", financeExpenses.fetchExpenseData, [2026]],
         ["fetchBudgetData", financeBudget.fetchBudgetData, []],
+        ["fetchCategoryLinkEditorData", financeBudget.fetchCategoryLinkEditorData, []],
         ["fetchCashflowData", financeCashflow.fetchCashflowData, []],
         ["fetchSueldosData", financeSueldos.fetchSueldosData, [2026]],
         ["fetchAnnualData", financeAnnual.fetchAnnualData, []],
@@ -241,8 +238,9 @@ describe("action permission guards", () => {
       const adminActions: [string, Function, unknown[]][] = [
         ["previewLibroMayor", financeData.previewLibroMayor, [new FormData()]],
         ["commitLibroMayor", financeData.commitLibroMayor, [new FormData()]],
+        ["previewBudget", financeData.previewBudget, [new FormData()]],
         ["commitBudget", financeData.commitBudget, [new FormData()]],
-        ["commitCategoryLink", financeData.commitCategoryLink, [new FormData()]],
+        ["setCategoryLink", financeBudget.setCategoryLink, ["ACME", "Food"]],
         ["commitSueldos", financeData.commitSueldos, [new FormData()]],
         ["addProjection", financeCashflow.addProjection, [new FormData()]],
         ["updateProjection", financeCashflow.updateProjection, [new FormData()]],

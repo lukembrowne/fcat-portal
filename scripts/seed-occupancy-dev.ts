@@ -240,13 +240,20 @@ export function seedOccupancyDev(
       .get() as { p?: string } | undefined)?.p ??
     "camera-trap";
 
+  // The occupancy pool is scoped to the BioChoco ct project, so seeded
+  // deployments must belong to it (INSERT OR IGNORE keeps an existing row).
+  db.prepare("INSERT OR IGNORE INTO ct_projects (name) VALUES ('BioChoco')").run();
+  const ctProjectId = (
+    db.prepare("SELECT id FROM ct_projects WHERE name = 'BioChoco'").get() as { id: number }
+  ).id;
+
   cleanOccupancySeed(db);
 
   const insDep = db.prepare(
     `INSERT INTO biochoco_deployments
-       (project_id, name, site_name, latitude, longitude, date_start, date_end,
+       (project_id, ct_project_id, name, site_name, latitude, longitude, date_start, date_end,
         status, excluded, field_notes)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'verified', 0, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'verified', 0, ?)`,
   );
   const insImg = db.prepare(
     `INSERT INTO biochoco_images (deployment_id, filename, status)
@@ -320,6 +327,7 @@ export function seedOccupancyDev(
     const depId = Number(
       insDep.run(
         projectId,
+        ctProjectId,
         `${SEED_PREFIX}${String(i).padStart(3, "0")}`,
         `Sitio sintético ${i}`,
         lat,

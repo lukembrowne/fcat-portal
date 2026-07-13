@@ -13,7 +13,7 @@
 import { NextResponse } from "next/server";
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
-import { deployments } from "@/db/schema";
+import { deployments, cameraTrapProjects } from "@/db/schema";
 import { getCurrentUser } from "@/lib/auth";
 import { log } from "@/lib/log";
 import { fetchEntities } from "@/lib/odk-client";
@@ -39,16 +39,25 @@ export async function GET() {
   if (!isAdmin) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   try {
-    // Occupancy site pool: same filter as fetchOccupancyInputs (verified + not excluded).
-    const pool = await db
-      .select({ id: deployments.id, name: deployments.name, siteName: deployments.siteName })
-      .from(deployments)
-      .where(
-        and(
-          eq(deployments.excluded, false),
-          inArray(deployments.status, ["verified", "verified_empty"]),
-        ),
-      );
+    // Occupancy site pool: same filter as fetchOccupancyInputs — verified + not
+    // excluded AND scoped to the BioChoco ct project (other projects' deployments
+    // have no BioChoco ODK site entity and are excluded from the analysis).
+    const [biochoco] = await db
+      .select({ id: cameraTrapProjects.id })
+      .from(cameraTrapProjects)
+      .where(eq(cameraTrapProjects.name, "BioChoco"));
+    const pool = biochoco
+      ? await db
+          .select({ id: deployments.id, name: deployments.name, siteName: deployments.siteName })
+          .from(deployments)
+          .where(
+            and(
+              eq(deployments.excluded, false),
+              inArray(deployments.status, ["verified", "verified_empty"]),
+              eq(deployments.cameraTrapProjectId, biochoco.id),
+            ),
+          )
+      : [];
 
     // Exact-match map used by the pipeline (only entities WITH a habitat_type).
     const map = await loadSiteHabitatMap();

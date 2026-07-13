@@ -145,14 +145,20 @@ export function fetchOccupancyInputs(
 ): OccupancyStreamInputs {
   const confidenceThreshold = opts.confidenceThreshold ?? DEFAULT_CONFIDENCE_THRESHOLD;
 
-  // Occupancy site pool = camera-trap deployments whose imagery is confirmed:
-  // verified (or verified_empty — a real survey with zero detections, kept as an
-  // absence site) and not excluded. Both streams share this pool for consistency.
+  // Occupancy site pool = BioChoco camera-trap deployments whose imagery is
+  // confirmed: verified (or verified_empty — a real survey with zero detections,
+  // kept as an absence site) and not excluded. Both streams share this pool for
+  // consistency. Scoped to the BioChoco ct project so deployments belonging to
+  // OTHER camera-trap projects (which have no BioChoco ODK site entity and would
+  // otherwise force the habitat covariate to be dropped for every model) never
+  // enter the analysis. Matches the app-wide BioChoco scoping used elsewhere
+  // (see getBiochocoCameraTrapProjectId in biochoco/resultados/habitat-actions.ts).
   const deployments = db.all(sql`
     SELECT id, site_name, name, latitude, longitude, date_start, date_end, field_notes
     FROM biochoco_deployments
     WHERE excluded = 0
       AND status IN ('verified', 'verified_empty')
+      AND ct_project_id = (SELECT id FROM ct_projects WHERE name = 'BioChoco')
   `) as DeploymentRow[];
 
   if (stream === "camera") {

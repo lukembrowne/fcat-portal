@@ -10,9 +10,13 @@ import {
 // Minimal DDL covering exactly the columns the seeder writes (no FKs/CHECKs so
 // the test DB stays self-contained).
 const DDL = `
+  CREATE TABLE ct_projects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE
+  );
   CREATE TABLE biochoco_deployments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id TEXT,
+    ct_project_id INTEGER,
     name TEXT NOT NULL,
     site_name TEXT,
     latitude REAL, longitude REAL,

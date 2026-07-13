@@ -33,8 +33,11 @@ vi.mock("@/db", () => ({
 }));
 
 const DDL = `
+  CREATE TABLE ct_projects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE
+  );
   CREATE TABLE biochoco_deployments (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT, name TEXT NOT NULL, site_name TEXT,
+    id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT, ct_project_id INTEGER, name TEXT NOT NULL, site_name TEXT,
     latitude REAL, longitude REAL, date_start TEXT, date_end TEXT, status TEXT,
     excluded INTEGER DEFAULT 0, field_notes TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch()), updated_at INTEGER NOT NULL DEFAULT (unixepoch())

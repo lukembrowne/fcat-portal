@@ -190,6 +190,10 @@ export async function runOccupancyBuild(opts: BuildRunOptions = {}): Promise<Bui
       }
     }
   }
+  // The prep phase (native raster reads + ODK habitat fetch) can dominate the
+  // wall time while the species counter is still 0, so surface each step as its
+  // own status message — otherwise the toast looks stalled at "0 de N".
+  opts.onProgress?.(0, totalSpecies, "Cargando covariables ráster (bosque + elevación)…");
   const raster = await loadRasterCovariates([...unionSites.values()]);
 
   // Per-model ψ-surface render specs + pending prediction rows, collected during
@@ -205,6 +209,7 @@ export async function runOccupancyBuild(opts: BuildRunOptions = {}): Promise<Bui
   // Unknown sites are left null so an incomplete habitat covariate is dropped
   // rather than mixing an "unknown" level into the fit (see toCovariateSpecs).
   const habitatBySiteId = new Map<string, string>();
+  opts.onProgress?.(0, totalSpecies, "Resolviendo tipo de hábitat por sitio…");
   const habitatMap = await loadSiteHabitatMap();
   if (habitatMap.size > 0) {
     for (const s of perStream) {
@@ -250,9 +255,10 @@ export async function runOccupancyBuild(opts: BuildRunOptions = {}): Promise<Bui
     // cohort where it was detected. No-op in production (no synthetic sites).
     const synthetic = getSyntheticSiteIds(inputs);
 
+    const streamLabel = stream === "camera" ? "Cámaras" : "Audio";
     for (const sp of species) {
       done++;
-      opts.onProgress?.(done, totalSpecies, `${stream}: ${sp}`);
+      opts.onProgress?.(done, totalSpecies, `${streamLabel} · ${sp}`);
       const events = bySpecies.get(sp) ?? [];
       const frame = buildDetectionFrame(cohortSitesFor(inputs.sites, events, synthetic), events, {
         binWidth,

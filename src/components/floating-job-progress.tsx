@@ -301,7 +301,14 @@ export function FloatingJobProgress() {
   const dlDone = sseData?.downloadedImages ?? activeJob?.downloadedImages ?? 0;
   const isDownloading = status === "processing" && dlTotal > 0 && dlDone < dlTotal;
   const isAnalyzing = status === "processing" && (sseData?.processed ?? 0) > 0;
-  const hasProgress = isDownloading || isAnalyzing;
+  // Occupancy publishes its species total up front, so render the determinate
+  // "0 de N" bar from the first update rather than an indeterminate pulse
+  // through the (potentially long) covariate-prep phase.
+  const isOccupancyProgress =
+    isOccupancy &&
+    status === "processing" &&
+    (sseData?.total ?? activeJob?.totalImages ?? 0) > 0;
+  const hasProgress = isDownloading || isAnalyzing || isOccupancyProgress;
   const processed = sseData?.processed ?? activeJob?.processedImages ?? 0;
   const total = sseData?.total ?? activeJob?.totalImages ?? 0;
   const percentage = isDownloading

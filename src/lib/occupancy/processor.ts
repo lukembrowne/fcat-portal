@@ -36,14 +36,20 @@ export async function processOccupancyJob(jobId: number): Promise<void> {
       trigger: job.createdBy?.startsWith("cron@") ? "cron" : "manual",
       createdBy: job.createdBy,
       onProgress: (done, total, label) => {
-        void db
+        // better-sqlite3 is synchronous — a bare drizzle builder is LAZY and only
+        // executes when awaited or via a terminal method. `.run()` runs it now
+        // (microseconds, no meaningful block); `void`-ing the builder without
+        // `.run()` silently discarded every progress tick, freezing the toast at
+        // the enqueue message until completion.
+        db
           .update(processingJobs)
           .set({
             totalImages: total,
             processedImages: done,
             statusMessage: `Ajustando modelos (${done} de ${total}) — ${label}`,
           })
-          .where(eq(processingJobs.id, jobId));
+          .where(eq(processingJobs.id, jobId))
+          .run();
       },
     });
 

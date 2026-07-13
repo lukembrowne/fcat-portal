@@ -1230,6 +1230,10 @@ export const occupancyModels = sqliteTable(
     psiFormula: text("psi_formula"),
     detFormula: text("det_formula"),
     fitSeconds: real("fit_seconds"),
+    // Covariates omitted from an eligible-but-reduced model, with Spanish
+    // reasons (JSON array of {name, reason}). Null = nothing dropped. Kept
+    // distinct from ineligible_reasons_json (which flags un-modeled species).
+    droppedCovariatesJson: text("dropped_covariates_json"),
     createdAt: integer("created_at", { mode: "timestamp" })
       .notNull()
       .default(sql`(unixepoch())`),

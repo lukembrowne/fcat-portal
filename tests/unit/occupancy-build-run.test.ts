@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { spawnSync } from "node:child_process";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
@@ -75,6 +75,7 @@ const DDL = `
     n_sites INTEGER, n_sites_detected INTEGER, total_detections INTEGER, n_occasions INTEGER, naive_occupancy REAL,
     estimated_occupancy REAL, occupancy_lower REAL, occupancy_upper REAL, mean_detection REAL, aic REAL,
     convergence INTEGER, psi_formula TEXT, det_formula TEXT, fit_seconds REAL,
+    dropped_covariates_json TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
   CREATE TABLE occupancy_covariate_effects (
@@ -161,4 +162,39 @@ describe.skipIf(!rReady())("runOccupancyBuild (integration, real R)", () => {
     expect(ineligible[0].ineligible_reasons_json).toBeTruthy();
     expect(ineligible[0].estimated_occupancy).toBeNull();
   }, 120_000);
+});
+
+describe("checkCovariateInfrastructure", () => {
+  const KEYS = ["OCCUPANCY_FOREST_RASTER", "OCCUPANCY_DEM_RASTER", "OCCUPANCY_AOI_KML"] as const;
+  const saved: Record<string, string | undefined> = {};
+  beforeEach(() => {
+    for (const k of KEYS) saved[k] = process.env[k];
+  });
+  afterEach(() => {
+    for (const k of KEYS) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  });
+
+  it("throws when the raster env vars are unset", async () => {
+    const { checkCovariateInfrastructure, OccupancyInfrastructureError } = await import(
+      "@/lib/occupancy/build-run"
+    );
+    for (const k of KEYS) delete process.env[k];
+    expect(() => checkCovariateInfrastructure()).toThrow(OccupancyInfrastructureError);
+  });
+
+  it("throws when a var is set but the file is missing (fail-closed)", async () => {
+    const { checkCovariateInfrastructure } = await import("@/lib/occupancy/build-run");
+    for (const k of KEYS) process.env[k] = "data/occupancy-rasters/does-not-exist.tif";
+    expect(() => checkCovariateInfrastructure()).toThrow(/no encontrado|no están disponibles/);
+  });
+
+  it("passes when all three point to existing files", async () => {
+    const { checkCovariateInfrastructure } = await import("@/lib/occupancy/build-run");
+    // package.json exists at cwd — reuse it as a stand-in for the raster files.
+    for (const k of KEYS) process.env[k] = "package.json";
+    expect(() => checkCovariateInfrastructure()).not.toThrow();
+  });
 });

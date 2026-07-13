@@ -13,6 +13,7 @@ import { getSyntheticSiteIds, cohortSitesFor } from "@/lib/occupancy/cohort";
 import { DEFAULT_BIN_WIDTH_DAYS } from "@/lib/occupancy/occasions";
 import { DEFAULT_CONFIDENCE_THRESHOLD } from "@/lib/audio-confidence";
 import { JOB_TYPES } from "@/lib/job-types";
+import { CAMERA_TRAP_ML_JOB_TYPES } from "@/lib/job-locks";
 import { processNextQueueable } from "@/lib/job-queue";
 import {
   occupancyModels,
@@ -273,6 +274,8 @@ export interface SpeciesModelDetail {
   detFormula: string | null;
   fitSeconds: number | null;
   effects: { submodel: string; param: string; estimate: number; se: number | null; z: number | null; pValue: number | null }[];
+  /** Covariates omitted from this (eligible) model, with Spanish reasons. */
+  droppedCovariates: { name: string; reason: string }[];
   habitatUse: HabitatBar[];
   forestCurve: CurvePoint[];
   elevationCurve: CurvePoint[];
@@ -374,6 +377,18 @@ export async function getSpeciesModel(
       ? nodePath.basename(pred.artifactPath).replace(/\.png$/i, "")
       : null;
 
+    // Covariates dropped from this eligible model (absent for some sites, or no
+    // variation) — surfaced so a reduced ψ~1 model is visibly reduced.
+    let droppedCovariates: { name: string; reason: string }[] = [];
+    if (model.droppedCovariatesJson) {
+      try {
+        const parsed = JSON.parse(model.droppedCovariatesJson);
+        if (Array.isArray(parsed)) droppedCovariates = parsed;
+      } catch {
+        droppedCovariates = [];
+      }
+    }
+
     // Sampling points = the deployment locations in THIS species' cohort. The
     // per-run snapshot holds the whole stream pool (synthetic seed + real), so
     // split by the OCC-SEED marker and pick the group whose size matches the
@@ -419,6 +434,7 @@ export async function getSpeciesModel(
           z: e.z,
           pValue: e.pValue,
         })),
+        droppedCovariates,
         habitatUse: habitatBars,
         forestCurve: curveFrom("forest", forestVals),
         elevationCurve: curveFrom("elevation", elevVals),
@@ -676,6 +692,14 @@ export interface DetectionSampleRow {
   cells: (0 | 1 | null)[];
   /** Categorical survey-effort label per occasion (null where cell is NA). */
   effort: (string | null)[];
+  /** Sampling window (ISO YYYY-MM-DD) and its length — surfaced so an outlier
+   *  long window (which inflates maxOccasions) is visible per site. */
+  windowStart: string;
+  windowEnd: string;
+  totalDays: number;
+  /** Link to where this site's detections are reviewed (verification grid /
+   *  deployment page), stream-aware. */
+  href: string;
 }
 
 export interface ModelInputSample {
@@ -683,6 +707,8 @@ export interface ModelInputSample {
   /** Total sites in the fit cohort. */
   nSites: number;
   maxOccasions: number;
+  /** Median window length across sites — baseline for the outlier flag. */
+  medianTotalDays: number;
   rows: DetectionSampleRow[];
 }
 
@@ -696,7 +722,6 @@ export interface ModelInputSample {
 export async function getModelInputSample(
   species: string,
   stream: "camera" | "audio",
-  maxSites = 12,
 ): Promise<ActionResult<ModelInputSample | null>> {
   await requirePermission("camera-trap", "viewer");
   try {
@@ -720,7 +745,38 @@ export async function getModelInputSample(
     const cohort = cohortSitesFor(inputs.sites, events, synthetic);
     const frame = buildDetectionFrame(cohort, events, { binWidth });
 
-    // Detected sites first (most informative), then most-surveyed.
+    const iso = (d: Date) => d.toISOString().slice(0, 10);
+
+    // Resolve a per-site link to where its detections are reviewed. siteId is the
+    // deployment id. Camera → the deployment's latest ML-job verification grid
+    // (fallback: the deployment page); Audio → the deployment recordings page.
+    const hrefBySite = new Map<string, string>();
+    if (stream === "camera") {
+      const deploymentIds = frame.perSite
+        .map((p) => Number(p.siteId))
+        .filter((n) => Number.isInteger(n));
+      if (deploymentIds.length > 0) {
+        const jobs = await db
+          .select({ id: processingJobs.id, deploymentId: processingJobs.deploymentId })
+          .from(processingJobs)
+          .where(
+            and(
+              inArray(processingJobs.deploymentId, deploymentIds),
+              inArray(processingJobs.jobType, [...CAMERA_TRAP_ML_JOB_TYPES]),
+            ),
+          )
+          .orderBy(desc(processingJobs.createdAt));
+        // First seen per deployment = latest job (query is createdAt desc).
+        for (const j of jobs) {
+          if (j.deploymentId == null) continue;
+          const key = String(j.deploymentId);
+          if (!hrefBySite.has(key)) hrefBySite.set(key, `/camera-trap/results/${j.id}`);
+        }
+      }
+    }
+
+    // Detected sites first (most informative), then most-surveyed. No display
+    // cap — every cohort site is shown so an outlier long window is visible.
     const rows: DetectionSampleRow[] = frame.perSite
       .map((p, i) => ({ p, i }))
       .sort(
@@ -729,7 +785,6 @@ export async function getModelInputSample(
           b.p.detections - a.p.detections ||
           b.p.occasions - a.p.occasions,
       )
-      .slice(0, maxSites)
       .map(({ p, i }) => ({
         siteId: p.siteId,
         siteName: p.siteName,
@@ -737,11 +792,31 @@ export async function getModelInputSample(
         detections: p.detections,
         cells: frame.y[i],
         effort: frame.effort[i],
+        windowStart: iso(p.windowStart),
+        windowEnd: iso(p.windowEnd),
+        totalDays: p.totalDays,
+        href:
+          stream === "audio"
+            ? `/audio/${p.siteId}`
+            : (hrefBySite.get(p.siteId) ?? `/camera-trap/${p.siteId}`),
       }));
+
+    // Median window length across sites — the baseline the table flags outliers
+    // against (a site whose window is much longer drives maxOccasions).
+    const lengths = frame.perSite.map((p) => p.totalDays).sort((a, b) => a - b);
+    const medianTotalDays = lengths.length
+      ? lengths[Math.floor((lengths.length - 1) / 2)]
+      : 0;
 
     return {
       success: true,
-      data: { binWidth, nSites: frame.siteIds.length, maxOccasions: frame.maxOccasions, rows },
+      data: {
+        binWidth,
+        nSites: frame.siteIds.length,
+        maxOccasions: frame.maxOccasions,
+        medianTotalDays,
+        rows,
+      },
     };
   } catch (error) {
     log.error({ err: error, species, stream }, "getModelInputSample failed");

@@ -231,6 +231,32 @@ describe("detection-history", () => {
     expect(frame.effort[0]).toEqual(["full", "full", "2d"]); // A ragged tail
     expect(frame.effort[1]).toEqual(["full", "full", null]); // B padded
   });
+
+  it("exposes each site's sampling window so an outlier can be spotted", () => {
+    const frame = buildDetectionFrame(sites, [], { binWidth: 5 });
+    const a = frame.perSite.find((p) => p.siteId === "A")!;
+    const b = frame.perSite.find((p) => p.siteId === "B")!;
+    expect(a.windowStart).toEqual(utc(2026, 1, 1));
+    expect(a.windowEnd).toEqual(utc(2026, 1, 12));
+    expect(a.totalDays).toBe(12); // inclusive 12-day window
+    expect(a.occasions).toBe(3);
+    expect(b.totalDays).toBe(10);
+    expect(b.occasions).toBe(2);
+  });
+
+  it("lets one long-window site inflate maxOccasions (the 74-occasion case)", () => {
+    // A site spanning ~a year forces every row to that width via NA padding —
+    // the diagnostic the matrix table surfaces.
+    const longSites: OccupancySite[] = [
+      ...sites,
+      { siteId: "X", siteName: "X", latitude: 0, longitude: 0, windowStart: utc(2026, 1, 1), windowEnd: utc(2027, 1, 1) },
+    ];
+    const frame = buildDetectionFrame(longSites, [], { binWidth: 5 });
+    const x = frame.perSite.find((p) => p.siteId === "X")!;
+    expect(x.totalDays).toBe(366); // inclusive ~1-year window (2026 non-leap)
+    expect(frame.maxOccasions).toBe(x.occasions); // X drives the matrix width
+    expect(frame.maxOccasions).toBeGreaterThan(70);
+  });
 });
 
 describe("eligibility", () => {

@@ -72,12 +72,72 @@ function splitEffect(param: string): { submodel: "state" | "det"; name: string }
   return { submodel: "state", name: param };
 }
 
+/** Thrown when a run over real sites lacks its raster/DEM/AOI infrastructure. */
+export class OccupancyInfrastructureError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OccupancyInfrastructureError";
+  }
+}
+
+/**
+ * Precondition for a run that models real (non-synthetic) sites: the forest +
+ * DEM rasters and the AOI polygon must be configured AND present on disk.
+ * Without them the pipeline would silently fit intercept-only (ψ~1) models with
+ * no map surface — so we fail the whole run with a clear Spanish message instead.
+ * The dev/seed path (synthetic OCC-SEED sites carrying field_notes covariates)
+ * needs no rasters and is exempt (the caller only invokes this when real sites
+ * are present).
+ */
+export function checkCovariateInfrastructure(): void {
+  const checks: { env: string; label: string }[] = [
+    { env: "OCCUPANCY_FOREST_RASTER", label: "la capa de cobertura boscosa" },
+    { env: "OCCUPANCY_DEM_RASTER", label: "el modelo de elevación (DEM)" },
+    { env: "OCCUPANCY_AOI_KML", label: "el área de estudio (AOI, KML)" },
+  ];
+  const missing: string[] = [];
+  for (const c of checks) {
+    const p = process.env[c.env];
+    if (!p) {
+      missing.push(`${c.label} (${c.env} sin configurar)`);
+    } else {
+      const abs = nodePath.isAbsolute(p) ? p : nodePath.join(process.cwd(), p);
+      if (!fs.existsSync(abs)) missing.push(`${c.label} (archivo no encontrado: ${p})`);
+    }
+  }
+  if (missing.length > 0) {
+    throw new OccupancyInfrastructureError(
+      `Los modelos de ocupación requieren capas ráster que no están disponibles: ` +
+        `${missing.join("; ")}. Coloque los archivos en data/occupancy-rasters/ y configure ` +
+        `OCCUPANCY_FOREST_RASTER, OCCUPANCY_DEM_RASTER y OCCUPANCY_AOI_KML en el entorno de producción.`,
+    );
+  }
+}
+
 export async function runOccupancyBuild(opts: BuildRunOptions = {}): Promise<BuildRunResult> {
   const binWidth = opts.binWidth ?? DEFAULT_BIN_WIDTH_DAYS;
   const confidenceThreshold = opts.confidenceThreshold ?? DEFAULT_CONFIDENCE_THRESHOLD;
   const thresholds = opts.thresholds ?? DEFAULT_THRESHOLDS;
   const raw = rawClient();
   const startedAtSec = Math.floor(nowMs() / 1000);
+
+  // Fetch inputs + precount species up front. Doing this before the run row is
+  // created lets the infrastructure guard fail cleanly with no orphaned
+  // 'running' row.
+  const perStream = STREAMS.map((stream) => {
+    const inputs = fetchOccupancyInputs(stream, { confidenceThreshold });
+    const species = new Set(inputs.detections.map((d) => d.species));
+    return { stream, inputs, species: [...species] };
+  });
+
+  // A run that models real (non-synthetic) sites requires the raster/DEM/AOI
+  // infrastructure; without it we fail loudly rather than fit ψ~1 null models.
+  // Purely-synthetic dev/seed runs are exempt.
+  const hasRealSites = perStream.some((s) => {
+    const synth = getSyntheticSiteIds(s.inputs);
+    return s.inputs.sites.some((site) => !synth.has(site.siteId));
+  });
+  if (hasRealSites) checkCovariateInfrastructure();
 
   const runId = Number(
     raw
@@ -101,8 +161,8 @@ export async function runOccupancyBuild(opts: BuildRunOptions = {}): Promise<Bui
        (run_id, species, stream, sufficient_data, ineligible_reasons_json,
         n_sites, n_sites_detected, total_detections, n_occasions, naive_occupancy,
         estimated_occupancy, occupancy_lower, occupancy_upper, mean_detection, aic,
-        convergence, psi_formula, det_formula, fit_seconds)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        convergence, psi_formula, det_formula, fit_seconds, dropped_covariates_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const insEffect = raw.prepare(
     `INSERT INTO occupancy_covariate_effects (model_id, submodel, param, estimate, se, z, p_value)
@@ -112,12 +172,7 @@ export async function runOccupancyBuild(opts: BuildRunOptions = {}): Promise<Bui
   let nModels = 0;
   let nEligible = 0;
 
-  // Precount species for progress.
-  const perStream = STREAMS.map((stream) => {
-    const inputs = fetchOccupancyInputs(stream, { confidenceThreshold });
-    const species = new Set(inputs.detections.map((d) => d.species));
-    return { stream, inputs, species: [...species] };
-  });
+  // Species total for progress (perStream computed above, before the run row).
   const totalSpecies = perStream.reduce((a, s) => a + s.species.length, 0);
   let done = 0;
   // Publish the total up front so the progress toast shows "0 de N" immediately
@@ -209,23 +264,28 @@ export async function runOccupancyBuild(opts: BuildRunOptions = {}): Promise<Bui
           runId, sp, stream, 0, JSON.stringify(elig.reasons),
           elig.stats.nSitesSurveyed, elig.stats.nSitesDetected, elig.stats.totalDetections,
           elig.stats.maxOccasions, elig.stats.naiveOccupancy,
-          null, null, null, null, null, null, null, null, null,
+          null, null, null, null, null, null, null, null, null, null,
         );
         nModels++;
         continue;
       }
 
-      // Covariates aligned to frame site order.
+      // Covariates aligned to frame site order. Capture the covariates dropped
+      // at BOTH gates (absent-for-some-sites in toCovariateSpecs, and
+      // no-variation / <2-levels in assembleRunConfig) so a reduced model is
+      // visibly reduced instead of silently fitting ψ~1.
       const specRaw = frame.siteIds.map((id) => covBySite.get(id)!);
-      const covSpecs = toCovariateSpecs(specRaw).covariates;
+      const { covariates: covSpecs, dropped: specDropped } = toCovariateSpecs(specRaw);
       const gridSpecs = raster ? buildGridCovariates(raster.grid, covSpecs) : undefined;
-      const { config, standardizations } = assembleRunConfig(frame, {
+      const { config, standardizations, dropped: cfgDropped } = assembleRunConfig(frame, {
         species: sp,
         stream,
         siteCovariates: covSpecs,
         gridCovariates: gridSpecs,
         binWidth,
       });
+      const allDropped = [...specDropped, ...cfgDropped];
+      const droppedJson = allDropped.length ? JSON.stringify(allDropped) : null;
 
       const res = await runOccupancyModel(config);
       if (!res.success) {
@@ -234,7 +294,7 @@ export async function runOccupancyBuild(opts: BuildRunOptions = {}): Promise<Bui
           runId, sp, stream, 1, JSON.stringify([`No convergió: ${res.error}`]),
           frame.nSitesSurveyed, frame.nSitesDetected, frame.totalDetections,
           frame.maxOccasions, frame.naiveOccupancy,
-          null, null, null, null, null, null, config.psiFormula, config.detFormula, null,
+          null, null, null, null, null, null, config.psiFormula, config.detFormula, null, droppedJson,
         );
         nModels++;
         nEligible++;
@@ -248,7 +308,7 @@ export async function runOccupancyBuild(opts: BuildRunOptions = {}): Promise<Bui
           r.nSites, frame.nSitesDetected, frame.totalDetections,
           r.nOccasions, r.naiveOccupancy,
           r.estimatedOccupancy, r.occupancyLower, r.occupancyUpper, r.meanDetection, r.aic,
-          r.convergence, config.psiFormula, config.detFormula, r.fitSeconds,
+          r.convergence, config.psiFormula, config.detFormula, r.fitSeconds, droppedJson,
         ).lastInsertRowid,
       );
       for (const e of r.effects) {

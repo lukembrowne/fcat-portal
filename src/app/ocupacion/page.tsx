@@ -129,56 +129,26 @@ export default async function OccupancyPage() {
       </div>
 
       {modeledSpecies.length > 0 ? (
-        <>
-          <Link
-            href="/ocupacion/cross-species"
-            className="block rounded-lg border-2 border-emerald-500/60 bg-emerald-50/60 dark:bg-emerald-950/30 p-4 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 transition-colors"
-          >
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-base font-semibold text-emerald-800 dark:text-emerald-300">
-                  Síntesis entre especies
-                </div>
-                <p className="text-sm text-muted-foreground">
-                  Riqueza predicha, ocupación general y por hábitat, y respuestas ambientales de
-                  las {modeledSpecies.length} especies modeladas.
-                </p>
+        <Link
+          href="/ocupacion/cross-species"
+          className="block rounded-lg border-2 border-emerald-500/60 bg-emerald-50/60 dark:bg-emerald-950/30 p-4 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 transition-colors"
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-base font-semibold text-emerald-800 dark:text-emerald-300">
+                Síntesis entre especies
               </div>
-              <span className="shrink-0 text-emerald-700 dark:text-emerald-400 font-medium">
-                Ver síntesis →
-              </span>
-            </div>
-          </Link>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Especies modeladas</CardTitle>
               <p className="text-sm text-muted-foreground">
-                Modelos ajustados en la última corrida. Abre una especie para ver su mapa de
-                ocurrencia predicha, uso de hábitat y diagnósticos.
+                Riqueza predicha, ocupación general y por hábitat, y respuestas ambientales de
+                las {modeledSpecies.length} especies modeladas. Abre una especie desde las tablas
+                de abajo para ver su mapa de ocurrencia predicha, uso de hábitat y diagnósticos.
               </p>
-            </CardHeader>
-            <CardContent>
-              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                {modeledSpecies.map((m) => (
-                  <Link
-                    key={`${m.species}-${m.stream}`}
-                    href={`/ocupacion/${encodeURIComponent(m.species)}?stream=${m.stream}`}
-                    className="rounded-lg border p-3 hover:bg-muted/50 transition-colors"
-                  >
-                    <div className="text-sm font-medium italic">{m.species}</div>
-                    <div className="text-xs text-muted-foreground">
-                      {m.stream === "audio" ? "Audio" : "Cámaras"} ·{" "}
-                      {m.estimatedOccupancy != null
-                        ? `ψ ${(m.estimatedOccupancy * 100).toFixed(0)}%`
-                        : "—"}
-                    </div>
-                  </Link>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        </>
+            </div>
+            <span className="shrink-0 text-emerald-700 dark:text-emerald-400 font-medium">
+              Ver síntesis →
+            </span>
+          </div>
+        </Link>
       ) : null}
 
       <StreamSection

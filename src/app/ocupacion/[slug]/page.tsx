@@ -100,6 +100,31 @@ export default async function SpeciesOccupancyPage({
             </CardContent>
           </Card>
 
+          {/* Covariates omitted from this model — makes a reduced ψ~1 fit visible */}
+          {model.droppedCovariates.length > 0 ? (
+            <Card className="border-amber-500/60 bg-amber-50/50 dark:bg-amber-950/20">
+              <CardHeader>
+                <CardTitle className="text-base text-amber-800 dark:text-amber-300">
+                  Covariables omitidas
+                </CardTitle>
+                <p className="text-xs text-muted-foreground">
+                  Estas covariables no entraron al modelo, por lo que el ajuste es reducido (no
+                  refleja su efecto). Corrija los datos o las capas indicadas y vuelva a correr el
+                  batch.
+                </p>
+              </CardHeader>
+              <CardContent>
+                <ul className="text-sm list-disc pl-5 space-y-1">
+                  {model.droppedCovariates.map((d, i) => (
+                    <li key={i}>
+                      <span className="font-medium">{d.name}</span>: {d.reason}
+                    </li>
+                  ))}
+                </ul>
+              </CardContent>
+            </Card>
+          ) : null}
+
           {/* Predicted-occurrence raster */}
           <Card>
             <CardHeader>

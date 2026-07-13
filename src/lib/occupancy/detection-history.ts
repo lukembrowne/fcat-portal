@@ -47,6 +47,13 @@ export interface SitePerRow {
   /** Species detections that landed inside this site's window. */
   detections: number;
   detected: boolean;
+  /** Inclusive active-survey window (UTC calendar days) — surfaced so the
+   *  sample matrix can show each site's sampling period and flag an outlier
+   *  window that inflates `maxOccasions`. */
+  windowStart: CaptureDay;
+  windowEnd: CaptureDay;
+  /** Total inclusive days in the window (drives this site's occasion count). */
+  totalDays: number;
 }
 
 export interface DetectionFrame {
@@ -148,6 +155,9 @@ export function buildDetectionFrame(
       occasions: layout.count,
       detections: siteDetections,
       detected,
+      windowStart: site.windowStart,
+      windowEnd: site.windowEnd,
+      totalDays: layout.totalDays,
     });
   }
 

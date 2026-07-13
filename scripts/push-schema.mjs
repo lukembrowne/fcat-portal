@@ -557,6 +557,7 @@ const statements = [
     psi_formula TEXT,
     det_formula TEXT,
     fit_seconds REAL,
+    dropped_covariates_json TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
   )`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_occupancy_models_run_species_stream ON occupancy_models(run_id, species, stream)`,
@@ -983,6 +984,10 @@ const migrations = [
   `ALTER TABLE grants ADD COLUMN reminders_sent INTEGER NOT NULL DEFAULT 0`,
   `ALTER TABLE grants DROP COLUMN check_rfp_date`,
   `ALTER TABLE grants DROP COLUMN notify_before_days`,
+
+  // Occupancy: per-model covariate-drop reasons so a reduced (ψ~1) model is
+  // visibly reduced instead of silently fitting an intercept-only null (2026-07-13)
+  `ALTER TABLE occupancy_models ADD COLUMN dropped_covariates_json TEXT`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }

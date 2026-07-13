@@ -1,6 +1,7 @@
 import "server-only";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
+import { log } from "@/lib/log";
 import {
   parseCaptureDayFromFilename,
   resolveCaptureDay,
@@ -18,7 +19,7 @@ import { DEFAULT_CONFIDENCE_THRESHOLD } from "@/lib/audio-confidence";
  * so filtering + site/window resolution stay identical across the two.
  */
 
-interface DeploymentRow {
+export interface DeploymentRow {
   id: number;
   site_name: string | null;
   name: string;
@@ -42,6 +43,28 @@ export interface OccupancyStreamInputs {
    * that once zeroed the camera stream silently — surface it, never hide it.
    */
   detectionsDroppedNoDate: number;
+  /**
+   * Deployments where the ODK install/retrieve window clamps out real file
+   * coverage (files dated outside date_start..date_end). Because the ODK dates
+   * are auto-recorded and authoritative, this signals a likely bad ODK date or
+   * mis-timestamped files — surfaced so it can be corrected rather than
+   * silently dropping those detections.
+   */
+  dateWindowAnomalies: DateWindowAnomaly[];
+}
+
+/** A deployment whose file capture dates fall outside its ODK survey window. */
+export interface DateWindowAnomaly {
+  siteId: string;
+  siteName: string;
+  /** ODK window bounds (yyyy-mm-dd) — the authoritative, clamped window. */
+  odkStart: string;
+  odkEnd: string;
+  /** Span of file capture dates (yyyy-mm-dd) that the ODK window clamped. */
+  fileMin: string;
+  fileMax: string;
+  /** No overlap at all between files and the ODK window (most severe). */
+  noOverlap: boolean;
 }
 
 function parseYmd(s: string | null | undefined): CaptureDay | null {
@@ -78,33 +101,33 @@ function deriveWindows(
   return acc;
 }
 
-/** Earliest / latest of the supplied days, ignoring nulls (null if both null). */
-function minDay(a: CaptureDay | null | undefined, b: CaptureDay | null | undefined): CaptureDay | null {
-  if (!a) return b ?? null;
-  if (!b) return a;
-  return a.getTime() <= b.getTime() ? a : b;
-}
-function maxDay(a: CaptureDay | null | undefined, b: CaptureDay | null | undefined): CaptureDay | null {
-  if (!a) return b ?? null;
-  if (!b) return a;
-  return a.getTime() >= b.getTime() ? a : b;
-}
+const isoDay = (d: CaptureDay) => d.toISOString().slice(0, 10);
 
-function buildSites(
+export function buildSites(
   deployments: DeploymentRow[],
   windows: Map<number, { min: CaptureDay; max: CaptureDay }>,
-): { sites: OccupancySite[]; covariateInputs: Map<string, SiteCovariateInput>; dropped: number } {
+): {
+  sites: OccupancySite[];
+  covariateInputs: Map<string, SiteCovariateInput>;
+  dropped: number;
+  anomalies: DateWindowAnomaly[];
+} {
   const sites: OccupancySite[] = [];
   const covariateInputs = new Map<string, SiteCovariateInput>();
+  const anomalies: DateWindowAnomaly[] = [];
   let dropped = 0;
   for (const d of deployments) {
     const derived = windows.get(d.id);
-    // Union the ODK install/retrieve window with the image-derived capture span:
-    // a photo means the camera was active that day, and ODK dates occasionally
-    // mismatch the data (e.g. a year-typo), which would otherwise drop every
-    // in-deployment detection out of window.
-    const start = minDay(parseYmd(d.date_start), derived?.min);
-    const end = maxDay(parseYmd(d.date_end), derived?.max);
+    const odkStart = parseYmd(d.date_start);
+    const odkEnd = parseYmd(d.date_end);
+    // Strict clamp: the ODK install/retrieve dates are authoritative — they are
+    // auto-recorded, so a typo is rare and signals a real data problem, not a
+    // reason to widen the window. File-derived capture dates define the window
+    // ONLY when a deployment has no ODK dates. This keeps a single stray file
+    // timestamp (camera clock reset, bad file_modified) from ballooning the
+    // survey window (the "74 occasions" symptom).
+    const start = odkStart ?? derived?.min ?? null;
+    const end = odkEnd ?? derived?.max ?? null;
     if (!start || !end || end.getTime() - start.getTime() < 0) {
       if (derived) dropped++;
       continue;
@@ -117,6 +140,36 @@ function buildSites(
     if (d.latitude == null || d.longitude == null) {
       dropped++;
       continue;
+    }
+    // Notify when the strict clamp trims real file coverage: file dates outside
+    // the ODK window mean either a bad ODK date or mis-timestamped files. Those
+    // detections become NA in-model; surface the mismatch instead of hiding it.
+    if (odkStart && odkEnd && derived) {
+      const before = derived.min.getTime() < start.getTime();
+      const after = derived.max.getTime() > end.getTime();
+      if (before || after) {
+        const noOverlap =
+          derived.max.getTime() < start.getTime() || derived.min.getTime() > end.getTime();
+        anomalies.push({
+          siteId: String(d.id),
+          siteName: d.site_name ?? d.name,
+          odkStart: isoDay(start),
+          odkEnd: isoDay(end),
+          fileMin: isoDay(derived.min),
+          fileMax: isoDay(derived.max),
+          noOverlap,
+        });
+        log.warn(
+          {
+            deploymentId: d.id,
+            siteName: d.site_name ?? d.name,
+            odkWindow: [isoDay(start), isoDay(end)],
+            fileWindow: [isoDay(derived.min), isoDay(derived.max)],
+            noOverlap,
+          },
+          "occupancy_date_window_clamp",
+        );
+      }
     }
     const siteId = String(d.id);
     sites.push({
@@ -136,7 +189,7 @@ function buildSites(
       fieldNotes: d.field_notes,
     });
   }
-  return { sites, covariateInputs, dropped };
+  return { sites, covariateInputs, dropped, anomalies };
 }
 
 export function fetchOccupancyInputs(
@@ -179,7 +232,7 @@ export function fetchOccupancyInputs(
         fileModified: r.file_modified,
       })),
     );
-    const { sites, covariateInputs, dropped } = buildSites(deployments, windows);
+    const { sites, covariateInputs, dropped, anomalies } = buildSites(deployments, windows);
 
     const rows = db.all(sql`
       SELECT COALESCE(NULLIF(id.corrected_species, ''), id.species) AS species,
@@ -219,7 +272,14 @@ export function fetchOccupancyInputs(
       }
       detections.push({ species: r.species, siteId, captureDay: day });
     }
-    return { sites, covariateInputs, detections, droppedSites: dropped, detectionsDroppedNoDate };
+    return {
+    sites,
+    covariateInputs,
+    detections,
+    droppedSites: dropped,
+    detectionsDroppedNoDate,
+    dateWindowAnomalies: anomalies,
+  };
   }
 
   // audio — filenames embed dates, so no file_modified fallback needed
@@ -229,7 +289,7 @@ export function fetchOccupancyInputs(
   const windows = deriveWindows(
     audioFilesRows.map((r) => ({ deployment_id: r.deployment_id, filename: r.filename, exif: null })),
   );
-  const { sites, covariateInputs, dropped } = buildSites(deployments, windows);
+  const { sites, covariateInputs, dropped, anomalies } = buildSites(deployments, windows);
 
   const rows = db.all(sql`
     SELECT COALESCE(NULLIF(ai.corrected_species, ''), ai.species) AS species,
@@ -256,5 +316,12 @@ export function fetchOccupancyInputs(
     }
     detections.push({ species: r.species, siteId, captureDay: day });
   }
-  return { sites, covariateInputs, detections, droppedSites: dropped, detectionsDroppedNoDate };
+  return {
+    sites,
+    covariateInputs,
+    detections,
+    droppedSites: dropped,
+    detectionsDroppedNoDate,
+    dateWindowAnomalies: anomalies,
+  };
 }

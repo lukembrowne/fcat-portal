@@ -7,13 +7,12 @@ import { requirePermission } from "@/lib/auth";
 import { log } from "@/lib/log";
 import type { ActionResult } from "@/lib/types";
 import { computeReadiness, type ReadinessReport } from "@/lib/occupancy/readiness";
-import { fetchOccupancyInputs } from "@/lib/occupancy/fetch";
+import { fetchOccupancyInputs, type DateWindowAnomaly } from "@/lib/occupancy/fetch";
 import { buildDetectionFrame } from "@/lib/occupancy/detection-history";
 import { getSyntheticSiteIds, cohortSitesFor } from "@/lib/occupancy/cohort";
 import { DEFAULT_BIN_WIDTH_DAYS } from "@/lib/occupancy/occasions";
 import { DEFAULT_CONFIDENCE_THRESHOLD } from "@/lib/audio-confidence";
 import { JOB_TYPES } from "@/lib/job-types";
-import { CAMERA_TRAP_ML_JOB_TYPES } from "@/lib/job-locks";
 import { processNextQueueable } from "@/lib/job-queue";
 import {
   occupancyModels,
@@ -40,6 +39,9 @@ export interface OccupancyReadinessResult {
   /** Deployments dropped from a stream's site pool for want of a survey window. */
   cameraSitesDropped: number;
   audioSitesDropped: number;
+  /** Deployments whose file dates fall outside their ODK survey window. */
+  cameraDateAnomalies: DateWindowAnomaly[];
+  audioDateAnomalies: DateWindowAnomaly[];
   generatedAt: string;
 }
 
@@ -79,6 +81,8 @@ export async function getOccupancyReadiness(
         audio,
         cameraSitesDropped: cam.droppedSites,
         audioSitesDropped: aud.droppedSites,
+        cameraDateAnomalies: cam.dateWindowAnomalies,
+        audioDateAnomalies: aud.dateWindowAnomalies,
         generatedAt: new Date().toISOString(),
       },
     };
@@ -273,6 +277,8 @@ export interface SpeciesModelDetail {
   psiFormula: string | null;
   detFormula: string | null;
   fitSeconds: number | null;
+  /** When the batch that produced this model completed (ISO); null if unknown. */
+  fittedAt: string | null;
   effects: { submodel: string; param: string; estimate: number; se: number | null; z: number | null; pValue: number | null }[];
   /** Covariates omitted from this (eligible) model, with Spanish reasons. */
   droppedCovariates: { name: string; reason: string }[];
@@ -312,6 +318,13 @@ export async function getSpeciesModel(
   try {
     const runId = await latestCompletedRunId();
     if (!runId) return { success: true, data: null };
+
+    const [runRow] = await db
+      .select({ completedAt: occupancyRuns.completedAt })
+      .from(occupancyRuns)
+      .where(eq(occupancyRuns.id, runId))
+      .limit(1);
+    const fittedAt = runRow?.completedAt ? runRow.completedAt.toISOString() : null;
 
     const [model] = await db
       .select()
@@ -426,6 +439,7 @@ export async function getSpeciesModel(
         psiFormula: model.psiFormula,
         detFormula: model.detFormula,
         fitSeconds: model.fitSeconds,
+        fittedAt,
         effects: effectRows.map((e) => ({
           submodel: e.submodel,
           param: e.param,
@@ -747,34 +761,6 @@ export async function getModelInputSample(
 
     const iso = (d: Date) => d.toISOString().slice(0, 10);
 
-    // Resolve a per-site link to where its detections are reviewed. siteId is the
-    // deployment id. Camera → the deployment's latest ML-job verification grid
-    // (fallback: the deployment page); Audio → the deployment recordings page.
-    const hrefBySite = new Map<string, string>();
-    if (stream === "camera") {
-      const deploymentIds = frame.perSite
-        .map((p) => Number(p.siteId))
-        .filter((n) => Number.isInteger(n));
-      if (deploymentIds.length > 0) {
-        const jobs = await db
-          .select({ id: processingJobs.id, deploymentId: processingJobs.deploymentId })
-          .from(processingJobs)
-          .where(
-            and(
-              inArray(processingJobs.deploymentId, deploymentIds),
-              inArray(processingJobs.jobType, [...CAMERA_TRAP_ML_JOB_TYPES]),
-            ),
-          )
-          .orderBy(desc(processingJobs.createdAt));
-        // First seen per deployment = latest job (query is createdAt desc).
-        for (const j of jobs) {
-          if (j.deploymentId == null) continue;
-          const key = String(j.deploymentId);
-          if (!hrefBySite.has(key)) hrefBySite.set(key, `/camera-trap/results/${j.id}`);
-        }
-      }
-    }
-
     // Detected sites first (most informative), then most-surveyed. No display
     // cap — every cohort site is shown so an outlier long window is visible.
     const rows: DetectionSampleRow[] = frame.perSite
@@ -795,10 +781,10 @@ export async function getModelInputSample(
         windowStart: iso(p.windowStart),
         windowEnd: iso(p.windowEnd),
         totalDays: p.totalDays,
-        href:
-          stream === "audio"
-            ? `/audio/${p.siteId}`
-            : (hrefBySite.get(p.siteId) ?? `/camera-trap/${p.siteId}`),
+        // siteId is the deployment id → link to the deployment detail page,
+        // where the installation's details can be edited (both streams share
+        // the same physical deployment).
+        href: `/camera-trap/${p.siteId}`,
       }));
 
     // Median window length across sites — the baseline the table flags outliers

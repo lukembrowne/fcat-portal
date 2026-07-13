@@ -1,5 +1,57 @@
+"use client";
+
+import { useMemo, useState } from "react";
 import Link from "next/link";
+import { SortIcon } from "@/components/sort-icon";
 import type { ModelInputSample } from "./actions";
+
+type SortKey = "siteName" | "windowStart" | "totalDays" | "occasions" | "detections";
+type SortDir = "asc" | "desc";
+
+// Numeric columns default to descending (most first); the site name defaults to
+// ascending (A→Z). Clicking the active column toggles the direction.
+const DEFAULT_DIR: Record<SortKey, SortDir> = {
+  siteName: "asc",
+  windowStart: "asc",
+  totalDays: "desc",
+  occasions: "desc",
+  detections: "desc",
+};
+
+function SortableTh({
+  label,
+  colKey,
+  activeKey,
+  dir,
+  onSort,
+  align = "right",
+  title,
+  className = "",
+}: {
+  label: string;
+  colKey: SortKey;
+  activeKey: SortKey;
+  dir: SortDir;
+  onSort: (key: SortKey) => void;
+  align?: "left" | "right";
+  title?: string;
+  className?: string;
+}) {
+  return (
+    <th
+      className={`px-2 py-1 font-medium cursor-pointer select-none ${
+        align === "left" ? "text-left" : "text-right"
+      } ${className}`}
+      onClick={() => onSort(colKey)}
+      title={title}
+    >
+      <span className={`inline-flex items-center gap-1 ${align === "right" ? "flex-row-reverse" : ""}`}>
+        {label}
+        <SortIcon direction={activeKey === colKey ? dir : false} />
+      </span>
+    </th>
+  );
+}
 
 /**
  * A view of the site × occasion detection matrix the model consumes — lets a
@@ -8,36 +60,95 @@ import type { ModelInputSample } from "./actions";
  * (detectada), 0 (revisada sin detección) or · (fuera de ventana / NA). Each
  * site also shows its sampling period so an outlier long window — which inflates
  * the occasion count for every site — is visible and flagged. Site names link to
- * where the detections are reviewed. The survey-effort level is on each cell's
- * hover title.
+ * the deployment detail page. Every summary column is sortable; the survey-effort
+ * level is on each cell's hover title.
  */
 export function DetectionSampleTable({ sample }: { sample: ModelInputSample }) {
   const occ = Array.from({ length: sample.maxOccasions }, (_, i) => i + 1);
+  const [sortKey, setSortKey] = useState<SortKey>("detections");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+
+  const toggleSort = (key: SortKey) => {
+    if (key === sortKey) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir(DEFAULT_DIR[key]);
+    }
+  };
+
+  const rows = useMemo(() => {
+    const dir = sortDir === "asc" ? 1 : -1;
+    return [...sample.rows].sort((a, b) => {
+      let cmp = 0;
+      if (sortKey === "siteName") cmp = a.siteName.localeCompare(b.siteName);
+      else if (sortKey === "windowStart") cmp = a.windowStart.localeCompare(b.windowStart);
+      else cmp = a[sortKey] - b[sortKey];
+      // Stable tiebreaker so equal values keep a deterministic order.
+      return cmp !== 0 ? cmp * dir : a.siteId.localeCompare(b.siteId);
+    });
+  }, [sample.rows, sortKey, sortDir]);
+
   // A window ≥3× the median (and clearly long) drives maxOccasions and pads
   // every other row with NA — flag it so the culprit is obvious.
   const isOutlier = (days: number) =>
     sample.medianTotalDays > 0 && days >= 3 * sample.medianTotalDays;
+
   return (
     <div className="space-y-2">
       <p className="text-xs text-muted-foreground">
         Matriz sitio × ocasión que entra al modelo ({sample.rows.length} sitios; ocasión = ventana
         de {sample.binWidth} días). Cada fila es un sitio; cada columna, una ocasión. El período de
         muestreo (inicio → fin) de cada sitio se muestra a la izquierda; un sitio con una ventana
-        muy larga (⚠) ensancha la matriz y deja el resto de filas con NA.
+        muy larga (⚠) ensancha la matriz y deja el resto de filas con NA. Haga clic en un encabezado
+        para ordenar.
       </p>
       <div className="overflow-x-auto">
         <table className="text-[11px] border-collapse">
           <thead>
             <tr className="text-muted-foreground">
-              <th className="sticky left-0 bg-background px-2 py-1 text-left font-medium">Sitio</th>
-              <th className="px-2 py-1 text-left font-medium whitespace-nowrap">Período</th>
-              <th className="px-1 py-1 text-right font-medium" title="Días de muestreo (inicio→fin)">
-                días
-              </th>
-              <th className="px-1 py-1 text-right font-medium" title="Ocasiones muestreadas en este sitio">
-                oc.
-              </th>
-              <th className="px-1 py-1 text-right font-medium">det.</th>
+              <SortableTh
+                label="Sitio"
+                colKey="siteName"
+                activeKey={sortKey}
+                dir={sortDir}
+                onSort={toggleSort}
+                align="left"
+                className="sticky left-0 bg-background whitespace-nowrap"
+              />
+              <SortableTh
+                label="Período"
+                colKey="windowStart"
+                activeKey={sortKey}
+                dir={sortDir}
+                onSort={toggleSort}
+                align="left"
+                className="whitespace-nowrap"
+              />
+              <SortableTh
+                label="días"
+                colKey="totalDays"
+                activeKey={sortKey}
+                dir={sortDir}
+                onSort={toggleSort}
+                title="Días de muestreo (inicio→fin)"
+              />
+              <SortableTh
+                label="oc."
+                colKey="occasions"
+                activeKey={sortKey}
+                dir={sortDir}
+                onSort={toggleSort}
+                title="Ocasiones muestreadas en este sitio"
+              />
+              <SortableTh
+                label="det."
+                colKey="detections"
+                activeKey={sortKey}
+                dir={sortDir}
+                onSort={toggleSort}
+                title="Ocasiones con detección"
+              />
               {occ.map((o) => (
                 <th key={o} className="px-1 py-1 text-center font-normal tabular-nums">
                   {o}
@@ -46,7 +157,7 @@ export function DetectionSampleTable({ sample }: { sample: ModelInputSample }) {
             </tr>
           </thead>
           <tbody>
-            {sample.rows.map((r) => {
+            {rows.map((r) => {
               const outlier = isOutlier(r.totalDays);
               return (
                 <tr key={r.siteId} className="border-t">
@@ -107,7 +218,7 @@ export function DetectionSampleTable({ sample }: { sample: ModelInputSample }) {
         detectada ·{" "}
         <span className="inline-block align-middle w-3 h-3 rounded-sm bg-muted mr-1" />0 = revisada
         sin detección · <span className="mr-1">·</span> = fuera de la ventana del sitio (NA). Sitio =
-        instalación (abre la página de verificación); ocasión = ventana de {sample.binWidth} días. ⚠
+        instalación (abre la página de la instalación); ocasión = ventana de {sample.binWidth} días. ⚠
         = ventana de muestreo atípicamente larga.
       </p>
     </div>

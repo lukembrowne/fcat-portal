@@ -14,6 +14,19 @@ const Z95 = 1.959964;
 
 const pct = (v: number) => `${(v * 100).toFixed(0)}%`;
 
+/** Batch completion timestamp → readable Ecuador-local date + time. */
+function formatFittedAt(iso: string): string {
+  try {
+    return new Intl.DateTimeFormat("es-EC", {
+      dateStyle: "medium",
+      timeStyle: "short",
+      timeZone: "America/Guayaquil",
+    }).format(new Date(iso));
+  } catch {
+    return iso.slice(0, 10);
+  }
+}
+
 export default async function SpeciesOccupancyPage({
   params,
   searchParams,
@@ -62,7 +75,12 @@ export default async function SpeciesOccupancyPage({
 
       <header className="space-y-1">
         <h1 className="text-2xl font-bold italic">{species}</h1>
-        <p className="text-sm text-muted-foreground">{STREAM_LABEL[stream]}</p>
+        <p className="text-sm text-muted-foreground">
+          {STREAM_LABEL[stream]}
+          {model?.fittedAt ? (
+            <> · Modelo ajustado el {formatFittedAt(model.fittedAt)}</>
+          ) : null}
+        </p>
       </header>
 
       {!model ? (

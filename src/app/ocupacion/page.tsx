@@ -9,6 +9,7 @@ import {
   listModeledSpecies,
 } from "./actions";
 import type { ReadinessReport, OccupancyStream } from "@/lib/occupancy/readiness";
+import type { DateWindowAnomaly } from "@/lib/occupancy/fetch";
 
 export const metadata = {
   title: "Modelos de ocupación",
@@ -29,6 +30,7 @@ function StreamSection({
   subtitle,
   report,
   dropped,
+  dateAnomalies,
   stream,
   modeled,
 }: {
@@ -36,6 +38,7 @@ function StreamSection({
   subtitle: string;
   report: ReadinessReport;
   dropped: number;
+  dateAnomalies: DateWindowAnomaly[];
   stream: OccupancyStream;
   modeled: ModeledMap;
 }) {
@@ -70,6 +73,29 @@ function StreamSection({
             {report.detectionsDroppedNoDate} detección(es) sin fecha de captura resoluble
             (nombre de archivo sin fecha, sin EXIF ni fecha de archivo) quedaron fuera del análisis.
           </p>
+        ) : null}
+        {dateAnomalies.length > 0 ? (
+          <div className="rounded-md border border-amber-500/60 bg-amber-50/50 dark:bg-amber-950/20 p-3 space-y-1">
+            <p className="text-xs font-medium text-amber-800 dark:text-amber-300">
+              {dateAnomalies.length} instalación(es) con archivos fuera de la ventana de
+              instalación/retiro (ODK). La ventana ODK es la autoritativa; los archivos con
+              fechas fuera de ella se recortan del análisis. Revise si la fecha de ODK o la
+              marca de tiempo de los archivos es incorrecta.
+            </p>
+            <ul className="text-xs text-amber-700 dark:text-amber-400 list-disc pl-5 space-y-0.5">
+              {dateAnomalies.map((a) => (
+                <li key={a.siteId}>
+                  <Link href={`/camera-trap/${a.siteId}`} className="hover:underline font-medium">
+                    {a.siteName}
+                  </Link>
+                  : archivos {a.fileMin} – {a.fileMax} vs ODK {a.odkStart} – {a.odkEnd}
+                  {a.noOverlap ? (
+                    <span className="font-semibold"> (sin traslape — probable fecha ODK errónea)</span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          </div>
         ) : null}
         <ReadinessTable rows={report.species} stream={stream} modeled={modeled} />
       </CardContent>
@@ -106,7 +132,15 @@ export default async function OccupancyPage() {
     );
   }
 
-  const { camera, audio, cameraSitesDropped, audioSitesDropped, generatedAt } = result.data;
+  const {
+    camera,
+    audio,
+    cameraSitesDropped,
+    audioSitesDropped,
+    cameraDateAnomalies,
+    audioDateAnomalies,
+    generatedAt,
+  } = result.data;
   const t = camera.thresholds;
 
   return (
@@ -156,6 +190,7 @@ export default async function OccupancyPage() {
         subtitle="Solo instalaciones verificadas (imágenes confirmadas) y no excluidas; solo detecciones verificadas o corregidas."
         report={camera}
         dropped={cameraSitesDropped}
+        dateAnomalies={cameraDateAnomalies}
         stream="camera"
         modeled={modeledByStream("camera")}
       />
@@ -165,6 +200,7 @@ export default async function OccupancyPage() {
         subtitle={`Mismas instalaciones verificadas y no excluidas que cámaras trampa. Detecciones con confianza ≥ ${(audio.confidenceThreshold ?? 0.7).toFixed(2)} (o verificadas). La confianza de BirdNET no es una probabilidad y varía entre especies — umbral global como primer criterio.`}
         report={audio}
         dropped={audioSitesDropped}
+        dateAnomalies={audioDateAnomalies}
         stream="audio"
         modeled={modeledByStream("audio")}
       />

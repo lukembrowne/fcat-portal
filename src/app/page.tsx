@@ -10,68 +10,6 @@ interface ModuleLink {
   show: boolean;
 }
 
-/**
- * Full-bleed, layered "cloud forest" scene rendered as inline SVG — no external
- * asset, scales crisply, and reads well under white text in either theme.
- */
-function CloudForestScene() {
-  return (
-    <svg
-      aria-hidden
-      className="absolute inset-0 h-full w-full"
-      viewBox="0 0 1440 720"
-      preserveAspectRatio="xMidYMax slice"
-    >
-      <defs>
-        <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#0d3b33" />
-          <stop offset="45%" stopColor="#1f5c48" />
-          <stop offset="78%" stopColor="#4a8a63" />
-          <stop offset="100%" stopColor="#cfe3a9" />
-        </linearGradient>
-        <radialGradient id="sun" cx="50%" cy="50%" r="50%">
-          <stop offset="0%" stopColor="#fdf1c9" stopOpacity="0.95" />
-          <stop offset="45%" stopColor="#f3d79a" stopOpacity="0.5" />
-          <stop offset="100%" stopColor="#f3d79a" stopOpacity="0" />
-        </radialGradient>
-        <linearGradient id="mist" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#ffffff" stopOpacity="0" />
-          <stop offset="100%" stopColor="#e9f2d6" stopOpacity="0.35" />
-        </linearGradient>
-      </defs>
-
-      {/* sky + low sun */}
-      <rect width="1440" height="720" fill="url(#sky)" />
-      <circle cx="1010" cy="470" r="240" fill="url(#sun)" />
-
-      {/* receding ridgelines: lighter + hazier the farther back */}
-      <path
-        d="M0 470 C 240 405, 430 445, 660 415 S 1120 380, 1440 430 L1440 720 L0 720 Z"
-        fill="#6ea583"
-        opacity="0.55"
-      />
-      <path
-        d="M0 520 C 260 470, 470 505, 720 475 S 1160 455, 1440 505 L1440 720 L0 720 Z"
-        fill="#4c8a67"
-        opacity="0.75"
-      />
-      <path
-        d="M0 585 C 220 545, 520 585, 760 555 S 1200 545, 1440 585 L1440 720 L0 720 Z"
-        fill="#2f6b4c"
-      />
-
-      {/* drifting mist bands between the ridges */}
-      <rect x="0" y="470" width="1440" height="120" fill="url(#mist)" />
-
-      {/* foreground canopy silhouette */}
-      <path
-        d="M0 640 C 120 610, 200 655, 300 632 C 380 612, 440 648, 540 636 C 640 624, 700 656, 820 640 C 940 624, 1010 658, 1140 640 C 1260 624, 1330 654, 1440 636 L1440 720 L0 720 Z"
-        fill="#173d2b"
-      />
-    </svg>
-  );
-}
-
 export default async function HomePage() {
   const user = await getCurrentUser();
 
@@ -124,10 +62,16 @@ export default async function HomePage() {
 
   return (
     <div className="relative min-h-[calc(100vh-6rem)] overflow-hidden rounded-2xl border border-border/40 shadow-sm">
-      <CloudForestScene />
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src="/landing-hero.jpg"
+        alt=""
+        aria-hidden
+        className="absolute inset-0 h-full w-full object-cover"
+      />
 
-      {/* legibility gradient over the scene */}
-      <div className="absolute inset-0 bg-gradient-to-t from-black/45 via-black/10 to-black/25" />
+      {/* legibility gradient over the photo */}
+      <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/25 to-black/35" />
 
       {/* content */}
       <div className="relative z-10 flex min-h-[calc(100vh-6rem)] flex-col items-center justify-center gap-10 px-6 py-16 text-center">

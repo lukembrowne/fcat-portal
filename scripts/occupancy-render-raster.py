@@ -248,23 +248,30 @@ def main():
             did_elev = True
 
     for md in cfg.get("models", []):
-        lin = np.full((ny, nx), float(md.get("b0", 0.0)))
-        # Evaluate ψ from a finer forest cover than the 500 m fit buffer so the
-        # occupancy surface carries fine detail (patches/streams) like the forest
-        # and elevation layers instead of a blurred 500 m mosaic — while staying
-        # smooth enough to keep a probability gradient. (This is the map's
-        # resolution; the coefficient itself was fit at the 500 m buffer scale.)
-        valid = inside & np.isfinite(forest_psi)
-        bf, fsd = md.get("bForest"), md.get("forestSd")
-        if bf is not None and fsd:
-            lin = lin + bf * (forest_psi - md.get("forestMean", 0.0)) / fsd
-        be, esd = md.get("bElev"), md.get("elevSd")
-        if be is not None and esd and elev is not None:
-            lin = lin + be * (elev - md.get("elevMean", 0.0)) / esd
-            valid = valid & np.isfinite(elev)
-        psi = 1.0 / (1.0 + np.exp(-lin))
-        colorize(psi, "psi", 0.0, 1.0, valid, md["out"])
-        done_models.append(md["name"])
+        # Isolate each model's render: one bad model (degenerate coefficients,
+        # all-NA grid) must NOT abort the whole pass and null out EVERY ψ
+        # surface — the forest/elevation layers are already written above, so an
+        # unguarded raise would leave the page with covariate layers but no ψ.
+        try:
+            lin = np.full((ny, nx), float(md.get("b0", 0.0)))
+            # Evaluate ψ from a finer forest cover than the 500 m fit buffer so the
+            # occupancy surface carries fine detail (patches/streams) like the forest
+            # and elevation layers instead of a blurred 500 m mosaic — while staying
+            # smooth enough to keep a probability gradient. (This is the map's
+            # resolution; the coefficient itself was fit at the 500 m buffer scale.)
+            valid = inside & np.isfinite(forest_psi)
+            bf, fsd = md.get("bForest"), md.get("forestSd")
+            if bf is not None and fsd:
+                lin = lin + bf * (forest_psi - md.get("forestMean", 0.0)) / fsd
+            be, esd = md.get("bElev"), md.get("elevSd")
+            if be is not None and esd and elev is not None:
+                lin = lin + be * (elev - md.get("elevMean", 0.0)) / esd
+                valid = valid & np.isfinite(elev)
+            psi = 1.0 / (1.0 + np.exp(-lin))
+            colorize(psi, "psi", 0.0, 1.0, valid, md["out"])
+            done_models.append(md["name"])
+        except Exception as ex:  # noqa: BLE001
+            sys.stderr.write(f"psi surface render failed for {md.get('name')!r}: {ex}\n")
 
     print(json.dumps({
         "bounds": [w, s, e, n],

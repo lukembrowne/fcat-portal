@@ -535,6 +535,12 @@ async function flushSurfaces(
       forest: { out: "_forest.png" },
       elevation: process.env.OCCUPANCY_DEM_RASTER ? { out: "_elevation.png" } : undefined,
       models,
+    }, {
+      // One full-grid ψ render per model on top of the shared forest/elevation
+      // pass — the fixed 180 s default is easily blown by a full species batch
+      // (SIGKILL → null → EVERY ψ surface lost). Scale a generous budget by model
+      // count; this is a background job with no hard wall-clock limit.
+      timeoutMs: Math.max(180_000, models.length * 10_000),
     });
     if (rr) {
       bounds = rr.bounds;

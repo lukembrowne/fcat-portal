@@ -165,7 +165,9 @@ export async function fetchCashflowData(): Promise<ActionResult<CashflowData>> {
     ].sort();
 
     const now = new Date();
-    const futureEnd = `${now.getFullYear() + 2}-12-01`;
+    // Cap the projection horizon at the end of 2027 (business decision — don't
+    // project cash flow further than the current planning window).
+    const futureEnd = "2027-12-01";
     const startMonth = allActualMonths[0] || `${now.getFullYear()}-01-01`;
     const endMonth = futureEnd;
 

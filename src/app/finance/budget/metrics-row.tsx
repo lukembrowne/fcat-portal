@@ -1,6 +1,6 @@
 "use client";
 
-import { Card, CardHeader } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { DollarSign, TrendingUp, Calendar, ThumbsUp, ThumbsDown } from "lucide-react";
 
 function formatCurrency(val: number) {
@@ -29,76 +29,80 @@ export function MetricsRow({
   overUnderAmount,
 }: MetricsRowProps) {
   return (
-    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+    <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
       {/* Total Spent */}
-      <Card>
-        <CardHeader className="pb-2">
-          <p className="text-sm text-muted-foreground">Gastos a la Fecha</p>
-          <div className="flex items-center gap-2">
-            <DollarSign className="h-5 w-5 text-green-600" />
-            <p className="text-2xl font-bold tabular-nums">
+      <Card className="py-4 gap-1">
+        <CardContent className="flex items-start justify-between">
+          <div className="min-w-0">
+            <p className="text-xs font-medium text-muted-foreground">
+              Gastos a la Fecha
+            </p>
+            <p className="text-xl font-bold tabular-nums mt-0.5">
               {formatCurrency(totalSpent)}
             </p>
           </div>
-        </CardHeader>
+          <DollarSign className="h-4 w-4 shrink-0 text-green-600" />
+        </CardContent>
       </Card>
 
       {/* Prorated Budget */}
-      <Card>
-        <CardHeader className="pb-2">
-          <p className="text-sm text-muted-foreground">
-            Presupuesto Prorrateado
-          </p>
-          <div className="flex items-center gap-2">
-            <TrendingUp className="h-5 w-5 text-blue-600" />
-            <p className="text-2xl font-bold tabular-nums">
+      <Card className="py-4 gap-1">
+        <CardContent className="flex items-start justify-between">
+          <div className="min-w-0">
+            <p className="text-xs font-medium text-muted-foreground">
+              Presupuesto Prorrateado
+            </p>
+            <p className="text-xl font-bold tabular-nums mt-0.5">
               {formatCurrency(totalBudgetProrated)}
             </p>
           </div>
-        </CardHeader>
+          <TrendingUp className="h-4 w-4 shrink-0 text-blue-600" />
+        </CardContent>
       </Card>
 
       {/* Annual Budget */}
-      <Card>
-        <CardHeader className="pb-2">
-          <p className="text-sm text-muted-foreground">Presupuesto Anual</p>
-          <div className="flex items-center gap-2">
-            <Calendar className="h-5 w-5 text-purple-600" />
-            <p className="text-2xl font-bold tabular-nums">
+      <Card className="py-4 gap-1">
+        <CardContent className="flex items-start justify-between">
+          <div className="min-w-0">
+            <p className="text-xs font-medium text-muted-foreground">
+              Presupuesto Anual
+            </p>
+            <p className="text-xl font-bold tabular-nums mt-0.5">
               {formatCurrency(totalBudgetAnnual)}
             </p>
           </div>
-        </CardHeader>
+          <Calendar className="h-4 w-4 shrink-0 text-purple-600" />
+        </CardContent>
       </Card>
 
       {/* Over/Under Indicator */}
       {isOverBudget ? (
-        <Card className="border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950">
-          <CardHeader className="pb-2">
-            <p className="text-sm text-red-700 dark:text-red-400">
-              Sobre Presupuesto
-            </p>
-            <div className="flex items-center gap-2">
-              <ThumbsDown className="h-5 w-5 text-red-600" />
-              <p className="text-2xl font-bold tabular-nums text-red-700 dark:text-red-400">
+        <Card className="py-4 gap-1 border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950">
+          <CardContent className="flex items-start justify-between">
+            <div className="min-w-0">
+              <p className="text-xs font-medium text-red-700 dark:text-red-400">
+                Sobre Presupuesto
+              </p>
+              <p className="text-xl font-bold tabular-nums mt-0.5 text-red-700 dark:text-red-400">
                 {formatCurrency(overUnderAmount)}
               </p>
             </div>
-          </CardHeader>
+            <ThumbsDown className="h-4 w-4 shrink-0 text-red-600" />
+          </CardContent>
         </Card>
       ) : (
-        <Card className="border-green-200 bg-green-50 dark:border-green-900 dark:bg-green-950">
-          <CardHeader className="pb-2">
-            <p className="text-sm text-green-700 dark:text-green-400">
-              Bajo Presupuesto
-            </p>
-            <div className="flex items-center gap-2">
-              <ThumbsUp className="h-5 w-5 text-green-600" />
-              <p className="text-2xl font-bold tabular-nums text-green-700 dark:text-green-400">
+        <Card className="py-4 gap-1 border-green-200 bg-green-50 dark:border-green-900 dark:bg-green-950">
+          <CardContent className="flex items-start justify-between">
+            <div className="min-w-0">
+              <p className="text-xs font-medium text-green-700 dark:text-green-400">
+                Bajo Presupuesto
+              </p>
+              <p className="text-xl font-bold tabular-nums mt-0.5 text-green-700 dark:text-green-400">
                 {formatCurrency(overUnderAmount)}
               </p>
             </div>
-          </CardHeader>
+            <ThumbsUp className="h-4 w-4 shrink-0 text-green-600" />
+          </CardContent>
         </Card>
       )}
     </div>

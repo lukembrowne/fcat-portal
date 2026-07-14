@@ -5,6 +5,7 @@ import { MetricsRow } from "./metrics-row";
 import { ExpenseCharts } from "./expense-charts";
 import { ExpensePivot } from "./expense-pivot";
 import { ExpenseTable } from "./expense-table";
+import { formatDataThrough } from "../lib/format-data-through";
 import type { ExpenseData } from "./actions";
 
 export function DashboardShell({ data }: { data: ExpenseData }) {
@@ -20,7 +21,12 @@ export function DashboardShell({ data }: { data: ExpenseData }) {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Gastos</h1>
+      <div>
+        <h1 className="text-2xl font-bold">Gastos</h1>
+        <p className="text-xs text-muted-foreground mt-1">
+          {formatDataThrough(data.dataThrough)}
+        </p>
+      </div>
       <MetricsRow totalExpenses={formattedTotal} />
       <ExpenseCharts byCategory={data.byCategory} byMonth={data.byMonth} />
       <ExpensePivot pivotData={data.pivotData} byMonth={data.byMonth} />

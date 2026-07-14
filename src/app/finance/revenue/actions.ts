@@ -9,6 +9,8 @@ import type { MonthlyAmount, CategoryAmount } from "../types";
 
 export interface RevenueData {
   totalRevenue: number;
+  /** Latest revenue transaction date in range (from the Libro Mayor), or null. */
+  dataThrough: string | null;
   byCategory: CategoryAmount[];
   byMonth: MonthlyAmount[];
   transactions: {
@@ -29,9 +31,12 @@ export async function fetchRevenueData(
   await requirePermission("finance", "viewer");
 
   try {
-    // Total revenue
+    // Total revenue + latest transaction date (data freshness)
     const totalRow = db
-      .select({ total: sql<number>`COALESCE(SUM(haber), 0)` })
+      .select({
+        total: sql<number>`COALESCE(SUM(haber), 0)`,
+        dataThrough: sql<string | null>`MAX(fecha)`,
+      })
       .from(financeTransactions)
       .where(
         sql`tx_type = 'revenue' AND fecha >= ${from} AND fecha <= ${to}`
@@ -88,6 +93,7 @@ export async function fetchRevenueData(
       success: true,
       data: {
         totalRevenue: totalRow?.total ?? 0,
+        dataThrough: totalRow?.dataThrough ?? null,
         byCategory,
         byMonth,
         transactions,

@@ -55,7 +55,7 @@ export function ExpenseCharts({
   }));
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+    <div className="space-y-4">
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Gastos por Categoria</CardTitle>
@@ -64,7 +64,7 @@ export function ExpenseCharts({
           {pieData.length === 0 ? (
             <p className="text-sm text-muted-foreground">Sin datos</p>
           ) : (
-            <ResponsiveContainer width="100%" height={300}>
+            <ResponsiveContainer width="100%" height={360}>
               <PieChart>
                 <Pie
                   data={pieData}
@@ -98,7 +98,7 @@ export function ExpenseCharts({
           {barData.length === 0 ? (
             <p className="text-sm text-muted-foreground">Sin datos</p>
           ) : (
-            <ResponsiveContainer width="100%" height={300}>
+            <ResponsiveContainer width="100%" height={360}>
               <BarChart data={barData}>
                 <XAxis dataKey="month" tick={{ fontSize: 11 }} />
                 <YAxis

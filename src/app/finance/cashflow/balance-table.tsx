@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import {
   Table,
   TableBody,
@@ -11,7 +10,7 @@ import {
 } from "@/components/ui/table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Download, ChevronsLeft, ChevronsRight, ChevronLeft, ChevronRight } from "lucide-react";
+import { Download } from "lucide-react";
 import type { CashflowMonthRow } from "../types";
 
 function fmt(n: number | null): string {
@@ -60,18 +59,19 @@ function exportCSV(rows: CashflowMonthRow[]) {
   URL.revokeObjectURL(url);
 }
 
-const PAGE_SIZE = 24; // ~2 years of months
-
 export function BalanceTable({ monthRows }: { monthRows: CashflowMonthRow[] }) {
-  const [page, setPage] = useState(0);
-  const totalPages = Math.ceil(monthRows.length / PAGE_SIZE);
-  const visibleRows = monthRows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
-
   return (
     <Card>
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between">
-          <CardTitle className="text-base">Balance Mensual</CardTitle>
+          <CardTitle className="text-base">
+            Balance Mensual
+            {monthRows.length > 0 && (
+              <span className="ml-2 text-xs font-normal text-muted-foreground">
+                ({monthRows.length} meses)
+              </span>
+            )}
+          </CardTitle>
           <Button
             variant="outline"
             size="sm"
@@ -89,24 +89,23 @@ export function BalanceTable({ monthRows }: { monthRows: CashflowMonthRow[] }) {
             Sin datos disponibles
           </p>
         ) : (
-          <>
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="whitespace-nowrap">Fecha</TableHead>
-                    <TableHead className="text-right whitespace-nowrap">Ingresos</TableHead>
-                    <TableHead className="text-right whitespace-nowrap">Gastos</TableHead>
-                    <TableHead className="text-right whitespace-nowrap">Neto</TableHead>
-                    <TableHead className="text-right whitespace-nowrap">Ing. Proy.</TableHead>
-                    <TableHead className="text-right whitespace-nowrap">Gastos Proy.</TableHead>
-                    <TableHead className="text-right whitespace-nowrap">Gastos Adic.</TableHead>
-                    <TableHead className="text-right whitespace-nowrap">Saldo</TableHead>
-                    <TableHead className="text-right whitespace-nowrap">Saldo Proy.</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {visibleRows.map((row) => (
+          <div className="max-h-[70vh] overflow-auto">
+            <Table>
+              <TableHeader className="sticky top-0 z-10 bg-background">
+                <TableRow>
+                  <TableHead className="whitespace-nowrap">Fecha</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Ingresos</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Gastos</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Neto</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Ing. Proy.</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Gastos Proy.</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Gastos Adic.</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Saldo</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Saldo Proy.</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {monthRows.map((row) => (
                     <TableRow key={row.yearMonth}>
                       <TableCell className="font-medium whitespace-nowrap">
                         {fmtMonth(row.yearMonth)}
@@ -135,35 +134,11 @@ export function BalanceTable({ monthRows }: { monthRows: CashflowMonthRow[] }) {
                       <TableCell className={`text-right font-mono text-sm font-semibold ${row.projectedBalance !== null && row.projectedBalance < 0 ? "text-red-600" : "text-purple-600"}`}>
                         {fmt(row.projectedBalance)}
                       </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-
-            {/* Pagination */}
-            {totalPages > 1 && (
-              <div className="flex items-center justify-between mt-4 text-sm text-muted-foreground">
-                <span>
-                  Página {page + 1} de {totalPages} ({monthRows.length} meses)
-                </span>
-                <div className="flex items-center gap-1">
-                  <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setPage(0)} disabled={page === 0}>
-                    <ChevronsLeft className="h-4 w-4" />
-                  </Button>
-                  <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setPage(page - 1)} disabled={page === 0}>
-                    <ChevronLeft className="h-4 w-4" />
-                  </Button>
-                  <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setPage(page + 1)} disabled={page >= totalPages - 1}>
-                    <ChevronRight className="h-4 w-4" />
-                  </Button>
-                  <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setPage(totalPages - 1)} disabled={page >= totalPages - 1}>
-                    <ChevronsRight className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
-            )}
-          </>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
         )}
       </CardContent>
     </Card>

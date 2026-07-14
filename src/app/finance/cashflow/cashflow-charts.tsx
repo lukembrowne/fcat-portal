@@ -64,7 +64,7 @@ export function CashflowCharts({
   const hasData = monthRows.length > 0;
 
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
+    <div className="space-y-4">
       {/* Revenue vs Expenses Bar Chart */}
       <Card>
         <CardHeader className="pb-2">
@@ -72,7 +72,7 @@ export function CashflowCharts({
         </CardHeader>
         <CardContent>
           {hasData ? (
-            <ResponsiveContainer width="100%" height={320}>
+            <ResponsiveContainer width="100%" height={380}>
               <BarChart data={barData} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis
@@ -98,7 +98,7 @@ export function CashflowCharts({
               </BarChart>
             </ResponsiveContainer>
           ) : (
-            <div className="h-[320px] flex items-center justify-center text-muted-foreground text-sm">
+            <div className="h-[380px] flex items-center justify-center text-muted-foreground text-sm">
               Sin datos — cargue el Libro Mayor primero
             </div>
           )}
@@ -112,7 +112,7 @@ export function CashflowCharts({
         </CardHeader>
         <CardContent>
           {hasData ? (
-            <ResponsiveContainer width="100%" height={320}>
+            <ResponsiveContainer width="100%" height={380}>
               <LineChart data={lineData} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis
@@ -158,7 +158,7 @@ export function CashflowCharts({
               </LineChart>
             </ResponsiveContainer>
           ) : (
-            <div className="h-[320px] flex items-center justify-center text-muted-foreground text-sm">
+            <div className="h-[380px] flex items-center justify-center text-muted-foreground text-sm">
               Sin datos — cargue el Libro Mayor primero
             </div>
           )}

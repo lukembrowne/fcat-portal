@@ -158,14 +158,14 @@ export function AnnualCharts({
   }
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+    <div className="space-y-4">
       {/* Annual Summary */}
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Resumen Anual</CardTitle>
         </CardHeader>
         <CardContent>
-          <ResponsiveContainer width="100%" height={300}>
+          <ResponsiveContainer width="100%" height={360}>
             <BarChart data={summaryData}>
               <XAxis dataKey="year" tick={{ fontSize: 11 }} />
               <YAxis tickFormatter={formatCurrency} tick={{ fontSize: 11 }} />
@@ -184,7 +184,7 @@ export function AnnualCharts({
           <CardTitle className="text-base">Ingresos Mensuales por Ano</CardTitle>
         </CardHeader>
         <CardContent>
-          <ResponsiveContainer width="100%" height={300}>
+          <ResponsiveContainer width="100%" height={360}>
             <BarChart data={monthlyRevenueData}>
               <XAxis dataKey="month" tick={{ fontSize: 11 }} />
               <YAxis tickFormatter={formatCurrency} tick={{ fontSize: 11 }} />
@@ -209,7 +209,7 @@ export function AnnualCharts({
           <CardTitle className="text-base">Gastos Mensuales por Ano</CardTitle>
         </CardHeader>
         <CardContent>
-          <ResponsiveContainer width="100%" height={300}>
+          <ResponsiveContainer width="100%" height={360}>
             <BarChart data={monthlyExpensesData}>
               <XAxis dataKey="month" tick={{ fontSize: 11 }} />
               <YAxis tickFormatter={formatCurrency} tick={{ fontSize: 11 }} />
@@ -229,7 +229,7 @@ export function AnnualCharts({
       </Card>
 
       {/* Expenses by Category Comparison */}
-      <Card className="lg:col-span-2">
+      <Card>
         <CardHeader>
           <CardTitle className="text-base">
             Gastos por Categoria por Ano (Top 15)

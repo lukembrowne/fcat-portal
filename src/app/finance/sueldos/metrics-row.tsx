@@ -26,31 +26,27 @@ export function MetricsRow({
   onFilterChange: (f: GrantFilter) => void;
 }) {
   return (
-    <div className="grid gap-4 md:grid-cols-2">
+    <div className="grid gap-3 md:grid-cols-2">
       {/* Total salary spend */}
-      <Card>
-        <CardContent className="pt-6">
-          <div className="flex items-start justify-between">
-            <div>
-              <p className="text-sm font-medium text-muted-foreground">
-                Total Gastado en Sueldos
-              </p>
-              <p className="text-2xl font-bold mt-1">{fmt(totalSpent)}</p>
-              <p className="text-xs text-muted-foreground mt-1">
-                En el período seleccionado
-              </p>
-            </div>
-            <div className="rounded-md bg-green-100 p-2 dark:bg-green-900/30">
-              <DollarSign className="h-5 w-5 text-green-600 dark:text-green-400" />
-            </div>
+      <Card className="py-4 gap-1">
+        <CardContent className="flex items-start justify-between">
+          <div className="min-w-0">
+            <p className="text-xs font-medium text-muted-foreground">
+              Total Gastado en Sueldos
+            </p>
+            <p className="text-xl font-bold mt-0.5">{fmt(totalSpent)}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              En el período seleccionado
+            </p>
           </div>
+          <DollarSign className="h-4 w-4 shrink-0 text-green-600 dark:text-green-400" />
         </CardContent>
       </Card>
 
       {/* Grant status filter */}
-      <Card>
-        <CardContent className="pt-6">
-          <p className="text-sm font-medium text-muted-foreground mb-3">
+      <Card className="py-4 gap-1">
+        <CardContent>
+          <p className="text-xs font-medium text-muted-foreground mb-2">
             Filtro por Estado de Financiamiento
           </p>
           <div className="flex flex-wrap gap-2">

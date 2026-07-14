@@ -5,6 +5,7 @@ import type { SiteSpecies } from "../types";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ConservationBadge } from "@/components/conservation-badge";
+import { PhotoShareButton } from "@/components/photo-share-button";
 import { Bug, Bird, Squirrel } from "lucide-react";
 
 interface SpeciesCardsProps {
@@ -21,6 +22,11 @@ interface SpeciesCardsProps {
    * render as static (used by the internal results page for now).
    */
   speciesHref?: ((speciesName: string) => string) | null;
+  /**
+   * When set (public landowner view), each card's photo gets a share button
+   * and this label is woven into the share caption. Omitted internally.
+   */
+  shareSiteLabel?: string;
 }
 
 const TAXONOMIC_LABELS: Record<string, string> = {
@@ -48,6 +54,7 @@ export function SpeciesCards({
   totalDetections,
   resolveImageUrl,
   speciesHref,
+  shareSiteLabel,
 }: SpeciesCardsProps) {
   if (species.length === 0) {
     return (
@@ -98,6 +105,14 @@ export function SpeciesCards({
                 <div className="absolute left-2 top-2 z-10">
                   <ConservationBadge status={sp.iucnStatus} />
                 </div>
+                {shareSiteLabel && sp.photoImageId && resolveImageUrl && (
+                  <div className="absolute right-2 top-2 z-10">
+                    <PhotoShareButton
+                      imagePath={resolveImageUrl(sp.photoImageId, "large")}
+                      caption={`🐾 ${sp.spanishName ?? sp.commonName ?? sp.speciesName} — Monitoreo de biodiversidad FCAT en ${shareSiteLabel}`}
+                    />
+                  </div>
+                )}
                 {sp.photoImageId ? (
                   /* eslint-disable-next-line @next/next/no-img-element */
                   <img

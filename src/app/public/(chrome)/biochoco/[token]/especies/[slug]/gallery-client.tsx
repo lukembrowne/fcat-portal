@@ -25,6 +25,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useImageZoom } from "@/hooks/use-image-zoom";
+import { PhotoShareButton } from "@/components/photo-share-button";
 import { Download, ChevronLeft, ChevronRight, X } from "lucide-react";
 import type { SpeciesImageRow } from "@/app/biochoco/resultados/actions";
 
@@ -259,19 +260,26 @@ function ImageViewerDialog({
           </div>
         </div>
 
-        {/* Footer: filename + download */}
+        {/* Footer: filename + share + download */}
         <div className="flex items-center justify-between gap-3 px-4 py-3 border-t bg-background">
           <p className="text-xs text-muted-foreground truncate">
             {image.filename}
           </p>
-          <a
-            href={downloadUrl}
-            download={`FCAT-${siteId}-${image.id}.jpg`}
-            className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 shrink-0"
-          >
-            <Download className="w-3.5 h-3.5" />
-            Descargar
-          </a>
+          <div className="flex items-center gap-2 shrink-0">
+            <PhotoShareButton
+              variant="button"
+              imagePath={largeUrl}
+              caption={`🐾 ${speciesLabel} — Monitoreo de biodiversidad FCAT en ${siteId}`}
+            />
+            <a
+              href={downloadUrl}
+              download={`FCAT-${siteId}-${image.id}.jpg`}
+              className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 shrink-0"
+            >
+              <Download className="w-3.5 h-3.5" />
+              Descargar
+            </a>
+          </div>
         </div>
       </DialogContent>
     </Dialog>

@@ -44,6 +44,8 @@ interface SiteResultsContentProps {
    * Temperatura. Audio sections are omitted when the site has no audio.
    */
   variant: "internal" | "public";
+  /** Site label woven into per-photo share captions (public view only). */
+  shareSiteLabel?: string;
 }
 
 export function SiteResultsContent({
@@ -52,6 +54,7 @@ export function SiteResultsContent({
   resolveImageUrl,
   speciesHref,
   variant,
+  shareSiteLabel,
 }: SiteResultsContentProps) {
   const showAudio =
     variant === "internal" && audio !== null && audio.hasAudio;
@@ -73,6 +76,7 @@ export function SiteResultsContent({
           )}
           resolveImageUrl={resolveImageUrl}
           speciesHref={speciesHref}
+          shareSiteLabel={shareSiteLabel}
         />
       </section>
 

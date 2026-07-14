@@ -128,6 +128,7 @@ export function PublicSiteShell({
         resolveImageUrl={resolveImageUrl}
         speciesHref={speciesHref}
         variant="public"
+        shareSiteLabel={siteName}
       />
     </div>
   );

@@ -29,6 +29,7 @@ import {
 } from "@/lib/occupancy/curves";
 import { toForestPlot, inverseVarianceMean, preferredByAic, type SpeciesSlope } from "@/lib/occupancy/meta-analysis";
 import { isSeparated } from "@/lib/occupancy/separation";
+import { naiveOccupancyByHabitat, type HabitatNaiveRow } from "@/lib/occupancy/habitat-summary";
 import { sumRichness } from "@/lib/occupancy/richness";
 import { renderSurface, paddedBbox } from "@/lib/occupancy/surface";
 import fs from "node:fs";
@@ -854,6 +855,8 @@ export interface ModelInputSample {
   /** Median window length across sites — baseline for the outlier flag. */
   medianTotalDays: number;
   rows: DetectionSampleRow[];
+  /** Naïve occupancy by habitat (descriptive; sites with a resolved habitat). */
+  habitatSummary: HabitatNaiveRow[];
 }
 
 /**
@@ -898,6 +901,7 @@ export async function getModelInputSample(
             siteId: occupancySiteCovariates.siteId,
             forestCover: occupancySiteCovariates.forestCover,
             elevation: occupancySiteCovariates.elevation,
+            habitat: occupancySiteCovariates.habitat,
           })
           .from(occupancySiteCovariates)
           .where(
@@ -908,6 +912,20 @@ export async function getModelInputSample(
           )
       : [];
     const covBySite = new Map(covSnap.map((c) => [c.siteId, c]));
+
+    // Naïve occupancy by habitat: the fraction of cohort sites (with ≥1
+    // detection) in each habitat class. Descriptive (no model), so it still
+    // answers "where does this species occur?" when the categorical habitat
+    // occupancy model is non-identifiable (a species found in only one habitat
+    // perfectly separates the ψ fit). Sites with an unresolved habitat are
+    // omitted (all BioChoco sites are classified; the note says as much).
+    const habitatBySite = new Map<string, string | null>(
+      covSnap.map((c) => [c.siteId, c.habitat]),
+    );
+    const habitatSummary: HabitatNaiveRow[] = naiveOccupancyByHabitat(
+      frame.perSite,
+      habitatBySite,
+    );
 
     const iso = (d: Date) => d.toISOString().slice(0, 10);
 
@@ -954,6 +972,7 @@ export async function getModelInputSample(
         maxOccasions: frame.maxOccasions,
         medianTotalDays,
         rows,
+        habitatSummary,
       },
     };
   } catch (error) {

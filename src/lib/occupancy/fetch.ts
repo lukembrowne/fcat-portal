@@ -19,6 +19,21 @@ import { DEFAULT_CONFIDENCE_THRESHOLD } from "@/lib/audio-confidence";
  * so filtering + site/window resolution stay identical across the two.
  */
 
+/**
+ * Labels that are not modelable species and must never be modeled or listed as
+ * candidates: `Homo sapiens` (people passing the camera, not wildlife), `Unknown`
+ * (unidentified detections), and `Aves` (a class-level catch-all, not a species —
+ * lumping many birds inflates a meaningless "occupancy"). Filtering here — at the
+ * single fetch source — drops them from BOTH the readiness report and the modeling
+ * run, so they never show up as a species page. Matched case-insensitively so a
+ * corrected-species typo like "unknown" is still caught.
+ */
+const EXCLUDED_OCCUPANCY_SPECIES = new Set(["homo sapiens", "unknown", "aves"]);
+
+export function isExcludedOccupancySpecies(species: string | null | undefined): boolean {
+  return species != null && EXCLUDED_OCCUPANCY_SPECIES.has(species.trim().toLowerCase());
+}
+
 export interface DeploymentRow {
   id: number;
   site_name: string | null;
@@ -256,7 +271,7 @@ export function fetchOccupancyInputs(
     const detections: ReadinessDetection[] = [];
     let detectionsDroppedNoDate = 0;
     for (const r of rows) {
-      if (!r.species) continue;
+      if (!r.species || isExcludedOccupancySpecies(r.species)) continue;
       const siteId = String(r.deployment_id);
       // Only detections in the verified pool matter; a no-date drop is meaningful
       // (and worth surfacing) only for those, not for out-of-pool legacy rows.
@@ -306,7 +321,7 @@ export function fetchOccupancyInputs(
   const detections: ReadinessDetection[] = [];
   let detectionsDroppedNoDate = 0;
   for (const r of rows) {
-    if (!r.species) continue;
+    if (!r.species || isExcludedOccupancySpecies(r.species)) continue;
     const siteId = String(r.deployment_id);
     if (!poolIds.has(siteId)) continue;
     const day = parseCaptureDayFromFilename(r.filename);

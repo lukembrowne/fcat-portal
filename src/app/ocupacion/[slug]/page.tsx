@@ -5,6 +5,7 @@ import { getSpeciesModel, getModelInputSample } from "../actions";
 import { HabitatUseChart, ResponseCurveChart } from "../charts";
 import { OccupancyMapClient } from "../occupancy-map-client";
 import { DetectionSampleTable } from "../detection-sample-table";
+import { HabitatNaiveTable } from "../habitat-naive-table";
 import { isSeparated } from "@/lib/occupancy/separation";
 
 export const dynamic = "force-dynamic";
@@ -206,6 +207,25 @@ export default async function SpeciesOccupancyPage({
               </CardHeader>
               <CardContent>
                 <HabitatUseChart bars={habitatBars} />
+              </CardContent>
+            </Card>
+          ) : null}
+
+          {/* Observed (naïve) occupancy by habitat — descriptive count, shown even
+              when the categorical habitat model is non-identifiable (e.g. a
+              species restricted to one habitat separates the fit). */}
+          {inputSample && inputSample.habitatSummary.length > 0 ? (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Ocupación observada por hábitat</CardTitle>
+                <p className="text-xs text-muted-foreground">
+                  {model && model.habitatUse.length > 0
+                    ? "Proporción de sitios con detección por tipo de hábitat (conteo directo, sin modelo) — complementa las barras de uso de hábitat de arriba."
+                    : "Proporción de sitios con detección por tipo de hábitat (conteo directo, sin modelo). Para esta especie el modelo de hábitat no fue identificable, así que este conteo describe su asociación con el hábitat."}
+                </p>
+              </CardHeader>
+              <CardContent>
+                <HabitatNaiveTable rows={inputSample.habitatSummary} />
               </CardContent>
             </Card>
           ) : null}

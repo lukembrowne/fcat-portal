@@ -203,9 +203,11 @@ export interface CategoryLinkEditorData {
 
 /**
  * Read model for the accounting-centric linking editor on the Presupuesto page.
- * Universe of accounting categories = distinct current-year expense categories
- * ∪ any category already present in the map (so a mapped-but-inactive category
- * still shows and can be re-assigned or cleared).
+ * Universe of accounting categories = ALL distinct expense categories ever seen
+ * (any year) ∪ any category already present in the map. Every accounting
+ * category stays in the table permanently so its link can be set, changed, or
+ * cleared at any time — clearing a link (or a category having no current-year
+ * spend) never makes the row disappear. The "spent" column remains current-year.
  */
 export async function fetchCategoryLinkEditorData(): Promise<
   ActionResult<CategoryLinkEditorData>
@@ -217,7 +219,7 @@ export async function fetchCategoryLinkEditorData(): Promise<
     const yearStart = `${currentYear}-01-01`;
     const yearEnd = `${currentYear}-12-31`;
 
-    // Expense totals by accounting category (current year)
+    // Expense totals by accounting category (current year) — for the spent column
     const expensesByCategory = db
       .select({
         category: financeTransactions.cuentaNombre,
@@ -228,6 +230,14 @@ export async function fetchCategoryLinkEditorData(): Promise<
         sql`tx_type = 'expense' AND fecha >= ${yearStart} AND fecha <= ${yearEnd}`
       )
       .groupBy(financeTransactions.cuentaNombre)
+      .all();
+
+    // All distinct expense categories ever recorded — so every category is
+    // always available to link, regardless of the current year's activity.
+    const allExpenseCategories = db
+      .selectDistinct({ category: financeTransactions.cuentaNombre })
+      .from(financeTransactions)
+      .where(sql`tx_type = 'expense'`)
       .all();
 
     // Existing mappings (link accounting category -> budget category)
@@ -249,9 +259,9 @@ export async function fetchCategoryLinkEditorData(): Promise<
       if (row.category) spentMap.set(row.category, row.total);
     }
 
-    // Universe: current-year expense categories ∪ already-mapped categories
+    // Universe: every expense category ever seen ∪ already-mapped categories
     const universe = new Set<string>();
-    for (const row of expensesByCategory) {
+    for (const row of allExpenseCategories) {
       if (row.category) universe.add(row.category);
     }
     for (const cat of linkToBudget.keys()) universe.add(cat);

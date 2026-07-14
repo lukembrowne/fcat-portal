@@ -162,6 +162,38 @@ describe("fetchCategoryLinkEditorData", () => {
 
     expect(budgetCategoryOptions).toEqual(["Food", "Transport"]);
   });
+
+  it("keeps categories with only prior-year spend (and no mapping) so they stay editable", async () => {
+    // F only ever had expenses in a prior year and is not mapped. It must still
+    // appear so its link can be set at any time — previously it vanished because
+    // the universe was current-year-only.
+    testDbRef.current!
+      .insert(schema.financeTransactions)
+      .values([
+        {
+          fecha: `${YEAR - 1}-06-15`,
+          codigo: "5",
+          cuentaNombre: "F",
+          asiento: "1",
+          debe: 999,
+          haber: 0,
+          year: YEAR - 1,
+          month: 6,
+          yearMonth: `${YEAR - 1}-06`,
+          txType: "expense" as const,
+        },
+      ])
+      .run();
+
+    const res = await fetchCategoryLinkEditorData();
+    expect(res.success).toBe(true);
+    if (!res.success) return;
+
+    const f = res.data.rows.find((r) => r.linkCategory === "F");
+    expect(f).toBeDefined();
+    // Present and linkable, but spent stays current-year (0), not the prior-year 999.
+    expect(f).toMatchObject({ budgetCategory: null, spent: 0 });
+  });
 });
 
 describe("setCategoryLink", () => {

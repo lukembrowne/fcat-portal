@@ -4,6 +4,7 @@ import type { PublicSiteDetail } from "@/app/biochoco/resultados/actions";
 import { getHabitatName } from "@/app/biochoco/overview/types";
 import { SiteResultsContent } from "@/app/biochoco/resultados/[siteId]/site-results-content";
 import { formatSiteDateRange } from "@/app/biochoco/resultados/[siteId]/site-header-stats";
+import { ContactForm } from "./contact-form";
 import { Calendar, MapPin, TreePine } from "lucide-react";
 
 interface PublicSiteShellProps {
@@ -130,6 +131,8 @@ export function PublicSiteShell({
         variant="public"
         shareSiteLabel={siteName}
       />
+
+      <ContactForm token={token} />
     </div>
   );
 }

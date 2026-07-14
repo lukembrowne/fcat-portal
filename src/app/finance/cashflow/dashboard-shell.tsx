@@ -17,7 +17,7 @@ import {
 /** Sentinel for "show all years" (no lower bound). */
 const ALL_YEARS = 0;
 /** Default lower bound: hide months before this year. */
-const DEFAULT_FROM_YEAR = 2025;
+const DEFAULT_FROM_YEAR = 2026;
 
 function yearOf(yearMonth: string): number {
   return parseInt(yearMonth.slice(0, 4), 10);
@@ -32,7 +32,7 @@ export function DashboardShell({ data }: { data: CashflowData }) {
   }, [data.monthRows]);
 
   const minYear = availableYears[0] ?? DEFAULT_FROM_YEAR;
-  // Clamp the default: if all data is already >= 2025, the default hides nothing.
+  // Clamp the default: if all data is already >= 2026, the default hides nothing.
   const initialFromYear =
     minYear >= DEFAULT_FROM_YEAR ? ALL_YEARS : DEFAULT_FROM_YEAR;
 

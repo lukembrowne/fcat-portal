@@ -12,7 +12,6 @@ export function DashboardShell({ data }: { data: AnnualData }) {
         annualSummary={data.annualSummary}
         monthlyRevenue={data.monthlyRevenue}
         monthlyExpenses={data.monthlyExpenses}
-        expensesByCategory={data.expensesByCategory}
       />
       <AnnualTables
         annualSummary={data.annualSummary}

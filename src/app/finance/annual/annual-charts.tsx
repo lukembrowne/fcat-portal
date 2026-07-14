@@ -14,7 +14,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type {
   AnnualSummaryRow,
   MonthlyByYear,
-  CategoryByYear,
 } from "./actions";
 
 const MONTH_NAMES = [
@@ -48,14 +47,12 @@ interface Props {
   annualSummary: AnnualSummaryRow[];
   monthlyRevenue: MonthlyByYear[];
   monthlyExpenses: MonthlyByYear[];
-  expensesByCategory: CategoryByYear[];
 }
 
 export function AnnualCharts({
   annualSummary,
   monthlyRevenue,
   monthlyExpenses,
-  expensesByCategory,
 }: Props) {
   // --- Annual Summary chart data ---
   const summaryData = useMemo(
@@ -113,37 +110,6 @@ export function AnnualCharts({
       ...vals,
     }));
   }, [monthlyExpenses, years]);
-
-  // --- Expenses by Category comparison data ---
-  const categoryData = useMemo(() => {
-    // Get top categories across all years (by total amount)
-    const categoryTotals = new Map<string, number>();
-    for (const entry of expensesByCategory) {
-      categoryTotals.set(
-        entry.category,
-        (categoryTotals.get(entry.category) ?? 0) + entry.amount
-      );
-    }
-    const topCategories = [...categoryTotals.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 15)
-      .map(([cat]) => cat);
-
-    const byCatYear = new Map<string, Record<string, number>>();
-    for (const cat of topCategories) {
-      const row: Record<string, number> = {};
-      for (const y of years) row[String(y)] = 0;
-      byCatYear.set(cat, row);
-    }
-    for (const entry of expensesByCategory) {
-      const row = byCatYear.get(entry.category);
-      if (row) row[String(entry.year)] = entry.amount;
-    }
-    return Array.from(byCatYear.entries()).map(([category, vals]) => ({
-      category,
-      ...vals,
-    }));
-  }, [expensesByCategory, years]);
 
   if (annualSummary.length === 0) {
     return (
@@ -221,42 +187,6 @@ export function AnnualCharts({
                   dataKey={String(y)}
                   fill={YEAR_COLORS[i % YEAR_COLORS.length]}
                   radius={[4, 4, 0, 0]}
-                />
-              ))}
-            </BarChart>
-          </ResponsiveContainer>
-        </CardContent>
-      </Card>
-
-      {/* Expenses by Category Comparison */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">
-            Gastos por Categoria por Ano (Top 15)
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <ResponsiveContainer width="100%" height={400}>
-            <BarChart data={categoryData} layout="vertical">
-              <XAxis
-                type="number"
-                tickFormatter={formatCurrency}
-                tick={{ fontSize: 11 }}
-              />
-              <YAxis
-                type="category"
-                dataKey="category"
-                tick={{ fontSize: 10 }}
-                width={180}
-              />
-              <Tooltip formatter={tooltipFormatter} />
-              <Legend />
-              {years.map((y, i) => (
-                <Bar
-                  key={y}
-                  dataKey={String(y)}
-                  fill={YEAR_COLORS[i % YEAR_COLORS.length]}
-                  radius={[0, 4, 4, 0]}
                 />
               ))}
             </BarChart>

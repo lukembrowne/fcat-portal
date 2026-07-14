@@ -5,6 +5,7 @@ import {
   useReactTable,
   getCoreRowModel,
   getSortedRowModel,
+  getFilteredRowModel,
   flexRender,
   type ColumnDef,
   type SortingState,
@@ -18,13 +19,16 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SortIcon } from "@/components/sort-icon";
+import { Search } from "lucide-react";
 import type {
   AnnualSummaryRow,
   MonthlyByYear,
   CategoryByYear,
 } from "./actions";
+import { buildCategoryYearRows, type CategoryYearRow } from "./category-rows";
 
 const MONTH_NAMES = [
   "Ene", "Feb", "Mar", "Abr", "May", "Jun",
@@ -42,26 +46,50 @@ function DataTable<T>({
   title,
   columns,
   data,
+  searchable = false,
+  searchPlaceholder,
+  globalFilterFn,
 }: {
   title: string;
   columns: ColumnDef<T, unknown>[];
   data: T[];
+  searchable?: boolean;
+  searchPlaceholder?: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  globalFilterFn?: (row: any, columnId: string, filterValue: string) => boolean;
 }) {
   const [sorting, setSorting] = useState<SortingState>([]);
+  const [globalFilter, setGlobalFilter] = useState("");
 
   const table = useReactTable({
     data,
     columns,
-    state: { sorting },
+    state: { sorting, globalFilter },
     onSortingChange: setSorting,
+    onGlobalFilterChange: setGlobalFilter,
+    globalFilterFn,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
+    getFilteredRowModel: searchable ? getFilteredRowModel() : undefined,
   });
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">{title}</CardTitle>
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle className="text-base">{title}</CardTitle>
+          {searchable && (
+            <div className="relative">
+              <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder={searchPlaceholder ?? "Buscar..."}
+                value={globalFilter}
+                onChange={(e) => setGlobalFilter(e.target.value)}
+                className="pl-8 w-56"
+              />
+            </div>
+          )}
+        </div>
       </CardHeader>
       <CardContent>
         <div className="rounded-md border overflow-x-auto">
@@ -252,11 +280,6 @@ function MonthlyExpensesTable({
 // ---------------------------------------------------------------------------
 // Expenses by Category Table
 // ---------------------------------------------------------------------------
-interface CategoryExpenseRow {
-  category: string;
-  [year: string]: string | number;
-}
-
 function CategoryExpensesTable({
   data,
   years,
@@ -264,48 +287,42 @@ function CategoryExpensesTable({
   data: CategoryByYear[];
   years: number[];
 }) {
-  const tableData = useMemo<CategoryExpenseRow[]>(() => {
-    // Collect all categories
-    const categorySet = new Set<string>();
-    for (const entry of data) categorySet.add(entry.category);
+  const tableData = useMemo<CategoryYearRow[]>(
+    () => buildCategoryYearRows(data, years),
+    [data, years]
+  );
 
-    const rows: CategoryExpenseRow[] = [];
-    for (const cat of categorySet) {
-      const row: CategoryExpenseRow = { category: cat };
-      for (const y of years) {
-        const entry = data.find((d) => d.year === y && d.category === cat);
-        row[String(y)] = entry?.amount ?? 0;
-      }
-      if (years.length >= 2) {
-        const latest = (row[String(years[years.length - 1])] as number) ?? 0;
-        const prev = (row[String(years[years.length - 2])] as number) ?? 0;
-        row["_change"] = latest - prev;
-      }
-      rows.push(row);
-    }
-
-    // Sort by latest year amount descending
-    if (years.length > 0) {
-      const latestYear = String(years[years.length - 1]);
-      rows.sort((a, b) => ((b[latestYear] as number) ?? 0) - ((a[latestYear] as number) ?? 0));
-    }
-
-    return rows;
-  }, [data, years]);
-
-  const columns = useMemo<ColumnDef<CategoryExpenseRow, unknown>[]>(() => {
-    const cols: ColumnDef<CategoryExpenseRow, unknown>[] = [
+  const columns = useMemo<ColumnDef<CategoryYearRow, unknown>[]>(() => {
+    const cols: ColumnDef<CategoryYearRow, unknown>[] = [
       {
         accessorKey: "category",
         header: "Categoria",
-        size: 200,
+        size: 240,
+        cell: ({ row }) => {
+          const r = row.original;
+          return (
+            <div className="min-w-[200px]">
+              <span>{r.category}</span>
+              <div
+                aria-hidden
+                className="mt-1 h-1.5 rounded-full opacity-70"
+                style={{
+                  width: `${Math.max(r.barFraction * 100, 1.5)}%`,
+                  backgroundColor: "var(--chart-1)",
+                }}
+              />
+            </div>
+          );
+        },
       },
     ];
 
     for (const y of years) {
+      const key = String(y);
       cols.push({
-        accessorKey: String(y),
-        header: String(y),
+        id: key,
+        accessorFn: (row) => row.perYear[key] ?? 0,
+        header: key,
         cell: ({ getValue }) => (
           <span className="tabular-nums">
             {formatCurrency(getValue<number>())}
@@ -314,9 +331,20 @@ function CategoryExpensesTable({
       });
     }
 
+    cols.push({
+      accessorKey: "total",
+      header: "Total",
+      cell: ({ getValue }) => (
+        <span className="tabular-nums font-medium">
+          {formatCurrency(getValue<number>())}
+        </span>
+      ),
+    });
+
     if (years.length >= 2) {
       cols.push({
-        accessorKey: "_change",
+        id: "_change",
+        accessorFn: (row) => row.change ?? 0,
         header: "Cambio",
         cell: ({ getValue }) => {
           const val = getValue<number>();
@@ -340,6 +368,13 @@ function CategoryExpensesTable({
       title="Gastos por Categoria por Ano"
       columns={columns}
       data={tableData}
+      searchable
+      searchPlaceholder="Buscar categoria..."
+      globalFilterFn={(row, _columnId, filterValue) =>
+        String(row.original.category)
+          .toLowerCase()
+          .includes(filterValue.toLowerCase())
+      }
     />
   );
 }

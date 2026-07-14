@@ -24,12 +24,14 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { promises as fs } from "fs";
+import path from "path";
 import sharp from "sharp";
 import { db } from "@/db";
 import { siteShareTokens, images } from "@/db/schema";
 import { eq, and, sql, inArray } from "drizzle-orm";
 import { downloadFileToBuffer } from "@/lib/drive-client";
 import { getOrGenerateThumbnail } from "@/lib/thumbnail";
+import { getWatermarkOverlay, WATERMARK_VERSION } from "@/lib/watermark";
 import { isValidShareToken } from "@/lib/public-tokens";
 import { log } from "@/lib/log";
 
@@ -58,6 +60,7 @@ async function loadOriginalBuffer(
 }
 
 async function resizeLarge(buffer: Buffer): Promise<Buffer> {
+  const overlay = await getWatermarkOverlay();
   return sharp(buffer, { limitInputPixels: LARGE_INPUT_PIXEL_LIMIT })
     .rotate() // honor EXIF orientation, then strip
     .resize({
@@ -66,8 +69,62 @@ async function resizeLarge(buffer: Buffer): Promise<Buffer> {
       fit: "inside",
       withoutEnlargement: true,
     })
+    .composite([{ input: overlay, gravity: "southeast" }])
     .jpeg({ quality: LARGE_QUALITY, mozjpeg: true })
     .toBuffer();
+}
+
+// Watermarking is CPU/memory-heavy and this route is unauthenticated, so the
+// large tier is disk-cached and concurrent identical requests are coalesced —
+// never watermark the same image twice under load. (See the AudioCache
+// process-explosion learning.)
+const LARGE_CACHE_DIR = path.join(
+  process.cwd(),
+  "data",
+  "cache",
+  "site-images-large",
+);
+const inflightLarge = new Map<string, Promise<Buffer | null>>();
+
+async function getOrGenerateLarge(
+  imageId: number,
+  loadOriginal: () => Promise<Buffer | null>,
+): Promise<Buffer | null> {
+  const cacheKey = `${imageId}-wm${WATERMARK_VERSION}`;
+  const cachePath = path.join(LARGE_CACHE_DIR, `${cacheKey}.jpg`);
+
+  // Disk cache hit — serve without re-compositing.
+  try {
+    return await fs.readFile(cachePath);
+  } catch {
+    // miss — generate below
+  }
+
+  const existing = inflightLarge.get(cacheKey);
+  if (existing) return existing;
+
+  const work = (async (): Promise<Buffer | null> => {
+    const original = await loadOriginal();
+    if (!original) return null;
+    const large = await resizeLarge(original);
+    try {
+      await fs.mkdir(LARGE_CACHE_DIR, { recursive: true });
+      await fs.writeFile(cachePath, large);
+    } catch (err) {
+      log.warn(
+        { err, imageId },
+        "[public-site-images] Large cache write failed",
+      );
+    }
+    return large;
+  })();
+
+  inflightLarge.set(cacheKey, work);
+  try {
+    return await work;
+  } finally {
+    inflightLarge.delete(cacheKey);
+  }
 }
 
 function badRequest(message: string) {
@@ -192,14 +249,15 @@ export async function GET(
   // 3b) Large — on-the-fly sharp resize. EXIF is stripped because sharp
   //     does not preserve metadata by default.
   try {
-    const original = await loadOriginalBuffer(image.path, image.driveFileId);
-    if (!original) {
+    const large = await getOrGenerateLarge(image.id, () =>
+      loadOriginalBuffer(image.path, image.driveFileId),
+    );
+    if (!large) {
       return NextResponse.json(
         { error: "No image source available" },
         { status: 404 },
       );
     }
-    const large = await resizeLarge(original);
 
     const headers: Record<string, string> = { ...baseHeaders };
     if (isDownload) {

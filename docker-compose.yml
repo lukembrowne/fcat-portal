@@ -30,6 +30,8 @@ services:
       - PORTAL_UPDATES_EMAILS=${PORTAL_UPDATES_EMAILS:-}
       - RESEND_FROM_EMAIL=${RESEND_FROM_EMAIL:-portal@fcat-ecuador.org}
       - CRON_SECRET=${CRON_SECRET:-}
+      # IUCN Red List v4 token — only used by scripts/backfill-iucn-status.mjs.
+      - IUCN_API_TOKEN=${IUCN_API_TOKEN:-}
       # DB backup offload to a DigitalOcean Space (S3-compatible). Default OFF —
       # the backup script runs gzip-local-only until the Space + creds exist and
       # BACKUP_OFFLOAD_ENABLED=true. Passed into the container so the entrypoint

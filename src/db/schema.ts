@@ -578,6 +578,9 @@ export const species = sqliteTable("biochoco_species", {
   })
     .notNull()
     .default("mammal"),
+  // IUCN Red List category code (LC/NT/VU/EN/CR/DD/EW/EX). Bare TEXT, no CHECK —
+  // validation lives in scripts/backfill-iucn-status.mjs. Null when unassessed.
+  iucnStatus: text("iucn_status"),
 });
 
 // ---------------------------------------------------------------------------

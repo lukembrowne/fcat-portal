@@ -1004,6 +1004,11 @@ const migrations = [
   // legacy 'combined'. The unique index gains `variant` below in
   // postMigrationIndexes (DROP the 3-col, recreate 4-col) (2026-07-13).
   `ALTER TABLE occupancy_models ADD COLUMN variant TEXT NOT NULL DEFAULT 'combined'`,
+
+  // Landowner dashboard: IUCN Red List category for conservation/rarity badges.
+  // Bare TEXT (no CHECK) to avoid a table rebuild; populated by
+  // scripts/backfill-iucn-status.mjs (2026-07-14).
+  `ALTER TABLE biochoco_species ADD COLUMN iucn_status TEXT`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }

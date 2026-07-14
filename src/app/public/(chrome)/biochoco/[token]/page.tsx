@@ -66,5 +66,9 @@ export default async function PublicBiochocoSitePage({ params }: PageProps) {
     );
   }
 
-  return <PublicSiteShell data={data} token={token} />;
+  const hasIntroVideo = Boolean(process.env.LANDOWNER_INTRO_VIDEO_DRIVE_FILE_ID);
+
+  return (
+    <PublicSiteShell data={data} token={token} hasIntroVideo={hasIntroVideo} />
+  );
 }

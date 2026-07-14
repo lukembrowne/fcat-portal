@@ -32,6 +32,8 @@ services:
       - CRON_SECRET=${CRON_SECRET:-}
       # IUCN Red List v4 token — only used by scripts/backfill-iucn-status.mjs.
       - IUCN_API_TOKEN=${IUCN_API_TOKEN:-}
+      # Fixed landowner intro/thank-you video (Drive file id). Empty = hidden.
+      - LANDOWNER_INTRO_VIDEO_DRIVE_FILE_ID=${LANDOWNER_INTRO_VIDEO_DRIVE_FILE_ID:-}
       # DB backup offload to a DigitalOcean Space (S3-compatible). Default OFF —
       # the backup script runs gzip-local-only until the Space + creds exist and
       # BACKUP_OFFLOAD_ENABLED=true. Passed into the container so the entrypoint

@@ -9,13 +9,19 @@ import { Calendar, MapPin, TreePine } from "lucide-react";
 interface PublicSiteShellProps {
   data: PublicSiteDetail;
   token: string;
+  /** Whether a fixed intro/thank-you video is configured (server-resolved). */
+  hasIntroVideo?: boolean;
 }
 
 function slugifySpecies(name: string): string {
   return encodeURIComponent(name.toLowerCase().replace(/\s+/g, "-"));
 }
 
-export function PublicSiteShell({ data, token }: PublicSiteShellProps) {
+export function PublicSiteShell({
+  data,
+  token,
+  hasIntroVideo = false,
+}: PublicSiteShellProps) {
   const { site } = data;
   const siteName = site?.siteName ?? data.siteId;
   const habitatLabel = site ? getHabitatName(site.habitatType) : "";
@@ -63,6 +69,18 @@ export function PublicSiteShell({ data, token }: PublicSiteShellProps) {
           </p>
           <h1 className="text-2xl font-bold tracking-tight">{siteName}</h1>
         </header>
+      )}
+
+      {hasIntroVideo && (
+        <video
+          controls
+          preload="none"
+          playsInline
+          className="w-full rounded-2xl bg-black aspect-video"
+        >
+          <source src="/api/public/intro-video" type="video/mp4" />
+          Su navegador no puede reproducir este video.
+        </video>
       )}
 
       {/* Human-scale summary — warm, plain Spanish, no science-y stat bar */}

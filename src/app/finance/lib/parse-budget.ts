@@ -100,17 +100,18 @@ export function parseBudgetExcel(
   // Recognized personnel subtotals. The individual staff rows in the budget
   // sit between the "PERSONNEL" header and the "TOTAL PERSONNEL COSTS" line and
   // already sum into these two subtotals, so they are excluded by section (not
-  // by name) — only the subtotals below survive to be combined into "Personnel".
+  // by name) — only the subtotals below survive, as two separate budget
+  // categories ("Personnel with Contract" / "Personnel without Contract").
   const PERSONNEL_SUBTOTALS = new Set([
     "Personnel Total with Contract",
     "Personnel Total without Contract",
   ]);
 
   // Extract candidate rows and split into recognized vs. unrecognized.
-  // A candidate is any row with a real category name and a non-zero amount that
-  // is not a total/summary or per-staff personnel line. Recognized categories
-  // (allowlist) import directly; the rest are surfaced for pre-flight review
-  // rather than dropped.
+  // A candidate is any row with a real category name that is not a total/summary
+  // or per-staff personnel line. Recognized categories (allowlist) import
+  // directly — even at $0, so every budgeted category is linkable; unrecognized
+  // categories import only when non-zero and are surfaced for pre-flight review.
   const items: NewFinanceBudgetItem[] = [];
   const unknownItems: NewFinanceBudgetItem[] = [];
   let inPersonnelSection = false;
@@ -130,7 +131,7 @@ export function parseBudgetExcel(
       continue;
     }
 
-    if (!category || amount === 0) continue;
+    if (!category) continue;
     // Skip subtotal/total lines that carry a number but aren't real categories.
     if (/^(total|subtotal|sub-total|suma|gran\s+total|grand\s+total)/i.test(category)) {
       continue;
@@ -140,17 +141,26 @@ export function parseBudgetExcel(
       category as (typeof BUDGET_CATEGORIES)[number]
     );
 
+    // Drop zero-amount rows UNLESS the category is recognized. A recognized
+    // category budgeted at $0 this year (e.g. "Land acquisition", "New
+    // construction", "Internet") is still a real budget line and must be
+    // imported so it can be linked to accounting spending. Unrecognized zero
+    // rows are section headers / blank noise ("Assets", "No Contract", …) and
+    // stay dropped so they never reach the "new category" review list.
+    if (amount === 0 && !isKnown) continue;
+
     if (inPersonnelSection) {
       if (PERSONNEL_SUBTOTALS.has(category)) {
         // The rolled-up personnel figures — keep these.
         items.push({ budgetYear, category, amount });
-      } else if (isKnown) {
-        // A recognized non-personnel category means the personnel block ended
-        // without an explicit total row; leave the section and handle normally.
-        inPersonnelSection = false;
-        items.push({ budgetYear, category, amount });
       }
-      // else: an individual staff detail line — skip (already in the subtotals).
+      // else: an individual staff detail line — skip (already in the subtotals),
+      // even if its name collides with the recognized-category allowlist. A
+      // No-Contract line named "Security Guards" is already inside "Personnel
+      // Total without Contract", so pulling it out here double-counts it AND
+      // prematurely ends the personnel block (dropping the lines that follow it,
+      // e.g. "Temporary FCATeros", to the unrecognized path). The section only
+      // ends on the explicit "TOTAL PERSONNEL…" row handled above.
       continue;
     }
 
@@ -161,37 +171,17 @@ export function parseBudgetExcel(
     }
   }
 
-  // Combine personnel categories (server.R lines 152-158)
+  // Keep the two personnel subtotals as separate budget categories rather than
+  // merging them into one "Personnel" line, so the budget breaks personnel down
+  // by contract status. Rename the raw sheet labels to clean category names.
   const withContract = items.find(
     (i) => i.category === "Personnel Total with Contract"
   );
   const withoutContract = items.find(
     (i) => i.category === "Personnel Total without Contract"
   );
-
-  if (withContract && withoutContract) {
-    // Compute the combined amount BEFORE removing the originals. Do not rename
-    // `withContract` in place first — doing so lets the renamed row slip past the
-    // filter below and produces a duplicate "Personnel" row (double-counting the
-    // largest budget line). See the two-identical-rows bug that inflated the 2026
-    // annual budget to ~$900k instead of ~$593k.
-    const combinedAmount = withContract.amount + withoutContract.amount;
-    // Remove the two original entries and add a single combined one
-    const filtered = items.filter(
-      (i) =>
-        i.category !== "Personnel Total with Contract" &&
-        i.category !== "Personnel Total without Contract"
-    );
-    filtered.push({
-      budgetYear,
-      category: "Personnel",
-      amount: combinedAmount,
-    });
-    items.length = 0;
-    items.push(...filtered);
-  } else if (withContract) {
-    withContract.category = "Personnel";
-  }
+  if (withContract) withContract.category = "Personnel with Contract";
+  if (withoutContract) withoutContract.category = "Personnel without Contract";
 
   // Get total budget from Revenue and Summary sheet for validation
   let totalFromSummary = 0;

@@ -1439,8 +1439,30 @@ export const uploadCountSnapshots = sqliteTable("upload_count_snapshots", {
 });
 
 // ---------------------------------------------------------------------------
+// Public Report Snapshots (published data for public/* overview pages)
+//
+// One row per public page slug. The admin "publish" action recomputes the
+// payload (stats + resolved curated media ids + captions) and upserts by slug,
+// so the public route renders a stored blob and never queries production tables.
+// The payload's media id sets double as the allowlist for the public media
+// routes — an asset is public only if it is in the active snapshot.
+// ---------------------------------------------------------------------------
+
+export const publicReportSnapshots = sqliteTable("public_report_snapshots", {
+  slug: text("slug").primaryKey(),
+  payload: text("payload").notNull(), // JSON: ReportSnapshot
+  generatedAt: integer("generated_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+  generatedBy: text("generated_by"),
+});
+
+// ---------------------------------------------------------------------------
 // Type Exports
 // ---------------------------------------------------------------------------
+
+export type PublicReportSnapshot = typeof publicReportSnapshots.$inferSelect;
+export type NewPublicReportSnapshot = typeof publicReportSnapshots.$inferInsert;
 
 export type CameraTrapProject = typeof cameraTrapProjects.$inferSelect;
 export type NewCameraTrapProject = typeof cameraTrapProjects.$inferInsert;

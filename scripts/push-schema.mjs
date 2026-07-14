@@ -841,6 +841,15 @@ const statements = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_grants_status_due ON grants(status, due_date)`,
   `CREATE INDEX IF NOT EXISTS idx_grants_funder ON grants(funder_id)`,
+
+  // Public Report Snapshots (published payload for public/* overview pages).
+  // One row per slug; upserted by the admin publish action.
+  `CREATE TABLE IF NOT EXISTS public_report_snapshots (
+    slug TEXT PRIMARY KEY,
+    payload TEXT NOT NULL,
+    generated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    generated_by TEXT
+  )`,
 ];
 
 for (const stmt of statements) {

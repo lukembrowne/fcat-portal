@@ -73,6 +73,12 @@ export function SidebarNav({ user }: SidebarNavProps) {
         href: "/biochoco/tools",
       });
     }
+    if (user.globalRole === "super_admin") {
+      biochocoChildren.push({
+        label: "Página pública",
+        href: "/admin/biochoco-overview",
+      });
+    }
   }
 
   // Build projects section

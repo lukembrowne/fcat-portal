@@ -180,9 +180,8 @@ export function UploadShell({ lastUploads }: UploadShellProps) {
                   descarga un archivo Excel separado por tabulaciones.
                 </li>
                 <li>
-                  Guárdelo como CSV con la fecha en el nombre, en la carpeta{" "}
-                  <span className="font-medium">data/transactions</span> — por
-                  ejemplo{" "}
+                  Súbalo aquí directamente. Se recomienda incluir la fecha en el
+                  nombre del archivo — por ejemplo{" "}
                   <span className="font-mono text-xs">
                     LibroMayor - 2024_12.csv
                   </span>

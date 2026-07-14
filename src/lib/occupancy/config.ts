@@ -123,13 +123,17 @@ export function assembleRunConfig(
 
   const psiFormula = psiTerms.length ? `~${psiTerms.join(" + ")}` : "~1";
 
-  // Survey-effort is a detection covariate only when bin lengths actually vary
-  // (all-full-bin deployments give a single-level factor, which occu can't fit).
-  const effortLevels = factorLevels(frame.effort.flat());
-  const useEffort = effortLevels.size >= 2;
+  // Survey effort is a CONTINUOUS detection covariate (active days per occasion,
+  // 1..binWidth) — a single `p~effort` slope, not per-level dummies (bucketed
+  // effort levels caused complete separation on sparse levels, see the
+  // 2026-07-14 plan). Usable only when it actually varies: an all-full-bin
+  // deployment gives a constant column that occu can't identify a slope from.
+  const effortValues = frame.effort.flat().filter((v): v is number => v != null);
+  const distinctEffort = new Set(effortValues);
+  const useEffort = distinctEffort.size >= 2;
   const detFormula = useEffort ? "~effort" : "~1";
   if (!useEffort) {
-    dropped.push({ name: "effort", reason: `esfuerzo constante (${effortLevels.size} nivel)` });
+    dropped.push({ name: "effort", reason: `esfuerzo constante (${distinctEffort.size} valor)` });
   }
 
   const config: OccupancyRunConfig = {
@@ -140,7 +144,8 @@ export function assembleRunConfig(
     siteCovs,
     siteFactors,
     obsCovs: useEffort ? { effort: frame.effort } : {},
-    obsFactors: useEffort ? ["effort"] : [],
+    // Effort is numeric now — never a factor. (siteFactors still carry habitat.)
+    obsFactors: [],
     psiFormula,
     detFormula,
     grid: anyGrid ? grid : null,

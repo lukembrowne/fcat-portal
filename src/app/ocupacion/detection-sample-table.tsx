@@ -5,7 +5,14 @@ import Link from "next/link";
 import { SortIcon } from "@/components/sort-icon";
 import type { ModelInputSample } from "./actions";
 
-type SortKey = "siteName" | "windowStart" | "totalDays" | "occasions" | "detections";
+type SortKey =
+  | "siteName"
+  | "windowStart"
+  | "totalDays"
+  | "occasions"
+  | "detections"
+  | "forestCover"
+  | "elevation";
 type SortDir = "asc" | "desc";
 
 // Numeric columns default to descending (most first); the site name defaults to
@@ -16,6 +23,8 @@ const DEFAULT_DIR: Record<SortKey, SortDir> = {
   totalDays: "desc",
   occasions: "desc",
   detections: "desc",
+  forestCover: "desc",
+  elevation: "desc",
 };
 
 function SortableTh({
@@ -80,10 +89,19 @@ export function DetectionSampleTable({ sample }: { sample: ModelInputSample }) {
   const rows = useMemo(() => {
     const dir = sortDir === "asc" ? 1 : -1;
     return [...sample.rows].sort((a, b) => {
+      // Unresolved covariate values always sort last, in either direction.
+      if (sortKey === "forestCover" || sortKey === "elevation") {
+        const av = a[sortKey];
+        const bv = b[sortKey];
+        if (av == null || bv == null) {
+          if (av == null && bv == null) return a.siteId.localeCompare(b.siteId);
+          return av == null ? 1 : -1;
+        }
+      }
       let cmp = 0;
       if (sortKey === "siteName") cmp = a.siteName.localeCompare(b.siteName);
       else if (sortKey === "windowStart") cmp = a.windowStart.localeCompare(b.windowStart);
-      else cmp = a[sortKey] - b[sortKey];
+      else cmp = (a[sortKey] as number) - (b[sortKey] as number);
       // Stable tiebreaker so equal values keep a deterministic order.
       return cmp !== 0 ? cmp * dir : a.siteId.localeCompare(b.siteId);
     });
@@ -149,6 +167,22 @@ export function DetectionSampleTable({ sample }: { sample: ModelInputSample }) {
                 onSort={toggleSort}
                 title="Ocasiones con detección"
               />
+              <SortableTh
+                label="bosque"
+                colKey="forestCover"
+                activeKey={sortKey}
+                dir={sortDir}
+                onSort={toggleSort}
+                title="Cobertura boscosa (buffer 500 m) — covariable de ψ"
+              />
+              <SortableTh
+                label="elev."
+                colKey="elevation"
+                activeKey={sortKey}
+                dir={sortDir}
+                onSort={toggleSort}
+                title="Elevación (m) — covariable de ψ"
+              />
               {occ.map((o) => (
                 <th key={o} className="px-1 py-1 text-center font-normal tabular-nums">
                   {o}
@@ -188,6 +222,18 @@ export function DetectionSampleTable({ sample }: { sample: ModelInputSample }) {
                   <td className="px-1 py-1 text-right tabular-nums text-muted-foreground">
                     {r.detections}
                   </td>
+                  <td
+                    className="px-1 py-1 text-right tabular-nums text-muted-foreground"
+                    title="Cobertura boscosa (buffer 500 m)"
+                  >
+                    {r.forestCover != null ? `${Math.round(r.forestCover * 100)}%` : "—"}
+                  </td>
+                  <td
+                    className="px-1 py-1 text-right tabular-nums text-muted-foreground"
+                    title="Elevación (m)"
+                  >
+                    {r.elevation != null ? `${Math.round(r.elevation)} m` : "—"}
+                  </td>
                   {occ.map((o) => {
                     const v = r.cells[o - 1] ?? null;
                     const eff = r.effort[o - 1];
@@ -200,7 +246,7 @@ export function DetectionSampleTable({ sample }: { sample: ModelInputSample }) {
                     return (
                       <td
                         key={o}
-                        title={eff ? `esfuerzo: ${eff}` : "fuera de ventana (NA)"}
+                        title={eff != null ? `esfuerzo: ${eff} día${eff === 1 ? "" : "s"}` : "fuera de ventana (NA)"}
                         className={`px-1 py-1 text-center tabular-nums ${cls}`}
                       >
                         {v === null ? "·" : v}

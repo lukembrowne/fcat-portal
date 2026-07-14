@@ -27,7 +27,8 @@ import {
   type CurvePoint,
   type HabitatBar,
 } from "@/lib/occupancy/curves";
-import { toForestPlot, inverseVarianceMean, type SpeciesSlope } from "@/lib/occupancy/meta-analysis";
+import { toForestPlot, inverseVarianceMean, preferredByAic, type SpeciesSlope } from "@/lib/occupancy/meta-analysis";
+import { isSeparated } from "@/lib/occupancy/separation";
 import { sumRichness } from "@/lib/occupancy/richness";
 import { renderSurface, paddedBbox } from "@/lib/occupancy/surface";
 import fs from "node:fs";
@@ -279,7 +280,11 @@ export interface SpeciesModelDetail {
   fitSeconds: number | null;
   /** When the batch that produced this model completed (ISO); null if unknown. */
   fittedAt: string | null;
-  effects: { submodel: string; param: string; estimate: number; se: number | null; z: number | null; pValue: number | null }[];
+  /** Which variant the headline numbers come from ('gradient'|'habitat'|'null'|'combined'); null if none identifiable. */
+  preferredVariant: string | null;
+  /** One row per fitted variant — powers the AIC comparison + non-identifiable notices. */
+  variants: VariantSummary[];
+  effects: { submodel: string; param: string; estimate: number; se: number | null; z: number | null; pValue: number | null; variant: string | null }[];
   /** Covariates omitted from this (eligible) model, with Spanish reasons. */
   droppedCovariates: { name: string; reason: string }[];
   habitatUse: HabitatBar[];
@@ -299,6 +304,18 @@ export interface SpeciesModelDetail {
     /** Deployment locations in this species' model cohort (sampling points). */
     sites: { lat: number; lng: number }[];
   } | null;
+}
+
+/** One ψ variant's summary for the species-page comparison + notices. */
+export interface VariantSummary {
+  variant: string;
+  aic: number | null;
+  /** AIC − (best AIC among identifiable variants); null when not comparable. */
+  deltaAic: number | null;
+  identifiable: boolean;
+  /** Spanish reason when not identifiable (degenerate / ineligible); null otherwise. */
+  reason: string | null;
+  psiFormula: string | null;
 }
 
 /** Shape of the per-model grid JSON artifact written by persistPrediction. */
@@ -326,7 +343,10 @@ export async function getSpeciesModel(
       .limit(1);
     const fittedAt = runRow?.completedAt ? runRow.completedAt.toISOString() : null;
 
-    const [model] = await db
+    // All variants for this species×stream in the latest run — the gradient +
+    // habitat + null set (or a legacy 'combined' row). Include non-identifiable
+    // ones so we can surface their degenerate/ineligible reasons on the page.
+    const rows = await db
       .select()
       .from(occupancyModels)
       .where(
@@ -334,21 +354,25 @@ export async function getSpeciesModel(
           eq(occupancyModels.runId, runId),
           eq(occupancyModels.species, species),
           eq(occupancyModels.stream, stream),
-          eq(occupancyModels.sufficientData, true),
         ),
-      )
-      .limit(1);
-    if (!model) return { success: true, data: null };
+      );
+    if (rows.length === 0) return { success: true, data: null };
 
-    const effectRows = await db
-      .select()
-      .from(occupancyCovariateEffects)
-      .where(eq(occupancyCovariateEffects.modelId, model.id));
-    const effects: Effect[] = effectRows.map((e) => ({
-      submodel: e.submodel as "state" | "det",
-      param: e.param,
-      estimate: e.estimate,
-    }));
+    const identifiable = rows.filter((r) => r.sufficientData);
+    const preferred = preferredByAic(identifiable);
+    // A legacy 'combined' row drives every section itself (map + curves + bars).
+    const gradientRow =
+      identifiable.find((r) => r.variant === "gradient") ??
+      identifiable.find((r) => r.variant === "combined") ??
+      null;
+    const habitatRow =
+      identifiable.find((r) => r.variant === "habitat") ??
+      identifiable.find((r) => r.variant === "combined") ??
+      null;
+    // The row whose diagnostics (n_sites, detections, etc.) anchor the header;
+    // identical across variants (shared frame), so the preferred one — or, when
+    // nothing is identifiable, any row — is fine.
+    const baseRow = preferred ?? rows[0];
 
     const snap = await db
       .select({
@@ -363,39 +387,117 @@ export async function getSpeciesModel(
     const forestVals = snap.map((s) => s.forestCover).filter((v): v is number => v != null);
     const elevVals = snap.map((s) => s.elevation).filter((v): v is number => v != null);
 
-    const [pred] = await db
-      .select()
-      .from(occupancyPredictions)
-      .where(eq(occupancyPredictions.modelId, model.id))
-      .limit(1);
-
-    // Response curves + habitat-use come from the R-predicted artifact (with 95%
-    // CIs); fall back to the coefficient-only TS reconstruction for legacy runs.
-    const grid = readGridArtifact(pred?.gridDataPath ?? null);
-    const habitatBars: HabitatBar[] = grid?.habitatUse
-      ? grid.habitatUse.map((h) => ({
-          habitat: h.habitat, psi: h.psi, lower: h.lower, upper: h.upper, isReference: h.isReference,
-        }))
-      : habitats.length
-        ? habitatUse(effects, habitats)
-        : [];
-    const curveFrom = (name: "forest" | "elevation", rawVals: number[]): CurvePoint[] => {
-      const r = grid?.curves?.[name];
-      return r
-        ? r.map((p) => ({ x: p.x, psi: p.psi, lower: p.lower, upper: p.upper }))
-        : responseCurve(effects, name, rawVals);
+    // Load one variant's stored effects + prediction artifact.
+    const loadVariant = async (row: typeof rows[number]) => {
+      const effectRows = await db
+        .select()
+        .from(occupancyCovariateEffects)
+        .where(eq(occupancyCovariateEffects.modelId, row.id));
+      const [predRow] = await db
+        .select()
+        .from(occupancyPredictions)
+        .where(eq(occupancyPredictions.modelId, row.id))
+        .limit(1);
+      return { row, effectRows, pred: predRow, grid: readGridArtifact(predRow?.gridDataPath ?? null) };
     };
 
+    const gradientV = gradientRow ? await loadVariant(gradientRow) : null;
+    const habitatV = habitatRow
+      ? habitatRow.id === gradientRow?.id
+        ? gradientV // legacy combined — same row drives both
+        : await loadVariant(habitatRow)
+      : null;
+
+    // Map surface + response curves come from the gradient variant; habitat-use
+    // bars from the habitat variant. Each falls back to the coefficient-only TS
+    // reconstruction for legacy runs with no artifact.
+    const gradientEffects: Effect[] = (gradientV?.effectRows ?? []).map((e) => ({
+      submodel: e.submodel as "state" | "det",
+      param: e.param,
+      estimate: e.estimate,
+    }));
+    const habitatEffects: Effect[] = (habitatV?.effectRows ?? []).map((e) => ({
+      submodel: e.submodel as "state" | "det",
+      param: e.param,
+      estimate: e.estimate,
+    }));
+
+    const habitatBars: HabitatBar[] = habitatV?.grid?.habitatUse
+      ? habitatV.grid.habitatUse.map((h) => ({
+          habitat: h.habitat, psi: h.psi, lower: h.lower, upper: h.upper, isReference: h.isReference,
+        }))
+      : habitats.length && habitatEffects.length
+        ? habitatUse(habitatEffects, habitats)
+        : [];
+    const curveFrom = (name: "forest" | "elevation", rawVals: number[]): CurvePoint[] => {
+      const r = gradientV?.grid?.curves?.[name];
+      return r
+        ? r.map((p) => ({ x: p.x, psi: p.psi, lower: p.lower, upper: p.upper }))
+        : gradientEffects.length
+          ? responseCurve(gradientEffects, name, rawVals)
+          : [];
+    };
+
+    const pred = gradientV?.pred ?? null;
+    const grid = gradientV?.grid ?? null;
     const psiName = pred?.artifactPath
       ? nodePath.basename(pred.artifactPath).replace(/\.png$/i, "")
       : null;
 
-    // Covariates dropped from this eligible model (absent for some sites, or no
-    // variation) — surfaced so a reduced ψ~1 model is visibly reduced.
-    let droppedCovariates: { name: string; reason: string }[] = [];
-    if (model.droppedCovariatesJson) {
+    // Assembled coefficient table: ψ (state) rows tagged by which variant they
+    // came from, plus ONE detection block (identical across variants).
+    const tableEffects: SpeciesModelDetail["effects"] = [];
+    const pushState = (
+      v: typeof gradientV,
+      variant: string | null,
+    ) => {
+      if (!v) return;
+      for (const e of v.effectRows) {
+        if (e.submodel === "state") {
+          tableEffects.push({
+            submodel: e.submodel, param: e.param, estimate: e.estimate,
+            se: e.se, z: e.z, pValue: e.pValue, variant,
+          });
+        }
+      }
+    };
+    pushState(gradientV, gradientV?.row.variant ?? null);
+    if (habitatV && habitatV.row.id !== gradientV?.row.id) pushState(habitatV, habitatV.row.variant);
+    const detSource = habitatV?.row.id === preferred?.id ? habitatV : gradientV;
+    for (const e of detSource?.effectRows ?? []) {
+      if (e.submodel === "det") {
+        tableEffects.push({
+          submodel: e.submodel, param: e.param, estimate: e.estimate,
+          se: e.se, z: e.z, pValue: e.pValue, variant: null,
+        });
+      }
+    }
+
+    const firstReason = (json: string | null): string | null => {
+      if (!json) return null;
       try {
-        const parsed = JSON.parse(model.droppedCovariatesJson);
+        const parsed = JSON.parse(json);
+        return Array.isArray(parsed) && parsed.length ? String(parsed[0]) : null;
+      } catch {
+        return null;
+      }
+    };
+    const bestAic = preferred?.aic ?? null;
+    const variants: VariantSummary[] = rows.map((r) => ({
+      variant: r.variant,
+      aic: r.aic,
+      deltaAic: r.sufficientData && r.aic != null && bestAic != null ? r.aic - bestAic : null,
+      identifiable: r.sufficientData,
+      reason: r.sufficientData ? null : firstReason(r.ineligibleReasonsJson),
+      psiFormula: r.psiFormula,
+    }));
+
+    // Covariates dropped from the preferred (eligible) model — surfaced so a
+    // reduced ψ~1 model is visibly reduced.
+    let droppedCovariates: { name: string; reason: string }[] = [];
+    if (preferred?.droppedCovariatesJson) {
+      try {
+        const parsed = JSON.parse(preferred.droppedCovariatesJson);
         if (Array.isArray(parsed)) droppedCovariates = parsed;
       } catch {
         droppedCovariates = [];
@@ -417,37 +519,34 @@ export async function getSpeciesModel(
     const synth = sitePts.filter((p) => p.synthetic);
     const real = sitePts.filter((p) => !p.synthetic);
     const cohort =
-      synth.length === model.nSites ? synth : real.length === model.nSites ? real : sitePts;
+      synth.length === baseRow.nSites ? synth : real.length === baseRow.nSites ? real : sitePts;
     const sites = cohort.map((p) => ({ lat: p.lat, lng: p.lng }));
 
     return {
       success: true,
       data: {
-        species: model.species,
-        stream: model.stream,
-        estimatedOccupancy: model.estimatedOccupancy,
-        occupancyLower: model.occupancyLower,
-        occupancyUpper: model.occupancyUpper,
-        meanDetection: model.meanDetection,
-        naiveOccupancy: model.naiveOccupancy,
-        nSites: model.nSites,
-        nSitesDetected: model.nSitesDetected,
-        totalDetections: model.totalDetections,
-        nOccasions: model.nOccasions,
-        aic: model.aic,
-        convergence: model.convergence,
-        psiFormula: model.psiFormula,
-        detFormula: model.detFormula,
-        fitSeconds: model.fitSeconds,
+        species: baseRow.species,
+        stream: baseRow.stream,
+        // Headline numbers come from the AIC-preferred variant (null when no
+        // variant is identifiable — the page then shows the insufficient state).
+        estimatedOccupancy: preferred?.estimatedOccupancy ?? null,
+        occupancyLower: preferred?.occupancyLower ?? null,
+        occupancyUpper: preferred?.occupancyUpper ?? null,
+        meanDetection: preferred?.meanDetection ?? null,
+        naiveOccupancy: baseRow.naiveOccupancy,
+        nSites: baseRow.nSites,
+        nSitesDetected: baseRow.nSitesDetected,
+        totalDetections: baseRow.totalDetections,
+        nOccasions: baseRow.nOccasions,
+        aic: preferred?.aic ?? null,
+        convergence: preferred?.convergence ?? null,
+        psiFormula: preferred?.psiFormula ?? null,
+        detFormula: preferred?.detFormula ?? null,
+        fitSeconds: preferred?.fitSeconds ?? null,
         fittedAt,
-        effects: effectRows.map((e) => ({
-          submodel: e.submodel,
-          param: e.param,
-          estimate: e.estimate,
-          se: e.se,
-          z: e.z,
-          pValue: e.pValue,
-        })),
+        preferredVariant: preferred?.variant ?? null,
+        variants,
+        effects: tableEffects,
         droppedCovariates,
         habitatUse: habitatBars,
         forestCurve: curveFrom("forest", forestVals),
@@ -592,14 +691,23 @@ export async function getCrossSpeciesData(): Promise<ActionResult<CrossSpeciesDa
       .from(occupancyCovariateEffects)
       .innerJoin(occupancyModels, eq(occupancyModels.id, occupancyCovariateEffects.modelId))
       .where(
-        and(eq(occupancyModels.runId, runId), eq(occupancyCovariateEffects.submodel, "state")),
+        and(
+          eq(occupancyModels.runId, runId),
+          eq(occupancyCovariateEffects.submodel, "state"),
+          // Degenerate (non-identifiable) models are stored sufficient_data=0;
+          // keep their ±∞ slopes out of the cross-species forest plot.
+          eq(occupancyModels.sufficientData, true),
+        ),
       );
 
+    // Per-coefficient backstop: even in a kept (identifiable) model a single
+    // factor level can separate (e.g. a habitat with zero detections → ±20
+    // slope). Drop those individual coefficients so they don't distort the plot.
     const forestRows = slopeRows
-      .filter((r) => r.param === "forest")
+      .filter((r) => r.param === "forest" && !isSeparated(r.estimate, r.se))
       .map((r) => ({ species: r.species, stream: r.stream, estimate: r.estimate, se: r.se }));
     const elevRows = slopeRows
-      .filter((r) => r.param === "elevation")
+      .filter((r) => r.param === "elevation" && !isSeparated(r.estimate, r.se))
       .map((r) => ({ species: r.species, stream: r.stream, estimate: r.estimate, se: r.se }));
 
     const preds = await db
@@ -655,6 +763,8 @@ export async function getCrossSpeciesData(): Promise<ActionResult<CrossSpeciesDa
       .select({
         species: occupancyModels.species,
         stream: occupancyModels.stream,
+        variant: occupancyModels.variant,
+        aic: occupancyModels.aic,
         estimatedOccupancy: occupancyModels.estimatedOccupancy,
         occupancyLower: occupancyModels.occupancyLower,
         occupancyUpper: occupancyModels.occupancyUpper,
@@ -662,8 +772,24 @@ export async function getCrossSpeciesData(): Promise<ActionResult<CrossSpeciesDa
       .from(occupancyModels)
       .where(and(eq(occupancyModels.runId, runId), eq(occupancyModels.sufficientData, true)));
 
-    const overallPlot: SpeciesSlope[] = models
-      .filter((m) => m.estimatedOccupancy != null)
+    // A species now has two identifiable variants (geo + habitat). Collapse to
+    // ONE row per species×stream — the AIC-preferred variant — so the occupancy
+    // plot doesn't count a species twice.
+    const bySpecies = new Map<string, (typeof models)[number][]>();
+    for (const m of models) {
+      if (m.estimatedOccupancy == null) continue;
+      const key = `${m.species}|${m.stream}`;
+      const list = bySpecies.get(key);
+      if (list) list.push(m);
+      else bySpecies.set(key, [m]);
+    }
+    const preferredBySpecies = new Map<string, (typeof models)[number]>();
+    for (const [key, list] of bySpecies) {
+      const pref = preferredByAic(list);
+      if (pref) preferredBySpecies.set(key, pref);
+    }
+
+    const overallPlot: SpeciesSlope[] = [...preferredBySpecies.values()]
       .map((m) => ({
         species: m.species,
         stream: m.stream,
@@ -685,7 +811,7 @@ export async function getCrossSpeciesData(): Promise<ActionResult<CrossSpeciesDa
         habitatOccupancy,
         richness,
         maxRichness,
-        nSpeciesModeled: models.length,
+        nSpeciesModeled: preferredBySpecies.size,
       },
     };
   } catch (error) {
@@ -704,8 +830,12 @@ export interface DetectionSampleRow {
   detections: number;
   /** 1 = detectada, 0 = revisada sin detección, null = fuera de ventana (NA). */
   cells: (0 | 1 | null)[];
-  /** Categorical survey-effort label per occasion (null where cell is NA). */
-  effort: (string | null)[];
+  /** Continuous survey effort (active days) per occasion (null where cell is NA). */
+  effort: (number | null)[];
+  /** Site-level ψ covariates from the run's site-covariate snapshot (null when
+   *  unresolved for this site). Forest cover is a 0..1 fraction. */
+  forestCover: number | null;
+  elevation: number | null;
   /** Sampling window (ISO YYYY-MM-DD) and its length — surfaced so an outlier
    *  long window (which inflates maxOccasions) is visible per site. */
   windowStart: string;
@@ -759,6 +889,26 @@ export async function getModelInputSample(
     const cohort = cohortSitesFor(inputs.sites, events, synthetic);
     const frame = buildDetectionFrame(cohort, events, { binWidth });
 
+    // Site-level ψ covariates from the latest run's snapshot, keyed by site id,
+    // so each matrix row can show the forest cover + elevation that drive ψ.
+    // Sites in the live cohort but missing a snapshot row degrade to null → "—".
+    const covSnap = runId
+      ? await db
+          .select({
+            siteId: occupancySiteCovariates.siteId,
+            forestCover: occupancySiteCovariates.forestCover,
+            elevation: occupancySiteCovariates.elevation,
+          })
+          .from(occupancySiteCovariates)
+          .where(
+            and(
+              eq(occupancySiteCovariates.runId, runId),
+              eq(occupancySiteCovariates.stream, stream),
+            ),
+          )
+      : [];
+    const covBySite = new Map(covSnap.map((c) => [c.siteId, c]));
+
     const iso = (d: Date) => d.toISOString().slice(0, 10);
 
     // Detected sites first (most informative), then most-surveyed. No display
@@ -778,6 +928,8 @@ export async function getModelInputSample(
         detections: p.detections,
         cells: frame.y[i],
         effort: frame.effort[i],
+        forestCover: covBySite.get(p.siteId)?.forestCover ?? null,
+        elevation: covBySite.get(p.siteId)?.elevation ?? null,
         windowStart: iso(p.windowStart),
         windowEnd: iso(p.windowEnd),
         totalDays: p.totalDays,

@@ -10,7 +10,6 @@ import {
 import {
   computeOccasions,
   occasionIndexForDay,
-  effortLevel,
   occasionEndDay,
 } from "@/lib/occupancy/occasions";
 import {
@@ -139,12 +138,6 @@ describe("occasions", () => {
     expect(() => computeOccasions(utc(2026, 1, 10), utc(2026, 1, 1), 5)).toThrow();
   });
 
-  it("effortLevel distinguishes full vs ragged bins", () => {
-    expect(effortLevel(5, 5)).toBe("full");
-    expect(effortLevel(2, 5)).toBe("2d");
-    expect(effortLevel(1, 5)).toBe("1d");
-  });
-
   it("occasionEndDay clamps the ragged bin to the window end", () => {
     const layout = computeOccasions(utc(2026, 1, 1), utc(2026, 1, 12), 5);
     expect(occasionEndDay(layout, 2, 5)).toEqual(utc(2026, 1, 12));
@@ -226,10 +219,10 @@ describe("detection-history", () => {
     expect(frame.perSite.find((p) => p.siteId === "C")!.detected).toBe(false);
   });
 
-  it("labels effort per cell and null-pads it with NA cells", () => {
+  it("records continuous effort (active days) per cell and null-pads NA cells", () => {
     const frame = buildDetectionFrame(sites, [], { binWidth: 5 });
-    expect(frame.effort[0]).toEqual(["full", "full", "2d"]); // A ragged tail
-    expect(frame.effort[1]).toEqual(["full", "full", null]); // B padded
+    expect(frame.effort[0]).toEqual([5, 5, 2]); // A ragged tail: 5,5,2 active days
+    expect(frame.effort[1]).toEqual([5, 5, null]); // B padded (only two full bins)
   });
 
   it("exposes each site's sampling window so an outlier can be spotted", () => {

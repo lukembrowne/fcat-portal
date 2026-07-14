@@ -22,3 +22,48 @@ export function isSeparated(
   // finite SE; anything past these bounds is separation, not signal.
   return se > 50 || Math.abs(estimate) > 15;
 }
+
+/** One occupancy (ψ / state) submodel coefficient, already split from its `psi()` wrapper. */
+export interface StateCoefficient {
+  name: string;
+  estimate: number | null;
+  se: number | null;
+}
+
+const INTERCEPT_NAMES = new Set(["Int", "(Intercept)"]);
+
+/**
+ * Model-level identifiability from the fitted ψ coefficients. Distinct from
+ * `isSeparated` (one coefficient): a model is *non-identifiable* — degenerate —
+ * when the whole ψ submodel carries no usable signal. This is the ocelot case:
+ * a 13-parameter model fit on 4 detected sites where `occu` ran off to ±∞ on
+ * every term yet still "converged" numerically, so the pipeline would otherwise
+ * store a confident-looking occupancy estimate with no information behind it.
+ *
+ * Degenerate when either:
+ *  - the ψ **intercept** is separated (the baseline occupancy itself is not
+ *    estimable — nothing downstream can be trusted), or
+ *  - **every** non-intercept ψ slope is separated (all covariate effects blew
+ *    up; only the intercept survives, and even that is being pulled by the
+ *    separated terms).
+ *
+ * A model with a clean intercept and ≥1 estimable slope is identifiable even if
+ * one factor level separated (the paca case) — that level is dropped from the
+ * synthesis per-coefficient, not the whole model.
+ */
+export function classifyModelIdentifiability(
+  stateCoeffs: StateCoefficient[],
+): { identifiable: boolean; reason?: string } {
+  if (stateCoeffs.length === 0) {
+    return { identifiable: false, reason: "modelo no identificable: sin coeficientes de ocupación (ψ)" };
+  }
+  const intercept = stateCoeffs.find((c) => INTERCEPT_NAMES.has(c.name));
+  if (intercept && isSeparated(intercept.estimate, intercept.se)) {
+    return { identifiable: false, reason: "modelo no identificable: separación en el intercepto de ψ" };
+  }
+  const slopes = stateCoeffs.filter((c) => !INTERCEPT_NAMES.has(c.name));
+  if (slopes.length > 0 && slopes.every((c) => isSeparated(c.estimate, c.se))) {
+    return { identifiable: false, reason: "modelo no identificable: separación en todos los términos de ψ" };
+  }
+  return { identifiable: true };
+}

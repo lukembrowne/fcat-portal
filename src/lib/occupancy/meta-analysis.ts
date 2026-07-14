@@ -28,6 +28,21 @@ export function toForestPlot(rows: SpeciesSlopeInput[]): SpeciesSlope[] {
     .sort((a, b) => b.estimate - a.estimate);
 }
 
+/**
+ * The "preferred" model among ψ variants (geo vs habitat) for one species: the
+ * one with the lowest AIC. Both variants share the same detection history and
+ * `p~effort` detection model, so their AICs compare like-for-like. A null AIC
+ * (unfitted / degenerate) sorts last; all-null returns the first variant.
+ */
+export function preferredByAic<T extends { aic: number | null }>(variants: T[]): T | null {
+  if (variants.length === 0) return null;
+  return variants.reduce((best, v) => {
+    const a = v.aic ?? Number.POSITIVE_INFINITY;
+    const b = best.aic ?? Number.POSITIVE_INFINITY;
+    return a < b ? v : best;
+  });
+}
+
 /** Inverse-variance weighted mean of the slopes (rows with a usable SE only). */
 export function inverseVarianceMean(rows: SpeciesSlopeInput[]): number | null {
   let wsum = 0;

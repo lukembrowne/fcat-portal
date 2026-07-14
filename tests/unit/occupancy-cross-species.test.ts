@@ -1,6 +1,28 @@
 import { describe, it, expect } from "vitest";
-import { toForestPlot, inverseVarianceMean } from "@/lib/occupancy/meta-analysis";
+import { toForestPlot, inverseVarianceMean, preferredByAic } from "@/lib/occupancy/meta-analysis";
 import { sumRichness } from "@/lib/occupancy/richness";
+
+describe("preferredByAic", () => {
+  it("picks the lowest-AIC variant", () => {
+    const geo = { variant: "geo", aic: 201.6 };
+    const habitat = { variant: "habitat", aic: 188.2 };
+    expect(preferredByAic([geo, habitat])).toBe(habitat);
+    expect(preferredByAic([habitat, geo])).toBe(habitat); // order-independent
+  });
+
+  it("treats a null AIC as worst (a fitted variant beats an unscored one)", () => {
+    const geo = { variant: "geo", aic: 201.6 };
+    const habitat = { variant: "habitat", aic: null };
+    expect(preferredByAic([habitat, geo])).toBe(geo);
+  });
+
+  it("returns the first when every AIC is null, and null for an empty set", () => {
+    const a = { variant: "geo", aic: null };
+    const b = { variant: "habitat", aic: null };
+    expect(preferredByAic([a, b])).toBe(a);
+    expect(preferredByAic([])).toBeNull();
+  });
+});
 
 describe("toForestPlot", () => {
   it("adds 95% CIs and sorts by effect size descending", () => {

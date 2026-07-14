@@ -402,6 +402,7 @@ const CAMERA_TRAP_DDL =
     run_id INTEGER NOT NULL REFERENCES occupancy_runs(id) ON DELETE CASCADE,
     species TEXT NOT NULL,
     stream TEXT NOT NULL,
+    variant TEXT NOT NULL DEFAULT 'combined',
     season TEXT,
     sufficient_data INTEGER NOT NULL DEFAULT 0,
     ineligible_reasons_json TEXT,
@@ -421,7 +422,7 @@ const CAMERA_TRAP_DDL =
     fit_seconds REAL,
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
-  CREATE UNIQUE INDEX idx_occupancy_models_run_species_stream ON occupancy_models(run_id, species, stream);
+  CREATE UNIQUE INDEX idx_occupancy_models_run_species_stream ON occupancy_models(run_id, species, stream, variant);
   CREATE TABLE occupancy_covariate_effects (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     model_id INTEGER NOT NULL REFERENCES occupancy_models(id) ON DELETE CASCADE,

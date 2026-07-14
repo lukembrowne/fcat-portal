@@ -540,6 +540,7 @@ const statements = [
     run_id INTEGER NOT NULL REFERENCES occupancy_runs(id) ON DELETE CASCADE,
     species TEXT NOT NULL,
     stream TEXT NOT NULL CHECK(stream IN ('camera','audio')),
+    variant TEXT NOT NULL DEFAULT 'combined',
     season TEXT,
     sufficient_data INTEGER NOT NULL DEFAULT 0,
     ineligible_reasons_json TEXT,
@@ -560,7 +561,7 @@ const statements = [
     dropped_covariates_json TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
   )`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS idx_occupancy_models_run_species_stream ON occupancy_models(run_id, species, stream)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_occupancy_models_run_species_stream ON occupancy_models(run_id, species, stream, variant)`,
   `CREATE INDEX IF NOT EXISTS idx_occupancy_models_species ON occupancy_models(species)`,
   `CREATE INDEX IF NOT EXISTS idx_occupancy_models_stream ON occupancy_models(stream)`,
   `CREATE TABLE IF NOT EXISTS occupancy_covariate_effects (
@@ -988,6 +989,12 @@ const migrations = [
   // Occupancy: per-model covariate-drop reasons so a reduced (ψ~1) model is
   // visibly reduced instead of silently fitting an intercept-only null (2026-07-13)
   `ALTER TABLE occupancy_models ADD COLUMN dropped_covariates_json TEXT`,
+
+  // Occupancy: split one ψ model into two variants per species×stream — 'geo'
+  // (ψ~forest+elevation) and 'habitat' (ψ~habitat). Existing rows become the
+  // legacy 'combined'. The unique index gains `variant` below in
+  // postMigrationIndexes (DROP the 3-col, recreate 4-col) (2026-07-13).
+  `ALTER TABLE occupancy_models ADD COLUMN variant TEXT NOT NULL DEFAULT 'combined'`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }
@@ -1018,6 +1025,17 @@ const postMigrationIndexes = [
   `CREATE INDEX IF NOT EXISTS idx_audio_id_corrected
     ON audio_identifications(corrected_species, audio_detection_id)
     WHERE verification_status = 'corrected'`,
+  // Occupancy: fold `variant` into the per-model uniqueness so two variants
+  // (geo + habitat) coexist per species×stream. Drop the legacy 3-col index and
+  // recreate 4-col; existing rows are all 'combined' so uniqueness still holds
+  // (2026-07-13).
+  `DROP INDEX IF EXISTS idx_occupancy_models_run_species_stream`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_occupancy_models_run_species_stream ON occupancy_models(run_id, species, stream, variant)`,
+  // Occupancy: rename the 'geo' ψ variant to the clearer 'gradient' in place
+  // (ψ~forest+elevation). No CHECK constraint on `variant`, so a plain UPDATE
+  // suffices — idempotent (matches nothing after the first run). New runs write
+  // 'gradient'/'null' directly (2026-07-14).
+  `UPDATE occupancy_models SET variant = 'gradient' WHERE variant = 'geo'`,
   // Multi-shared-drive fan-out: index the deployment → drive FK (2026-05-24)
   `CREATE INDEX IF NOT EXISTS idx_biochoco_deployments_shared_drive_id ON biochoco_deployments(shared_drive_id)`,
   // Project-scoped fan-out: selection hot path (2026-05-27)

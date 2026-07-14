@@ -35,8 +35,44 @@ describe("assembleRunConfig", () => {
     expect(config.siteCovs.habitat).toEqual(["a", "b", "a", "b"]);
     expect(config.psiFormula).toBe("~forest + habitat");
     expect(config.detFormula).toBe("~effort");
-    expect(config.obsFactors).toEqual(["effort"]);
+    // Effort is a CONTINUOUS detection covariate now — never a factor.
+    expect(config.obsFactors).toEqual([]);
     expect(config.grid).toBeNull();
+  });
+
+  it("passes effort as a numeric obs covariate when it varies (12-day window → 5,5,2)", () => {
+    const frame = frameOf(3); // window 01-01→01-12, bin 5 → nDays [5,5,2] per site
+    const { config, dropped } = assembleRunConfig(frame, {
+      species: "X",
+      stream: "camera",
+      siteCovariates: [],
+    });
+    expect(config.detFormula).toBe("~effort");
+    expect(config.obsFactors).toEqual([]);
+    // The obs covariate matrix is numeric (active days), not bucketed labels.
+    const effRow = (config.obsCovs.effort as (number | null)[][])[0];
+    expect(effRow).toEqual([5, 5, 2]);
+    expect(dropped.find((d) => d.name === "effort")).toBeUndefined();
+  });
+
+  it("drops effort (→ ~1) when it is constant (10-day window → 5,5 everywhere)", () => {
+    const sites: OccupancySite[] = Array.from({ length: 3 }, (_, i) => ({
+      siteId: `S${i}`,
+      siteName: `S${i}`,
+      latitude: 0,
+      longitude: 0,
+      windowStart: utc(2026, 1, 1),
+      windowEnd: utc(2026, 1, 10), // exactly two full 5-day bins → nDays [5,5]
+    }));
+    const frame = buildDetectionFrame(sites, [], { binWidth: 5 });
+    const { config, dropped } = assembleRunConfig(frame, {
+      species: "X",
+      stream: "camera",
+      siteCovariates: [],
+    });
+    expect(config.detFormula).toBe("~1");
+    expect(config.obsCovs).toEqual({});
+    expect(dropped.find((d) => d.name === "effort")?.reason).toMatch(/esfuerzo constante/);
   });
 
   it("standardizes the grid with SITE-fitted params, not the grid's own moments", () => {

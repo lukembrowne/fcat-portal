@@ -65,21 +65,6 @@ export function occasionIndexForDay(
   return idx < layout.count ? idx : null;
 }
 
-/**
- * Bucket survey-effort day-counts into coarse categorical levels for use as an
- * `unmarked` detection covariate. Full bins collapse to one level; short
- * (ragged/partial) bins get their own levels so effort differences are
- * controlled for without exploding the factor. Returns a stable string label.
- */
-export function effortLevel(
-  nDays: number,
-  binWidth: number = DEFAULT_BIN_WIDTH_DAYS,
-): string {
-  if (nDays >= binWidth) return `full`; // full-width bin
-  if (nDays <= 1) return `1d`;
-  return `${nDays}d`;
-}
-
 /** The last day (inclusive) of occasion `j`. Useful for lunar/DOY covariates. */
 export function occasionEndDay(layout: OccasionLayout, j: number, binWidth = DEFAULT_BIN_WIDTH_DAYS): CaptureDay {
   const startOffset = j * binWidth;

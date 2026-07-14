@@ -14,7 +14,8 @@
 #     "siteCovs":   { "<name>": [ ... nSites ] },
 #     "siteFactors": ["habitat", ...],           # which siteCovs are categorical
 #     "obsCovs":    { "<name>": [[ ... occ], ...] }, # sites x occasions
-#     "obsFactors": ["effort", ...],
+#     "obsFactors": [],                          # which obsCovs are categorical
+#                                                #   (effort is numeric/continuous)
 #     "psiFormula": "~forest + elev + habitat",  # occupancy (state) formula
 #     "detFormula": "~effort",                   # detection formula
 #     "grid":       { "<name>": [ ... nCells ] } | null  # optional prediction grid
@@ -85,13 +86,18 @@ main <- function() {
   if (!is.null(cfg$obsCovs)) {
     for (nm in names(cfg$obsCovs)) {
       rows <- cfg$obsCovs[[nm]]
-      m <- matrix(NA_character_, nrow = nSites, ncol = nOcc)
+      isFactor <- nm %in% obsFactors
+      # Categorical obs covariates (listed in obsFactors) build a character matrix
+      # — unmarked coerces it to a factor. Everything else (e.g. continuous
+      # survey effort = active days per occasion) builds a NUMERIC matrix, giving
+      # a single slope instead of per-level dummies.
+      m <- matrix(if (isFactor) NA_character_ else NA_real_, nrow = nSites, ncol = nOcc)
       for (i in seq_len(nSites)) {
         r <- rows[[i]]
-        for (j in seq_len(nOcc)) m[i, j] <- chrCell(r[[j]])
+        for (j in seq_len(nOcc)) {
+          m[i, j] <- if (isFactor) chrCell(r[[j]]) else numCell(r[[j]])
+        }
       }
-      # unmarked wants obs factors as a factor vector reshaped; keep as data across
-      # all sites/occasions. It converts character matrices to factors itself.
       obsCovs[[nm]] <- m
     }
   }

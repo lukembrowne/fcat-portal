@@ -1208,6 +1208,17 @@ export const occupancyModels = sqliteTable(
       .references(() => occupancyRuns.id, { onDelete: "cascade" }),
     species: text("species").notNull(),
     stream: text("stream", { enum: ["camera", "audio"] }).notNull(),
+    // Which ψ model this row is: 'gradient' (ψ~forest+elevation, drives the map +
+    // response curves), 'habitat' (ψ~habitat, drives the habitat-use bars), or
+    // 'null' (ψ~1, the intercept-only AIC baseline). 'combined' is the legacy
+    // single ψ~forest+elevation+habitat model (pre 2026-07-13); never fit anymore,
+    // kept only so old rows read back. 'gradient' was renamed from 'geo' on
+    // 2026-07-14 (migrated in place). Guarded in app code by this enum — no SQLite
+    // CHECK (a DB CHECK would force a table recreation on every value addition; see
+    // the text({ enum }) gotcha).
+    variant: text("variant", { enum: ["gradient", "habitat", "combined", "null"] })
+      .notNull()
+      .default("combined"),
     // Season label for the modeled window (e.g. "2026-01"); null = whole span.
     season: text("season"),
     // Data-readiness (populated for every species, eligible or not).
@@ -1242,7 +1253,8 @@ export const occupancyModels = sqliteTable(
     uniqueIndex("idx_occupancy_models_run_species_stream").on(
       table.runId,
       table.species,
-      table.stream
+      table.stream,
+      table.variant
     ),
     index("idx_occupancy_models_species").on(table.species),
     index("idx_occupancy_models_stream").on(table.stream),

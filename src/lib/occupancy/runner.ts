@@ -29,7 +29,9 @@ export interface OccupancyRunConfig {
   y: (0 | 1 | null)[][];
   siteCovs: Record<string, (number | string)[]>;
   siteFactors: string[];
-  obsCovs: Record<string, (string | null)[][]>;
+  /** sites × occasions detection covariates. Numeric (e.g. continuous effort) or
+   *  string cells; names listed in `obsFactors` are treated as categorical. */
+  obsCovs: Record<string, (number | string | null)[][]>;
   obsFactors: string[];
   psiFormula: string;
   detFormula: string;

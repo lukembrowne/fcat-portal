@@ -12,6 +12,16 @@ export const dynamic = "force-dynamic";
 const STREAM_LABEL: Record<string, string> = { camera: "Cámaras trampa", audio: "Audio" };
 const Z95 = 1.959964;
 
+// Human labels for the ψ model variants shown in the comparison + coefficient table.
+const VARIANT_LABEL: Record<string, string> = {
+  gradient: "gradiente ambiental (bosque + elevación)",
+  habitat: "hábitat",
+  null: "nulo (ψ~1)",
+  combined: "combinado",
+};
+const variantLabel = (v: string | null | undefined): string =>
+  v ? (VARIANT_LABEL[v] ?? v) : "—";
+
 const pct = (v: number) => `${(v * 100).toFixed(0)}%`;
 
 /** Batch completion timestamp → readable Ecuador-local date + time. */
@@ -59,6 +69,14 @@ export default async function SpeciesOccupancyPage({
     ...b,
     estimable: !separatedHabitats.has(b.habitat),
   }));
+
+  // The two ψ variants (geo vs habitat), split into the identifiable ones (shown
+  // with AIC + ΔAIC, preferred marked) and the non-identifiable ones (shown with
+  // their Spanish reason). A legacy 'combined' run has a single variant.
+  const variants = model?.variants ?? [];
+  const identifiableVariants = variants.filter((v) => v.identifiable);
+  const degenerateVariants = variants.filter((v) => !v.identifiable);
+  const noModelFit = !!model && identifiableVariants.length === 0;
 
   // Radius of the buffer the forest-cover covariate is computed over (and the
   // scale the ψ surface is predicted at) — surfaced so the covariate is
@@ -114,6 +132,9 @@ export default async function SpeciesOccupancyPage({
               <p className="text-xs text-muted-foreground mt-1">
                 La ocupación estimada corrige por la detección imperfecta (p ={" "}
                 {model.meanDetection != null ? model.meanDetection.toFixed(2) : "—"}).
+                {model.preferredVariant ? (
+                  <> Modelo preferido: <strong>ψ ~ {variantLabel(model.preferredVariant)}</strong> (menor AIC).</>
+                ) : null}
               </p>
             </CardContent>
           </Card>
@@ -223,7 +244,67 @@ export default async function SpeciesOccupancyPage({
               <CardTitle className="text-base">Para científicos</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4 text-sm">
-              <div className="overflow-x-auto">
+              {/* Model comparison: gradient vs habitat vs null (ψ~1) by AIC. */}
+              <div className="space-y-2">
+                <div className="text-sm font-medium">Comparación de modelos</div>
+                <p className="text-xs text-muted-foreground">
+                  Se ajustan varios modelos de ocupación con la misma detección (p ~ esfuerzo):
+                  cobertura boscosa + elevación (superficie de ψ y curvas), tipo de hábitat (barras de
+                  uso de hábitat) y un modelo nulo (ψ~1) de referencia. Comparten los datos, por lo que
+                  su AIC es comparable — el de menor AIC es el preferido para la estimación principal.
+                </p>
+                {noModelFit ? (
+                  <p className="text-amber-700 dark:text-amber-400 text-xs">
+                    Ningún modelo resultó identificable para esta especie: los datos son insuficientes
+                    para estimar los efectos (separación). Se muestran los diagnósticos abajo, pero no
+                    una estimación de ocupación.
+                  </p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="text-xs">
+                      <thead className="text-left text-muted-foreground">
+                        <tr>
+                          <th className="py-1 pr-4">Modelo (ψ)</th>
+                          <th className="pr-4 text-right">AIC</th>
+                          <th className="pr-4 text-right">ΔAIC</th>
+                          <th></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {identifiableVariants.map((v) => (
+                          <tr key={v.variant} className="border-t">
+                            <td className="py-1 pr-4 whitespace-nowrap">ψ ~ {variantLabel(v.variant)}</td>
+                            <td className="pr-4 text-right tabular-nums">
+                              {v.aic != null ? v.aic.toFixed(1) : "—"}
+                            </td>
+                            <td className="pr-4 text-right tabular-nums">
+                              {v.deltaAic != null ? (v.deltaAic === 0 ? "0.0" : `+${v.deltaAic.toFixed(1)}`) : "—"}
+                            </td>
+                            <td>
+                              {v.variant === model.preferredVariant ? (
+                                <span className="text-emerald-700 dark:text-emerald-400 font-medium">
+                                  preferido
+                                </span>
+                              ) : null}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                {degenerateVariants.length > 0 ? (
+                  <ul className="text-xs text-muted-foreground list-disc pl-5 space-y-1">
+                    {degenerateVariants.map((v) => (
+                      <li key={v.variant}>
+                        <span className="font-medium">ψ ~ {variantLabel(v.variant)}</span>:{" "}
+                        {v.reason ?? "no identificable"}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+              <div className="overflow-x-auto border-t pt-4">
                 <table className="w-full text-xs">
                   <thead className="text-left text-muted-foreground">
                     <tr>
@@ -251,8 +332,10 @@ export default async function SpeciesOccupancyPage({
                           key={i}
                           className={`border-t ${sig ? "font-semibold" : ""} ${separated ? "text-muted-foreground" : ""}`}
                         >
-                          <td className="py-1">
-                            {e.submodel === "state" ? "ψ (ocupación)" : "p (detección)"}
+                          <td className="py-1 whitespace-nowrap">
+                            {e.submodel === "state"
+                              ? `ψ (${variantLabel(e.variant)})`
+                              : "p (detección)"}
                           </td>
                           <td>
                             {e.param}
@@ -289,7 +372,7 @@ export default async function SpeciesOccupancyPage({
                 <Diag label="Ajuste" value={model.fitSeconds != null ? `${model.fitSeconds.toFixed(2)} s` : "—"} />
               </dl>
               <p className="text-xs text-muted-foreground">
-                Modelo: ψ {model.psiFormula} · p {model.detFormula}. Cobertura boscosa = proporción
+                Modelo preferido: ψ {model.psiFormula ?? "—"} · p {model.detFormula ?? "—"}. Cobertura boscosa = proporción
                 de bosque en un buffer de {forestBufferM} m alrededor de cada sitio (misma escala
                 usada para predecir la superficie de ψ). Covariables continuas estandarizadas; curvas
                 retransformadas a la escala original. Fila en negrita (*) = efecto con IC 95% que

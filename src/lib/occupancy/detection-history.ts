@@ -16,7 +16,6 @@ import type { CaptureDay } from "./capture-date";
 import {
   computeOccasions,
   DEFAULT_BIN_WIDTH_DAYS,
-  effortLevel,
   occasionIndexForDay,
   type OccasionLayout,
 } from "./occasions";
@@ -61,8 +60,10 @@ export interface DetectionFrame {
   maxOccasions: number;
   /** sites × maxOccasions presence/absence with NA padding. */
   y: Cell[][];
-  /** sites × maxOccasions categorical survey-effort level; null where y is NA. */
-  effort: (string | null)[][];
+  /** sites × maxOccasions continuous survey effort (active days in the occasion
+   *  bin, 1..binWidth); null where y is NA. Fed to `occu` as a numeric detection
+   *  covariate — a single `p~effort` slope, not per-level dummies. */
+  effort: (number | null)[][];
   perSite: SitePerRow[];
   /** Sites with ≥1 non-NA cell. */
   nSitesSurveyed: number;
@@ -112,7 +113,7 @@ export function buildDetectionFrame(
   }
 
   const y: Cell[][] = [];
-  const effort: (string | null)[][] = [];
+  const effort: (number | null)[][] = [];
   const perSite: SitePerRow[] = [];
   const siteIds: string[] = [];
   let nSitesSurveyed = 0;
@@ -123,10 +124,11 @@ export function buildDetectionFrame(
   for (const site of sites) {
     const layout = layouts.get(site.siteId)!;
     const row: Cell[] = new Array(maxOccasions).fill(null);
-    const effortRow: (string | null)[] = new Array(maxOccasions).fill(null);
+    const effortRow: (number | null)[] = new Array(maxOccasions).fill(null);
     for (let j = 0; j < layout.count; j++) {
       row[j] = 0;
-      effortRow[j] = effortLevel(layout.nDays[j], binWidth);
+      // Continuous effort = active days in this occasion's bin (1..binWidth).
+      effortRow[j] = layout.nDays[j];
     }
 
     let siteDetections = 0;

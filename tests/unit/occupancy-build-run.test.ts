@@ -74,6 +74,7 @@ const DDL = `
   );
   CREATE TABLE occupancy_models (
     id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER NOT NULL, species TEXT NOT NULL, stream TEXT NOT NULL,
+    variant TEXT NOT NULL DEFAULT 'combined',
     season TEXT, sufficient_data INTEGER NOT NULL DEFAULT 0, ineligible_reasons_json TEXT,
     n_sites INTEGER, n_sites_detected INTEGER, total_detections INTEGER, n_occasions INTEGER, naive_occupancy REAL,
     estimated_occupancy REAL, occupancy_lower REAL, occupancy_upper REAL, mean_detection REAL, aic REAL,
@@ -145,6 +146,49 @@ describe.skipIf(!rReady())("runOccupancyBuild (integration, real R)", () => {
       .all(res.runId) as { submodel: string }[];
     const submodels = effects.map((e) => e.submodel);
     expect(submodels).toContain("state");
+
+    // Every fitted (sufficient_data=1) model is a real variant — never the
+    // legacy 'combined'. Eligible species produce a gradient model + a ψ~1 null
+    // baseline (habitat too when a usable factor exists).
+    const fittedVariants = new Set(fitted.map((m) => m.variant as string));
+    expect(fittedVariants.has("gradient")).toBe(true);
+    expect(fittedVariants.has("null")).toBe(true);
+    expect(fittedVariants.has("combined")).toBe(false);
+    for (const m of fitted) {
+      expect(["gradient", "habitat", "null"]).toContain(m.variant as string);
+    }
+    // The gradient variant carries forest/elevation state params; a habitat
+    // variant (when present) carries habitat* params.
+    const gradientParams = sqlite
+      .prepare(
+        `SELECT DISTINCT e.param FROM occupancy_covariate_effects e
+         JOIN occupancy_models m ON m.id = e.model_id
+         WHERE m.run_id = ? AND m.variant = 'gradient' AND e.submodel = 'state'`,
+      )
+      .all(res.runId) as { param: string }[];
+    // gradient has at least an intercept; forest/elevation appear when they varied.
+    expect(gradientParams.length).toBeGreaterThan(0);
+    // The ψ~1 null baseline persists a state intercept and a "~1" ψ formula.
+    const nullRows = sqlite
+      .prepare(
+        `SELECT psi_formula FROM occupancy_models WHERE run_id = ? AND variant = 'null' AND sufficient_data = 1`,
+      )
+      .all(res.runId) as { psi_formula: string }[];
+    expect(nullRows.length).toBeGreaterThan(0);
+    for (const r of nullRows) expect(r.psi_formula).toBe("~1");
+
+    // Continuous effort: the detection block is a single numeric `effort` slope,
+    // never the old per-level dummies (effort2d/effort4d/effortfull) that caused
+    // separation. Where an effort term exists, it is exactly "effort".
+    const detParams = sqlite
+      .prepare(
+        `SELECT DISTINCT e.param FROM occupancy_covariate_effects e
+         JOIN occupancy_models m ON m.id = e.model_id
+         WHERE m.run_id = ? AND e.submodel = 'det'`,
+      )
+      .all(res.runId) as { param: string }[];
+    const effortParams = detParams.map((d) => d.param).filter((p) => p.startsWith("effort"));
+    for (const p of effortParams) expect(p).toBe("effort"); // no bucketed levels
 
     // Site-covariate snapshot persisted for both streams.
     const snap = sqlite

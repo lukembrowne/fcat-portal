@@ -60,7 +60,7 @@ export async function processOccupancyJob(jobId: number): Promise<void> {
         completedAt: new Date(),
         totalImages: result.nModels,
         processedImages: result.nModels,
-        statusMessage: `Modelos de ocupación completos — ${result.nEligible} especies modeladas de ${result.nModels}`,
+        statusMessage: `Modelos de ocupación completos — ${result.nEligible} especies modeladas (${result.nModels} modelos ajustados)`,
       })
       .where(eq(processingJobs.id, jobId));
 

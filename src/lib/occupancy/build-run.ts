@@ -22,6 +22,7 @@ import { assembleRunConfig, type GridCovariateSpec } from "./config";
 import { runOccupancyModel, type OccupancyPrediction, type OccupancyCurvePoint, type OccupancyHabitatBar } from "./runner";
 import { runForestCover, type RasterGridCell } from "./raster";
 import { renderRasterSurfaces, paddedBbox, type RasterModelSpec } from "./surface";
+import { classifyModelIdentifiability } from "./separation";
 import type { CovariateResolvers } from "./covariates";
 import { DEFAULT_BIN_WIDTH_DAYS } from "./occasions";
 import { DEFAULT_CONFIDENCE_THRESHOLD } from "@/lib/audio-confidence";
@@ -65,7 +66,7 @@ function rawClient(): BetterSqlite3.Database {
   return (db as unknown as { $client: BetterSqlite3.Database }).$client;
 }
 
-/** Split an R coefficient name like `psi(forest)` / `p(effortfull)` into submodel + param. */
+/** Split an R coefficient name like `psi(forest)` / `p(effort)` into submodel + param. */
 function splitEffect(param: string): { submodel: "state" | "det"; name: string } {
   if (param.startsWith("psi(")) return { submodel: "state", name: param.slice(4, -1) };
   if (param.startsWith("p(")) return { submodel: "det", name: param.slice(2, -1) };
@@ -158,11 +159,11 @@ export async function runOccupancyBuild(opts: BuildRunOptions = {}): Promise<Bui
 
   const insModel = raw.prepare(
     `INSERT INTO occupancy_models
-       (run_id, species, stream, sufficient_data, ineligible_reasons_json,
+       (run_id, species, stream, variant, sufficient_data, ineligible_reasons_json,
         n_sites, n_sites_detected, total_detections, n_occasions, naive_occupancy,
         estimated_occupancy, occupancy_lower, occupancy_upper, mean_detection, aic,
         convergence, psi_formula, det_formula, fit_seconds, dropped_covariates_json)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const insEffect = raw.prepare(
     `INSERT INTO occupancy_covariate_effects (model_id, submodel, param, estimate, se, z, p_value)
@@ -234,6 +235,118 @@ export async function runOccupancyBuild(opts: BuildRunOptions = {}): Promise<Bui
     habitat: (id: string) => habitatBySiteId.get(id),
   };
 
+  // Fit + persist ONE ψ variant for a species. Shared by all variants so the
+  // fit/persist/artifact flow lives in one place; only the covariate subset and
+  // the artifact kind differ. `gradient` writes the ψ map surface + response
+  // curves; `habitat` writes the habitat-use bars (no map); `null` (ψ~1) is the
+  // intercept-only AIC baseline and writes no artifacts. Mutates nModels via closure.
+  const fitVariant = async (
+    variant: "gradient" | "habitat" | "null",
+    frame: ReturnType<typeof buildDetectionFrame>,
+    sp: string,
+    stream: "camera" | "audio",
+    siteCovariates: ReturnType<typeof toCovariateSpecs>["covariates"],
+    variantDropped: { name: string; reason: string }[],
+  ): Promise<void> => {
+    const gridSpecs =
+      variant === "gradient" && raster ? buildGridCovariates(raster.grid, siteCovariates) : undefined;
+    const { config, standardizations, dropped: cfgDropped } = assembleRunConfig(frame, {
+      species: sp,
+      stream,
+      siteCovariates,
+      gridCovariates: gridSpecs,
+      binWidth,
+    });
+    const allDropped = [...variantDropped, ...cfgDropped];
+    const droppedJson = allDropped.length ? JSON.stringify(allDropped) : null;
+
+    const res = await runOccupancyModel(config);
+    if (!res.success) {
+      log.warn({ species: sp, stream, variant, error: res.error }, "occupancy_fit_failed");
+      insModel.run(
+        runId, sp, stream, variant, 1, JSON.stringify([`No convergió: ${res.error}`]),
+        frame.nSitesSurveyed, frame.nSitesDetected, frame.totalDetections,
+        frame.maxOccasions, frame.naiveOccupancy,
+        null, null, null, null, null, null, config.psiFormula, config.detFormula, null, droppedJson,
+      );
+      nModels++;
+      return;
+    }
+
+    const r = res.result;
+
+    // Post-fit degeneracy guard: a numerically-"converged" fit whose entire ψ
+    // submodel separated carries no information. Store it as insufficient (with a
+    // Spanish reason) — keeping the diagnostic fields (n_sites, detections, aic,
+    // formula) so the page can explain what was attempted — rather than a
+    // confident estimate. Excluded from the cross-species synthesis in U4.
+    const stateCoeffs = r.effects
+      .map((e) => ({ split: splitEffect(e.param), estimate: e.estimate, se: e.se }))
+      .filter((e) => e.split.submodel === "state")
+      .map((e) => ({ name: e.split.name, estimate: e.estimate, se: e.se }));
+    const identifiability = classifyModelIdentifiability(stateCoeffs);
+    if (!identifiability.identifiable) {
+      log.warn({ species: sp, stream, variant, reason: identifiability.reason }, "occupancy_model_degenerate");
+      insModel.run(
+        runId, sp, stream, variant, 0, JSON.stringify([identifiability.reason]),
+        r.nSites, frame.nSitesDetected, frame.totalDetections,
+        r.nOccasions, r.naiveOccupancy,
+        null, null, null, null, r.aic,
+        r.convergence, config.psiFormula, config.detFormula, r.fitSeconds, droppedJson,
+      );
+      nModels++;
+      return;
+    }
+
+    const modelId = Number(
+      insModel.run(
+        runId, sp, stream, variant, 1, null,
+        r.nSites, frame.nSitesDetected, frame.totalDetections,
+        r.nOccasions, r.naiveOccupancy,
+        r.estimatedOccupancy, r.occupancyLower, r.occupancyUpper, r.meanDetection, r.aic,
+        r.convergence, config.psiFormula, config.detFormula, r.fitSeconds, droppedJson,
+      ).lastInsertRowid,
+    );
+    for (const e of r.effects) {
+      const { submodel, name } = splitEffect(e.param);
+      insEffect.run(modelId, submodel, name, e.estimate, e.se, e.z, e.p);
+    }
+
+    if (variant === "gradient") {
+      // Full-grid ψ surface + response curves (raster path only). The habitat
+      // factor never enters the gradient model, so no habitat-use bars here.
+      if (raster && r.prediction && gridSpecs) {
+        const written = writeGridArtifact(
+          runId, sp, stream, "gradient", raster.grid, r.prediction, r.curves, undefined,
+        );
+        pendingPreds.push({ modelId, ...written });
+        const coef = stateCoefficients(r.effects);
+        renderModels.push({
+          name: written.slug,
+          out: `${written.slug}.png`,
+          b0: coef.b0,
+          bForest: coef.forest,
+          bElev: coef.elevation,
+          forestMean: standardizations.forest?.mean,
+          forestSd: standardizations.forest?.sd,
+          elevMean: standardizations.elevation?.mean,
+          elevSd: standardizations.elevation?.sd,
+        });
+      }
+    } else if (variant === "habitat") {
+      // habitat: persist the habitat-use bars in a cells-empty artifact (no ψ
+      // surface). Raster-gated to match where the species page shows artifacts.
+      if (raster && r.habitatUse && r.habitatUse.length > 0) {
+        const written = writeGridArtifact(
+          runId, sp, stream, "habitat", [], null, undefined, r.habitatUse,
+        );
+        pendingPreds.push({ modelId, ...written });
+      }
+    }
+    // 'null' (ψ~1): no covariates → no map, curves, or bars; the row + AIC is all.
+    nModels++;
+  };
+
   for (const { stream, inputs, species } of perStream) {
     // Snapshot covariates for the whole site pool once per stream.
     const poolInputs: SiteCovariateInput[] = inputs.sites.map(
@@ -266,8 +379,10 @@ export async function runOccupancyBuild(opts: BuildRunOptions = {}): Promise<Bui
       const elig = assessEligibility(frame, thresholds);
 
       if (!elig.eligible) {
+        // A species below the data-readiness gate never reaches the fit stage,
+        // so it gets ONE legacy 'combined' row (not a gradient/habitat pair).
         insModel.run(
-          runId, sp, stream, 0, JSON.stringify(elig.reasons),
+          runId, sp, stream, "combined", 0, JSON.stringify(elig.reasons),
           elig.stats.nSitesSurveyed, elig.stats.nSitesDetected, elig.stats.totalDetections,
           elig.stats.maxOccasions, elig.stats.naiveOccupancy,
           null, null, null, null, null, null, null, null, null, null,
@@ -282,64 +397,27 @@ export async function runOccupancyBuild(opts: BuildRunOptions = {}): Promise<Bui
       // visibly reduced instead of silently fitting ψ~1.
       const specRaw = frame.siteIds.map((id) => covBySite.get(id)!);
       const { covariates: covSpecs, dropped: specDropped } = toCovariateSpecs(specRaw);
-      const gridSpecs = raster ? buildGridCovariates(raster.grid, covSpecs) : undefined;
-      const { config, standardizations, dropped: cfgDropped } = assembleRunConfig(frame, {
-        species: sp,
-        stream,
-        siteCovariates: covSpecs,
-        gridCovariates: gridSpecs,
-        binWidth,
-      });
-      const allDropped = [...specDropped, ...cfgDropped];
-      const droppedJson = allDropped.length ? JSON.stringify(allDropped) : null;
 
-      const res = await runOccupancyModel(config);
-      if (!res.success) {
-        log.warn({ species: sp, stream, error: res.error }, "occupancy_fit_failed");
-        insModel.run(
-          runId, sp, stream, 1, JSON.stringify([`No convergió: ${res.error}`]),
-          frame.nSitesSurveyed, frame.nSitesDetected, frame.totalDetections,
-          frame.maxOccasions, frame.naiveOccupancy,
-          null, null, null, null, null, null, config.psiFormula, config.detFormula, null, droppedJson,
-        );
-        nModels++;
-        nEligible++;
-        continue;
-      }
+      // Split the one ψ model into variants that each answer a question they can
+      // actually identify: `gradient` (continuous forest+elevation → map surface +
+      // response curves), `habitat` (categorical factor → habitat-use bars), and a
+      // `null` (ψ~1) baseline. All share the detection frame + continuous
+      // `p~effort` model, so their AICs compare like-for-like.
+      const gradientSpecs = covSpecs.filter((c) => c.kind === "continuous");
+      const habitatSpecs = covSpecs.filter((c) => c.kind === "factor");
+      const gradientDroppedNames = new Set(["forest", "elevation"]);
+      const gradientDropped = specDropped.filter((d) => gradientDroppedNames.has(d.name));
+      const habitatDropped = specDropped.filter((d) => !gradientDroppedNames.has(d.name));
 
-      const r = res.result;
-      const modelId = Number(
-        insModel.run(
-          runId, sp, stream, 1, null,
-          r.nSites, frame.nSitesDetected, frame.totalDetections,
-          r.nOccasions, r.naiveOccupancy,
-          r.estimatedOccupancy, r.occupancyLower, r.occupancyUpper, r.meanDetection, r.aic,
-          r.convergence, config.psiFormula, config.detFormula, r.fitSeconds, droppedJson,
-        ).lastInsertRowid,
-      );
-      for (const e of r.effects) {
-        const { submodel, name } = splitEffect(e.param);
-        insEffect.run(modelId, submodel, name, e.estimate, e.se, e.z, e.p);
+      // Always fit gradient (it is the mappable, baseline model — reduces to ψ~1
+      // when no continuous covariate is available). Fit habitat only when a usable
+      // habitat factor exists; otherwise there is no habitat model to speak of.
+      // Always fit the ψ~1 null last as the AIC baseline the others are compared to.
+      await fitVariant("gradient", frame, sp, stream, gradientSpecs, gradientDropped);
+      if (habitatSpecs.length > 0) {
+        await fitVariant("habitat", frame, sp, stream, habitatSpecs, habitatDropped);
       }
-      if (raster && r.prediction && gridSpecs) {
-        const written = writeGridArtifact(
-          runId, sp, stream, raster.grid, r.prediction, r.curves, r.habitatUse,
-        );
-        pendingPreds.push({ modelId, ...written });
-        const coef = stateCoefficients(r.effects);
-        renderModels.push({
-          name: `${sp}-${stream}`,
-          out: `${written.slug}.png`,
-          b0: coef.b0,
-          bForest: coef.forest,
-          bElev: coef.elevation,
-          forestMean: standardizations.forest?.mean,
-          forestSd: standardizations.forest?.sd,
-          elevMean: standardizations.elevation?.mean,
-          elevSd: standardizations.elevation?.sd,
-        });
-      }
-      nModels++;
+      await fitVariant("null", frame, sp, stream, [], []);
       nEligible++;
     }
   }
@@ -443,30 +521,37 @@ function writeGridArtifact(
   runId: number,
   species: string,
   stream: string,
+  variant: "gradient" | "habitat",
   grid: RasterGridCell[],
-  prediction: OccupancyPrediction,
+  prediction: OccupancyPrediction | null,
   curves: Record<string, OccupancyCurvePoint[]> | undefined,
   habitatUse: OccupancyHabitatBar[] | undefined,
 ): { slug: string; gridRelPath: string; nCells: number; psiMin: number | null; psiMax: number | null } {
   const dir = nodePath.join(process.cwd(), "data", "occupancy-models", String(runId));
   fs.mkdirSync(dir, { recursive: true });
-  const slug = `${species.replace(/[^a-z0-9]+/gi, "-")}-${stream}`;
+  // Slug carries the variant so geo + habitat artifacts for one species don't
+  // clobber each other (they share species+stream).
+  const slug = `${species.replace(/[^a-z0-9]+/gi, "-")}-${stream}-${variant}`;
   const gridPath = nodePath.join(dir, `${slug}.json`);
-  const cells = grid.map((c, i) => ({
-    lat: c.lat,
-    lng: c.lng,
-    psi: prediction.psi[i] ?? null,
-    se: prediction.se[i] ?? null,
-    lower: prediction.lower?.[i] ?? null,
-    upper: prediction.upper?.[i] ?? null,
-    forest: c.forestCover ?? null,
-    elevation: c.elevation ?? null,
-  }));
+  // The habitat variant has no ψ surface — it writes an empty cells array and
+  // carries only the habitat-use bars.
+  const cells = prediction
+    ? grid.map((c, i) => ({
+        lat: c.lat,
+        lng: c.lng,
+        psi: prediction.psi[i] ?? null,
+        se: prediction.se[i] ?? null,
+        lower: prediction.lower?.[i] ?? null,
+        upper: prediction.upper?.[i] ?? null,
+        forest: c.forestCover ?? null,
+        elevation: c.elevation ?? null,
+      }))
+    : [];
   fs.writeFileSync(
     gridPath,
     JSON.stringify({ cells, curves: curves ?? null, habitatUse: habitatUse ?? null }),
   );
-  const psis = prediction.psi.filter((v) => Number.isFinite(v));
+  const psis = prediction ? prediction.psi.filter((v) => Number.isFinite(v)) : [];
   return {
     slug,
     gridRelPath: nodePath.relative(process.cwd(), gridPath),

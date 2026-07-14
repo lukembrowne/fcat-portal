@@ -27,6 +27,10 @@ import type { OdkSiteEntity } from "@/lib/odk-types";
 import type { ActionResult } from "@/lib/types";
 import { log } from "@/lib/log";
 import type { SiteInfo } from "../overview/types";
+import {
+  toPublicSiteInfo,
+  type PublicSiteInfo,
+} from "@/lib/landowner/public-site-info";
 import type { HabitatAssessment } from "../habitat/types";
 import type {
   ResultadosData,
@@ -849,7 +853,10 @@ export interface PublicSiteDetailExtras {
   deploymentIds: number[];
 }
 
-export type PublicSiteDetail = SiteDetail & PublicSiteDetailExtras;
+// The public payload exposes only a landowner-safe projection of `site` — no
+// landowner name/phone, no GPS. See toPublicSiteInfo.
+export type PublicSiteDetail = Omit<SiteDetail, "site"> &
+  PublicSiteDetailExtras & { site: PublicSiteInfo | null };
 
 export const fetchSiteDetailByToken = cache(
   async (token: string): Promise<PublicSiteDetail | null> => {
@@ -956,7 +963,8 @@ export const fetchSiteDetailByToken = cache(
     }
 
     return {
-      site,
+      // Landowner-safe projection only — strips name/phone/GPS from the client payload.
+      site: toPublicSiteInfo(site),
       siteId: tokenRow.biochocoSiteId,
       heroImageId: tokenRow.heroImageId,
       deploymentIds: depIds,

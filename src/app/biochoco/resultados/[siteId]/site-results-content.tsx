@@ -10,7 +10,9 @@ import { Separator } from "@/components/ui/separator";
 import { Bird, Camera, Waves } from "lucide-react";
 
 interface SiteResultsContentProps {
-  data: SiteDetail;
+  // `site` is not read here; accept both internal (SiteDetail) and the
+  // landowner-safe public payload by omitting it from the required shape.
+  data: Omit<SiteDetail, "site">;
   /**
    * Audio data (acoustic indices + verified BirdNET species). Null on the
    * public-share variant since audio panels are internal-only in v1.

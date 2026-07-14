@@ -13,7 +13,9 @@ import type { CompactStat } from "@/components/compact-stat-bar";
  * their header anyway.
  */
 export function buildSiteStats(
-  data: SiteDetail,
+  // Only reads species/temperature/habitat — `site` shape is irrelevant, so
+  // both the internal (SiteDetail) and public (landowner-safe) payloads fit.
+  data: Omit<SiteDetail, "site">,
   icons: {
     species: ReactNode;
     temperature: ReactNode;

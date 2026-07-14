@@ -60,7 +60,6 @@ export async function sendLandownerContactEmail(
     return false;
   }
 
-  const resend = getResend();
   const from = getFromEmail();
   const waLink = payload.landownerPhone
     ? buildWhatsappReplyLink(payload.landownerPhone)
@@ -99,6 +98,7 @@ export async function sendLandownerContactEmail(
   ].join("\n");
 
   try {
+    const resend = getResend(); // throws on missing RESEND_API_KEY — caught below
     const { error } = await resend.emails.send({ from, to, subject, html, text });
     if (error) {
       log.error({ err: error, siteId: payload.siteId }, "[landowner-contact] Resend error");

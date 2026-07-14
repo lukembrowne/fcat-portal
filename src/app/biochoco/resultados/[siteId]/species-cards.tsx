@@ -4,6 +4,7 @@ import Link from "next/link";
 import type { SiteSpecies } from "../types";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { ConservationBadge } from "@/components/conservation-badge";
 import { Bug, Bird, Squirrel } from "lucide-react";
 
 interface SpeciesCardsProps {
@@ -94,6 +95,9 @@ export function SpeciesCards({
             >
               {/* Photo */}
               <div className="relative h-40 bg-muted">
+                <div className="absolute left-2 top-2 z-10">
+                  <ConservationBadge status={sp.iucnStatus} />
+                </div>
                 {sp.photoImageId ? (
                   /* eslint-disable-next-line @next/next/no-img-element */
                   <img

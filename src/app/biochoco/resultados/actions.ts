@@ -376,6 +376,7 @@ async function fetchSpeciesForDeployments(
       spanishName: species.spanishName,
       commonName: species.commonName,
       taxonomicType: species.type,
+      iucnStatus: species.iucnStatus,
       detectionCount: sql<number>`count(*)`,
       avgConfidence: sql<number>`round(avg(${identifications.confidence}), 3)`,
     })
@@ -423,6 +424,7 @@ async function fetchSpeciesForDeployments(
       spanishName: row.spanishName,
       commonName: row.commonName,
       taxonomicType: row.taxonomicType,
+      iucnStatus: row.iucnStatus,
       detectionCount: row.detectionCount,
       avgConfidence: row.avgConfidence,
       photoImageId,

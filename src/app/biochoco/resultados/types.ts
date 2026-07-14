@@ -35,6 +35,8 @@ export interface SiteSpecies {
   detectionCount: number;
   avgConfidence: number;
   photoImageId: number | null;
+  /** IUCN Red List category code (LC/NT/VU/EN/CR/…), null when unassessed. */
+  iucnStatus: string | null;
 }
 
 export interface TemperatureReading {

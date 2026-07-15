@@ -625,6 +625,11 @@ export async function processJobInternal(
                   frameIndex: frame.index,
                   status: "pending",
                   exifTimestamp: frameTimestamp,
+                  // Carry the source video's mtime (SD-card = camera clock) onto the
+                  // frame so a capture day is still resolvable when per-frame
+                  // exifTimestamp is null (tsMethod "none" or metadata/folder parse
+                  // failed). Without this, occupancy drops these frames as dateless.
+                  fileModified: vid.fileModified ?? null,
                 })
                 .returning();
               frameRecords.push({ id: frameImage.id, framePath: frame.path, frameName });

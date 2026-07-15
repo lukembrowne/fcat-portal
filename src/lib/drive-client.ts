@@ -1232,13 +1232,28 @@ export async function updateFileContent(
   fileId: string,
   buffer: Buffer,
   mimeType: string,
+  modifiedTime?: Date | string | null,
 ): Promise<void> {
   const drive = getDrive();
+
+  // Preserve the caller-supplied modifiedTime instead of letting Drive stamp
+  // "now" on a content rewrite. Occupancy's capture-day fallback reads
+  // biochoco_images.file_modified (Drive's modifiedTime captured at scan); a
+  // compression re-upload that bumped it to the compression date silently
+  // shifted a deployment's survey window (GIZ-004 → June). When omitted, Drive
+  // keeps its default behavior.
+  const iso =
+    modifiedTime == null
+      ? null
+      : modifiedTime instanceof Date
+        ? modifiedTime.toISOString()
+        : modifiedTime;
 
   await withRetry(
     () =>
       drive.files.update({
         fileId,
+        ...(iso ? { requestBody: { modifiedTime: iso } } : {}),
         media: {
           mimeType,
           body: Readable.from(buffer),

@@ -17,6 +17,7 @@ vi.mock("next/cache", () => ({
 
 // Mock sharp — returns a smaller buffer by default
 const mockSharpInstance = {
+  keepExif: vi.fn().mockReturnThis(),
   jpeg: vi.fn().mockReturnThis(),
   toBuffer: vi.fn().mockResolvedValue(Buffer.alloc(500, "c")), // 500 bytes (smaller than 1000)
   metadata: vi.fn().mockResolvedValue({ width: 100, height: 100, format: "jpeg" }),
@@ -104,6 +105,7 @@ beforeEach(() => {
 });
 
 describe("compressImageBatch", () => {
+  const FIXTURE_MODIFIED = new Date("2026-03-12T15:35:25.000Z");
   function makeImageInput(overrides?: Partial<{ driveFileId: string | null; path: string | null }>) {
     return [{
       id: seed.images[0].id,
@@ -111,6 +113,7 @@ describe("compressImageBatch", () => {
       path: overrides?.path ?? "/cache/1/IMG_001.jpg",
       driveFileId: overrides?.driveFileId ?? "drive-file-1",
       deploymentId: seed.deployment.id,
+      fileModified: FIXTURE_MODIFIED,
     }];
   }
 
@@ -142,8 +145,9 @@ describe("compressImageBatch", () => {
     expect(result.compressed).toBe(1);
     expect(result.failed).toBe(0);
 
-    // Should upload to Drive
-    expect(mockUpdateFileContent).toHaveBeenCalledWith("drive-file-1", expect.any(Buffer), "image/jpeg");
+    // Should upload to Drive, forwarding the original modifiedTime so the
+    // re-upload doesn't reset it to the compression date.
+    expect(mockUpdateFileContent).toHaveBeenCalledWith("drive-file-1", expect.any(Buffer), "image/jpeg", FIXTURE_MODIFIED);
 
     // Should also write to cache
     expect(mockWriteFile).toHaveBeenCalled();

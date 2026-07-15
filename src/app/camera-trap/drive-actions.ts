@@ -451,7 +451,7 @@ export async function compressDeploymentImages(
  *                        false: write to cache only, skip Drive upload (inline during ML processing).
  */
 export async function compressImageBatch(
-  imgs: Array<{ id: number; filename: string; path: string | null; driveFileId: string | null; deploymentId: number }>,
+  imgs: Array<{ id: number; filename: string; path: string | null; driveFileId: string | null; deploymentId: number; fileModified?: Date | null }>,
   options: { uploadToDrive: boolean; jobId: number; deploymentId: number },
   onProgress?: (compressed: number, failed: number, savedBytes: number) => Promise<void>,
 ): Promise<{ compressed: number; failed: number; savedBytes: number }> {
@@ -495,6 +495,11 @@ export async function compressImageBatch(
         const originalSize = originalBuffer.length;
 
         const compressedBuffer = await sharp(originalBuffer)
+          // Preserve EXIF (incl. DateTimeOriginal) — sharp strips all metadata by
+          // default on re-encode. Current field cameras ship EXIF-less JPEGs so
+          // this is a no-op today, but it stops compression from destroying capture
+          // time for any camera that does embed it.
+          .keepExif()
           .jpeg({ quality: COMPRESSION_QUALITY })
           .toBuffer();
 
@@ -523,9 +528,11 @@ export async function compressImageBatch(
           return { saved: 0 };
         }
 
-        // Upload to Drive only for standalone compression
+        // Upload to Drive only for standalone compression. Preserve the original
+        // modifiedTime so occupancy's file_modified capture-day fallback isn't
+        // shifted to the compression date.
         if (options.uploadToDrive && img.driveFileId) {
-          await updateFileContent(img.driveFileId, compressedBuffer, "image/jpeg");
+          await updateFileContent(img.driveFileId, compressedBuffer, "image/jpeg", img.fileModified);
         }
 
         // Always write to cache
@@ -1121,8 +1128,9 @@ export async function revertJobInternal(
             throw new Error("Restored revision is not a valid image");
           }
 
-          // Upload restored original back to Drive
-          await updateFileContent(img.driveFileId!, originalBuffer, "image/jpeg");
+          // Upload restored original back to Drive, preserving the original
+          // modifiedTime (occupancy reads file_modified as a capture-day fallback).
+          await updateFileContent(img.driveFileId!, originalBuffer, "image/jpeg", img.fileModified);
 
           // Delete cached/thumbnail files
           const cachePath = img.path || path.join(CACHE_BASE, String(deploymentId), img.filename);

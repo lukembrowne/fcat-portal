@@ -165,8 +165,31 @@ export async function refreshUploadCountsInternal(
 }
 
 /**
- * Match deployments against ODK install/retrieve submissions, filling NULL
- * fields only. Caller is responsible for authorization.
+ * Decide whether an ODK-derived retrieval date should be written to a
+ * deployment's `date_end`. ODK is the authoritative source for retrieval dates,
+ * so a corrected retrieve_sensors submission must be able to overwrite an
+ * existing (wrong) value — a plain fill-null guard froze bad dates forever. The
+ * one exception is a manual edit: never clobber a value the user set by hand.
+ *
+ *  - no retrieval, or it already matches → nothing to do
+ *  - date_end is null → fill it (any source)
+ *  - date_end set + source is `manual` → preserve the user's edit
+ *  - date_end set + source is odk/auto → overwrite with the newer ODK value
+ */
+export function shouldUpdateDateEnd(
+  dep: { dateEnd: string | null; metadataSource: string | null },
+  retrieval: string | undefined,
+): retrieval is string {
+  if (!retrieval || retrieval === dep.dateEnd) return false;
+  if (dep.dateEnd == null) return true;
+  return dep.metadataSource !== "manual";
+}
+
+/**
+ * Match deployments against ODK install/retrieve submissions. Fills NULL fields,
+ * and propagates a changed ODK retrieval date to `date_end` unless it was set
+ * manually (see {@link shouldUpdateDateEnd}). Caller is responsible for
+ * authorization.
  */
 export async function matchOdkDeploymentsInternal(
   deploymentIds: number[]
@@ -259,7 +282,7 @@ export async function matchOdkDeploymentsInternal(
 
     if (!sub) {
       const retrieval = retrievalMap.get(normalizedName);
-      if (!dep.dateEnd && retrieval) {
+      if (shouldUpdateDateEnd(dep, retrieval)) {
         const retUpdates: Record<string, unknown> = {
           dateEnd: retrieval,
           updatedAt: new Date(),
@@ -299,7 +322,12 @@ export async function matchOdkDeploymentsInternal(
     if (!dep.dateStart && sub.dateInstalled) updates.dateStart = sub.dateInstalled;
 
     const retrieval = retrievalMap.get(normalizedName);
-    if (!dep.dateEnd && retrieval) {
+    // Propagate the ODK retrieval date, not just fill a null. retrieve_sensors is
+    // submitted (and often corrected) AFTER the install match runs, so a fill-null
+    // guard left a wrong-but-non-null date_end frozen forever (REF-001: stuck at
+    // the install date until a re-link). ODK is authoritative for odk-sourced rows,
+    // so overwrite when it differs — but never clobber a manual edit.
+    if (shouldUpdateDateEnd(dep, retrieval)) {
       updates.dateEnd = retrieval;
     }
 

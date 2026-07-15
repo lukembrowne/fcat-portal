@@ -289,7 +289,8 @@ const CAMERA_TRAP_DDL =
     common_name TEXT NOT NULL,
     spanish_name TEXT,
     taxonomic_rank TEXT NOT NULL DEFAULT 'species',
-    type TEXT NOT NULL DEFAULT 'mammal'
+    type TEXT NOT NULL DEFAULT 'mammal',
+    iucn_status TEXT
   );
 
   CREATE TABLE activity_log (

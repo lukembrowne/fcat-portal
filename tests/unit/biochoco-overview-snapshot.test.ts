@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  coarsenCoord,
+  exactCoord,
   isRealSpecies,
   siteCode,
   summarizeCameraSpecies,
@@ -19,15 +19,15 @@ describe("siteCode (privacy: landowner names never leak)", () => {
   });
 });
 
-describe("coarsenCoord (privacy: exact camera locations hidden)", () => {
-  it("rounds to 2 decimals (~1.1km)", () => {
-    expect(coarsenCoord(0.123456)).toBe(0.12);
-    expect(coarsenCoord(-79.98765)).toBe(-79.99);
+describe("exactCoord (sampling sites shown at full precision)", () => {
+  it("passes finite coordinates through unchanged", () => {
+    expect(exactCoord(0.123456)).toBe(0.123456);
+    expect(exactCoord(-79.98765)).toBe(-79.98765);
   });
 
   it("passes null / NaN through as null", () => {
-    expect(coarsenCoord(null)).toBeNull();
-    expect(coarsenCoord(Number.NaN)).toBeNull();
+    expect(exactCoord(null)).toBeNull();
+    expect(exactCoord(Number.NaN)).toBeNull();
   });
 });
 

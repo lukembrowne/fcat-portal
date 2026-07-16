@@ -4,7 +4,7 @@ import { sql } from "drizzle-orm";
 import { log } from "@/lib/log";
 import type { CuratedAudioClip, CuratedImage, ReportSnapshot, ReportStats } from "./snapshot-types";
 import {
-  coarsenCoord,
+  exactCoord,
   resolveCuratedAudio,
   resolveCuratedImages,
   siteCode,
@@ -12,6 +12,7 @@ import {
   type EffectiveSpeciesRow,
   type SpeciesMeta,
 } from "./snapshot-transforms";
+import { countSitesByHabitat, habitatForSite } from "./habitat";
 
 // BioChoco = ct_projects.id 1 (documented convention; matches extract.mjs).
 const PROJECT_ID = 1;
@@ -27,8 +28,8 @@ function num(v: unknown): number {
 
 /**
  * Compute the outward-safe BioChoco stat payload from live tables. Ported from
- * ~/apps/biochoco-report/extract.mjs. Emits site codes only and coarsened
- * coordinates — no landowner names, no precise locations.
+ * ~/apps/biochoco-report/extract.mjs. Emits site codes only (no landowner
+ * names); sampling-site coordinates are shown at full precision by FCAT's call.
  */
 export async function computeStats(): Promise<ReportStats> {
   const project =
@@ -55,11 +56,13 @@ export async function computeStats(): Promise<ReportStats> {
     audio: num(rs?.audio),
     climate: num(rs?.climate),
   };
-  const distinctSites = num(
-    (await db.get<{ n: number }>(sql`
-      SELECT COUNT(DISTINCT substr(name, 1, instr(name || '_', '_') - 1)) n
-        FROM biochoco_deployments WHERE ${DEP_SCOPE}`))?.n,
-  );
+  // Distinct site codes → per-habitat site counts via the ODK-derived map.
+  const distinctSiteCodes = (
+    await db.all<{ name: string }>(sql`
+      SELECT DISTINCT name FROM biochoco_deployments WHERE ${DEP_SCOPE}`)
+  ).map((r) => siteCode(r.name));
+  const distinctSites = new Set(distinctSiteCodes).size;
+  const habitatCounts = countSitesByHabitat(distinctSiteCodes);
   const byStatus = (
     await db.all<{ status: string; n: number }>(sql`
       SELECT status, COUNT(*) n FROM biochoco_deployments WHERE ${DEP_SCOPE}
@@ -138,6 +141,17 @@ export async function computeStats(): Promise<ReportStats> {
   const { cameraRealSpecies, cameraSpeciesByType, cameraTopSpecies } = summarizeCameraSpecies(
     effRows,
     speciesMeta,
+  );
+  // Scalar total of human-reviewed identifications (mirrors effRows' join, no group-by).
+  const identificationsReviewed = num(
+    (await db.get<{ n: number }>(sql`
+      SELECT COUNT(*) n
+        FROM biochoco_identifications i
+        JOIN biochoco_detections det ON det.id = i.detection_id
+        JOIN biochoco_images im ON im.id = det.image_id
+        JOIN biochoco_deployments d ON d.id = im.deployment_id
+       WHERE d.ct_project_id = ${PROJECT_ID}
+         AND i.verification_status IN ('verified', 'corrected')`))?.n,
   );
 
   // ---- audio ----
@@ -232,9 +246,11 @@ export async function computeStats(): Promise<ReportStats> {
       status: string;
       latitude: number | null;
       longitude: number | null;
+      date_start: string | null;
+      date_end: string | null;
       detections: number;
     }>(sql`
-      SELECT d.name, d.status, d.latitude, d.longitude,
+      SELECT d.name, d.status, d.latitude, d.longitude, d.date_start, d.date_end,
              (SELECT COUNT(*) FROM biochoco_detections det
                 JOIN biochoco_images im ON im.id = det.image_id
                WHERE im.deployment_id = d.id) AS detections
@@ -244,8 +260,11 @@ export async function computeStats(): Promise<ReportStats> {
   ).map((d) => ({
     code: siteCode(d.name),
     status: d.status,
-    lat: coarsenCoord(d.latitude),
-    lng: coarsenCoord(d.longitude),
+    habitat: habitatForSite(siteCode(d.name)),
+    lat: exactCoord(d.latitude),
+    lng: exactCoord(d.longitude),
+    dateStart: d.date_start,
+    dateEnd: d.date_end,
     detections: num(d.detections),
   }));
 
@@ -255,6 +274,7 @@ export async function computeStats(): Promise<ReportStats> {
     retrievedCount,
     retrievedSensors,
     distinctSites,
+    habitatCounts,
     byStatus,
     samplingSpan,
     cameraTrapDays,
@@ -262,6 +282,7 @@ export async function computeStats(): Promise<ReportStats> {
     totalDetections,
     cameraRealSpecies,
     cameraSpeciesByType,
+    identificationsReviewed,
     cameraTopSpecies,
     audio,
     audioSpeciesCount,

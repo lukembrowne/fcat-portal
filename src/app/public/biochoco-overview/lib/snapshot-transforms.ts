@@ -32,12 +32,13 @@ export function siteCode(name: string): string {
 }
 
 /**
- * Coarsen a coordinate for public display. Rounding to 2 decimals (~1.1 km)
- * hides exact camera locations while keeping the reserve-scale map faithful.
+ * Pass a coordinate through for public display, guarding null/NaN only.
+ * Sampling-site coordinates are shown at full precision (FCAT's call — the
+ * exact deployment locations are intentionally public on the map).
  */
-export function coarsenCoord(value: number | null): number | null {
+export function exactCoord(value: number | null): number | null {
   if (value == null || Number.isNaN(value)) return null;
-  return Math.round(value * 100) / 100;
+  return value;
 }
 
 /**

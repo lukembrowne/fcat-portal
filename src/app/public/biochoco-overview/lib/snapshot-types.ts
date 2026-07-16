@@ -29,8 +29,11 @@ export interface CameraSpeciesRow {
 export interface DeploymentPoint {
   code: string;
   status: string;
+  habitat: string;
   lat: number | null;
   lng: number | null;
+  dateStart: string | null;
+  dateEnd: string | null;
   detections: number;
 }
 
@@ -40,6 +43,8 @@ export interface ReportStats {
   retrievedCount: number;
   retrievedSensors: { cam: number; audio: number; climate: number };
   distinctSites: number;
+  /** Distinct sites per habitat key (from the ODK-derived site→habitat map). */
+  habitatCounts: Record<string, number>;
   byStatus: { status: string; n: number }[];
   samplingSpan: { start: string | null; end: string | null };
   cameraTrapDays: number;
@@ -47,6 +52,8 @@ export interface ReportStats {
   totalDetections: number;
   cameraRealSpecies: number;
   cameraSpeciesByType: Record<string, number>;
+  /** Count of verified + corrected camera identifications (human-reviewed). */
+  identificationsReviewed: number;
   cameraTopSpecies: CameraSpeciesRow[];
   audio: { files: number; bytes: number; deployments: number };
   audioSpeciesCount: number;

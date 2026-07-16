@@ -1,11 +1,14 @@
 /**
  * Bilingual copy for the public BioChoco overview page.
  *
+ * This is a faithful port of the standalone collaborator report
+ * (~/Desktop/BioChoco-Collaborator-Report.html): the ENGLISH strings are the
+ * Desktop text verbatim; the SPANISH is drafted to match, pending FCAT review.
+ *
  * No i18n library — parallel `en` / `es` objects with an identical key shape,
  * matching the portal's hardcoded-strings convention. Numbers are injected from
- * the snapshot at render time and are language-agnostic; only labels live here.
- *
- * The Spanish is a draft pending FCAT review. Edit either language independently.
+ * the snapshot at render time via `{token}` placeholders the shell interpolates;
+ * only labels/prose live here. Habitat names/descriptions live in `lib/habitat.ts`.
  */
 
 import type { Lang } from "./lib/snapshot-types";
@@ -16,48 +19,112 @@ export interface Contact {
   email: string;
 }
 
-export interface ReportContent {
-  eyebrow: string;
+export interface TitledBody {
   title: string;
-  subtitle: string;
-  intro: string;
+  body: string;
+}
 
-  statLabels: {
-    deployments: string;
-    deploymentsSub: string; // "{cam} camera · {audio} audio · {climate} climate" scaffold label
-    sites: string;
-    cameraSpecies: string;
-    audioSpecies: string;
-    audioSpeciesSub: string;
-    detections: string;
-    cameraTrapDays: string;
-    iButtonReadings: string;
+export interface MethodCard {
+  title: string;
+  model: string;
+  body: string;
+}
+
+export interface GalleryShot {
+  /** Screenshot filename under public/biochoco-overview/gallery/ (same value in en/es). */
+  file: string;
+  addr: string;
+  title: string;
+  caption: string;
+}
+
+export interface StatLabel {
+  /** Fixed label under the number. */
+  label: string;
+  /** Sub-line; may contain `{token}` placeholders interpolated in the shell. */
+  sub: string;
+}
+
+export interface ReportContent {
+  hero: {
+    eyebrow: string;
+    title: string;
+    sub: string;
+    liveDate: string; // "Data current {date}"
+    metaSensors: string;
   };
 
-  learn: { heading: string; body: string[] };
-  methods: { heading: string; body: string[] };
+  learn: {
+    heading: string;
+    intro: string;
+    objectives: { num: string; title: string; body: string }[]; // 4
+    peopleHeading: string;
+    people: string;
+  };
+
+  methods: {
+    heading: string;
+    intro: string;
+    cards: MethodCard[]; // 4
+    habitatHead: { title: string; body: string };
+    sitesSampledOne: string; // "site sampled"
+    sitesSampledMany: string; // "sites sampled"
+  };
+
+  stats: {
+    eyebrow: string;
+    heading: string;
+    spanLine: string; // "... covering {span}."
+    tiles: StatLabel[]; // 7, in Desktop order
+    note: string; // statNote template with {deploymentCount} {retrievedCount} {inField}
+  };
+
+  map: {
+    heading: string;
+    note: string;
+    legendTitle: string;
+  };
 
   species: {
     heading: string;
-    cameraHeading: string;
-    audioHeading: string;
-    audioCaveat: string;
-    detectionsLabel: string;
+    intro: string;
+    onCamera: string;
+    bySound: string;
+    camCap: string; // "{n} species identified so far. ..."
+    audCap: string; // "Most-detected birds across {n} recordings:"
+    audNote: string; // "... more than {n} candidate bird species. ..."
   };
 
-  media: {
+  bonus: {
     heading: string;
     photosHeading: string;
     audioHeading: string;
-    empty: string;
   };
 
-  map: { heading: string; note: string };
+  platform: {
+    heading: string;
+    intro: string;
+    gallery: GalleryShot[]; // 4
+  };
 
-  collaborate: { heading: string; body: string[]; contactsHeading: string };
-  contacts: Contact[];
+  collaborate: {
+    heading: string;
+    intro: string;
+    oppListTitle: string;
+    oppList: TitledBody[]; // 5
+    network: string;
+    ctaHeading: string;
+    ctaBody: string;
+    contactsHeading: string;
+  };
 
-  footer: string;
+  contacts: Contact[]; // 3
+
+  footer: {
+    org: string;
+    tagline: string;
+    date: string; // "Data current as of {date}"
+  };
 
   ui: {
     toLanguage: string; // label for the toggle button that switches AWAY
@@ -69,79 +136,201 @@ export interface ReportContent {
   };
 }
 
-const contacts: Contact[] = [
-  { name: "Luke Browne", role: "Research Lead", email: "lukebrowne@fcat-ecuador.org" },
-  { name: "Luis Carrasco", role: "Reserve Director", email: "luiscarrasco@fcat-ecuador.org" },
-  { name: "Jordan Karubian", role: "Co-Founder", email: "jordankarubian@fcat-ecuador.org" },
-];
-
 const en: ReportContent = {
-  eyebrow: "BioChoco · Ecuadorian Chocó",
-  title: "A living record of one of the world's richest rainforests",
-  subtitle:
-    "FCAT runs a landscape-scale biodiversity monitoring network across forest, cacao agroforestry, and restoration in the Ecuadorian Chocó. This is an open invitation to build on it.",
-  intro:
-    "Cameras, acoustic recorders, and microclimate loggers sample sites across a working conservation landscape. The data below is live from our field program — we are looking for researchers to collaborate, ask new questions, and help turn it into science.",
-
-  statLabels: {
-    deployments: "monitoring deployments",
-    deploymentsSub: "camera · audio · climate",
-    sites: "field sites",
-    cameraSpecies: "camera species",
-    audioSpecies: "candidate audio species",
-    audioSpeciesSub: "automated, pending review",
-    detections: "wildlife detections",
-    cameraTrapDays: "camera-trap-days",
-    iButtonReadings: "microclimate readings",
+  hero: {
+    eyebrow: "",
+    title: "BioChocó",
+    sub: "An integrated biodiversity monitoring network across a forest-to-farm landscape in the Chocó of western Ecuador.",
+    liveDate: "Data current {date}",
+    metaSensors: "Camera traps · passive acoustics · habitat · endangered species",
   },
 
   learn: {
-    heading: "What we're trying to learn",
-    body: [
-      "How does biodiversity respond as land shifts between primary forest, regenerating forest, cacao agroforestry, and restoration? Which management choices recover the most biodiversity per hectare — and per dollar?",
-      "We model occupancy of birds, mammals, and soundscapes across this gradient, and track how a connected reserve can knit fragmented habitat back together.",
+    heading: "Objectives",
+    intro:
+      "The Chocó is one of the most biodiverse rainforests on Earth, and more than 95% of its original forest is already gone. What remains is a mosaic of forest, cacao farms, and pasture. How does biodiversity respond to these shifts in land use? How can we design conservation interventions to maximize benefits for local communities and biodiversity? BioChocó is working to answer these questions.",
+    objectives: [
+      {
+        num: "01",
+        title: "Track conservation outcomes",
+        body: "Follow the real-time conservation outcomes of FCAT's corridor-building and restoration interventions, so we can see how biodiversity recovers as it happens.",
+      },
+      {
+        num: "02",
+        title: "Understand land-use change",
+        body: "Measure how biodiversity and ecosystems respond to land-use change across a gradient of land use types, from primary forest through cacao agroforestry to open pasture.",
+      },
+      {
+        num: "03",
+        title: "Assess priority species",
+        body: "Provide scientifically rigorous habitat-use assessments for the Chocó's endangered and keystone species across birds, mammals, frogs, and insects.",
+      },
+      {
+        num: "04",
+        title: "Elevate the Chocó globally",
+        body: "Raise global awareness of and engagement with this understudied rainforest through an open, real-time data platform.",
+      },
     ],
+    peopleHeading: "Part of a holistic conservation program",
+    people:
+      "BioChocó is one part of a broader, community-led conservation program: FCAT has worked run an award-winning conservation and research program since 2003, employs two dozen local residents, and pairs field research with education and capacity building. Our aproach has produced more than 50 peer-reviewed scientific papers with local coauthors and awards including the Whitley Prize for Nature. BioChocó is run by four local field biologyist - FCATer@s - and works with 50 local farmers who host stations on their land. ",
   },
+
   methods: {
-    heading: "How the monitoring works",
-    body: [
-      "Camera traps record wildlife day and night; MegaDetector and species classifiers surface animals from millions of frames, with expert review of the labels that matter.",
-      "Passive acoustic recorders capture the dawn-to-dusk soundscape; BirdNET proposes species that experts then confirm.",
-      "Microclimate loggers measure the temperature each sensor site actually experiences, grounding the biology in local conditions.",
+    heading: "How each biodiversity monitoring station works",
+    intro:
+      "Every biodiversity monitoring station within the Biochocó network is built around a GPS coordinate and a stack of automated sensors, so a single visit captures animals, sound, climate, and forest structure together.",
+    cards: [
+      {
+        title: "Motion-triggered camera",
+        model: "Trail camera · photo mode",
+        body: "Runs at least 30 days per deployment. We pass photos through a custom species classifier we fine-tuned for the Chocó and each image is reviewed and verified.",
+      },
+      {
+        title: "Passive acoustic recorder",
+        model: "Song Meter Micro 2 · 48 kHz",
+        body: "Records one minute in every ten, around the clock. Recordings run through BirdNET for species identification.",
+      },
+      {
+        title: "Microclimate logger",
+        model: "iButton Thermochron",
+        body: "Logs temperature at 30 minute intervals through the deployment, giving a paired record of the microclimate each camera and recorder experienced.",
+      },
+      {
+        title: "Habitat structure",
+        model: "Field survey · drone overflight",
+        body: "On the first visit the team measures canopy cover, tree size and density, and forest cover around each station, then links structure to what the sensors detect.",
+      },
     ],
+    habitatHead: {
+      title: "What habitats are we monitoring?",
+      body: "Monitoring stations are spread across the full gradient of land use types in the region, from primary and regenerating forest to open pasture, along with three cacao farming systems.",
+    },
+    sitesSampledOne: "site sampled",
+    sitesSampledMany: "sites sampled",
   },
 
-  species: {
-    heading: "What we're finding",
-    cameraHeading: "Most-detected camera species",
-    audioHeading: "Most-detected audio species",
-    audioCaveat: "Audio species are automated candidates (confidence ≥ 0.8) pending expert review, not a confirmed list.",
-    detectionsLabel: "detections",
-  },
-
-  media: {
-    heading: "From the field",
-    photosHeading: "Camera-trap photographs",
-    audioHeading: "Field recordings",
-    empty: "Curated photos and recordings are being selected and will appear here soon.",
+  stats: {
+    eyebrow: "",
+    heading: "Where the network stands today",
+    spanLine: "Every number here comes straight from the FCAT data portal, covering {span}.",
+    tiles: [
+      { label: "monitoring deployments", sub: "{cam} camera · {audio} audio · {climate} climate" },
+      { label: "camera-trap days", sub: "{span}" },
+      { label: "camera-trap photos", sub: "collected in the field" },
+      { label: "identifications reviewed", sub: "verified or corrected by staff" },
+      { label: "species on camera", sub: "{mammals} mammals · {birds} birds" },
+      { label: "audio recordings", sub: "{tb} TB of sound" },
+      { label: "microclimate readings", sub: "{loggers} temperature loggers" },
+    ],
+    note: "{deploymentCount} sensor deployments have been established this field season; the {retrievedCount} shown above have completed their run and been retrieved, and about {inField} are still collecting in the field. Because sensors run on a rotating schedule, these totals keep climbing — the camera, audio, and microclimate counts above reflect the data retrieved and processed so far.",
   },
 
   map: {
-    heading: "Where we sample",
-    note: "Sites are shown at reserve scale; exact camera locations are not published.",
+    heading: "Where we are working",
+    note: "Each point is a monitoring deployment, colored by habitat type. Pan and zoom to explore; the dashed line marks the FCAT reserve boundary.",
+    legendTitle: "Habitat",
+  },
+
+  species: {
+    heading: "Who is showing up",
+    intro:
+      "Camera identifications are verified or corrected by FCAT biologists. Bird detections come from automated BirdNET analysis, filtered to a confidence of 0.8 or higher.",
+    onCamera: "On camera",
+    bySound: "By sound",
+    camCap: "{n} species identified so far. The most-detected wild species:",
+    audCap: "Most-detected birds across {n} recordings:",
+    audNote:
+      "At a confidence of 0.8 or higher, BirdNET has flagged calls matching more than {n} candidate bird species. These automated detections still await expert review, so treat the wider list as a starting point rather than a confirmed species count.",
+  },
+
+  bonus: {
+    heading: "From the field",
+    photosHeading: "Camera-trap photographs",
+    audioHeading: "Field recordings",
+  },
+
+  platform: {
+    heading: "One open platform for the whole network",
+    intro:
+      "FCAT is building a virtual living laboratory: a single portal that pulls raw files from Google Drive, runs AI detection and our fine-tuned BioCLIP classifier, lets biologists verify results, and publishes them as open data in the Camtrap DP standard for GBIF and the Environmental Data Initiative. The same system tracks the field schedule, the microclimate records, and the training of the classifier itself. The aim is to share what the sensors capture, imagery, sound, climate, and biodiversity, as open data for the wider research community.",
+    gallery: [
+      {
+        file: "results-by-site.jpg",
+        addr: "FCAT Portal · Resultados por sitio",
+        title: "Results by site",
+        caption:
+          "Every deployment on one habitat-colored map, with camera, temperature, and audio readiness tracked per site.",
+      },
+      {
+        file: "occupancy.jpg",
+        addr: "FCAT Portal · Ocupación",
+        title: "Live occupancy modeling",
+        caption:
+          "Single- and multi-species occupancy models that refit automatically as new camera and audio detections arrive, rendered as predicted-occurrence maps.",
+      },
+      {
+        file: "species-classifier.jpg",
+        addr: "FCAT Portal · Clasificador de especies",
+        title: "Custom species classifier",
+        caption:
+          "A fine-tuned BioCLIP model built into the camera-trap annotation pipeline — versioned and benchmarked per species against earlier models.",
+      },
+      {
+        file: "microclimate.jpg",
+        addr: "FCAT Portal · Microclima",
+        title: "Microclimate records",
+        caption: "Each iButton logger's temperature series, deployment window, and coverage, per site.",
+      },
+    ],
   },
 
   collaborate: {
-    heading: "Collaborate with us",
-    body: [
-      "This dataset is open to researchers. If you work on occupancy, bioacoustics, agroforestry, restoration ecology, or Chocó biodiversity — or want to bring a new question to it — we'd like to hear from you.",
-      "Students, postdocs, and PIs are all welcome. Tell us what you'd explore.",
+    heading: "Where collaborators come in",
+    intro:
+      "The network is designed as a shared foundation. The sensors run, the data lands in an open portal, and we want researchers to build on it.",
+    oppListTitle: "Opportunities for collaboration",
+    oppList: [
+      {
+        title: "Occupancy and community modeling",
+        body: "Repeated visits across the land-use gradient support single- and multi-species occupancy and diversity work on birds, mammals, frogs, and insects, drawing on verified camera-trap species records — dates, coordinates, and imagery — in the Camtrap DP standard and published to GBIF and the Environmental Data Initiative.",
+      },
+      {
+        title: "Bioacoustics",
+        body: "A large acoustic archive — continuous day-and-night recordings with BirdNET output — for community- and species-level analysis, with expert point counts from ornithologist Juan Freile for ground-truthing.",
+      },
+      {
+        title: "Machine learning and computer vision",
+        body: "A labeled, growing dataset for classifier training and detection benchmarks, building on our fine-tuned BioCLIP and MegaDetector.",
+      },
+      {
+        title: "Carbon, habitat, and restoration ecology",
+        body: "Forest-structure data — paired with per-station temperature and microclimate series — tied to two active restoration and agroforestry experiments.",
+      },
+      {
+        title: "Socio-ecological research",
+        body: "Work at the human-environment interface, alongside FCAT's community and land-use research.",
+      },
     ],
+    network:
+      "This builds on an established network. FCAT works with computer scientists and ecologists at Tulane University, researchers at Universidad San Francisco de Quito, the Cornell Lab of Ornithology, and the twelve-member Chocó Alliance, so collaborators plug into an active, well-connected effort.",
+    ctaHeading: "Let's build on this together",
+    ctaBody:
+      "If your research could use camera-trap, acoustic, or microclimate data from a Chocó forest landscape, or you want to co-design a study around the network, we would like to talk.",
     contactsHeading: "Get in touch",
   },
-  contacts,
 
-  footer: "FCAT — Fundación para la Conservación de los Andes Tropicales",
+  contacts: [
+    { name: "Luke Browne", role: "Monitoring lead", email: "lukebrowne@fcat-ecuador.org" },
+    { name: "Luis Carrasco", role: "FCAT Reserve Director", email: "luiscarrasco@fcat-ecuador.org" },
+    { name: "Jordan Karubian", role: "FCAT co-founder", email: "jordankarubian@fcat-ecuador.org" },
+  ],
+
+  footer: {
+    org: "Fundación para la Conservación de los Andes Tropicales",
+    tagline: "BioChoco biodiversity monitoring network · Chocó, Ecuador",
+    date: "Data current as of {date}",
+  },
 
   ui: {
     toLanguage: "Español",
@@ -154,72 +343,201 @@ const en: ReportContent = {
 };
 
 const es: ReportContent = {
-  eyebrow: "BioChoco · Chocó ecuatoriano",
-  title: "Un registro vivo de uno de los bosques más ricos del planeta",
-  subtitle:
-    "FCAT mantiene una red de monitoreo de biodiversidad a escala de paisaje en bosque, agroforestería de cacao y restauración en el Chocó ecuatoriano. Esta es una invitación abierta a construir sobre ella.",
-  intro:
-    "Cámaras, grabadoras acústicas y registradores de microclima muestrean sitios en un paisaje de conservación productivo. Los datos a continuación provienen en vivo de nuestro programa de campo — buscamos investigadores para colaborar, plantear nuevas preguntas y ayudar a convertirlos en ciencia.",
-
-  statLabels: {
-    deployments: "instalaciones de monitoreo",
-    deploymentsSub: "cámara · audio · clima",
-    sites: "sitios de campo",
-    cameraSpecies: "especies en cámara",
-    audioSpecies: "especies candidatas en audio",
-    audioSpeciesSub: "automáticas, pendientes de revisión",
-    detections: "detecciones de fauna",
-    cameraTrapDays: "días-cámara-trampa",
-    iButtonReadings: "registros de microclima",
+  hero: {
+    eyebrow: "FCAT · Chocó, Ecuador",
+    title: "BioChoco",
+    sub: "Una red integrada de monitoreo de biodiversidad a lo largo de un paisaje de bosque a finca en el Chocó del occidente de Ecuador.",
+    liveDate: "Datos al {date}",
+    metaSensors: "Cámaras trampa · acústica pasiva · microclima · hábitat",
   },
 
   learn: {
     heading: "Qué buscamos aprender",
-    body: [
-      "¿Cómo responde la biodiversidad cuando la tierra cambia entre bosque primario, bosque en regeneración, agroforestería de cacao y restauración? ¿Qué decisiones de manejo recuperan más biodiversidad por hectárea — y por dólar?",
-      "Modelamos la ocupación de aves, mamíferos y paisajes sonoros a lo largo de este gradiente, y seguimos cómo una reserva conectada puede volver a unir hábitats fragmentados.",
+    intro:
+      "El Chocó es uno de los bosques lluviosos más biodiversos de la Tierra, y más del 90% de su bosque original ya se ha perdido. Lo que queda es un mosaico de bosque, fincas de cacao y pastizal. FCAT lleva a cabo aquí dos experimentos a escala de paisaje, uno que restaura tierra degradada y otro que replantea cómo se cultiva el cacao, para responder una pregunta difícil: ¿qué métodos recuperan más biodiversidad por cada dólar invertido? BioChoco mide la respuesta.",
+    objectives: [
+      {
+        num: "01",
+        title: "Seguir los resultados de conservación",
+        body: "Seguir en tiempo real los resultados de conservación de las intervenciones de construcción de corredores y restauración de FCAT, para ver qué recupera la biodiversidad a medida que sucede.",
+      },
+      {
+        num: "02",
+        title: "Entender el cambio de uso del suelo",
+        body: "Medir cómo responden la biodiversidad y los ecosistemas al cambio de uso del suelo a lo largo del gradiente, desde el bosque primario, pasando por la agroforestería de cacao, hasta el pastizal abierto.",
+      },
+      {
+        num: "03",
+        title: "Evaluar especies prioritarias",
+        body: "Proveer evaluaciones de uso de hábitat científicamente rigurosas para las especies amenazadas y paraguas del Chocó, en aves, mamíferos, ranas e insectos.",
+      },
+      {
+        num: "04",
+        title: "Elevar el Chocó a escala global",
+        body: "Aumentar la conciencia y la participación global en torno a este bosque poco estudiado mediante una plataforma de datos abierta y en tiempo real.",
+      },
     ],
+    peopleHeading: "Parte de un programa de conservación integral",
+    people:
+      "Cuatro FCATero/as, biólogos de campo locales, llevan el monitoreo en el campo, trabajando con alrededor de 50 agricultores que albergan estaciones en sus tierras. El monitoreo es una parte de un programa de conservación más amplio y liderado por la comunidad: FCAT trabaja aquí desde 2003, emplea a dos docenas de residentes locales, y combina la investigación de campo con educación y desarrollo de capacidades. Ese modelo ha producido más de 50 artículos revisados por pares con coautores locales y reconocimientos como el Premio Whitley para la Naturaleza.",
   },
+
   methods: {
-    heading: "Cómo funciona el monitoreo",
-    body: [
-      "Las cámaras trampa registran fauna de día y de noche; MegaDetector y clasificadores de especies extraen animales de millones de fotogramas, con revisión experta de las etiquetas clave.",
-      "Las grabadoras acústicas pasivas capturan el paisaje sonoro del amanecer al anochecer; BirdNET propone especies que los expertos luego confirman.",
-      "Los registradores de microclima miden la temperatura que realmente experimenta cada sitio, anclando la biología a las condiciones locales.",
+    heading: "Cómo funciona cada estación",
+    intro:
+      "Cada estación se construye alrededor de una coordenada GPS y un conjunto de sensores automáticos, de modo que una sola visita captura animales, sonido, clima y estructura del bosque en conjunto.",
+    cards: [
+      {
+        title: "Cámara activada por movimiento",
+        model: "Cámara trampa · modo foto",
+        body: "Funciona al menos 30 días por instalación. Las fotos pasan por MegaDetector para encontrar animales, y luego por un clasificador de especies afinado para el Chocó (un modelo BioCLIP entrenado con nuestras propias imágenes verificadas). Un biólogo revisa y corrige cada identificación.",
+      },
+      {
+        title: "Grabadora acústica pasiva",
+        model: "Song Meter Micro 2 · 48 kHz",
+        body: "Graba un minuto de cada diez, durante todo el día. Las grabaciones pasan por BirdNET para la identificación de aves.",
+      },
+      {
+        title: "Registrador de microclima",
+        model: "iButton Thermochron",
+        body: "Registra la temperatura a intervalos fijos durante toda la instalación, dando un registro emparejado del microclima que experimentó cada cámara y grabadora.",
+      },
+      {
+        title: "Estructura del hábitat",
+        model: "Muestreo de campo · sobrevuelo con dron",
+        body: "En la primera visita el equipo mide la cobertura del dosel, el tamaño y densidad de los árboles, y la cobertura boscosa alrededor de cada estación, y luego vincula la estructura con lo que detectan los sensores.",
+      },
     ],
+    habitatHead: {
+      title: "Siete tipos de hábitat a lo largo de un gradiente de uso del suelo",
+      body: "Las estaciones se distribuyen por todo el gradiente, desde bosque no perturbado hasta pastizal abierto, con los tres sistemas principales de cacao muestreados por separado. Las fotos provienen de los muestreos de hábitat del equipo de campo.",
+    },
+    sitesSampledOne: "sitio muestreado",
+    sitesSampledMany: "sitios muestreados",
   },
 
-  species: {
-    heading: "Qué estamos encontrando",
-    cameraHeading: "Especies más detectadas en cámara",
-    audioHeading: "Especies más detectadas en audio",
-    audioCaveat: "Las especies de audio son candidatas automáticas (confianza ≥ 0.8) pendientes de revisión experta, no una lista confirmada.",
-    detectionsLabel: "detecciones",
-  },
-
-  media: {
-    heading: "Desde el campo",
-    photosHeading: "Fotografías de cámara trampa",
-    audioHeading: "Grabaciones de campo",
-    empty: "Se están seleccionando fotos y grabaciones curadas que aparecerán aquí pronto.",
+  stats: {
+    eyebrow: "La primera temporada de campo",
+    heading: "Dónde se encuentra la red hoy",
+    spanLine: "Cada número aquí proviene directamente del portal de datos de FCAT, cubriendo {span}.",
+    tiles: [
+      { label: "instalaciones de monitoreo", sub: "{cam} cámara · {audio} audio · {climate} clima" },
+      { label: "días-cámara-trampa", sub: "{span}" },
+      { label: "fotos de cámara trampa", sub: "recolectadas en el campo" },
+      { label: "identificaciones revisadas", sub: "verificadas o corregidas por el equipo" },
+      { label: "especies en cámara", sub: "{mammals} mamíferos · {birds} aves" },
+      { label: "grabaciones de audio", sub: "{tb} TB de sonido" },
+      { label: "registros de microclima", sub: "{loggers} registradores de temperatura" },
+    ],
+    note: "Se han establecido {deploymentCount} instalaciones de sensores en esta temporada de campo; las {retrievedCount} mostradas arriba han completado su ciclo y han sido recogidas, y alrededor de {inField} siguen recolectando datos en el campo. Como los sensores funcionan en un calendario rotativo, estos totales siguen creciendo — los conteos de cámara, audio y microclima de arriba reflejan los datos recogidos y procesados hasta ahora.",
   },
 
   map: {
-    heading: "Dónde muestreamos",
-    note: "Los sitios se muestran a escala de reserva; no se publican las ubicaciones exactas de las cámaras.",
+    heading: "Dónde estamos trabajando",
+    note: "Cada punto es una instalación de monitoreo, coloreada por tipo de hábitat. Desplázate y haz zoom para explorar; la línea discontinua marca el límite de la reserva de FCAT.",
+    legendTitle: "Hábitat",
+  },
+
+  species: {
+    heading: "Quién está apareciendo",
+    intro:
+      "Las identificaciones de cámara son verificadas o corregidas por biólogos de FCAT. Las detecciones de aves provienen del análisis automático de BirdNET, filtradas a una confianza de 0.8 o superior.",
+    onCamera: "En cámara",
+    bySound: "Por sonido",
+    camCap: "{n} especies identificadas hasta ahora. Las especies silvestres más detectadas:",
+    audCap: "Aves más detectadas en {n} grabaciones:",
+    audNote:
+      "Con una confianza de 0.8 o superior, BirdNET ha marcado cantos que coinciden con más de {n} especies candidatas de aves. Estas detecciones automáticas aún esperan revisión experta, así que trata la lista más amplia como un punto de partida y no como un conteo confirmado de especies.",
+  },
+
+  bonus: {
+    heading: "Desde el campo",
+    photosHeading: "Fotografías de cámara trampa",
+    audioHeading: "Grabaciones de campo",
+  },
+
+  platform: {
+    heading: "Una plataforma abierta para toda la red",
+    intro:
+      "FCAT está construyendo un laboratorio viviente virtual: un único portal que trae archivos crudos desde Google Drive, ejecuta detección con IA y nuestro clasificador BioCLIP afinado, permite a los biólogos verificar resultados, y los publica como datos abiertos en el estándar Camtrap DP para GBIF y el Environmental Data Initiative. El mismo sistema gestiona el calendario de campo, los registros de microclima, y el entrenamiento del propio clasificador. El objetivo es compartir lo que capturan los sensores, imágenes, sonido, clima y biodiversidad, como datos abiertos para la comunidad investigadora en general.",
+    gallery: [
+      {
+        file: "results-by-site.jpg",
+        addr: "FCAT Portal · Resultados por sitio",
+        title: "Resultados por sitio",
+        caption:
+          "Cada instalación en un mapa coloreado por hábitat, con la preparación de cámara, temperatura y audio registrada por sitio.",
+      },
+      {
+        file: "occupancy.jpg",
+        addr: "FCAT Portal · Ocupación",
+        title: "Modelamiento de ocupación en vivo",
+        caption:
+          "Modelos de ocupación de una y varias especies que se reajustan automáticamente a medida que llegan nuevas detecciones de cámara y audio, presentados como mapas de ocurrencia predicha.",
+      },
+      {
+        file: "species-classifier.jpg",
+        addr: "FCAT Portal · Clasificador de especies",
+        title: "Clasificador de especies propio",
+        caption:
+          "Un modelo BioCLIP afinado integrado en el flujo de anotación de cámara trampa, versionado y evaluado por especie frente a modelos anteriores.",
+      },
+      {
+        file: "microclimate.jpg",
+        addr: "FCAT Portal · Microclima",
+        title: "Registros de microclima",
+        caption:
+          "La serie de temperatura de cada registrador iButton, su ventana de instalación y cobertura, por sitio.",
+      },
+    ],
   },
 
   collaborate: {
-    heading: "Colabora con nosotros",
-    body: [
-      "Este conjunto de datos está abierto a investigadores. Si trabajas en ocupación, bioacústica, agroforestería, ecología de la restauración o biodiversidad del Chocó — o quieres traer una nueva pregunta — nos gustaría saber de ti.",
-      "Estudiantes, postdoctorados e investigadores principales son bienvenidos. Cuéntanos qué explorarías.",
+    heading: "Dónde entran los colaboradores",
+    intro:
+      "La red está diseñada como una base compartida. Los sensores funcionan, los datos llegan a un portal abierto, y queremos que los investigadores construyan sobre ellos.",
+    oppListTitle: "Oportunidades de colaboración",
+    oppList: [
+      {
+        title: "Modelamiento de ocupación y comunidades",
+        body: "Las visitas repetidas a lo largo del gradiente de uso del suelo permiten trabajos de ocupación de una y múltiples especies y de diversidad en aves, mamíferos, ranas e insectos, a partir de registros de especies de cámara trampa verificados —fechas, coordenadas e imágenes— en el estándar Camtrap DP y publicados en GBIF y el Environmental Data Initiative.",
+      },
+      {
+        title: "Bioacústica",
+        body: "Un amplio archivo acústico —grabaciones continuas de día y de noche con resultados de BirdNET— para análisis a nivel de comunidad y de especie, con conteos por puntos de experto realizados por el ornitólogo Juan Freile para validación en campo.",
+      },
+      {
+        title: "Aprendizaje automático y visión por computadora",
+        body: "Un conjunto de datos etiquetado y en crecimiento para entrenar clasificadores y evaluar detección, construyendo sobre nuestro BioCLIP afinado y MegaDetector.",
+      },
+      {
+        title: "Carbono, hábitat y ecología de la restauración",
+        body: "Datos de estructura del bosque —emparejados con series de temperatura y microclima por estación— vinculados a dos experimentos activos de restauración y agroforestería.",
+      },
+      {
+        title: "Investigación socio-ecológica",
+        body: "Trabajo en la interfaz entre el ser humano y el ambiente, junto a la investigación comunitaria y de uso del suelo de FCAT.",
+      },
     ],
-    contactsHeading: "Contáctanos",
+    network:
+      "Esto se construye sobre una red ya establecida. FCAT trabaja con científicos de la computación y ecólogos de la Universidad de Tulane, investigadores de la Universidad San Francisco de Quito, el Cornell Lab of Ornithology, y la Alianza del Chocó de doce miembros, de modo que los colaboradores se conectan a un esfuerzo activo y bien vinculado.",
+    ctaHeading: "Construyamos sobre esto juntos",
+    ctaBody:
+      "Si tu investigación podría usar datos de cámara trampa, acústicos o de microclima de un paisaje boscoso del Chocó, o quieres co-diseñar un estudio en torno a la red, nos gustaría conversar.",
+    contactsHeading: "Ponte en contacto",
   },
-  contacts,
 
-  footer: "FCAT — Fundación para la Conservación de los Andes Tropicales",
+  contacts: [
+    { name: "Luke Browne", role: "Líder de monitoreo", email: "lukebrowne@fcat-ecuador.org" },
+    { name: "Luis Carrasco", role: "Director de la Reserva FCAT", email: "luiscarrasco@fcat-ecuador.org" },
+    { name: "Jordan Karubian", role: "Cofundador de FCAT", email: "jordankarubian@fcat-ecuador.org" },
+  ],
+
+  footer: {
+    org: "Fundación para la Conservación de los Andes Tropicales",
+    tagline: "Red de monitoreo de biodiversidad BioChoco · Chocó, Ecuador",
+    date: "Datos actualizados al {date}",
+  },
 
   ui: {
     toLanguage: "English",
@@ -234,4 +552,4 @@ const es: ReportContent = {
 export const CONTENT: Record<Lang, ReportContent> = { en, es };
 
 /** Default language: Spanish, the organization's working language. */
-export const DEFAULT_LANG: Lang = "es";
+export const DEFAULT_LANG: Lang = "en";

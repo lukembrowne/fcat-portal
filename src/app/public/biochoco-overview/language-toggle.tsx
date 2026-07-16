@@ -20,7 +20,7 @@ export function LanguageToggle({
       type="button"
       onClick={() => onToggle(next)}
       aria-label={`Switch language to ${CONTENT[next].ui.toLanguage}`}
-      className="rounded-full border border-border/60 px-3 py-1 text-sm font-medium transition-colors hover:bg-muted"
+      className="abtn"
     >
       {CONTENT[lang].ui.toLanguage}
     </button>

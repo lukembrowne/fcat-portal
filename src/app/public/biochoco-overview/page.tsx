@@ -12,27 +12,18 @@ const PUBLIC_BASE_URL =
   process.env.NEXT_PUBLIC_BASE_URL || "https://portal.fcat-ecuador.org";
 
 export async function generateMetadata(): Promise<Metadata> {
-  const snapshot = await getActiveReportSnapshot(BIOCHOCO_OVERVIEW_SLUG);
   const c = CONTENT[DEFAULT_LANG];
-  const heroId = snapshot?.images[0]?.imageId;
-  const images = heroId
-    ? [
-        {
-          url: `${PUBLIC_BASE_URL}/api/public/report-images/${heroId}?size=large`,
-          alt: c.title,
-        },
-      ]
-    : [];
+  const title = `${c.hero.title} — FCAT`;
 
   return {
-    title: `${c.title} — FCAT`,
-    description: c.subtitle,
+    title,
+    description: c.hero.sub,
     openGraph: {
-      title: c.title,
-      description: c.subtitle,
+      title: c.hero.title,
+      description: c.hero.sub,
       siteName: "Portal FCAT",
       type: "website",
-      images,
+      images: [{ url: `${PUBLIC_BASE_URL}/biochoco-overview/hero.jpg`, alt: c.hero.title }],
     },
   };
 }

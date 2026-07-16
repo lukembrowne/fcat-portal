@@ -70,12 +70,22 @@ export async function computeStats(): Promise<ReportStats> {
     (await db.get<{ start: string | null; end: string | null }>(sql`
       SELECT MIN(date_start) start, MAX(date_end) end
         FROM biochoco_deployments WHERE ${DEP_SCOPE}`)) ?? { start: null, end: null };
+  // Prefer the QA-validated sampling window (valid_* ?? date_*) so a camera that
+  // died early counts its real span, not the full install→retrieve interval —
+  // otherwise this published effort figure is over-reported. Same trim as the
+  // CSV export and occupancy pipeline. (samplingSpan above stays raw: it is the
+  // cross-sensor project date range, not camera effort.)
   const cameraTrapDays = Math.round(
     num(
       (await db.get<{ d: number }>(sql`
-        SELECT COALESCE(SUM(julianday(date_end) - julianday(date_start)), 0) d
+        SELECT COALESCE(SUM(
+                 julianday(COALESCE(valid_end, date_end))
+                 - julianday(COALESCE(valid_start, date_start))
+               ), 0) d
           FROM biochoco_deployments
-         WHERE ${DEP_SCOPE} AND date_start IS NOT NULL AND date_end IS NOT NULL`))?.d,
+         WHERE ${DEP_SCOPE}
+           AND COALESCE(valid_start, date_start) IS NOT NULL
+           AND COALESCE(valid_end, date_end) IS NOT NULL`))?.d,
     ),
   );
 

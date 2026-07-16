@@ -20,6 +20,8 @@ function dep(overrides: Partial<DeploymentRow> & { id: number }): DeploymentRow 
     longitude: -79.1,
     date_start: null,
     date_end: null,
+    valid_start: null,
+    valid_end: null,
     field_notes: null,
     ...overrides,
   };
@@ -80,5 +82,66 @@ describe("buildSites — strict ODK date clamp + anomaly", () => {
     const deployments = [dep({ id: 5, date_start: null, date_end: null })];
     const { sites } = buildSites(deployments, new Map());
     expect(sites).toHaveLength(0);
+  });
+
+  it("prefers the QA-validated window over the wider ODK install/retrieve window", () => {
+    // Retrieved on schedule after 30 days, but the camera only recorded 8 —
+    // the reviewer trimmed valid_* to the real sampling span (cf. GIZ-004).
+    const deployments = [
+      dep({
+        id: 6,
+        date_start: "2026-02-24",
+        date_end: "2026-03-25",
+        valid_start: "2026-03-04T09:59",
+        valid_end: "2026-03-12T10:35",
+      }),
+    ];
+    const windows = new Map([[6, { min: day("2026-03-04"), max: day("2026-03-12") }]]);
+
+    const { sites } = buildSites(deployments, windows);
+    expect(sites[0].windowStart.toISOString().slice(0, 10)).toBe("2026-03-04");
+    expect(sites[0].windowEnd.toISOString().slice(0, 10)).toBe("2026-03-12");
+  });
+
+  it("resolves each bound independently (valid_end fills in for a null date_end)", () => {
+    // date_end is null (retrieval not yet synced) but the reviewer set valid_end.
+    const deployments = [
+      dep({ id: 7, date_start: "2026-05-20", date_end: null, valid_end: "2026-06-20T02:18" }),
+    ];
+    const windows = new Map([[7, { min: day("2026-05-20"), max: day("2026-06-20") }]]);
+
+    const { sites } = buildSites(deployments, windows);
+    expect(sites[0].windowStart.toISOString().slice(0, 10)).toBe("2026-05-20");
+    expect(sites[0].windowEnd.toISOString().slice(0, 10)).toBe("2026-06-20");
+  });
+});
+
+describe("buildSites — audio stream uses file stamps, ignores valid_*", () => {
+  it("takes the audio file min/max, not the camera-QA'd valid_* window", () => {
+    // The camera was trimmed to 8 days (valid_*), but the recorder ran its own
+    // span. Audio must use its filename-derived min/max, not the camera trim.
+    const deployments = [
+      dep({
+        id: 10,
+        date_start: "2026-02-24",
+        date_end: "2026-03-25",
+        valid_start: "2026-03-04",
+        valid_end: "2026-03-12",
+      }),
+    ];
+    const windows = new Map([[10, { min: day("2026-02-24"), max: day("2026-03-25") }]]);
+
+    const { sites, anomalies } = buildSites(deployments, windows, "audio");
+    expect(sites[0].windowStart.toISOString().slice(0, 10)).toBe("2026-02-24");
+    expect(sites[0].windowEnd.toISOString().slice(0, 10)).toBe("2026-03-25");
+    // File span IS the window for audio, so there is nothing to flag.
+    expect(anomalies).toHaveLength(0);
+  });
+
+  it("falls back to ODK dates when a deployment has no audio files", () => {
+    const deployments = [dep({ id: 11, date_start: "2026-04-01", date_end: "2026-04-30" })];
+    const { sites } = buildSites(deployments, new Map(), "audio");
+    expect(sites[0].windowStart.toISOString().slice(0, 10)).toBe("2026-04-01");
+    expect(sites[0].windowEnd.toISOString().slice(0, 10)).toBe("2026-04-30");
   });
 });

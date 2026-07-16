@@ -262,6 +262,8 @@ export async function fetchSiteDetail(
           status: deployments.status,
           dateStart: deployments.dateStart,
           dateEnd: deployments.dateEnd,
+          validStart: deployments.validStart,
+          validEnd: deployments.validEnd,
         })
         .from(deployments)
         .where(
@@ -289,24 +291,29 @@ export async function fetchSiteDetail(
 
     const depIds = siteDeps.map((d) => d.id);
 
-    // Calculate camera trap days and date range
+    // Calculate camera trap days and date range. Prefer the QA-validated window
+    // (valid_* ?? date_*) so a camera that died early counts its real sampling
+    // span, not the full install→retrieve interval — otherwise effort is
+    // over-reported. Matches the trim used in the CSV export and occupancy.
     let totalCameraTrapDays = 0;
     let earliestStart: string | null = null;
     let latestEnd: string | null = null;
     for (const dep of siteDeps) {
-      if (dep.dateStart && dep.dateEnd) {
-        const start = new Date(dep.dateStart);
-        const end = new Date(dep.dateEnd);
+      const depStart = dep.validStart ?? dep.dateStart;
+      const depEnd = dep.validEnd ?? dep.dateEnd;
+      if (depStart && depEnd) {
+        const start = new Date(depStart);
+        const end = new Date(depEnd);
         const days = Math.ceil(
           (end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)
         );
         if (days > 0) totalCameraTrapDays += days;
       }
-      if (dep.dateStart && (!earliestStart || dep.dateStart < earliestStart)) {
-        earliestStart = dep.dateStart;
+      if (depStart && (!earliestStart || depStart < earliestStart)) {
+        earliestStart = depStart;
       }
-      if (dep.dateEnd && (!latestEnd || dep.dateEnd > latestEnd)) {
-        latestEnd = dep.dateEnd;
+      if (depEnd && (!latestEnd || depEnd > latestEnd)) {
+        latestEnd = depEnd;
       }
     }
 
@@ -905,6 +912,8 @@ export const fetchSiteDetailByToken = cache(
           status: deployments.status,
           dateStart: deployments.dateStart,
           dateEnd: deployments.dateEnd,
+          validStart: deployments.validStart,
+          validEnd: deployments.validEnd,
         })
         .from(deployments)
         .where(inArray(deployments.id, depIds)),
@@ -919,23 +928,28 @@ export const fetchSiteDetailByToken = cache(
     const site =
       sites.find((s) => s.siteId === tokenRow.biochocoSiteId) ?? null;
 
+    // Prefer the QA-validated window (valid_* ?? date_*) so early-death cameras
+    // count real sampling span, not the full install→retrieve interval. Keep in
+    // sync with the per-site dashboard copy of this loop above.
     let totalCameraTrapDays = 0;
     let earliestStart: string | null = null;
     let latestEnd: string | null = null;
     for (const dep of siteDeps) {
-      if (dep.dateStart && dep.dateEnd) {
-        const start = new Date(dep.dateStart);
-        const end = new Date(dep.dateEnd);
+      const depStart = dep.validStart ?? dep.dateStart;
+      const depEnd = dep.validEnd ?? dep.dateEnd;
+      if (depStart && depEnd) {
+        const start = new Date(depStart);
+        const end = new Date(depEnd);
         const days = Math.ceil(
           (end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)
         );
         if (days > 0) totalCameraTrapDays += days;
       }
-      if (dep.dateStart && (!earliestStart || dep.dateStart < earliestStart)) {
-        earliestStart = dep.dateStart;
+      if (depStart && (!earliestStart || depStart < earliestStart)) {
+        earliestStart = depStart;
       }
-      if (dep.dateEnd && (!latestEnd || dep.dateEnd > latestEnd)) {
-        latestEnd = dep.dateEnd;
+      if (depEnd && (!latestEnd || depEnd > latestEnd)) {
+        latestEnd = depEnd;
       }
     }
 

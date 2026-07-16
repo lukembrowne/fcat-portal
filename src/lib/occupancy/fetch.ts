@@ -42,6 +42,14 @@ export interface DeploymentRow {
   longitude: number | null;
   date_start: string | null;
   date_end: string | null;
+  /**
+   * QA-validated survey window (`biochoco_deployments.valid_start`/`valid_end`),
+   * set on the deployment QA panel to trim the window to the real sampling span
+   * when a camera died early / filled its card. Preferred over the ODK
+   * install/retrieve dates when present — same precedence the CSV export uses.
+   */
+  valid_start: string | null;
+  valid_end: string | null;
   field_notes: string | null;
 }
 
@@ -121,6 +129,7 @@ const isoDay = (d: CaptureDay) => d.toISOString().slice(0, 10);
 export function buildSites(
   deployments: DeploymentRow[],
   windows: Map<number, { min: CaptureDay; max: CaptureDay }>,
+  windowSource: "camera" | "audio" = "camera",
 ): {
   sites: OccupancySite[];
   covariateInputs: Map<string, SiteCovariateInput>;
@@ -133,16 +142,32 @@ export function buildSites(
   let dropped = 0;
   for (const d of deployments) {
     const derived = windows.get(d.id);
-    const odkStart = parseYmd(d.date_start);
-    const odkEnd = parseYmd(d.date_end);
-    // Strict clamp: the ODK install/retrieve dates are authoritative — they are
-    // auto-recorded, so a typo is rare and signals a real data problem, not a
-    // reason to widen the window. File-derived capture dates define the window
-    // ONLY when a deployment has no ODK dates. This keeps a single stray file
-    // timestamp (camera clock reset, bad file_modified) from ballooning the
-    // survey window (the "74 occasions" symptom).
-    const start = odkStart ?? derived?.min ?? null;
-    const end = odkEnd ?? derived?.max ?? null;
+    // Window resolution differs by stream:
+    //   camera → QA valid_* → ODK install/retrieve date_* → file-derived span.
+    //     The QA-validated dates trim the window to the real sampling span (a
+    //     camera that died early / filled its card): a deployment retrieved on
+    //     schedule after 30 days but that only recorded 8 shows an 8-day window,
+    //     not 30. ODK dates are authoritative when no valid_* is set, and a stray
+    //     file timestamp (clock reset, bad file_modified) can't balloon it (the
+    //     "74 occasions" symptom). Mirrors the export's `valid* ?? date*`.
+    //   audio  → file-derived span FIRST (recorder filenames embed reliable
+    //     timestamps), ODK date_* only as a fallback when no audio files resolve.
+    //     valid_* is NEVER applied here: it is QA'd from the CAMERA images, but
+    //     the recorder's real on/off span (duty cycle, early battery death) is
+    //     its own — the audio filenames are the ground truth for it.
+    let authStart: CaptureDay | null = null;
+    let authEnd: CaptureDay | null = null;
+    let start: CaptureDay | null;
+    let end: CaptureDay | null;
+    if (windowSource === "audio") {
+      start = derived?.min ?? parseYmd(d.date_start) ?? null;
+      end = derived?.max ?? parseYmd(d.date_end) ?? null;
+    } else {
+      authStart = parseYmd(d.valid_start) ?? parseYmd(d.date_start);
+      authEnd = parseYmd(d.valid_end) ?? parseYmd(d.date_end);
+      start = authStart ?? derived?.min ?? null;
+      end = authEnd ?? derived?.max ?? null;
+    }
     if (!start || !end || end.getTime() - start.getTime() < 0) {
       if (derived) dropped++;
       continue;
@@ -156,10 +181,12 @@ export function buildSites(
       dropped++;
       continue;
     }
-    // Notify when the strict clamp trims real file coverage: file dates outside
-    // the ODK window mean either a bad ODK date or mis-timestamped files. Those
-    // detections become NA in-model; surface the mismatch instead of hiding it.
-    if (odkStart && odkEnd && derived) {
+    // Notify when the authoritative (valid/ODK) window trims real file coverage:
+    // file dates outside it mean either a bad ODK date or mis-timestamped files.
+    // Those detections become NA in-model; surface the mismatch, don't hide it.
+    // Only meaningful when the window came from a validated/ODK source, not from
+    // the file-derived fallback (which can never trim its own coverage).
+    if (authStart && authEnd && derived) {
       const before = derived.min.getTime() < start.getTime();
       const after = derived.max.getTime() > end.getTime();
       if (before || after) {
@@ -222,7 +249,8 @@ export function fetchOccupancyInputs(
   // enter the analysis. Matches the app-wide BioChoco scoping used elsewhere
   // (see getBiochocoCameraTrapProjectId in biochoco/resultados/habitat-actions.ts).
   const deployments = db.all(sql`
-    SELECT id, site_name, name, latitude, longitude, date_start, date_end, field_notes
+    SELECT id, site_name, name, latitude, longitude,
+           date_start, date_end, valid_start, valid_end, field_notes
     FROM biochoco_deployments
     WHERE excluded = 0
       AND status IN ('verified', 'verified_empty')
@@ -304,7 +332,7 @@ export function fetchOccupancyInputs(
   const windows = deriveWindows(
     audioFilesRows.map((r) => ({ deployment_id: r.deployment_id, filename: r.filename, exif: null })),
   );
-  const { sites, covariateInputs, dropped, anomalies } = buildSites(deployments, windows);
+  const { sites, covariateInputs, dropped, anomalies } = buildSites(deployments, windows, "audio");
 
   const rows = db.all(sql`
     SELECT COALESCE(NULLIF(ai.corrected_species, ''), ai.species) AS species,

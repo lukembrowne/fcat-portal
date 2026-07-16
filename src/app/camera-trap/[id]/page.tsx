@@ -193,7 +193,7 @@ export default async function DeploymentDetailPage({ params }: PageProps) {
               <QaSection
                 deploymentId={deployment.id}
                 canEdit={isEditor}
-                excluded={deployment.excluded ?? false}
+                excludedCamera={deployment.excludedCamera ?? false}
                 validStart={deployment.validStart}
                 validEnd={deployment.validEnd}
                 qaNotes={deployment.qaNotes}

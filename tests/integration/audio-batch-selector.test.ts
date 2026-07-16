@@ -40,7 +40,7 @@ async function insertAudioDeployment(
       uploadAudioCount: opts.audioCount,
       previousAudioCount: opts.audioCount, // settled: upload === previous
       uploadNewestAudioDate: OLD_DATE,
-      excluded: opts.excluded ?? false,
+      excludedAudio: opts.excluded ?? false,
     })
     .returning();
 

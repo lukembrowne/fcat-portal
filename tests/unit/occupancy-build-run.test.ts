@@ -39,7 +39,7 @@ const DDL = `
   CREATE TABLE biochoco_deployments (
     id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT, ct_project_id INTEGER, name TEXT NOT NULL, site_name TEXT,
     latitude REAL, longitude REAL, date_start TEXT, date_end TEXT, valid_start TEXT, valid_end TEXT, status TEXT,
-    excluded INTEGER DEFAULT 0, field_notes TEXT,
+    excluded_audio INTEGER DEFAULT 0, excluded_camera INTEGER DEFAULT 0, field_notes TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch()), updated_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
   CREATE TABLE biochoco_images (

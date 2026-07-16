@@ -12,7 +12,7 @@ import { updateDeploymentQa } from "../actions";
 interface QaSectionProps {
   deploymentId: number;
   canEdit: boolean;
-  excluded: boolean;
+  excludedCamera: boolean;
   validStart: string | null;
   validEnd: string | null;
   qaNotes: string | null;
@@ -21,7 +21,7 @@ interface QaSectionProps {
 export function QaSection({
   deploymentId,
   canEdit,
-  excluded: initialExcluded,
+  excludedCamera: initialExcluded,
   validStart: initialValidStart,
   validEnd: initialValidEnd,
   qaNotes: initialQaNotes,
@@ -49,7 +49,7 @@ export function QaSection({
     startSavingQa(async () => {
       setQaError(null);
       const result = await updateDeploymentQa(deploymentId, {
-        excluded,
+        excludedCamera: excluded,
         validStart: validStart || null,
         validEnd: validEnd || null,
         qaNotes: qaNotes.trim() || null,
@@ -73,7 +73,7 @@ export function QaSection({
         {initialExcluded && (
           <div className="flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-1.5">
             <div className="h-2 w-2 rounded-full bg-destructive shrink-0" />
-            <p className="text-xs font-medium text-destructive">Excluida de exportaciones</p>
+            <p className="text-xs font-medium text-destructive">Excluida del análisis de cámara</p>
           </div>
         )}
         <div className="grid grid-cols-2 gap-4">
@@ -109,7 +109,7 @@ export function QaSection({
           onCheckedChange={(v) => setExcluded(!!v)}
         />
         <Label htmlFor="qa-excluded" className="text-sm font-normal">
-          Excluir de exportaciones
+          Excluir del análisis de cámara
         </Label>
       </div>
 

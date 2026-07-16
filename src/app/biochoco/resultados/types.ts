@@ -12,6 +12,14 @@ export interface SiteReadiness {
   temperature: ReadinessStatus;
   habitat: ReadinessStatus;
   audio: ReadinessStatus;
+  /**
+   * True when the site has camera/audio deployments but ALL of them are
+   * excluded for that stream (excluded_camera / excluded_audio). Rendered as a
+   * red ✕ overriding the readiness icon on the resultados site table. Optional
+   * so other SiteReadiness consumers (map popups, public pages) are unaffected.
+   */
+  camerasExcluded?: boolean;
+  audioExcluded?: boolean;
 }
 
 export interface SiteWithReadiness extends SiteInfo {

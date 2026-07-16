@@ -2,7 +2,7 @@
 
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { processingJobs, occupancyRuns } from "@/db/schema";
+import { processingJobs, occupancyRuns, species } from "@/db/schema";
 import { requirePermission } from "@/lib/auth";
 import { log } from "@/lib/log";
 import type { ActionResult } from "@/lib/types";
@@ -29,9 +29,12 @@ import {
 } from "@/lib/occupancy/curves";
 import { toForestPlot, inverseVarianceMean, preferredByAic, type SpeciesSlope } from "@/lib/occupancy/meta-analysis";
 import { isSeparated } from "@/lib/occupancy/separation";
+import {
+  classifyModelStatus,
+  type SpeciesModelStatus,
+  type ModelVariantRow,
+} from "@/lib/occupancy/model-status";
 import { naiveOccupancyByHabitat, type HabitatNaiveRow } from "@/lib/occupancy/habitat-summary";
-import { sumRichness } from "@/lib/occupancy/richness";
-import { renderSurface, paddedBbox } from "@/lib/occupancy/surface";
 import fs from "node:fs";
 import nodePath from "node:path";
 
@@ -76,6 +79,11 @@ export async function getOccupancyReadiness(
       detectionsDroppedNoDate: aud.detectionsDroppedNoDate,
     });
 
+    // Enrich both reports with common/Spanish names + IUCN status from the
+    // shared species lookup (joined by scientific name). Species absent from
+    // the lookup keep null names; the table falls back to the scientific string.
+    await enrichReadinessNames([camera, audio]);
+
     return {
       success: true,
       data: {
@@ -91,6 +99,66 @@ export async function getOccupancyReadiness(
   } catch (error) {
     log.error({ err: error }, "getOccupancyReadiness failed");
     return { success: false, error: "No se pudo calcular la disponibilidad de datos de ocupación." };
+  }
+}
+
+/**
+ * Display names + IUCN status for one species (by scientific name), for the
+ * occupancy species detail header. Null when the species is absent from the
+ * lookup — the caller falls back to the scientific string.
+ */
+export async function getOccupancySpeciesInfo(
+  scientificName: string,
+): Promise<{
+  commonName: string | null;
+  spanishName: string | null;
+  iucnStatus: string | null;
+} | null> {
+  await requirePermission("camera-trap", "viewer");
+  const [row] = await db
+    .select({
+      commonName: species.commonName,
+      spanishName: species.spanishName,
+      iucnStatus: species.iucnStatus,
+    })
+    .from(species)
+    .where(eq(species.scientificName, scientificName))
+    .limit(1);
+  return row ?? null;
+}
+
+/**
+ * Mutates each report's species rows in place, attaching common/Spanish names +
+ * IUCN status from `biochoco_species` (joined by scientific name). Occupancy
+ * stores bare binomials for both streams, so this resolves against the full
+ * lookup table (the `camera_selectable` flag is irrelevant here). Species not
+ * in the lookup keep null names — the table falls back to the scientific string.
+ */
+async function enrichReadinessNames(reports: ReadinessReport[]): Promise<void> {
+  const names = new Set<string>();
+  for (const rep of reports) {
+    for (const row of rep.species) names.add(row.species);
+  }
+  if (names.size === 0) return;
+
+  const rows = await db
+    .select({
+      scientificName: species.scientificName,
+      commonName: species.commonName,
+      spanishName: species.spanishName,
+      iucnStatus: species.iucnStatus,
+    })
+    .from(species)
+    .where(inArray(species.scientificName, [...names]));
+  const byName = new Map(rows.map((r) => [r.scientificName, r]));
+
+  for (const rep of reports) {
+    for (const row of rep.species) {
+      const sp = byName.get(row.species);
+      row.commonName = sp?.commonName ?? null;
+      row.spanishName = sp?.spanishName ?? null;
+      row.iucnStatus = sp?.iucnStatus ?? null;
+    }
   }
 }
 
@@ -217,17 +285,15 @@ async function latestCompletedRunId(): Promise<number | null> {
   return r?.id ?? null;
 }
 
-export interface ModeledSpeciesRow {
-  species: string;
-  stream: string;
-  estimatedOccupancy: number | null;
-  naiveOccupancy: number | null;
-  meanDetection: number | null;
-  nSites: number;
-  nSitesDetected: number;
-}
-
-export async function listModeledSpecies(): Promise<ActionResult<ModeledSpeciesRow[]>> {
+/**
+ * Per-species model outcome for the latest completed run: `modeled` (carries the
+ * AIC-preferred ψ/p), `ceiling` (casi ubicua — every variant separated at the ψ
+ * boundary), or `unfit`. Reads ALL variant rows — NOT the `sufficient_data = true`
+ * subset — so near-ubiquitous species surface with an explicit reason instead of
+ * silently vanishing behind a "—". Ineligible species (only a legacy `combined`
+ * gate row) are omitted; their state is shown live by the readiness gate.
+ */
+export async function listSpeciesModelStatus(): Promise<ActionResult<SpeciesModelStatus[]>> {
   await requirePermission("camera-trap", "viewer");
   try {
     const runId = await latestCompletedRunId();
@@ -236,17 +302,34 @@ export async function listModeledSpecies(): Promise<ActionResult<ModeledSpeciesR
       .select({
         species: occupancyModels.species,
         stream: occupancyModels.stream,
+        variant: occupancyModels.variant,
+        sufficientData: occupancyModels.sufficientData,
         estimatedOccupancy: occupancyModels.estimatedOccupancy,
-        naiveOccupancy: occupancyModels.naiveOccupancy,
         meanDetection: occupancyModels.meanDetection,
+        naiveOccupancy: occupancyModels.naiveOccupancy,
         nSites: occupancyModels.nSites,
         nSitesDetected: occupancyModels.nSitesDetected,
+        aic: occupancyModels.aic,
+        ineligibleReasonsJson: occupancyModels.ineligibleReasonsJson,
       })
       .from(occupancyModels)
-      .where(and(eq(occupancyModels.runId, runId), eq(occupancyModels.sufficientData, true)));
-    return { success: true, data: rows };
+      .where(eq(occupancyModels.runId, runId));
+
+    const byKey = new Map<string, ModelVariantRow[]>();
+    for (const r of rows) {
+      const key = `${r.species}|${r.stream}`;
+      const arr = byKey.get(key);
+      if (arr) arr.push(r);
+      else byKey.set(key, [r]);
+    }
+    const out: SpeciesModelStatus[] = [];
+    for (const group of byKey.values()) {
+      const status = classifyModelStatus(group);
+      if (status) out.push(status);
+    }
+    return { success: true, data: out };
   } catch (error) {
-    log.error({ err: error }, "listModeledSpecies failed");
+    log.error({ err: error }, "listSpeciesModelStatus failed");
     return { success: false, error: "No se pudieron listar los modelos." };
   }
 }
@@ -683,14 +766,19 @@ export interface CrossSpeciesData {
   overallPlot: SpeciesSlope[];
   /** Mean ψ per habitat, summarized across species. */
   habitatOccupancy: HabitatOccupancy[];
-  /** Richness surface (Σψ, normalized to [0,1]) as a raster layer for the map. */
-  richness: {
-    runId: number;
-    psiName: string | null;
-    bbox: number[] | null;
-    cells: MapCell[];
-  } | null;
-  maxRichness: number;
+  /**
+   * Near-ubiquitous ("casi ubicua") species: eligible but every variant separated
+   * at the ψ boundary, so they carry no estimable ψ and are absent from the plots
+   * above. Surfaced here (and counted per plot) so the synthesis is not silently
+   * biased against the most common species.
+   */
+  nearUbiquitous: {
+    species: string;
+    stream: string;
+    naiveOccupancy: number;
+    nSites: number;
+    nSitesDetected: number;
+  }[];
   nSpeciesModeled: number;
 }
 
@@ -705,8 +793,7 @@ export async function getCrossSpeciesData(): Promise<ActionResult<CrossSpeciesDa
       elevationMean: null,
       overallPlot: [],
       habitatOccupancy: [],
-      richness: null,
-      maxRichness: 0,
+      nearUbiquitous: [],
       nSpeciesModeled: 0,
     };
     if (!runId) return { success: true, data: empty };
@@ -749,46 +836,51 @@ export async function getCrossSpeciesData(): Promise<ActionResult<CrossSpeciesDa
     const artifacts = preds
       .map((p) => readGridArtifact(p.gridDataPath))
       .filter((a): a is GridArtifact => a != null);
-    const grids = artifacts.map((a) => a.cells).filter((c) => c.length > 0);
     const habitatOccupancy = aggregateHabitatOccupancy(
       artifacts.map((a) => a.habitatUse ?? []),
     );
-    const rich = sumRichness(grids);
-    const maxRichness = rich.reduce((a, c) => Math.max(a, c.richness), 0);
-    const richCells: MapCell[] = rich.map((c) => ({
-      lat: c.lat,
-      lng: c.lng,
-      psi: maxRichness > 0 ? c.richness / maxRichness : 0,
-      lower: null,
-      upper: null,
-      forest: null,
-      elevation: null,
-    }));
 
-    // Render the summed-richness surface once per run (cached by file presence).
-    let richness: CrossSpeciesData["richness"] = null;
-    if (richCells.length > 0) {
-      const richPng = nodePath.join(
-        process.cwd(), "data", "occupancy-models", String(runId), "_richness.png",
-      );
-      let bounds: number[] | null = null;
-      if (!fs.existsSync(richPng)) {
-        const rendered = await renderSurface({
-          cells: richCells.map((c) => ({ lat: c.lat, lng: c.lng, value: c.psi })),
-          ramp: "psi",
-          outPath: richPng,
-          vmin: 0,
-          vmax: 1,
-        });
-        bounds = rendered?.bounds ?? null;
-      }
-      richness = {
-        runId,
-        psiName: fs.existsSync(richPng) ? "_richness" : null,
-        bbox: bounds ?? paddedBbox(richCells),
-        cells: richCells,
-      };
+    // Near-ubiquitous ("casi ubicua") species: eligible but every variant separated
+    // at the ψ boundary, so they have no estimable ψ and are absent from every plot
+    // below. Classify all variant rows (NOT the sufficient_data=true subset) and
+    // keep the ceiling ones so the page can name + count them.
+    const statusRows = await db
+      .select({
+        species: occupancyModels.species,
+        stream: occupancyModels.stream,
+        variant: occupancyModels.variant,
+        sufficientData: occupancyModels.sufficientData,
+        estimatedOccupancy: occupancyModels.estimatedOccupancy,
+        meanDetection: occupancyModels.meanDetection,
+        naiveOccupancy: occupancyModels.naiveOccupancy,
+        nSites: occupancyModels.nSites,
+        nSitesDetected: occupancyModels.nSitesDetected,
+        aic: occupancyModels.aic,
+        ineligibleReasonsJson: occupancyModels.ineligibleReasonsJson,
+      })
+      .from(occupancyModels)
+      .where(eq(occupancyModels.runId, runId));
+    const byKeyStatus = new Map<string, ModelVariantRow[]>();
+    for (const r of statusRows) {
+      const key = `${r.species}|${r.stream}`;
+      const arr = byKeyStatus.get(key);
+      if (arr) arr.push(r);
+      else byKeyStatus.set(key, [r]);
     }
+    const nearUbiquitous: CrossSpeciesData["nearUbiquitous"] = [];
+    for (const group of byKeyStatus.values()) {
+      const s = classifyModelStatus(group);
+      if (s?.kind === "ceiling") {
+        nearUbiquitous.push({
+          species: s.species,
+          stream: s.stream,
+          naiveOccupancy: s.naiveOccupancy,
+          nSites: s.nSites,
+          nSitesDetected: s.nSitesDetected,
+        });
+      }
+    }
+    nearUbiquitous.sort((a, b) => b.naiveOccupancy - a.naiveOccupancy);
 
     const models = await db
       .select({
@@ -840,8 +932,7 @@ export async function getCrossSpeciesData(): Promise<ActionResult<CrossSpeciesDa
         elevationMean: inverseVarianceMean(elevRows),
         overallPlot,
         habitatOccupancy,
-        richness,
-        maxRichness,
+        nearUbiquitous,
         nSpeciesModeled: preferredBySpecies.size,
       },
     };
@@ -984,10 +1075,11 @@ export async function getModelInputSample(
         windowStart: iso(p.windowStart),
         windowEnd: iso(p.windowEnd),
         totalDays: p.totalDays,
-        // siteId is the deployment id → link to the deployment detail page,
-        // where the installation's details can be edited (both streams share
-        // the same physical deployment).
-        href: `/camera-trap/${p.siteId}`,
+        // siteId is the deployment id → link to the deployment detail page in
+        // the module matching THIS stream: audio results link to /audio, camera
+        // results to /camera-trap (both streams share the same physical
+        // deployment, but the QA/exclusion controls live per module).
+        href: `/${stream === "audio" ? "audio" : "camera-trap"}/${p.siteId}`,
       }));
 
     // Median window length across sites — the baseline the table flags outliers

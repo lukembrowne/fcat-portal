@@ -51,6 +51,7 @@ export interface SpeciesIndexRow {
   scientificName: string;
   commonName: string;
   spanishName: string | null;
+  iucnStatus: string | null;
   detectionCount: number;
   siteCount: number;
   lastSeen: number | null; // unix seconds
@@ -115,6 +116,7 @@ export async function getCameraTrapSpeciesIndex(): Promise<
       scientificName: agg.scientificName,
       commonName: sp?.commonName ?? agg.scientificName,
       spanishName: sp?.spanishName ?? null,
+      iucnStatus: sp?.iucnStatus ?? null,
       detectionCount: agg.detectionCount,
       siteCount: agg.siteCount,
       lastSeen: agg.lastSeen,

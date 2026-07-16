@@ -306,7 +306,7 @@ async function collectExportCandidates(
       classifierConfidence: identifications.confidence,
       detectionClass: detections.detectionClass,
       detectorModelVersion: detections.modelVersion,
-      excluded: deployments.excluded,
+      excluded: deployments.excludedCamera,
       isExternal: images.isExternal,
       sourceDataset: externalImages.sourceDataset,
       sourceUrl: externalImages.sourceUrl,
@@ -323,7 +323,7 @@ async function collectExportCandidates(
       and(
         inArray(identifications.verificationStatus, ["verified", "corrected"]),
         eq(detections.detectionClass, 0),
-        eq(deployments.excluded, false),
+        eq(deployments.excludedCamera, false),
         gte(detections.detectionConfidence, detectionConfidenceFloor),
         // Exclude detections whose source image can never be fetched. The crop
         // loop downloads via `loadImageBytes`, which tries the local cache path

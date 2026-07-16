@@ -30,7 +30,7 @@ export default async function SiteDetailPage({
 
   const [result, siteDepIds] = await Promise.all([
     fetchSiteDetail(siteId),
-    fetchSiteDeploymentIds(siteId),
+    fetchSiteAudioDeploymentIds(siteId),
   ]);
 
   if (!result.success) {
@@ -66,11 +66,14 @@ export default async function SiteDetailPage({
 }
 
 /**
- * Look up the deployment IDs that belong to this site. Reuses the
- * site-name/site-id fallback chain in habitat-lookup so audio queries
- * see the same set of deployments the rest of the page does.
+ * Look up the AUDIO deployment IDs that belong to this site (sole consumer:
+ * fetchSiteAudio). Filters on `excluded_audio` — NOT `excluded_camera` — so the
+ * audio drill-down is independent of the camera exclusion: a deployment whose
+ * camera was excluded still contributes its audio, and one whose audio recorder
+ * was excluded (e.g. CCN-010) is dropped from the audio sections. Reuses the
+ * site-name/site-id fallback chain so audio queries resolve the same site set.
  */
-async function fetchSiteDeploymentIds(siteId: string): Promise<number[]> {
+async function fetchSiteAudioDeploymentIds(siteId: string): Promise<number[]> {
   const [proj] = await db
     .select({ id: cameraTrapProjects.id })
     .from(cameraTrapProjects)
@@ -86,7 +89,7 @@ async function fetchSiteDeploymentIds(siteId: string): Promise<number[]> {
     .where(
       and(
         eq(deployments.cameraTrapProjectId, proj.id),
-        or(eq(deployments.excluded, false), isNull(deployments.excluded)),
+        or(eq(deployments.excludedAudio, false), isNull(deployments.excludedAudio)),
       ),
     );
   return rows

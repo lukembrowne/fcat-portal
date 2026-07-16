@@ -3,7 +3,6 @@ import { requirePermission } from "@/lib/auth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { getCrossSpeciesData } from "../actions";
 import { ForestPlotChart, HabitatUseChart } from "../charts";
-import { OccupancyMapClient } from "../occupancy-map-client";
 
 export const dynamic = "force-dynamic";
 
@@ -19,10 +18,20 @@ export default async function CrossSpeciesPage() {
         elevationMean: null,
         overallPlot: [],
         habitatOccupancy: [],
-        richness: null,
-        maxRichness: 0,
+        nearUbiquitous: [],
         nSpeciesModeled: 0,
       };
+
+  const nExcluded = data.nearUbiquitous.length;
+  // Footnote appended under each model plot so the reader sees these species were
+  // excluded, not that they don't exist.
+  const excludedNote =
+    nExcluded > 0 ? (
+      <p className="text-xs text-muted-foreground mt-2">
+        +{nExcluded} especie{nExcluded === 1 ? "" : "s"} casi ubicua{nExcluded === 1 ? "" : "s"}{" "}
+        excluida{nExcluded === 1 ? "" : "s"} (ψ no estimable — ver abajo).
+      </p>
+    ) : null;
 
   return (
     <div className="p-6 max-w-screen-2xl mx-auto space-y-6">
@@ -46,38 +55,6 @@ export default async function CrossSpeciesPage() {
         </Card>
       ) : (
         <>
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Riqueza predicha</CardTitle>
-              <p className="text-xs text-muted-foreground">
-                Suma de la ocupación predicha (Σψ) entre especies — número esperado de especies por
-                celda. Proyección de hábitat, no espacialmente explícita.
-              </p>
-            </CardHeader>
-            <CardContent>
-              {data.richness ? (
-                <OccupancyMapClient
-                  runId={data.richness.runId}
-                  psiName={data.richness.psiName}
-                  hasForest={false}
-                  hasElevation={false}
-                  bbox={data.richness.bbox}
-                  cells={data.richness.cells}
-                  legend={{ kind: "richness", max: data.maxRichness }}
-                />
-              ) : (
-                <div className="rounded-lg border p-6 text-sm text-muted-foreground">
-                  Superficie de riqueza no disponible.
-                </div>
-              )}
-              {data.maxRichness > 0 ? (
-                <p className="text-xs text-muted-foreground mt-2">
-                  Riqueza máxima estimada: {data.maxRichness.toFixed(1)} especies.
-                </p>
-              ) : null}
-            </CardContent>
-          </Card>
-
           {data.overallPlot.length > 0 ? (
             <Card>
               <CardHeader>
@@ -89,6 +66,7 @@ export default async function CrossSpeciesPage() {
               </CardHeader>
               <CardContent>
                 <ForestPlotChart rows={data.overallPlot} unitLabel="ocupación" mode="probability" />
+                {excludedNote}
               </CardContent>
             </Card>
           ) : null}
@@ -112,6 +90,7 @@ export default async function CrossSpeciesPage() {
                     isReference: false,
                   }))}
                 />
+                {excludedNote}
               </CardContent>
             </Card>
           ) : null}
@@ -128,6 +107,7 @@ export default async function CrossSpeciesPage() {
             </CardHeader>
             <CardContent>
               <ForestPlotChart rows={data.forestPlot} unitLabel="cobertura boscosa" />
+              {excludedNote}
             </CardContent>
           </Card>
 
@@ -144,6 +124,34 @@ export default async function CrossSpeciesPage() {
               </CardHeader>
               <CardContent>
                 <ForestPlotChart rows={data.elevationPlot} unitLabel="elevación" />
+                {excludedNote}
+              </CardContent>
+            </Card>
+          ) : null}
+
+          {data.nearUbiquitous.length > 0 ? (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Especies casi ubicuas (ψ no estimable)</CardTitle>
+                <p className="text-xs text-muted-foreground">
+                  Ocupan casi todos los sitios; la ocupación (ψ) queda en el límite (≈100%) y no es
+                  estimable como punto con IC, por lo que se excluyen de los gráficos de modelo de
+                  arriba. Se listan aquí para que la síntesis no quede sesgada contra las especies
+                  más comunes.
+                </p>
+              </CardHeader>
+              <CardContent>
+                <ul className="text-sm space-y-1">
+                  {data.nearUbiquitous.map((s) => (
+                    <li key={`${s.species}|${s.stream}`} className="flex justify-between gap-4">
+                      <span className="italic">{s.species}</span>
+                      <span className="text-muted-foreground tabular-nums whitespace-nowrap">
+                        detectada en {s.nSitesDetected}/{s.nSites} sitios (
+                        {Math.round(s.naiveOccupancy * 100)}%)
+                      </span>
+                    </li>
+                  ))}
+                </ul>
               </CardContent>
             </Card>
           ) : null}

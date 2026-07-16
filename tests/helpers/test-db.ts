@@ -147,7 +147,8 @@ const CAMERA_TRAP_DDL =
     site_name TEXT,
     odk_submission_id TEXT,
     metadata_source TEXT,
-    excluded INTEGER NOT NULL DEFAULT 0,
+    excluded_audio INTEGER NOT NULL DEFAULT 0,
+    excluded_camera INTEGER NOT NULL DEFAULT 0,
     valid_start TEXT,
     valid_end TEXT,
     qa_notes TEXT,
@@ -290,7 +291,8 @@ const CAMERA_TRAP_DDL =
     spanish_name TEXT,
     taxonomic_rank TEXT NOT NULL DEFAULT 'species',
     type TEXT NOT NULL DEFAULT 'mammal',
-    iucn_status TEXT
+    iucn_status TEXT,
+    camera_selectable INTEGER NOT NULL DEFAULT 1
   );
 
   CREATE TABLE activity_log (

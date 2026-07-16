@@ -11,14 +11,14 @@ import { updateAudioDeploymentQa } from "../actions";
 interface AudioQaSectionProps {
   deploymentId: number;
   canEdit: boolean;
-  excluded: boolean;
+  excludedAudio: boolean;
   qaNotes: string | null;
 }
 
 export function AudioQaSection({
   deploymentId,
   canEdit,
-  excluded: initialExcluded,
+  excludedAudio: initialExcluded,
   qaNotes: initialQaNotes,
 }: AudioQaSectionProps) {
   const [excluded, setExcluded] = useState(initialExcluded);
@@ -36,7 +36,7 @@ export function AudioQaSection({
         <div className="flex items-center gap-2">
           <Checkbox id="qa-excluded" checked={excluded} disabled />
           <Label htmlFor="qa-excluded" className="text-sm font-normal text-muted-foreground">
-            Excluir de exportaciones
+            Excluir del análisis de audio
           </Label>
         </div>
         {qaNotes && (
@@ -55,7 +55,7 @@ export function AudioQaSection({
     setQaSaved(false);
 
     const result = await updateAudioDeploymentQa(deploymentId, {
-      excluded,
+      excludedAudio: excluded,
       qaNotes: qaNotes || null,
     });
 
@@ -77,7 +77,7 @@ export function AudioQaSection({
           onCheckedChange={(v) => setExcluded(!!v)}
         />
         <Label htmlFor="qa-excluded" className="text-sm font-normal">
-          Excluir de exportaciones
+          Excluir del análisis de audio
         </Label>
       </div>
 

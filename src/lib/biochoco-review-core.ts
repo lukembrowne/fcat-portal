@@ -201,7 +201,11 @@ export async function gatherDeploymentReviewData(
         siteName: deployments.siteName,
         latitude: deployments.latitude,
         longitude: deployments.longitude,
-        excluded: deployments.excluded,
+        // "Fully excluded" for the cross-stream review = dropped from BOTH
+        // streams (the legacy single-`excluded` meaning, preserved by the
+        // migration). An audio-only or camera-only exclusion still collected
+        // data in the other stream, so it is not counted as excluded here.
+        excluded: sql<boolean>`(${deployments.excludedCamera} = 1 AND ${deployments.excludedAudio} = 1)`,
         status: deployments.status,
         driveFolderId: deployments.driveFolderId,
         fieldNotes: deployments.fieldNotes,

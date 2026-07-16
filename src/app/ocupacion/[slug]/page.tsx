@@ -1,12 +1,13 @@
 import Link from "next/link";
 import { requirePermission } from "@/lib/auth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { getSpeciesModel, getModelInputSample } from "../actions";
+import { getSpeciesModel, getModelInputSample, getOccupancySpeciesInfo } from "../actions";
 import { HabitatUseChart, ResponseCurveChart } from "../charts";
 import { OccupancyMapClient } from "../occupancy-map-client";
 import { DetectionSampleTable } from "../detection-sample-table";
 import { HabitatNaiveTable } from "../habitat-naive-table";
 import { isSeparated } from "@/lib/occupancy/separation";
+import { IucnCode } from "@/components/iucn-code";
 
 export const dynamic = "force-dynamic";
 
@@ -51,12 +52,14 @@ export default async function SpeciesOccupancyPage({
   const species = decodeURIComponent(slug);
   const stream = streamParam === "audio" ? "audio" : "camera";
 
-  const [result, sampleResult] = await Promise.all([
+  const [result, sampleResult, speciesInfo] = await Promise.all([
     getSpeciesModel(species, stream),
     getModelInputSample(species, stream),
+    getOccupancySpeciesInfo(species),
   ]);
   const model = result.success ? result.data : null;
   const inputSample = sampleResult.success ? sampleResult.data : null;
+  const commonName = speciesInfo?.commonName || null;
 
   // Habitat levels whose coefficient blew up (complete separation) are not
   // estimable — flag them so the bar chart shows "no estimable" instead of a
@@ -105,7 +108,20 @@ export default async function SpeciesOccupancyPage({
       </div>
 
       <header className="space-y-1">
-        <h1 className="text-2xl font-bold italic">{species}</h1>
+        {commonName ? (
+          <>
+            <h1 className="text-2xl font-bold flex flex-wrap items-center gap-2">
+              <span>{commonName}</span>
+              <IucnCode status={speciesInfo?.iucnStatus} className="text-xs align-middle" />
+            </h1>
+            <p className="text-base italic text-muted-foreground">{species}</p>
+          </>
+        ) : (
+          <h1 className="text-2xl font-bold italic flex flex-wrap items-center gap-2">
+            <span>{species}</span>
+            <IucnCode status={speciesInfo?.iucnStatus} className="text-xs not-italic align-middle" />
+          </h1>
+        )}
         <p className="text-sm text-muted-foreground">
           {STREAM_LABEL[stream]}
           {model?.fittedAt ? (

@@ -1,12 +1,13 @@
 import Link from "next/link";
 import { requirePermission } from "@/lib/auth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ReadinessTable, type ModeledMap } from "./readiness-table";
+import { ReadinessTable, type StatusMap } from "./readiness-table";
+import { NameLangProvider } from "./name-lang";
 import { RunControl } from "./run-control";
 import {
   getOccupancyReadiness,
   getLatestOccupancyRun,
-  listModeledSpecies,
+  listSpeciesModelStatus,
 } from "./actions";
 import type { ReadinessReport, OccupancyStream } from "@/lib/occupancy/readiness";
 import type { DateWindowAnomaly } from "@/lib/occupancy/fetch";
@@ -40,7 +41,7 @@ function StreamSection({
   dropped: number;
   dateAnomalies: DateWindowAnomaly[];
   stream: OccupancyStream;
-  modeled: ModeledMap;
+  modeled: StatusMap;
 }) {
   return (
     <Card>
@@ -111,16 +112,15 @@ export default async function OccupancyPage() {
   const [result, runInfo, modeled] = await Promise.all([
     getOccupancyReadiness(),
     getLatestOccupancyRun(),
-    listModeledSpecies(),
+    listSpeciesModelStatus(),
   ]);
   const modeledSpecies = modeled.success ? modeled.data : [];
-  // Per-stream lookup of the fitted ψ + p so the readiness tables can show the
-  // modeled numbers alongside the raw counts (— when a species isn't modeled).
-  const modeledByStream = (stream: OccupancyStream): ModeledMap =>
+  // Per-stream lookup of each species' model outcome (modeled ψ/p, casi ubicua, or
+  // no estimable) so the readiness table can show an honest state instead of a
+  // bare "—" for species whose fit hit the ψ ceiling.
+  const modeledByStream = (stream: OccupancyStream): StatusMap =>
     new Map(
-      modeledSpecies
-        .filter((m) => m.stream === stream)
-        .map((m) => [m.species, { psi: m.estimatedOccupancy, p: m.meanDetection }]),
+      modeledSpecies.filter((m) => m.stream === stream).map((m) => [m.species, m]),
     );
 
   if (!result.success) {
@@ -162,6 +162,7 @@ export default async function OccupancyPage() {
         />
       </div>
 
+      <NameLangProvider>
       {modeledSpecies.length > 0 ? (
         <Link
           href="/ocupacion/cross-species"
@@ -204,6 +205,7 @@ export default async function OccupancyPage() {
         stream="audio"
         modeled={modeledByStream("audio")}
       />
+      </NameLangProvider>
 
       <footer className="text-xs text-muted-foreground border-t pt-4 space-y-1">
         <p>

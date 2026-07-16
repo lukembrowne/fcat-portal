@@ -36,6 +36,7 @@ function synthesize(scientificName: string): Species {
     taxonomicRank: "species",
     type: "mammal",
     iucnStatus: null,
+    cameraSelectable: true,
   };
 }
 

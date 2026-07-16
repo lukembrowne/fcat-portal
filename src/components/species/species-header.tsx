@@ -2,6 +2,7 @@ import type { Species } from "@/db/schema";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { IucnCode } from "@/components/iucn-code";
 
 interface SpeciesHeaderProps {
   species: Species;
@@ -33,6 +34,7 @@ export function SpeciesHeader({
             · {species.spanishName}
           </span>
         ) : null}
+        <IucnCode status={species.iucnStatus} className="ml-2 text-xs align-middle" />
       </h1>
       <p className="italic text-muted-foreground">{species.scientificName}</p>
       <p className="text-sm flex flex-wrap items-center gap-x-3 gap-y-1">

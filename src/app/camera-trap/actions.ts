@@ -1575,7 +1575,7 @@ export interface DeploymentRow {
   createdAt: Date;
   updatedAt: Date;
   createdBy: string | null;
-  excluded: boolean;
+  excludedCamera: boolean;
   validStart: string | null;
   validEnd: string | null;
   qaNotes: string | null;
@@ -1881,7 +1881,7 @@ export async function getDeploymentsWithStats(): Promise<DeploymentRow[]> {
       createdAt: d.createdAt,
       updatedAt: d.updatedAt,
       createdBy: d.createdBy,
-      excluded: d.excluded,
+      excludedCamera: d.excludedCamera,
       validStart: d.validStart,
       validEnd: d.validEnd,
       qaNotes: d.qaNotes,
@@ -1930,7 +1930,7 @@ export async function updateDeploymentMetadata(
     longitude?: number | null;
     dateStart?: string | null;
     dateEnd?: string | null;
-    excluded?: boolean;
+    excludedCamera?: boolean;
     validStart?: string | null;
     validEnd?: string | null;
     qaNotes?: string | null;
@@ -1997,7 +1997,7 @@ export async function updateDeploymentMetadata(
 export async function updateDeploymentQa(
   id: number,
   fields: {
-    excluded: boolean;
+    excludedCamera: boolean;
     validStart: string | null;
     validEnd: string | null;
     qaNotes: string | null;
@@ -2027,7 +2027,7 @@ export async function updateDeploymentQa(
     await db
       .update(deployments)
       .set({
-        excluded: fields.excluded,
+        excludedCamera: fields.excludedCamera,
         validStart: fields.validStart,
         validEnd: fields.validEnd,
         qaNotes: fields.qaNotes,
@@ -2055,7 +2055,7 @@ export async function bulkUpdateMetadata(
     longitude?: number | null;
     dateStart?: string | null;
     dateEnd?: string | null;
-    excluded?: boolean;
+    excludedCamera?: boolean;
     qaNotes?: string | null;
   }
 ): Promise<ActionResult<{ count: number }>> {
@@ -2090,7 +2090,7 @@ export async function bulkUpdateMetadata(
     if (fields.longitude !== undefined) updates.longitude = fields.longitude;
     if (fields.dateStart !== undefined) updates.dateStart = fields.dateStart || null;
     if (fields.dateEnd !== undefined) updates.dateEnd = fields.dateEnd || null;
-    if (fields.excluded !== undefined) updates.excluded = fields.excluded;
+    if (fields.excludedCamera !== undefined) updates.excludedCamera = fields.excludedCamera;
     if (fields.qaNotes !== undefined) updates.qaNotes = fields.qaNotes;
 
     await db
@@ -4666,9 +4666,25 @@ export async function bulkVerifyByThreshold(
 // Species + Verification Stats
 // ---------------------------------------------------------------------------
 
-export async function getSpeciesList() {
+/**
+ * Species offered in the camera-trap annotation picker.
+ *
+ * Defaults to `camera_selectable = true` so the audio-only BirdNET taxonomy
+ * (imported into the shared `biochoco_species` table for name/IUCN resolution)
+ * never floods the annotation dropdown. Pass `includeNonSelectable: true` for
+ * the species-manage page, which must see flagged-out birds to promote them.
+ */
+export async function getSpeciesList(
+  opts?: { includeNonSelectable?: boolean },
+) {
   await requirePermission("camera-trap", "viewer");
-  return db.select().from(species).orderBy(species.commonName);
+  const query = db.select().from(species);
+  const rows = opts?.includeNonSelectable
+    ? await query.orderBy(species.commonName)
+    : await query
+        .where(eq(species.cameraSelectable, true))
+        .orderBy(species.commonName);
+  return rows;
 }
 
 export async function getJobSpecies(jobId: number): Promise<string[]> {
@@ -4902,6 +4918,7 @@ export async function createSpecies(data: {
   spanishName?: string | null;
   taxonomicRank?: TaxonomicRank;
   type?: string;
+  cameraSelectable?: boolean;
 }): Promise<ActionResult<Species>> {
   await requirePermission("camera-trap", "editor");
 
@@ -4914,6 +4931,7 @@ export async function createSpecies(data: {
         spanishName: data.spanishName?.trim() || null,
         taxonomicRank: data.taxonomicRank || "species",
         type: (data.type as Species["type"]) || "mammal",
+        cameraSelectable: data.cameraSelectable ?? true,
       })
       .returning();
 
@@ -4936,6 +4954,7 @@ export async function updateSpecies(
     spanishName?: string | null;
     taxonomicRank?: TaxonomicRank;
     type?: string;
+    cameraSelectable?: boolean;
   }
 ): Promise<ActionResult<Species>> {
   const user = await requirePermission("camera-trap", "editor");
@@ -4947,6 +4966,7 @@ export async function updateSpecies(
     if (data.spanishName !== undefined) updates.spanishName = data.spanishName?.trim() || null;
     if (data.taxonomicRank !== undefined) updates.taxonomicRank = data.taxonomicRank;
     if (data.type !== undefined) updates.type = data.type;
+    if (data.cameraSelectable !== undefined) updates.cameraSelectable = data.cameraSelectable;
 
     // Fetch old record to detect scientificName change
     const [old] = await db

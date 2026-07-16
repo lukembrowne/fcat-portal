@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -72,6 +73,7 @@ interface FormState {
   spanishName: string;
   taxonomicRank: TaxonomicRank;
   type: string;
+  cameraSelectable: boolean;
 }
 
 const emptyForm: FormState = {
@@ -80,6 +82,7 @@ const emptyForm: FormState = {
   spanishName: "",
   taxonomicRank: "species",
   type: "mammal",
+  cameraSelectable: true,
 };
 
 type SortKey = "scientificName" | "commonName" | "spanishName" | "taxonomicRank" | "type";
@@ -154,6 +157,7 @@ export function ManageSpeciesClient({ species }: ManageSpeciesClientProps) {
         spanishName: form.spanishName || null,
         taxonomicRank: form.taxonomicRank,
         type: form.type,
+        cameraSelectable: form.cameraSelectable,
       });
       if (result.success) {
         setAddOpen(false);
@@ -175,6 +179,7 @@ export function ManageSpeciesClient({ species }: ManageSpeciesClientProps) {
         spanishName: form.spanishName || null,
         taxonomicRank: form.taxonomicRank,
         type: form.type,
+        cameraSelectable: form.cameraSelectable,
       });
       if (result.success) {
         setEditId(null);
@@ -194,6 +199,7 @@ export function ManageSpeciesClient({ species }: ManageSpeciesClientProps) {
       spanishName: sp.spanishName || "",
       taxonomicRank: sp.taxonomicRank as TaxonomicRank,
       type: sp.type,
+      cameraSelectable: sp.cameraSelectable,
     });
     setEditId(sp.id);
   };
@@ -288,6 +294,22 @@ export function ManageSpeciesClient({ species }: ManageSpeciesClientProps) {
           </Select>
         </div>
       </div>
+      <div className="flex items-start gap-2 pt-1">
+        <Checkbox
+          id="cameraSelectable"
+          checked={form.cameraSelectable}
+          onCheckedChange={(v) => setForm({ ...form, cameraSelectable: v === true })}
+        />
+        <div className="grid gap-0.5 leading-none">
+          <Label htmlFor="cameraSelectable" className="cursor-pointer">
+            Seleccionable en anotación de cámaras trampa
+          </Label>
+          <p className="text-xs text-muted-foreground">
+            Desmarcado para especies solo de audio (BirdNET) que no deben aparecer
+            en el selector de anotación de cámaras.
+          </p>
+        </div>
+      </div>
       {error && (
         <p className="text-sm text-destructive">{error}</p>
       )}
@@ -372,7 +394,18 @@ export function ManageSpeciesClient({ species }: ManageSpeciesClientProps) {
                 const rank = RANK_LABELS[sp.taxonomicRank] || RANK_LABELS.species;
                 return (
                   <TableRow key={sp.id}>
-                    <TableCell className="font-medium italic">{sp.scientificName}</TableCell>
+                    <TableCell className="font-medium italic">
+                      {sp.scientificName}
+                      {!sp.cameraSelectable && (
+                        <Badge
+                          variant="outline"
+                          className="ml-2 text-[10px] not-italic bg-sky-50 text-sky-700 border-sky-200"
+                          title="Solo audio — no aparece en el selector de anotación de cámaras trampa"
+                        >
+                          Solo audio
+                        </Badge>
+                      )}
+                    </TableCell>
                     <TableCell>{sp.commonName}</TableCell>
                     <TableCell className="text-muted-foreground">
                       {sp.spanishName || "—"}

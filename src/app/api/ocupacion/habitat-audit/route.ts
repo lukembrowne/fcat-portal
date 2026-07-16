@@ -39,9 +39,11 @@ export async function GET() {
   if (!isAdmin) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   try {
-    // Occupancy site pool: same filter as fetchOccupancyInputs — verified + not
-    // excluded AND scoped to the BioChoco ct project (other projects' deployments
-    // have no BioChoco ODK site entity and are excluded from the analysis).
+    // Occupancy site pool: same filter as fetchOccupancyInputs' camera stream —
+    // verified + not excluded_camera AND scoped to the BioChoco ct project (other
+    // projects' deployments have no BioChoco ODK site entity and are excluded from
+    // the analysis). Habitat is a shared covariate, but this audit's frame is the
+    // camera pool, so it gates on the camera exclusion flag.
     const [biochoco] = await db
       .select({ id: cameraTrapProjects.id })
       .from(cameraTrapProjects)
@@ -52,7 +54,7 @@ export async function GET() {
           .from(deployments)
           .where(
             and(
-              eq(deployments.excluded, false),
+              eq(deployments.excludedCamera, false),
               inArray(deployments.status, ["verified", "verified_empty"]),
               eq(deployments.cameraTrapProjectId, biochoco.id),
             ),

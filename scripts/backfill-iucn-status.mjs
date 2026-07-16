@@ -9,9 +9,15 @@
  * DD/EW/EX) on the row. Species with no match or an API error are left NULL and
  * reported in the summary — never a crash.
  *
- * The IUCN v4 API is a TWO-step lookup:
- *   1. GET /api/v4/taxa/scientific_name?genus_name=&species_name=  -> assessments[]
- *   2. GET /api/v4/assessments/{id}                                -> red_list_category.code
+ * The IUCN v4 API returns the category directly on the taxa lookup — each item
+ * in `assessments[]` already carries `red_list_category_code` (e.g. "LC"/"VU"/
+ * "EN"), so a single request per species suffices:
+ *   GET /api/v4/taxa/scientific_name?genus_name=&species_name=  -> assessments[]
+ * (An older two-step design fetched /assessments/{id} and read a *nested*
+ * `red_list_category.code` that doesn't exist on the response — that returned
+ * `undefined` for every species, i.e. a uniform "(no assessment)". Do not
+ * reintroduce it.) We fall back to the detail endpoint only if the summary
+ * assessment somehow lacks a code.
  *
  * Requires an IUCN v4 token (generate at https://api.iucnredlist.org/):
  *   IUCN_API_TOKEN=... docker compose exec portal node scripts/backfill-iucn-status.mjs
@@ -48,6 +54,39 @@ async function apiGet(pathAndQuery) {
 }
 
 /**
+ * Pull a Red List category code out of an assessment-shaped object, tolerating
+ * the field-name variants the v4 API and its wrappers use. The taxa summary
+ * carries it flat as `red_list_category_code`; some payloads nest it under
+ * `red_list_category.code`. Exported for testing.
+ */
+export function extractCategoryCode(obj) {
+  if (!obj || typeof obj !== "object") return null;
+  const candidates = [
+    obj.red_list_category_code,
+    obj.red_list_category?.code,
+    obj.category,
+    obj.code,
+  ];
+  const code = candidates.find((c) => typeof c === "string" && c.length > 0);
+  return code ?? null;
+}
+
+/**
+ * Pick the latest assessment from a taxa response's `assessments[]`: prefer the
+ * one flagged `latest === true`, else the newest by `year_published`. Exported
+ * for testing.
+ */
+export function pickLatestAssessment(assessments) {
+  if (!Array.isArray(assessments) || assessments.length === 0) return null;
+  return (
+    assessments.find((a) => a?.latest === true) ??
+    [...assessments].sort(
+      (a, b) => (Number(b?.year_published) || 0) - (Number(a?.year_published) || 0)
+    )[0]
+  );
+}
+
+/**
  * Resolve a binomial scientific name to its latest Red List category code.
  * Returns the code string, or null when the taxon has no (matched) assessment.
  */
@@ -59,22 +98,39 @@ async function resolveCategory(scientificName) {
   const taxon = await apiGet(
     `/taxa/scientific_name?genus_name=${encodeURIComponent(genus)}&species_name=${encodeURIComponent(species)}`
   );
-  const assessments = taxon?.assessments;
-  if (!Array.isArray(assessments) || assessments.length === 0) return null;
+  const latest = pickLatestAssessment(taxon?.assessments);
+  if (!latest) return null;
 
-  // Prefer the flagged latest assessment, else the newest by year_published.
-  const latest =
-    assessments.find((a) => a.latest === true) ??
-    [...assessments].sort(
-      (a, b) => (b.year_published ?? 0) - (a.year_published ?? 0)
-    )[0];
-  const assessmentId = latest?.assessment_id;
+  // The category code is present on the summary assessment in the vast majority
+  // of cases — no second request needed.
+  const summaryCode = extractCategoryCode(latest);
+  if (summaryCode) return summaryCode;
+
+  // Fallback only when the summary lacks a code: fetch the full assessment.
+  const assessmentId = latest.assessment_id;
   if (assessmentId == null) return null;
-
   await sleep(THROTTLE_MS);
   const assessment = await apiGet(`/assessments/${assessmentId}`);
-  const code = assessment?.red_list_category?.code;
-  return typeof code === "string" && code.length > 0 ? code : null;
+  return extractCategoryCode(assessment);
+}
+
+/**
+ * Build the species-selection query. With `onlyMissing`, restrict to rows whose
+ * `iucn_status IS NULL` so re-runs (e.g. after new BirdNET species are added)
+ * only fill gaps instead of re-hitting the API for already-assessed species.
+ * Exported for testing.
+ */
+export function buildSpeciesQuery(onlyMissing) {
+  const where = [
+    "taxonomic_rank = 'species'",
+    "type != 'system'",
+    ...(onlyMissing ? ["iucn_status IS NULL"] : []),
+  ];
+  return (
+    `SELECT id, scientific_name FROM biochoco_species\n` +
+    `       WHERE ${where.join(" AND ")}\n` +
+    `       ORDER BY scientific_name`
+  );
 }
 
 async function main() {
@@ -85,17 +141,14 @@ async function main() {
     process.exit(1);
   }
 
+  const onlyMissing = process.argv.includes("--only-missing");
+
   const db = new Database(dbPath);
   db.pragma("busy_timeout = 5000");
 
   // Only binomial species rows (skip higher taxa and the 'system' pseudo-type).
-  const rows = db
-    .prepare(
-      `SELECT id, scientific_name FROM biochoco_species
-       WHERE taxonomic_rank = 'species' AND type != 'system'
-       ORDER BY scientific_name`
-    )
-    .all();
+  // With --only-missing, also skip rows that already carry an IUCN status.
+  const rows = db.prepare(buildSpeciesQuery(onlyMissing)).all();
 
   const update = db.prepare(
     `UPDATE biochoco_species SET iucn_status = ? WHERE id = ?`
@@ -107,7 +160,10 @@ async function main() {
   const unmatchedNames = [];
   const erroredNames = [];
 
-  console.log(`[iucn] ${rows.length} species to check (throttle ${THROTTLE_MS}ms)`);
+  console.log(
+    `[iucn] ${rows.length} species to check (throttle ${THROTTLE_MS}ms)` +
+      (onlyMissing ? " [--only-missing: unassessed rows only]" : "")
+  );
 
   for (const row of rows) {
     try {
@@ -143,7 +199,10 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error(`[iucn] Fatal: ${err.message}`);
-  process.exit(1);
-});
+// Run only when invoked directly (not when imported by the unit test).
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((err) => {
+    console.error(`[iucn] Fatal: ${err.message}`);
+    process.exit(1);
+  });
+}

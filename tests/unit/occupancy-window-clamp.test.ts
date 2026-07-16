@@ -116,30 +116,83 @@ describe("buildSites — strict ODK date clamp + anomaly", () => {
   });
 });
 
-describe("buildSites — audio stream uses file stamps, ignores valid_*", () => {
-  it("takes the audio file min/max, not the camera-QA'd valid_* window", () => {
-    // The camera was trimmed to 8 days (valid_*), but the recorder ran its own
-    // span. Audio must use its filename-derived min/max, not the camera trim.
+describe("buildSites — audio window: ODK install start, last-file end", () => {
+  it("clamps a stray pre-install recording to the ODK install date and flags it", () => {
+    // CCN-003 / NAC-006 pattern: a file captured weeks before the sensor was
+    // placed would otherwise open the window early and balloon the matrix.
+    const deployments = [dep({ id: 10, date_start: "2026-03-17", date_end: "2026-04-17" })];
+    // Stray file on 2026-02-01 (pre-install); recorder died 2026-04-10 (battery).
+    const windows = new Map([[10, { min: day("2026-02-01"), max: day("2026-04-10") }]]);
+
+    const { sites, anomalies } = buildSites(deployments, windows, "audio");
+    // Start = ODK install (clamps the stray), end = last file (battery death).
+    expect(sites[0].windowStart.toISOString().slice(0, 10)).toBe("2026-03-17");
+    expect(sites[0].windowEnd.toISOString().slice(0, 10)).toBe("2026-04-10");
+    // The pre-install file is surfaced, not silently dropped.
+    expect(anomalies).toHaveLength(1);
+    expect(anomalies[0]).toMatchObject({
+      siteId: "10",
+      odkStart: "2026-03-17",
+      fileMin: "2026-02-01",
+      fileMax: "2026-04-10",
+      noOverlap: false,
+    });
+  });
+
+  it("ends at the last file when the recorder died before the ODK retrieve date", () => {
+    const deployments = [dep({ id: 11, date_start: "2026-03-17", date_end: "2026-04-17" })];
+    const windows = new Map([[11, { min: day("2026-03-17"), max: day("2026-04-05") }]]);
+
+    const { sites, anomalies } = buildSites(deployments, windows, "audio");
+    expect(sites[0].windowStart.toISOString().slice(0, 10)).toBe("2026-03-17");
+    expect(sites[0].windowEnd.toISOString().slice(0, 10)).toBe("2026-04-05");
+    // Files fall inside [install, last file] — nothing to flag.
+    expect(anomalies).toHaveLength(0);
+  });
+
+  it("uses the ODK install date, never the camera-QA'd valid_* window", () => {
+    // valid_* is trimmed from the CAMERA imagery; audio must not inherit it.
     const deployments = [
       dep({
-        id: 10,
+        id: 12,
         date_start: "2026-02-24",
         date_end: "2026-03-25",
         valid_start: "2026-03-04",
         valid_end: "2026-03-12",
       }),
     ];
-    const windows = new Map([[10, { min: day("2026-02-24"), max: day("2026-03-25") }]]);
+    const windows = new Map([[12, { min: day("2026-02-24"), max: day("2026-03-25") }]]);
 
-    const { sites, anomalies } = buildSites(deployments, windows, "audio");
+    const { sites } = buildSites(deployments, windows, "audio");
+    // ODK install (02-24), not valid_start (03-04).
     expect(sites[0].windowStart.toISOString().slice(0, 10)).toBe("2026-02-24");
     expect(sites[0].windowEnd.toISOString().slice(0, 10)).toBe("2026-03-25");
-    // File span IS the window for audio, so there is nothing to flag.
+  });
+
+  it("opens at ODK install when the recorder started late (leading absences)", () => {
+    const deployments = [dep({ id: 13, date_start: "2026-04-01", date_end: "2026-04-30" })];
+    // First file 2026-04-05 — recorder came online 4 days after install.
+    const windows = new Map([[13, { min: day("2026-04-05"), max: day("2026-04-28") }]]);
+
+    const { sites, anomalies } = buildSites(deployments, windows, "audio");
+    expect(sites[0].windowStart.toISOString().slice(0, 10)).toBe("2026-04-01");
+    expect(sites[0].windowEnd.toISOString().slice(0, 10)).toBe("2026-04-28");
+    // Files fall inside [install, last file]; the leading gap is absence, not anomaly.
+    expect(anomalies).toHaveLength(0);
+  });
+
+  it("falls back to the first file for the start when ODK install is missing", () => {
+    const deployments = [dep({ id: 14, date_start: null, date_end: null })];
+    const windows = new Map([[14, { min: day("2026-03-01"), max: day("2026-03-20") }]]);
+
+    const { sites, anomalies } = buildSites(deployments, windows, "audio");
+    expect(sites[0].windowStart.toISOString().slice(0, 10)).toBe("2026-03-01");
+    expect(sites[0].windowEnd.toISOString().slice(0, 10)).toBe("2026-03-20");
     expect(anomalies).toHaveLength(0);
   });
 
   it("falls back to ODK dates when a deployment has no audio files", () => {
-    const deployments = [dep({ id: 11, date_start: "2026-04-01", date_end: "2026-04-30" })];
+    const deployments = [dep({ id: 15, date_start: "2026-04-01", date_end: "2026-04-30" })];
     const { sites } = buildSites(deployments, new Map(), "audio");
     expect(sites[0].windowStart.toISOString().slice(0, 10)).toBe("2026-04-01");
     expect(sites[0].windowEnd.toISOString().slice(0, 10)).toBe("2026-04-30");

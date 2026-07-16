@@ -36,7 +36,7 @@ interface DeploymentInfo {
   latitude: number | null;
   longitude: number | null;
   ctProjectName: string | null;
-  excluded: boolean;
+  excludedAudio: boolean;
   qaNotes: string | null;
   fieldNotes: string | null;
   uploadAudioFolderId: string | null;
@@ -199,7 +199,7 @@ export function RecordingsShell({
         </div>
 
         <div className="mt-2 border-t pt-2">
-          <CollapsibleSection title="Detalles" defaultOpen={false}>
+          <CollapsibleSection title="Detalles" defaultOpen>
             {deployment.fieldNotes && (
               <div className="rounded-md border bg-amber-50 dark:bg-amber-950/20 px-3 py-2 mb-4">
                 <p className="text-muted-foreground text-xs font-medium uppercase tracking-wide mb-0.5">
@@ -216,7 +216,7 @@ export function RecordingsShell({
               <AudioQaSection
                 deploymentId={deployment.id}
                 canEdit={isEditor}
-                excluded={deployment.excluded ?? false}
+                excludedAudio={deployment.excludedAudio ?? false}
                 qaNotes={deployment.qaNotes}
               />
             </div>

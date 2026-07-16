@@ -123,6 +123,7 @@ export async function fetchResultadosData(): Promise<ActionResult<ResultadosData
       rawHabitatSubs,
       audioDepRows,
       birdnetDepRows,
+      exclusionRows,
     ] = await Promise.all([
       fetchEntities<OdkSiteEntity>(BIOCHOCO_PROJECT_ID, BIOCHOCO_DATASET_SITES),
       db
@@ -131,13 +132,13 @@ export async function fetchResultadosData(): Promise<ActionResult<ResultadosData
           name: deployments.name,
           siteName: deployments.siteName,
           status: deployments.status,
-          excluded: deployments.excluded,
+          excluded: deployments.excludedCamera,
         })
         .from(deployments)
         .where(
           and(
             eq(deployments.cameraTrapProjectId, ctProjectId),
-            or(eq(deployments.excluded, false), isNull(deployments.excluded))
+            or(eq(deployments.excludedCamera, false), isNull(deployments.excludedCamera))
           )
         ),
       db
@@ -166,6 +167,20 @@ export async function fetchResultadosData(): Promise<ActionResult<ResultadosData
             isNotNull(processingJobs.deploymentId)
           )
         ),
+      // ALL deployments with their per-stream exclusion flags (NOT filtered by
+      // exclusion, unlike allDeps above) — used only to flag site cells whose
+      // camera/audio data is entirely excluded, so an all-excluded site shows a
+      // ✕ instead of vanishing from the readiness pool.
+      db
+        .select({
+          id: deployments.id,
+          name: deployments.name,
+          siteName: deployments.siteName,
+          excludedCamera: deployments.excludedCamera,
+          excludedAudio: deployments.excludedAudio,
+        })
+        .from(deployments)
+        .where(eq(deployments.cameraTrapProjectId, ctProjectId)),
     ]);
 
     const sites = transformSites(rawSites);
@@ -175,6 +190,16 @@ export async function fetchResultadosData(): Promise<ActionResult<ResultadosData
     const birdnetDeploymentIds = new Set(
       birdnetDepRows.map((r) => r.deploymentId)
     );
+
+    // Group the full (unfiltered) deployment set by site for the exclusion flags.
+    const siteExclusionDeps = new Map<string, typeof exclusionRows>();
+    for (const dep of exclusionRows) {
+      const sid = deploymentToSiteId(dep, siteIdSet);
+      if (!sid) continue;
+      const list = siteExclusionDeps.get(sid) ?? [];
+      list.push(dep);
+      siteExclusionDeps.set(sid, list);
+    }
 
     // Extract assessed site IDs from habitat submissions
     const assessedSiteIds = new Set<string>();
@@ -253,9 +278,20 @@ export async function fetchResultadosData(): Promise<ActionResult<ResultadosData
         audio = "in_progress";
       }
 
+      // Per-stream exclusion (red ✕): the site has deployments of that stream
+      // but every one is excluded for it. Camera uses all site deployments;
+      // audio uses only the audio-bearing ones (a site with no audio stays a
+      // gray "none", not ✕).
+      const exclDeps = siteExclusionDeps.get(site.siteId) ?? [];
+      const camerasExcluded =
+        exclDeps.length > 0 && exclDeps.every((d) => d.excludedCamera);
+      const audioBearing = exclDeps.filter((d) => audioDeploymentIds.has(d.id));
+      const audioExcluded =
+        audioBearing.length > 0 && audioBearing.every((d) => d.excludedAudio);
+
       return {
         ...site,
-        readiness: { cameras, temperature, habitat, audio },
+        readiness: { cameras, temperature, habitat, audio, camerasExcluded, audioExcluded },
         deploymentCount: deps.length,
       };
     });
@@ -316,7 +352,7 @@ export async function fetchSiteDetail(
         .where(
           and(
             eq(deployments.cameraTrapProjectId, ctProjectId),
-            or(eq(deployments.excluded, false), isNull(deployments.excluded))
+            or(eq(deployments.excludedCamera, false), isNull(deployments.excludedCamera))
           )
         ),
       fetchSubmissions<Record<string, unknown>>(
@@ -693,7 +729,7 @@ async function resolveSiteSnapshot(siteId: string): Promise<{
       .where(
         and(
           eq(deployments.cameraTrapProjectId, ctProjectId),
-          or(eq(deployments.excluded, false), isNull(deployments.excluded))
+          or(eq(deployments.excludedCamera, false), isNull(deployments.excludedCamera))
         )
       ),
   ]);

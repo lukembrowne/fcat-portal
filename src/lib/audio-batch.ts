@@ -50,7 +50,7 @@ export async function selectBatchEligibleAudioDeployments(): Promise<{
       uploadAudioCount: deployments.uploadAudioCount,
       previousAudioCount: deployments.previousAudioCount,
       uploadNewestAudioDate: deployments.uploadNewestAudioDate,
-      excluded: deployments.excluded,
+      excluded: deployments.excludedAudio,
       // NOTE: the outer-table correlation MUST be written as the literal
       // `biochoco_deployments.id`, NOT `${deployments.id}`. Drizzle renders an
       // interpolated column inside a raw `sql` fragment UNQUALIFIED (`"id"`),

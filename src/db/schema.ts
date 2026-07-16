@@ -163,8 +163,12 @@ export const deployments = sqliteTable(
     metadataSource: text("metadata_source", {
       enum: ["manual", "odk", "drive"],
     }),
-    // QA metadata
-    excluded: integer("excluded", { mode: "boolean" }).notNull().default(false),
+    // QA metadata. Exclusion is per-stream: a deployment whose audio recorder
+    // failed but whose camera is fine (e.g. CCN-010) is dropped from audio
+    // analyses only, and vice versa. (Replaced the single shared `excluded`
+    // flag — migrate-split-exclusion.mjs backfills both from it, then drops it.)
+    excludedAudio: integer("excluded_audio", { mode: "boolean" }).notNull().default(false),
+    excludedCamera: integer("excluded_camera", { mode: "boolean" }).notNull().default(false),
     validStart: text("valid_start"),
     validEnd: text("valid_end"),
     qaNotes: text("qa_notes"),
@@ -581,6 +585,14 @@ export const species = sqliteTable("biochoco_species", {
   // IUCN Red List category code (LC/NT/VU/EN/CR/DD/EW/EX). Bare TEXT, no CHECK —
   // validation lives in scripts/backfill-iucn-status.mjs. Null when unassessed.
   iucnStatus: text("iucn_status"),
+  // Whether this species is offered in the camera-trap annotation picker.
+  // Default true keeps every curated species selectable; the BirdNET taxonomy
+  // import/auto-add sets it false for audio-only birds so the ~6k label set
+  // doesn't flood the annotation dropdown. Name/IUCN resolution ignores this
+  // flag (it joins the full table); only getSpeciesList() filters on it.
+  cameraSelectable: integer("camera_selectable", { mode: "boolean" })
+    .notNull()
+    .default(true),
 });
 
 // ---------------------------------------------------------------------------

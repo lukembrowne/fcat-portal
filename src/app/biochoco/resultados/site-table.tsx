@@ -4,7 +4,7 @@ import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import type { SiteWithReadiness, ReadinessStatus } from "./types";
 import { getHabitatName } from "../overview/types";
-import { CheckCircle2, Clock, Minus } from "lucide-react";
+import { CheckCircle2, Clock, Minus, XCircle } from "lucide-react";
 import { SortIcon } from "@/components/sort-icon";
 import {
   Table,
@@ -27,6 +27,15 @@ function ReadinessIcon({ status }: { status: ReadinessStatus }) {
   if (status === "in_progress")
     return <Clock className="h-4 w-4 text-amber-500" />;
   return <Minus className="h-4 w-4 text-gray-400" />;
+}
+
+/** Red ✕ shown when a site's data for a stream is entirely excluded. */
+function ExcludedIcon({ label }: { label: string }) {
+  return (
+    <span title={label} className="inline-flex">
+      <XCircle className="h-4 w-4 text-red-600" aria-label={label} />
+    </span>
+  );
 }
 
 export function SiteTable({ sites }: SiteTableProps) {
@@ -139,7 +148,11 @@ export function SiteTable({ sites }: SiteTableProps) {
               <TableCell className="text-center">{site.deploymentCount}</TableCell>
               <TableCell className="text-center">
                 <div className="flex justify-center">
-                  <ReadinessIcon status={site.readiness.cameras} />
+                  {site.readiness.camerasExcluded ? (
+                    <ExcludedIcon label="Excluida del análisis de cámara" />
+                  ) : (
+                    <ReadinessIcon status={site.readiness.cameras} />
+                  )}
                 </div>
               </TableCell>
               <TableCell className="text-center">
@@ -154,7 +167,11 @@ export function SiteTable({ sites }: SiteTableProps) {
               </TableCell>
               <TableCell className="text-center">
                 <div className="flex justify-center">
-                  <ReadinessIcon status={site.readiness.audio} />
+                  {site.readiness.audioExcluded ? (
+                    <ExcludedIcon label="Excluida del análisis de audio" />
+                  ) : (
+                    <ReadinessIcon status={site.readiness.audio} />
+                  )}
                 </div>
               </TableCell>
             </TableRow>

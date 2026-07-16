@@ -36,7 +36,7 @@ export async function runAudioSyncWorker(jobId: number): Promise<void> {
     listDeployments: async (job) => {
       const baseFilter = and(
         isNotNull(deployments.uploadAudioFolderId),
-        eq(deployments.excluded, false)
+        eq(deployments.excludedAudio, false)
       );
       return job.cameraTrapProjectId
         ? await db

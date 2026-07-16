@@ -127,7 +127,7 @@ export async function GET(request: NextRequest) {
       and(
         inArray(deployments.id, ids),
         inArray(deployments.status, PROCESSED_STATUSES),
-        eq(deployments.excluded, false),
+        eq(deployments.excludedCamera, false),
         projectAccessFilter,
       )
     );

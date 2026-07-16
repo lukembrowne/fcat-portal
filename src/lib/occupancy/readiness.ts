@@ -31,7 +31,16 @@ export interface ReadinessDetection {
 }
 
 export interface ReadinessSpeciesRow {
+  /** Canonical scientific name (the occupancy key). */
   species: string;
+  /**
+   * Display names + IUCN status resolved from `biochoco_species`, populated by
+   * the server action (getOccupancyReadiness) — NOT by the pure compute. Null
+   * when the species is absent from the lookup; callers fall back to `species`.
+   */
+  commonName?: string | null;
+  spanishName?: string | null;
+  iucnStatus?: string | null;
   eligible: boolean;
   reasons: string[];
   nSites: number;

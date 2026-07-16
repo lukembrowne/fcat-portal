@@ -63,7 +63,7 @@ export default async function AudioDetailPage({
       latitude: deployments.latitude,
       longitude: deployments.longitude,
       ctProjectName: cameraTrapProjects.name,
-      excluded: deployments.excluded,
+      excludedAudio: deployments.excludedAudio,
       qaNotes: deployments.qaNotes,
       fieldNotes: deployments.fieldNotes,
       uploadAudioFolderId: deployments.uploadAudioFolderId,

@@ -160,8 +160,19 @@ export function buildSites(
     let start: CaptureDay | null;
     let end: CaptureDay | null;
     if (windowSource === "audio") {
-      start = derived?.min ?? parseYmd(d.date_start) ?? null;
-      end = derived?.max ?? parseYmd(d.date_end) ?? null;
+      // Audio window: ODK install (date_start) is the authoritative "sensor is
+      // now deployed" moment, so it sets the START and clamps out stray files
+      // captured before placement (e.g. NAC-006 opening 2025-12-12, CCN-003
+      // 2025-11-17 — a single early file would otherwise balloon the window to
+      // 60–86 days and NA-pad the whole matrix). The END stays last-file-first:
+      // a recorder that died before the ODK retrieve date (dead battery) reports
+      // its real shutoff, not the scheduled retrieval. authStart/authEnd are set
+      // from the ODK dates so the clamp-anomaly block below surfaces files that
+      // fall outside the ODK install window instead of silently dropping them.
+      authStart = parseYmd(d.date_start);
+      authEnd = parseYmd(d.date_end);
+      start = authStart ?? derived?.min ?? null;
+      end = derived?.max ?? authEnd ?? null;
     } else {
       authStart = parseYmd(d.valid_start) ?? parseYmd(d.date_start);
       authEnd = parseYmd(d.valid_end) ?? parseYmd(d.date_end);
@@ -182,10 +193,11 @@ export function buildSites(
       continue;
     }
     // Notify when the authoritative (valid/ODK) window trims real file coverage:
-    // file dates outside it mean either a bad ODK date or mis-timestamped files.
-    // Those detections become NA in-model; surface the mismatch, don't hide it.
-    // Only meaningful when the window came from a validated/ODK source, not from
-    // the file-derived fallback (which can never trim its own coverage).
+    // file dates outside it mean either a bad ODK date, mis-timestamped files, or
+    // (audio) recordings captured before the sensor was installed. Those
+    // detections become NA in-model; surface the mismatch, don't hide it. Only
+    // meaningful when the window came from a validated/ODK source, not from the
+    // file-derived fallback (which can never trim its own coverage).
     if (authStart && authEnd && derived) {
       const before = derived.min.getTime() < start.getTime();
       const after = derived.max.getTime() > end.getTime();
@@ -242,17 +254,21 @@ export function fetchOccupancyInputs(
 
   // Occupancy site pool = BioChoco camera-trap deployments whose imagery is
   // confirmed: verified (or verified_empty — a real survey with zero detections,
-  // kept as an absence site) and not excluded. Both streams share this pool for
-  // consistency. Scoped to the BioChoco ct project so deployments belonging to
-  // OTHER camera-trap projects (which have no BioChoco ODK site entity and would
-  // otherwise force the habitat covariate to be dropped for every model) never
-  // enter the analysis. Matches the app-wide BioChoco scoping used elsewhere
-  // (see getBiochocoCameraTrapProjectId in biochoco/resultados/habitat-actions.ts).
+  // kept as an absence site) and not excluded. Exclusion is PER STREAM: the
+  // camera stream drops excluded_camera=1 deployments, the audio stream drops
+  // excluded_audio=1, so a failed audio recorder (CCN-010) leaves the camera in
+  // the analysis and vice versa. Scoped to the BioChoco ct project so deployments
+  // belonging to OTHER camera-trap projects (which have no BioChoco ODK site
+  // entity and would otherwise force the habitat covariate to be dropped for
+  // every model) never enter the analysis. Matches the app-wide BioChoco scoping
+  // used elsewhere (see getBiochocoCameraTrapProjectId in
+  // biochoco/resultados/habitat-actions.ts).
+  const excludedCol = stream === "camera" ? sql`excluded_camera` : sql`excluded_audio`;
   const deployments = db.all(sql`
     SELECT id, site_name, name, latitude, longitude,
            date_start, date_end, valid_start, valid_end, field_notes
     FROM biochoco_deployments
-    WHERE excluded = 0
+    WHERE ${excludedCol} = 0
       AND status IN ('verified', 'verified_empty')
       AND ct_project_id = (SELECT id FROM ct_projects WHERE name = 'BioChoco')
   `) as DeploymentRow[];

@@ -12,12 +12,16 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { SortIcon } from "@/components/sort-icon";
+import { IucnCode } from "@/components/iucn-code";
+import { useNameLang, displayCommonName } from "./name-lang";
 import type { ReadinessSpeciesRow, OccupancyStream } from "@/lib/occupancy/readiness";
+import type { SpeciesModelStatus } from "@/lib/occupancy/model-status";
 
-/** Fitted ψ + p per species (from the latest completed run), keyed by species. */
-export type ModeledMap = Map<string, { psi: number | null; p: number | null }>;
+/** Per-species model outcome from the latest completed run, keyed by species. */
+export type StatusMap = Map<string, SpeciesModelStatus>;
 
 type SortKey =
+  | "commonName"
   | "species"
   | "nSites"
   | "nSitesDetected"
@@ -29,7 +33,8 @@ type SortKey =
   | "eligible";
 
 const COLUMNS: { key: SortKey; label: string; numeric: boolean; title?: string }[] = [
-  { key: "species", label: "Especie", numeric: false },
+  { key: "commonName", label: "Nombre común", numeric: false },
+  { key: "species", label: "Nombre científico", numeric: false },
   { key: "nSitesDetected", label: "Sitios con detección", numeric: true },
   { key: "nSites", label: "Sitios muestreados", numeric: true },
   {
@@ -60,7 +65,11 @@ const COLUMNS: { key: SortKey; label: string; numeric: boolean; title?: string }
   { key: "eligible", label: "Estado", numeric: false },
 ];
 
-type Row = ReadinessSpeciesRow & { modeledP: number | null; modeledPsi: number | null };
+type Row = ReadinessSpeciesRow & {
+  modeledP: number | null;
+  modeledPsi: number | null;
+  status: SpeciesModelStatus | null;
+};
 
 export function ReadinessTable({
   rows,
@@ -69,8 +78,12 @@ export function ReadinessTable({
 }: {
   rows: ReadinessSpeciesRow[];
   stream: OccupancyStream;
-  modeled: ModeledMap;
+  modeled: StatusMap;
 }) {
+  const lang = useNameLang();
+  /** Displayed common name in the selected language (falls back gracefully). */
+  const displayName = (r: ReadinessSpeciesRow): string =>
+    displayCommonName(r, lang);
   // Default: eligible first, then most-spread — matches the action's ordering.
   const [sortKey, setSortKey] = useState<SortKey>("nSitesDetected");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
@@ -78,8 +91,14 @@ export function ReadinessTable({
   const merged: Row[] = useMemo(
     () =>
       rows.map((r) => {
-        const m = modeled.get(r.species);
-        return { ...r, modeledP: m?.p ?? null, modeledPsi: m?.psi ?? null };
+        const m = modeled.get(r.species) ?? null;
+        const isModeled = m?.kind === "modeled";
+        return {
+          ...r,
+          modeledP: isModeled ? m.p : null,
+          modeledPsi: isModeled ? m.psi : null,
+          status: m,
+        };
       }),
     [rows, modeled],
   );
@@ -88,7 +107,11 @@ export function ReadinessTable({
     const copy = [...merged];
     copy.sort((a, b) => {
       let cmp: number;
-      if (sortKey === "species") {
+      if (sortKey === "commonName") {
+        // Sort by the displayed (common) name, falling back to the scientific
+        // string when unmatched; scientific name is the stable tiebreaker below.
+        cmp = displayName(a).localeCompare(displayName(b));
+      } else if (sortKey === "species") {
         cmp = a.species.localeCompare(b.species);
       } else if (sortKey === "eligible") {
         cmp = (a.eligible ? 1 : 0) - (b.eligible ? 1 : 0);
@@ -106,13 +129,13 @@ export function ReadinessTable({
       return sortDir === "asc" ? cmp : -cmp;
     });
     return copy;
-  }, [merged, sortKey, sortDir]);
+  }, [merged, sortKey, sortDir, lang]);
 
   const toggle = (key: SortKey) => {
     if (key === sortKey) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
     else {
       setSortKey(key);
-      setSortDir(key === "species" ? "asc" : "desc");
+      setSortDir(key === "species" || key === "commonName" ? "asc" : "desc");
     }
   };
 
@@ -149,20 +172,26 @@ export function ReadinessTable({
           </TableHeader>
           <TableBody>
             {sorted.map((r) => {
-              const isModeled = r.modeledPsi != null || r.modeledP != null;
+              const isModeled = r.status?.kind === "modeled";
               return (
                 <TableRow key={r.species}>
-                  <TableCell className="font-medium italic">
-                    {isModeled ? (
-                      <Link
-                        href={`/ocupacion/${encodeURIComponent(r.species)}?stream=${stream}`}
-                        className="text-emerald-700 dark:text-emerald-400 hover:underline"
-                      >
-                        {r.species}
-                      </Link>
-                    ) : (
-                      r.species
-                    )}
+                  <TableCell className="font-medium">
+                    <span className="inline-flex items-center gap-1.5">
+                      {isModeled ? (
+                        <Link
+                          href={`/ocupacion/${encodeURIComponent(r.species)}?stream=${stream}`}
+                          className="text-emerald-700 dark:text-emerald-400 hover:underline"
+                        >
+                          {displayName(r)}
+                        </Link>
+                      ) : (
+                        displayName(r)
+                      )}
+                      <IucnCode status={r.iucnStatus} />
+                    </span>
+                  </TableCell>
+                  <TableCell className="italic text-muted-foreground">
+                    {r.species}
                   </TableCell>
                   <TableCell className="text-right">{r.nSitesDetected}</TableCell>
                   <TableCell className="text-right">{r.nSites}</TableCell>
@@ -178,11 +207,7 @@ export function ReadinessTable({
                     {r.modeledPsi != null ? `${(r.modeledPsi * 100).toFixed(0)}%` : "—"}
                   </TableCell>
                   <TableCell>
-                    {r.eligible ? (
-                      <Badge className="bg-emerald-600 hover:bg-emerald-600">
-                        Listo para modelar
-                      </Badge>
-                    ) : (
+                    {!r.eligible ? (
                       <div className="space-y-1">
                         <Badge
                           variant="outline"
@@ -196,6 +221,30 @@ export function ReadinessTable({
                           ))}
                         </ul>
                       </div>
+                    ) : r.status?.kind === "ceiling" ? (
+                      <div className="space-y-1">
+                        <Badge
+                          variant="outline"
+                          className="border-sky-500 text-sky-700 dark:text-sky-400"
+                        >
+                          Casi ubicua — ψ no estimable
+                        </Badge>
+                        <p className="text-xs text-muted-foreground">{r.status.reason}</p>
+                      </div>
+                    ) : r.status?.kind === "unfit" ? (
+                      <div className="space-y-1">
+                        <Badge
+                          variant="outline"
+                          className="border-slate-400 text-slate-600 dark:text-slate-300"
+                        >
+                          No estimable
+                        </Badge>
+                        <p className="text-xs text-muted-foreground">{r.status.reason}</p>
+                      </div>
+                    ) : (
+                      <Badge className="bg-emerald-600 hover:bg-emerald-600">
+                        Listo para modelar
+                      </Badge>
                     )}
                   </TableCell>
                 </TableRow>

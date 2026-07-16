@@ -78,7 +78,7 @@ export interface AudioDeploymentRow {
   verifiedCount: number;
   unverifiedCount: number;
   isBirdnetProcessing: boolean;
-  excluded: boolean;
+  excludedAudio: boolean;
   displayStatus: string;
   /** Number of audio_files where compressed=false (still WAV). */
   uncompressedFileCount: number;
@@ -150,7 +150,7 @@ export async function fetchAudioDeployments(
       dateEnd: deployments.dateEnd,
       ctProjectName: cameraTrapProjects.name,
       uploadAudioFolderId: deployments.uploadAudioFolderId,
-      excluded: deployments.excluded,
+      excludedAudio: deployments.excludedAudio,
     })
     .from(deployments)
     .leftJoin(
@@ -2018,7 +2018,7 @@ export async function bulkUpdateAudioMetadata(
     longitude?: number | null;
     dateStart?: string | null;
     dateEnd?: string | null;
-    excluded?: boolean;
+    excludedAudio?: boolean;
     qaNotes?: string | null;
   }
 ): Promise<ActionResult<{ count: number }>> {
@@ -2049,7 +2049,7 @@ export async function bulkUpdateAudioMetadata(
     if (fields.longitude !== undefined) updates.longitude = fields.longitude;
     if (fields.dateStart !== undefined) updates.dateStart = fields.dateStart || null;
     if (fields.dateEnd !== undefined) updates.dateEnd = fields.dateEnd || null;
-    if (fields.excluded !== undefined) updates.excluded = fields.excluded;
+    if (fields.excludedAudio !== undefined) updates.excludedAudio = fields.excludedAudio;
     if (fields.qaNotes !== undefined) updates.qaNotes = fields.qaNotes;
 
     await db
@@ -2305,7 +2305,7 @@ export async function clearAudioIndex(
 export async function updateAudioDeploymentQa(
   deploymentId: number,
   fields: {
-    excluded: boolean;
+    excludedAudio: boolean;
     qaNotes: string | null;
   }
 ): Promise<ActionResult> {
@@ -2329,7 +2329,7 @@ export async function updateAudioDeploymentQa(
     await db
       .update(deployments)
       .set({
-        excluded: fields.excluded,
+        excludedAudio: fields.excludedAudio,
         qaNotes: fields.qaNotes,
         updatedAt: new Date(),
       })

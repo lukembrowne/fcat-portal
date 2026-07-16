@@ -471,7 +471,7 @@ export function DeploymentsTable({
             <div className="flex flex-col gap-1">
               <span className="inline-flex items-center gap-1">
                 <StatusBadge status={displayStatus} type="deployment" />
-                {d.excluded && (
+                {d.excludedCamera && (
                   <span className="inline-flex items-center rounded-full border border-destructive/30 bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium text-destructive">
                     Excluida
                   </span>
@@ -1055,7 +1055,7 @@ export function DeploymentsTable({
                         return (
                           <TableRow
                             key={row.id}
-                            className={`group/row cursor-pointer hover:bg-muted/50 ${dep.excluded ? "opacity-50" : ""}`}
+                            className={`group/row cursor-pointer hover:bg-muted/50 ${dep.excludedCamera ? "opacity-50" : ""}`}
                             data-state={row.getIsSelected() ? "selected" : undefined}
                             onClick={(e) => {
                               // React synthetic events bubble through the React tree, not the DOM.

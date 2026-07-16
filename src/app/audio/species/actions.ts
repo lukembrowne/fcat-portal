@@ -106,6 +106,7 @@ export async function getAudioSpeciesIndex(
       scientificName: agg.scientificName,
       commonName: sp?.commonName ?? agg.scientificName,
       spanishName: sp?.spanishName ?? null,
+      iucnStatus: sp?.iucnStatus ?? null,
       detectionCount: agg.detectionCount,
       siteCount: agg.siteCount,
       lastSeen: agg.lastSeen,

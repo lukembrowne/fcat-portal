@@ -186,7 +186,7 @@ export function AudioDeploymentsShell({
                   {d.verifiedCount}/{d.verifiedCount + d.unverifiedCount} revisadas
                 </span>
               )}
-              {d.excluded && (
+              {d.excludedAudio && (
                 <span className="inline-flex items-center rounded-full border border-destructive/30 bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium text-destructive">
                   Excluida
                 </span>
@@ -671,7 +671,7 @@ export function AudioDeploymentsShell({
                         return (
                           <TableRow
                             key={row.id}
-                            className={`group/row cursor-pointer hover:bg-muted/50 ${dep.excluded ? "opacity-50" : ""}`}
+                            className={`group/row cursor-pointer hover:bg-muted/50 ${dep.excludedAudio ? "opacity-50" : ""}`}
                             data-state={row.getIsSelected() ? "selected" : undefined}
                             onClick={(e) => {
                               // React synthetic events bubble through the React tree, not the DOM.

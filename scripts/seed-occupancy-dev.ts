@@ -252,8 +252,8 @@ export function seedOccupancyDev(
   const insDep = db.prepare(
     `INSERT INTO biochoco_deployments
        (project_id, ct_project_id, name, site_name, latitude, longitude, date_start, date_end,
-        status, excluded, field_notes)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'verified', 0, ?)`,
+        status, excluded_audio, excluded_camera, field_notes)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'verified', 0, 0, ?)`,
   );
   const insImg = db.prepare(
     `INSERT INTO biochoco_images (deployment_id, filename, status)

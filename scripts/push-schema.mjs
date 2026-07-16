@@ -887,7 +887,12 @@ const migrations = [
   // Camera trap project-level permissions (2026-02-22)
   `ALTER TABLE biochoco_deployments ADD COLUMN ct_project_id INTEGER REFERENCES ct_projects(id) ON DELETE SET NULL`,
   // Deployment QA metadata (2026-02-23)
-  `ALTER TABLE biochoco_deployments ADD COLUMN excluded INTEGER NOT NULL DEFAULT 0`,
+  // Per-stream exclusion (2026-07-16): replaced the single `excluded` flag with
+  // excluded_audio + excluded_camera. Existing prod DBs keep their `excluded`
+  // column until scripts/migrate-split-exclusion.mjs backfills + drops it; new
+  // DBs never create it. These ALTERs are idempotent (already-exists is ignored).
+  `ALTER TABLE biochoco_deployments ADD COLUMN excluded_audio INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE biochoco_deployments ADD COLUMN excluded_camera INTEGER NOT NULL DEFAULT 0`,
   `ALTER TABLE biochoco_deployments ADD COLUMN valid_start TEXT`,
   `ALTER TABLE biochoco_deployments ADD COLUMN valid_end TEXT`,
   `ALTER TABLE biochoco_deployments ADD COLUMN qa_notes TEXT`,
@@ -1027,6 +1032,13 @@ const migrations = [
   `ALTER TABLE site_share_tokens ADD COLUMN first_viewed_at INTEGER`,
   `ALTER TABLE site_share_tokens ADD COLUMN last_viewed_at INTEGER`,
   `ALTER TABLE site_share_tokens ADD COLUMN view_count INTEGER NOT NULL DEFAULT 0`,
+
+  // Species: whether offered in the camera-trap annotation picker. Default 1
+  // keeps every existing curated species selectable; the BirdNET taxonomy
+  // import + per-run auto-add set it to 0 for audio-only birds so the label
+  // set doesn't flood the annotation dropdown. Name/IUCN resolution ignores
+  // this flag; only getSpeciesList() filters on it (2026-07-16).
+  `ALTER TABLE biochoco_species ADD COLUMN camera_selectable INTEGER NOT NULL DEFAULT 1`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }

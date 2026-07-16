@@ -107,7 +107,7 @@ function sortRollups(rollups: HabitatSpeciesRollup[]): HabitatSpeciesRollup[] {
 
 /**
  * Group BioChoco deployments into habitat buckets. Excludes deployments
- * marked `excluded=true`. Returns a map habitatKey → deployment rows + a
+ * marked `excluded_camera=true`. Returns a map habitatKey → deployment rows + a
  * lookup deploymentId → habitatKey for downstream joins.
  */
 async function loadDeploymentsByHabitat(
@@ -129,7 +129,7 @@ async function loadDeploymentsByHabitat(
     .where(
       and(
         eq(deployments.cameraTrapProjectId, ctProjectId),
-        or(eq(deployments.excluded, false), isNull(deployments.excluded)),
+        or(eq(deployments.excludedCamera, false), isNull(deployments.excludedCamera)),
       ),
     );
 

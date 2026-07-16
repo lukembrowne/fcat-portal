@@ -19,9 +19,11 @@ import {
   processingJobs,
   audioDetections,
   audioIdentifications,
+  species,
 } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { log } from "@/lib/log";
+import { resolveBirdnetName, isNonSpeciesLabel } from "@/lib/birdnet-taxonomy";
 
 const BIRDNET_SCRIPT = path.join(
   process.cwd(),
@@ -132,6 +134,9 @@ export async function runBirdNETAnalysis(
 
     let totalProcessed = 0;
     let totalDetections = 0;
+    // Distinct scientific names seen this run — used to auto-add any newly
+    // detected species to the shared lookup on completion (U4).
+    const detectedSpecies = new Set<string>();
     let lastError: string | null = null;
     const startedAt = Date.now();
     let lastProgressLoggedAt = 0;
@@ -272,6 +277,7 @@ export async function runBirdNETAnalysis(
               verificationStatus: "unverified",
             });
 
+            detectedSpecies.add(det.scientific_name);
             totalDetections++;
           }
 
@@ -318,7 +324,7 @@ export async function runBirdNETAnalysis(
       log.warn({ jobId, line: line.slice(0, 300) }, "[birdnet] stderr");
     });
 
-    proc.on("close", (code) => {
+    proc.on("close", async (code) => {
       if (code !== 0 && code !== null) {
         const stderr = stderrChunks.join("").slice(-1000);
         log.error({ code, stderr }, "[birdnet] Process exited with error");
@@ -329,6 +335,16 @@ export async function runBirdNETAnalysis(
           error: lastError || `BirdNET exited with code ${code}`,
         });
         return;
+      }
+
+      // Keep the shared species lookup current: add any newly-detected species
+      // (names from the vendored reference) so audio/occupancy resolve common
+      // names + IUCN without a manual re-seed. Best-effort — a catalog hiccup
+      // must never fail the analysis itself.
+      try {
+        await upsertNewBirdnetSpecies(detectedSpecies, jobId);
+      } catch (err) {
+        log.warn({ err, jobId }, "[birdnet] Failed to add new species to lookup");
       }
 
       resolve({
@@ -348,4 +364,52 @@ export async function runBirdNETAnalysis(
       });
     });
   });
+}
+
+/**
+ * Add any scientific names not yet in `biochoco_species`, tagged `type='bird'`
+ * and `camera_selectable=0` (audio-only), with names from the vendored BirdNET
+ * reference (falling back to the scientific string when absent). Non-species
+ * labels are skipped, and species already present are left untouched — this
+ * never clobbers `iucn_status` or an existing `camera_selectable` flag.
+ *
+ * Exported for testing. Returns the number of species added.
+ */
+export async function upsertNewBirdnetSpecies(
+  scientificNames: Set<string>,
+  jobId?: number,
+): Promise<number> {
+  const names = [...scientificNames]
+    .map((n) => n?.trim())
+    .filter((n): n is string => !!n && !isNonSpeciesLabel(n));
+  if (names.length === 0) return 0;
+
+  const existingRows = await db
+    .select({ scientificName: species.scientificName })
+    .from(species)
+    .where(inArray(species.scientificName, names));
+  const existing = new Set(existingRows.map((r) => r.scientificName));
+  const missing = names.filter((n) => !existing.has(n));
+  if (missing.length === 0) return 0;
+
+  let added = 0;
+  for (const name of missing) {
+    const info = resolveBirdnetName(name);
+    await db
+      .insert(species)
+      .values({
+        scientificName: name,
+        commonName: info?.commonName || name, // fallback: scientific string
+        spanishName: info?.spanishName ?? null,
+        type: "bird",
+        taxonomicRank: "species",
+        cameraSelectable: false,
+      })
+      .onConflictDoNothing();
+    added++;
+  }
+  if (added > 0) {
+    log.info({ jobId, added }, "[birdnet] Added new species to lookup");
+  }
+  return added;
 }

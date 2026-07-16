@@ -21,7 +21,7 @@ const DDL = `
     site_name TEXT,
     latitude REAL, longitude REAL,
     date_start TEXT, date_end TEXT,
-    status TEXT, excluded INTEGER DEFAULT 0,
+    status TEXT, excluded_audio INTEGER DEFAULT 0, excluded_camera INTEGER DEFAULT 0,
     field_notes TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch()),
     updated_at INTEGER NOT NULL DEFAULT (unixepoch())

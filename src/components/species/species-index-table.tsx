@@ -5,6 +5,7 @@ import Link from "next/link";
 import type { SpeciesIndexRow } from "@/app/camera-trap/species/actions";
 import { speciesSlug } from "@/lib/species-slug";
 import { Input } from "@/components/ui/input";
+import { IucnCode } from "@/components/iucn-code";
 
 interface SpeciesIndexTableProps {
   rows: SpeciesIndexRow[];
@@ -135,7 +136,10 @@ export function SpeciesIndexTable({ rows, basePath, emptyState }: SpeciesIndexTa
                     href={`${basePath}/${speciesSlug(r.scientificName)}`}
                     className="block"
                   >
-                    <div className="font-medium">{r.commonName}</div>
+                    <div className="font-medium flex items-center gap-1.5">
+                      <span>{r.commonName}</span>
+                      <IucnCode status={r.iucnStatus} />
+                    </div>
                     <div className="text-xs text-muted-foreground italic">
                       {r.scientificName}
                       {r.spanishName ? ` · ${r.spanishName}` : ""}

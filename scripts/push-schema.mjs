@@ -1009,6 +1009,24 @@ const migrations = [
   // Bare TEXT (no CHECK) to avoid a table rebuild; populated by
   // scripts/backfill-iucn-status.mjs (2026-07-14).
   `ALTER TABLE biochoco_species ADD COLUMN iucn_status TEXT`,
+
+  // Landowner dashboard: per-site personalization on the public share page —
+  // a free-text note and one curated "example recording" audio clip. Both
+  // nullable; edited in the internal share popover. Seeds of the page-builder
+  // (2026-07-15).
+  `ALTER TABLE site_share_tokens ADD COLUMN landowner_note TEXT`,
+  `ALTER TABLE site_share_tokens ADD COLUMN featured_audio_id INTEGER`,
+
+  // Landowner dashboard: per-site page-builder config (ordered JSON blocks).
+  // Null → default layout. See src/lib/landowner/page-config.ts (2026-07-15).
+  `ALTER TABLE site_share_tokens ADD COLUMN page_config TEXT`,
+
+  // Landowner dashboard: lightweight view tracking on the public share page —
+  // first/last opened timestamps (Unix seconds, nullable) + a running view
+  // count. Stamped by recordSiteView() on public page render (2026-07-16).
+  `ALTER TABLE site_share_tokens ADD COLUMN first_viewed_at INTEGER`,
+  `ALTER TABLE site_share_tokens ADD COLUMN last_viewed_at INTEGER`,
+  `ALTER TABLE site_share_tokens ADD COLUMN view_count INTEGER NOT NULL DEFAULT 0`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }

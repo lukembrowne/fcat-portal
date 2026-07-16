@@ -2,10 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import {
-  createSiteShareLink,
-  revokeSiteShareLink,
-} from "../actions";
+import { createSiteShareLink, revokeSiteShareLink } from "../actions";
 import { Button } from "@/components/ui/button";
 import {
   Popover,

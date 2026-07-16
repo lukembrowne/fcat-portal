@@ -46,6 +46,12 @@ interface SiteResultsContentProps {
   variant: "internal" | "public";
   /** Site label woven into per-photo share captions (public view only). */
   shareSiteLabel?: string;
+  /**
+   * Whether to render the leading "Fauna" species-grid section. Defaults to
+   * true. The public landowner page sets this false because the species are
+   * already shown in the swipe carousel above.
+   */
+  showFauna?: boolean;
 }
 
 export function SiteResultsContent({
@@ -55,6 +61,7 @@ export function SiteResultsContent({
   speciesHref,
   variant,
   shareSiteLabel,
+  showFauna = true,
 }: SiteResultsContentProps) {
   const showAudio =
     variant === "internal" && audio !== null && audio.hasAudio;
@@ -63,22 +70,24 @@ export function SiteResultsContent({
 
   return (
     <div className="space-y-6">
-      <section>
-        <h2 className="text-lg font-semibold flex items-center gap-2 mb-4">
-          <Camera className="h-5 w-5" />
-          Fauna
-        </h2>
-        <SpeciesCards
-          species={data.species}
-          totalDetections={data.species.reduce(
-            (sum, s) => sum + s.detectionCount,
-            0,
-          )}
-          resolveImageUrl={resolveImageUrl}
-          speciesHref={speciesHref}
-          shareSiteLabel={shareSiteLabel}
-        />
-      </section>
+      {showFauna && (
+        <section>
+          <h2 className="text-lg font-semibold flex items-center gap-2 mb-4">
+            <Camera className="h-5 w-5" />
+            Fauna
+          </h2>
+          <SpeciesCards
+            species={data.species}
+            totalDetections={data.species.reduce(
+              (sum, s) => sum + s.detectionCount,
+              0,
+            )}
+            resolveImageUrl={resolveImageUrl}
+            speciesHref={speciesHref}
+            shareSiteLabel={shareSiteLabel}
+          />
+        </section>
+      )}
 
       {hasAudioSpecies && (
         <>

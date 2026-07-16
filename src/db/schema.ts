@@ -1407,6 +1407,26 @@ export const siteShareTokens = sqliteTable(
     biochocoSiteId: text("biochoco_site_id").notNull(),
     deploymentIds: text("deployment_ids").notNull(),
     heroImageId: integer("hero_image_id"),
+    // Personalized landowner-facing message shown on the public page (nullable,
+    // plain text). Seed of the future page-builder — a text block, curated by
+    // the team next to the share link. See featuredAudioId for the audio block.
+    landownerNote: text("landowner_note"),
+    // Curated "example recording" for the site: an audio_files.id whose
+    // deployment is in deploymentIds. Streamed via the token-gated
+    // /api/public/site-audio route. Nullable = no audio block rendered.
+    featuredAudioId: integer("featured_audio_id"),
+    // Page-builder config: ordered typed content blocks as JSON. Null → the
+    // public page falls back to the default layout (hero/note/audio derived
+    // from the columns above). See src/lib/landowner/page-config.ts.
+    pageConfig: text("page_config"),
+    // Lightweight view tracking for the public landowner page. Stamped by the
+    // fire-and-forget recordSiteView() action on public page render (never in
+    // the cached fetch / generateMetadata). first/last are nullable (null =
+    // never opened → "publicado" status); count defaults to 0. Soft signal,
+    // not analytics — small over-count from bots/prefetch is accepted.
+    firstViewedAt: integer("first_viewed_at", { mode: "timestamp" }),
+    lastViewedAt: integer("last_viewed_at", { mode: "timestamp" }),
+    viewCount: integer("view_count").notNull().default(0),
     createdBy: text("created_by").notNull(),
     label: text("label"),
     revokedAt: integer("revoked_at", { mode: "timestamp" }),

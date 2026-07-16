@@ -30,11 +30,45 @@ interface SidebarNavProps {
   user: AuthUser;
 }
 
+/**
+ * Builds the ordered children of the BioChocó "Página pública" group.
+ * Pure + exported for unit testing (no DB, no React).
+ */
+export function buildBiochocoPublicNav({
+  isBiochocoEditor,
+  isSuperAdmin,
+}: {
+  isBiochocoEditor: boolean;
+  isSuperAdmin: boolean;
+}): NavItem[] {
+  const publicChildren: NavItem[] = [];
+  if (isBiochocoEditor) {
+    publicChildren.push({
+      label: "Páginas de fincas",
+      href: "/biochoco/paginas-publicas",
+    });
+  }
+  if (isSuperAdmin) {
+    publicChildren.push({
+      label: "Resumen divulgativo",
+      href: "/admin/biochoco-overview",
+    });
+  }
+  return publicChildren;
+}
+
 export function SidebarNav({ user }: SidebarNavProps) {
   const isBiochocoAdmin =
     user.globalRole === "super_admin" ||
     user.permissions.some(
       (p) => p.projectId === "biochoco" && p.role === "admin"
+    );
+  const isBiochocoEditor =
+    user.globalRole === "super_admin" ||
+    user.permissions.some(
+      (p) =>
+        p.projectId === "biochoco" &&
+        (p.role === "editor" || p.role === "admin")
     );
 
   const hasBiochoco = hasProjectAccess(user, "biochoco");
@@ -73,10 +107,14 @@ export function SidebarNav({ user }: SidebarNavProps) {
         href: "/biochoco/tools",
       });
     }
-    if (user.globalRole === "super_admin") {
+    const publicChildren = buildBiochocoPublicNav({
+      isBiochocoEditor,
+      isSuperAdmin: user.globalRole === "super_admin",
+    });
+    if (publicChildren.length > 0) {
       biochocoChildren.push({
         label: "Página pública",
-        href: "/admin/biochoco-overview",
+        children: publicChildren,
       });
     }
   }

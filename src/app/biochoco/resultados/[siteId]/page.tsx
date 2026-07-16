@@ -1,5 +1,5 @@
 import { requirePermission } from "@/lib/auth";
-import { fetchSiteDetail, getSiteShareLink } from "../actions";
+import { fetchSiteDetail } from "../actions";
 import { fetchSiteAudio } from "../habitat-actions";
 import { SiteDetailShell } from "./site-detail-shell";
 import { db } from "@/db";
@@ -28,9 +28,8 @@ export default async function SiteDetailPage({
     (biochocoRole !== undefined &&
       ROLE_HIERARCHY[biochocoRole] >= ROLE_HIERARCHY.editor);
 
-  const [result, existingLink, siteDepIds] = await Promise.all([
+  const [result, siteDepIds] = await Promise.all([
     fetchSiteDetail(siteId),
-    canShare ? getSiteShareLink(siteId) : Promise.resolve(null),
     fetchSiteDeploymentIds(siteId),
   ]);
 
@@ -62,7 +61,6 @@ export default async function SiteDetailPage({
       audio={audio}
       siteId={siteId}
       canShare={canShare}
-      existingShareLink={existingLink}
     />
   );
 }

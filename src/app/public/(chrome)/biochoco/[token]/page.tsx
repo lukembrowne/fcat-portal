@@ -1,5 +1,8 @@
 import type { Metadata } from "next";
-import { fetchSiteDetailByToken } from "@/app/biochoco/resultados/actions";
+import {
+  fetchSiteDetailByToken,
+  recordSiteView,
+} from "@/app/biochoco/resultados/actions";
 import { PublicSiteShell } from "./public-site-shell";
 
 interface PageProps {
@@ -14,7 +17,10 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   const data = await fetchSiteDetailByToken(token);
 
   if (!data) {
-    return { title: "Enlace no válido — Portal FCAT" };
+    return {
+      title: "Enlace no válido — Portal FCAT",
+      robots: { index: false, follow: false },
+    };
   }
 
   const siteName = data.site?.siteName ?? data.siteId;
@@ -38,6 +44,10 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   return {
     title: `${siteName} — Portal FCAT`,
     description,
+    // Token-gated page: keep it out of search engines (a leaked link should
+    // never surface a landowner's name/photos in results). OG scrapers
+    // (WhatsApp/Facebook) ignore this, so rich link previews still work.
+    robots: { index: false, follow: false },
     openGraph: {
       title: siteName,
       description,
@@ -65,6 +75,11 @@ export default async function PublicBiochocoSitePage({ params }: PageProps) {
       </div>
     );
   }
+
+  // Fire-and-forget view tracking. The action swallows its own errors, so a
+  // bare await here can never break the render (KTD-3: page body only, never
+  // in generateMetadata or the cached fetch).
+  await recordSiteView(token);
 
   const hasIntroVideo = Boolean(process.env.LANDOWNER_INTRO_VIDEO_DRIVE_FILE_ID);
 

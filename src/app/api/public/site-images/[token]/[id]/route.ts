@@ -215,6 +215,8 @@ export async function GET(
     "Cache-Control": "public, max-age=31536000, immutable",
     "Content-Type": "image/jpeg",
     "X-Content-Type-Options": "nosniff",
+    // Keep token-gated photos out of Google Images / other crawlers.
+    "X-Robots-Tag": "noindex",
   };
 
   // 3a) Thumbnail — reuse the existing pipeline (cached on disk).

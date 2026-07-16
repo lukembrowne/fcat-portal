@@ -4,27 +4,24 @@ import Link from "next/link";
 import type { SiteDetail, SiteAudioData } from "../types";
 import { getHabitatName } from "../../overview/types";
 import { SiteResultsContent } from "./site-results-content";
-import { SiteShareButton } from "./site-share-button";
 import { CompactStatBar } from "@/components/compact-stat-bar";
 import { buildSiteStats, formatSiteDateRange } from "./site-header-stats";
-import { MapPin, Calendar, Camera, Thermometer, TreePine } from "lucide-react";
-
-interface SiteShareLink {
-  token: string;
-  url: string;
-  createdAt: Date;
-  createdBy: string;
-  label: string | null;
-}
+import {
+  MapPin,
+  Calendar,
+  Camera,
+  Thermometer,
+  TreePine,
+  Share2,
+} from "lucide-react";
 
 interface SiteDetailShellProps {
   data: SiteDetail;
   /** Audio panels (acoustic indices + BirdNET species). Null on share-public view. */
   audio: SiteAudioData | null;
   siteId: string;
-  /** True only for biochoco editors+ — gates the share button render. */
+  /** True only for biochoco editors+ — gates the public-page jump link. */
   canShare: boolean;
-  existingShareLink: SiteShareLink | null;
 }
 
 const internalImageUrl = (id: number, size: "thumb" | "large") =>
@@ -35,7 +32,6 @@ export function SiteDetailShell({
   audio,
   siteId,
   canShare,
-  existingShareLink,
 }: SiteDetailShellProps) {
   const { site } = data;
   if (!site) return null;
@@ -79,10 +75,14 @@ export function SiteDetailShell({
             </div>
           </div>
           {canShare && (
-            <SiteShareButton
-              siteId={siteId}
-              existingLink={existingShareLink}
-            />
+            <Link
+              href={`/biochoco/paginas-publicas/${encodeURIComponent(siteId)}`}
+              className="inline-flex shrink-0 items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
+            >
+              <Share2 className="h-4 w-4" />
+              Editar página pública
+              <span aria-hidden>→</span>
+            </Link>
           )}
         </div>
       </header>

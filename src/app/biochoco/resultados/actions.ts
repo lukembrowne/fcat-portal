@@ -14,9 +14,11 @@ import {
   ibuttonReadings,
   cameraTrapProjects,
   siteShareTokens,
+  audioFiles,
+  processingJobs,
 } from "@/db/schema";
 import { recordEvent } from "@/lib/system-events";
-import { eq, and, sql, inArray, isNull, or, desc } from "drizzle-orm";
+import { eq, and, sql, inArray, isNull, isNotNull, or, desc } from "drizzle-orm";
 import { fetchEntities, fetchSubmissions } from "@/lib/odk-client";
 import {
   BIOCHOCO_PROJECT_ID,
@@ -31,6 +33,13 @@ import {
   toPublicSiteInfo,
   type PublicSiteInfo,
 } from "@/lib/landowner/public-site-info";
+import {
+  parsePageConfig,
+  serializePageConfig,
+  defaultConfigFromLegacy,
+  type PageConfig,
+} from "@/lib/landowner/page-config";
+import { CONTENT } from "@/app/public/biochoco-overview/content";
 import type { HabitatAssessment } from "../habitat/types";
 import type {
   ResultadosData,
@@ -105,8 +114,16 @@ export async function fetchResultadosData(): Promise<ActionResult<ResultadosData
       return { success: true, data: { sites: [] } };
     }
 
-    // Parallel: ODK sites, deployments, iButton uploads, habitat assessments
-    const [rawSites, allDeps, allUploads, rawHabitatSubs] = await Promise.all([
+    // Parallel: ODK sites, deployments, iButton uploads, habitat assessments,
+    // audio-bearing deployments, and BirdNET-analyzed deployments.
+    const [
+      rawSites,
+      allDeps,
+      allUploads,
+      rawHabitatSubs,
+      audioDepRows,
+      birdnetDepRows,
+    ] = await Promise.all([
       fetchEntities<OdkSiteEntity>(BIOCHOCO_PROJECT_ID, BIOCHOCO_DATASET_SITES),
       db
         .select({
@@ -133,11 +150,31 @@ export async function fetchResultadosData(): Promise<ActionResult<ResultadosData
         BIOCHOCO_FORM_HABITAT,
         { flatten: true }
       ),
+      // Deployments that have any audio files at all.
+      db
+        .selectDistinct({ deploymentId: audioFiles.deploymentId })
+        .from(audioFiles),
+      // Deployments with a completed BirdNET analysis job (analyzed, even if
+      // no annotation has been manually reviewed yet — "por revisar").
+      db
+        .selectDistinct({ deploymentId: processingJobs.deploymentId })
+        .from(processingJobs)
+        .where(
+          and(
+            eq(processingJobs.jobType, "birdnet"),
+            eq(processingJobs.status, "completed"),
+            isNotNull(processingJobs.deploymentId)
+          )
+        ),
     ]);
 
     const sites = transformSites(rawSites);
     const siteIdSet = new Set(sites.map((s) => s.siteId));
     const ibuttonDeploymentIds = new Set(allUploads.map((u) => u.deploymentId));
+    const audioDeploymentIds = new Set(audioDepRows.map((r) => r.deploymentId));
+    const birdnetDeploymentIds = new Set(
+      birdnetDepRows.map((r) => r.deploymentId)
+    );
 
     // Extract assessed site IDs from habitat submissions
     const assessedSiteIds = new Set<string>();
@@ -206,9 +243,19 @@ export async function fetchResultadosData(): Promise<ActionResult<ResultadosData
         ? "complete"
         : "none";
 
+      // Audio (BirdNET): green once any deployment has a completed BirdNET run
+      // (we don't manually verify these), amber when audio exists but hasn't
+      // been analyzed yet, none when the site has no audio at all.
+      let audio: SiteReadiness["audio"] = "none";
+      if (depIds.some((id) => birdnetDeploymentIds.has(id))) {
+        audio = "complete";
+      } else if (depIds.some((id) => audioDeploymentIds.has(id))) {
+        audio = "in_progress";
+      }
+
       return {
         ...site,
-        readiness: { cameras, temperature, habitat, audio: "none" as const },
+        readiness: { cameras, temperature, habitat, audio },
         deploymentCount: deps.length,
       };
     });
@@ -825,6 +872,12 @@ export async function getSiteShareLink(siteId: string): Promise<{
   createdAt: Date;
   createdBy: string;
   label: string | null;
+  /** Effective page-builder config (stored config, else derived from legacy). */
+  pageConfig: PageConfig;
+  /** Lightweight view tracking for the share panel. */
+  viewCount: number;
+  firstViewedAt: Date | null;
+  lastViewedAt: Date | null;
 } | null> {
   const [row] = await db
     .select()
@@ -840,13 +893,283 @@ export async function getSiteShareLink(siteId: string): Promise<{
 
   if (!row) return null;
 
+  const pageConfig =
+    parsePageConfig(row.pageConfig) ??
+    defaultConfigFromLegacy({
+      heroImageId: row.heroImageId,
+      landownerNote: row.landownerNote,
+      featuredAudioId: row.featuredAudioId,
+    });
+
   return {
     token: row.token,
     url: buildSiteShareUrl(row.token),
     createdAt: row.createdAt,
     createdBy: row.createdBy,
     label: row.label,
+    pageConfig,
+    viewCount: row.viewCount ?? 0,
+    firstViewedAt: row.firstViewedAt ?? null,
+    lastViewedAt: row.lastViewedAt ?? null,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Active-token helper
+// ---------------------------------------------------------------------------
+
+/** Resolve the deployment-id snapshot of a site's active share token ([] if none). */
+async function activeTokenDepIds(siteId: string): Promise<number[]> {
+  const [row] = await db
+    .select({ deploymentIds: siteShareTokens.deploymentIds })
+    .from(siteShareTokens)
+    .where(
+      and(
+        eq(siteShareTokens.biochocoSiteId, siteId),
+        isNull(siteShareTokens.revokedAt)
+      )
+    )
+    .orderBy(desc(siteShareTokens.createdAt))
+    .limit(1);
+  if (!row) return [];
+  try {
+    const parsed = JSON.parse(row.deploymentIds);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((id) => typeof id === "number" && Number.isInteger(id));
+  } catch {
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Page builder — media pickers + config save
+// ---------------------------------------------------------------------------
+//
+// The builder composes the public page's `page_config` on the site's active
+// share token. Media pickers are scoped to the token snapshot, and the save
+// action re-validates every media id against that snapshot so a token can only
+// ever surface its own site's photos and recordings.
+
+/** An audio clip the team can feature as the site's "example recording". */
+export interface SiteAudioOption {
+  id: number;
+  filename: string;
+  durationSeconds: number | null;
+}
+
+/** A candidate photo (one representative per species) for the featured grid. */
+export interface SitePhotoOption {
+  imageId: number;
+  label: string;
+}
+
+/**
+ * List the audio clips available to feature for a site — every playable
+ * Drive-backed recording whose deployment is in the active token's snapshot.
+ * Returns [] if there is no active link or no audio. Editor-only.
+ */
+export async function fetchSiteAudioOptions(
+  siteId: string
+): Promise<SiteAudioOption[]> {
+  await requirePermission("biochoco", "editor");
+
+  const depIds = await activeTokenDepIds(siteId);
+  if (depIds.length === 0) return [];
+
+  const rows = await db
+    .select({
+      id: audioFiles.id,
+      filename: audioFiles.filename,
+      duration: audioFiles.duration,
+    })
+    .from(audioFiles)
+    .where(
+      and(
+        inArray(audioFiles.deploymentId, depIds),
+        eq(audioFiles.playable, true),
+        isNotNull(audioFiles.driveFileId)
+      )
+    )
+    .orderBy(audioFiles.filename)
+    .limit(500);
+
+  return rows.map((r) => ({
+    id: r.id,
+    filename: r.filename,
+    durationSeconds: r.duration ?? null,
+  }));
+}
+
+/**
+ * List candidate photos for the featured-photos picker: the best (representative)
+ * photo per species detected at the site. Editor-only; [] if no active link.
+ */
+export async function fetchSitePhotoOptions(
+  siteId: string
+): Promise<SitePhotoOption[]> {
+  await requirePermission("biochoco", "editor");
+
+  const depIds = await activeTokenDepIds(siteId);
+  if (depIds.length === 0) return [];
+
+  const speciesList = await fetchSpeciesForDeployments(depIds);
+  const options: SitePhotoOption[] = [];
+  for (const s of speciesList) {
+    if (s.photoImageId == null) continue;
+    options.push({
+      imageId: s.photoImageId,
+      label: s.spanishName || s.commonName || s.speciesName,
+    });
+  }
+  return options;
+}
+
+/**
+ * Persist the page-builder config on a site's active share token. The incoming
+ * config is re-validated for shape (parsePageConfig) and every media id is
+ * checked against the site's snapshot — invalid ids are stripped rather than
+ * trusted, so a token can never surface another site's media. Editor-only.
+ */
+export async function updateSitePageConfig(
+  siteId: string,
+  config: PageConfig
+): Promise<ActionResult<void>> {
+  const user = await requirePermission("biochoco", "editor");
+
+  try {
+    const [row] = await db
+      .select({
+        id: siteShareTokens.id,
+        deploymentIds: siteShareTokens.deploymentIds,
+      })
+      .from(siteShareTokens)
+      .where(
+        and(
+          eq(siteShareTokens.biochocoSiteId, siteId),
+          isNull(siteShareTokens.revokedAt)
+        )
+      )
+      .orderBy(desc(siteShareTokens.createdAt))
+      .limit(1);
+
+    if (!row) {
+      return { success: false, error: "No hay un enlace activo para este sitio" };
+    }
+
+    // Never trust the client object — re-parse through the shape validator.
+    const clean = parsePageConfig(JSON.stringify(config));
+    if (!clean) {
+      return { success: false, error: "Configuración inválida" };
+    }
+
+    let depIds: number[] = [];
+    try {
+      const parsed = JSON.parse(row.deploymentIds);
+      if (Array.isArray(parsed)) {
+        depIds = parsed.filter(
+          (id) => typeof id === "number" && Number.isInteger(id)
+        );
+      }
+    } catch {
+      depIds = [];
+    }
+
+    // Collect the media ids the config references so we can validate in two queries.
+    const imageIds = new Set<number>();
+    const audioIds = new Set<number>();
+    for (const b of clean.blocks) {
+      if (b.type === "hero" && b.imageId != null) imageIds.add(b.imageId);
+      if (b.type === "featuredPhotos") b.imageIds.forEach((id) => imageIds.add(id));
+      if (b.type === "featuredAudio" && b.audioId != null) audioIds.add(b.audioId);
+    }
+
+    let validImages = new Set<number>();
+    if (imageIds.size > 0 && depIds.length > 0) {
+      const rows = await db
+        .select({ id: images.id })
+        .from(images)
+        .where(
+          and(
+            inArray(images.id, [...imageIds]),
+            inArray(images.deploymentId, depIds)
+          )
+        );
+      validImages = new Set(rows.map((r) => r.id));
+    }
+
+    let validAudio = new Set<number>();
+    if (audioIds.size > 0 && depIds.length > 0) {
+      const rows = await db
+        .select({ id: audioFiles.id })
+        .from(audioFiles)
+        .where(
+          and(
+            inArray(audioFiles.id, [...audioIds]),
+            inArray(audioFiles.deploymentId, depIds),
+            isNotNull(audioFiles.driveFileId)
+          )
+        );
+      validAudio = new Set(rows.map((r) => r.id));
+    }
+
+    // Rebuild sanitized blocks: strip invalid media ids, drop now-empty blocks.
+    const blocks: PageConfig["blocks"] = [];
+    for (const b of clean.blocks) {
+      switch (b.type) {
+        case "hero":
+          blocks.push({
+            type: "hero",
+            imageId:
+              b.imageId != null && validImages.has(b.imageId) ? b.imageId : null,
+          });
+          break;
+        case "featuredPhotos": {
+          const kept = b.imageIds.filter((id) => validImages.has(id));
+          if (kept.length > 0) blocks.push({ type: "featuredPhotos", imageIds: kept });
+          break;
+        }
+        case "featuredAudio":
+          blocks.push({
+            type: "featuredAudio",
+            audioId:
+              b.audioId != null && validAudio.has(b.audioId) ? b.audioId : null,
+          });
+          break;
+        default:
+          blocks.push(b);
+      }
+    }
+
+    const sanitized: PageConfig = { version: clean.version, blocks };
+
+    await db
+      .update(siteShareTokens)
+      .set({ pageConfig: serializePageConfig(sanitized) })
+      .where(eq(siteShareTokens.id, row.id));
+
+    await recordEvent({
+      source: "biochoco-resultados",
+      eventType: "update_site_page_config",
+      summary: `Página pública personalizada para sitio ${siteId}`,
+      actorEmail: user.email,
+      projectId: "biochoco",
+      targetType: "biochoco_site",
+      targetId: siteId,
+      details: {
+        tokenId: row.id,
+        blockTypes: sanitized.blocks.map((b) => b.type),
+      },
+    });
+
+    revalidatePath(`/biochoco/resultados/${siteId}`);
+    return { success: true, data: undefined };
+  } catch (err) {
+    log.error({ err }, "Failed to update site page config");
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : "Error al guardar",
+    };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -856,16 +1179,145 @@ export async function getSiteShareLink(siteId: string): Promise<{
 // Wrapped in React cache() so the public page and generateMetadata share
 // a single DB hit per request.
 
+/** A curated "example recording" surfaced on the public landowner page. */
+export interface PublicFeaturedAudio {
+  id: number;
+  filename: string;
+  durationSeconds: number | null;
+}
+
+/**
+ * A page-config block resolved for the public client: media ids validated
+ * against the site's snapshot and metadata attached. Rendered in order by the
+ * public shell. `hero` is carried separately as `heroImageId`.
+ */
+export type ResolvedContentBlock =
+  | { type: "summary"; text: string }
+  | { type: "note"; text: string }
+  | { type: "featuredPhotos"; imageIds: number[] }
+  | { type: "featuredAudio"; audio: PublicFeaturedAudio }
+  | { type: "projectContext"; blurb: string; siteCount: number | null };
+
 export interface PublicSiteDetailExtras {
   siteId: string;
+  /** Effective hero image (config hero block, else the token's heroImageId). */
   heroImageId: number | null;
   deploymentIds: number[];
+  /** Ordered, resolved content blocks driving the public page body. */
+  contentBlocks: ResolvedContentBlock[];
 }
 
 // The public payload exposes only a landowner-safe projection of `site` — no
 // landowner name/phone, no GPS. See toPublicSiteInfo.
 export type PublicSiteDetail = Omit<SiteDetail, "site"> &
   PublicSiteDetailExtras & { site: PublicSiteInfo | null };
+
+/**
+ * Resolve one featured audio clip to public metadata, guarding that its
+ * deployment is still in the token's snapshot AND it still has a Drive file, so
+ * a stale pick renders no player rather than a broken one.
+ */
+async function resolveFeaturedAudio(
+  audioId: number,
+  depIds: number[]
+): Promise<PublicFeaturedAudio | null> {
+  const [af] = await db
+    .select({
+      id: audioFiles.id,
+      filename: audioFiles.filename,
+      duration: audioFiles.duration,
+      deploymentId: audioFiles.deploymentId,
+      driveFileId: audioFiles.driveFileId,
+    })
+    .from(audioFiles)
+    .where(eq(audioFiles.id, audioId));
+  if (af && af.driveFileId && depIds.includes(af.deploymentId)) {
+    return { id: af.id, filename: af.filename, durationSeconds: af.duration ?? null };
+  }
+  return null;
+}
+
+/**
+ * Resolve a validated PageConfig into the ordered, client-safe content blocks
+ * the public shell renders. Every block degrades to nothing when its media is
+ * missing/stale or its text is empty; photo ids are validated against the
+ * site's snapshot so a token can only surface its own media. The `hero` block
+ * is handled by the caller (carried as heroImageId). Exactly one
+ * `projectContext` block is always appended as the final element (any
+ * config-sourced projectContext blocks are ignored), so the public page always
+ * ends with the "Sobre el proyecto BioChoco" card and never shows two.
+ */
+async function resolveContentBlocks(
+  config: PageConfig,
+  depIds: number[],
+  projectContext: { blurb: string; siteCount: number | null }
+): Promise<ResolvedContentBlock[]> {
+  // One query for every featured-photo id across all such blocks.
+  const wantedPhotoIds = new Set<number>();
+  for (const b of config.blocks) {
+    if (b.type === "featuredPhotos") {
+      for (const id of b.imageIds) wantedPhotoIds.add(id);
+    }
+  }
+  let validPhotoIds = new Set<number>();
+  if (wantedPhotoIds.size > 0 && depIds.length > 0) {
+    const rows = await db
+      .select({ id: images.id })
+      .from(images)
+      .where(
+        and(
+          inArray(images.id, [...wantedPhotoIds]),
+          inArray(images.deploymentId, depIds)
+        )
+      );
+    validPhotoIds = new Set(rows.map((r) => r.id));
+  }
+
+  const out: ResolvedContentBlock[] = [];
+  for (const b of config.blocks) {
+    switch (b.type) {
+      case "summary": {
+        const text = b.text.trim();
+        if (text) out.push({ type: "summary", text });
+        break;
+      }
+      case "note": {
+        const text = b.text.trim();
+        if (text) out.push({ type: "note", text });
+        break;
+      }
+      case "featuredPhotos": {
+        const imageIds = b.imageIds.filter((id) => validPhotoIds.has(id));
+        if (imageIds.length > 0) out.push({ type: "featuredPhotos", imageIds });
+        break;
+      }
+      case "featuredAudio": {
+        if (b.audioId != null) {
+          const audio = await resolveFeaturedAudio(b.audioId, depIds);
+          if (audio) out.push({ type: "featuredAudio", audio });
+        }
+        break;
+      }
+      case "projectContext": {
+        // Ignore config-sourced projectContext blocks entirely; exactly one is
+        // always appended below so the "Sobre el proyecto BioChoco" card is
+        // guaranteed present and never duplicated.
+        break;
+      }
+      // "hero" is carried as heroImageId.
+      default:
+        break;
+    }
+  }
+
+  // Always end with exactly one projectContext block, regardless of config.
+  out.push({
+    type: "projectContext",
+    blurb: projectContext.blurb,
+    siteCount: projectContext.siteCount,
+  });
+  return out;
+}
 
 export const fetchSiteDetailByToken = cache(
   async (token: string): Promise<PublicSiteDetail | null> => {
@@ -978,12 +1430,31 @@ export const fetchSiteDetailByToken = cache(
       }
     }
 
+    // Config-first: parse the stored page config, else derive the default from
+    // the legacy columns so an un-built token renders exactly as before.
+    const config =
+      parsePageConfig(tokenRow.pageConfig) ??
+      defaultConfigFromLegacy({
+        heroImageId: tokenRow.heroImageId,
+        landownerNote: tokenRow.landownerNote,
+        featuredAudioId: tokenRow.featuredAudioId,
+      });
+    const heroBlock = config.blocks.find((b) => b.type === "hero");
+    const effectiveHeroId =
+      (heroBlock?.type === "hero" ? heroBlock.imageId : null) ??
+      tokenRow.heroImageId;
+    const contentBlocks = await resolveContentBlocks(config, depIds, {
+      blurb: CONTENT.es.learn.intro,
+      siteCount: sites.length > 0 ? sites.length : null,
+    });
+
     return {
       // Landowner-safe projection only — strips name/phone/GPS from the client payload.
       site: toPublicSiteInfo(site),
       siteId: tokenRow.biochocoSiteId,
-      heroImageId: tokenRow.heroImageId,
+      heroImageId: effectiveHeroId,
       deploymentIds: depIds,
+      contentBlocks,
       deploymentCount: siteDeps.length,
       totalCameraTrapDays,
       dateRange: { start: earliestStart, end: latestEnd },
@@ -1097,4 +1568,38 @@ export async function fetchSpeciesImagesByToken(
     page,
     pageSize
   );
+}
+
+/**
+ * Fire-and-forget view tracking for the public landowner page. Called once
+ * from the public page component body (NOT generateMetadata, NOT inside the
+ * cached fetchSiteDetailByToken) so the cached fetch stays side-effect free.
+ *
+ * Not permission-gated: the public route's auth is the unguessable active
+ * token itself. A single UPDATE stamps last_viewed_at + increments the count
+ * and seeds first_viewed_at via COALESCE(..., unixepoch()) — unixepoch()
+ * yields Unix seconds, matching the mode:"timestamp" column encoding.
+ *
+ * Any failure is swallowed: a tracking write must never break the render.
+ */
+export async function recordSiteView(token: string): Promise<void> {
+  if (!isValidShareToken(token)) return;
+
+  try {
+    await db
+      .update(siteShareTokens)
+      .set({
+        lastViewedAt: new Date(),
+        viewCount: sql`${siteShareTokens.viewCount} + 1`,
+        firstViewedAt: sql`COALESCE(${siteShareTokens.firstViewedAt}, unixepoch())`,
+      })
+      .where(
+        and(
+          eq(siteShareTokens.token, token),
+          isNull(siteShareTokens.revokedAt)
+        )
+      );
+  } catch (err) {
+    log.warn({ err }, "Failed to record site view (swallowed)");
+  }
 }

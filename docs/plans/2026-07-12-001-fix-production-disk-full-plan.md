@@ -12,7 +12,9 @@ depth: standard
 
 The production droplet's root disk is 90% full (173 G of 193 G used, ~21 G free). The camera-trap ML pre-flight guard refuses any job that can't reserve one chunk (~10 G) plus the 20 G co-tenant safety margin — ~30 G free. With only ~21 G free, every nightly job fails immediately (`0 / N`, "Fallido", *Espacio en disco insuficiente*). Five deployments failed on the 2026-07-11 nightly run (GIZ-011_V1, NAC-004_V1, POT-002_V1, POT-004_V1, POT-008_V1).
 
-This plan has two parts: **(1)** a one-time reclaim (~45 G) to unblock the queue tonight, and **(2)** structural changes so the disk stops creeping back to full — gzip-compressed backups **offloaded to a DigitalOcean Space** (only the last 6 hourly + newest daily stay on-box, dropping local backups from 38 G to ~1.5 G), an independent orphaned-cache sweep, and a proactive disk alert that fires *before* jobs hit the guard. No droplet resize (decision: stay on 193 G; resize is documented as a fallback lever, not planned work).
+This plan has two parts: **(1)** a one-time reclaim (~45 G) to unblock the queue tonight, and **(2)** structural changes so the disk stops creeping back to full — gzip-compressed backups, an independent orphaned-cache sweep, and a proactive disk alert that fires *before* jobs hit the guard. No droplet resize (decision: stay on 193 G; resize is documented as a fallback lever, not planned work).
+
+> **Implementation status (2026-07-13):** Shipped and active — **gzip compression** (backups 38 G → ~11 G, retention unchanged at 48h hourly + 7 daily), the **orphaned-cache sweep**, and the **low-disk alert**. The **DigitalOcean Space offload is built but deferred** — it ships behind `BACKUP_OFFLOAD_ENABLED` (default **off**), so backups stay entirely on the droplet for now. It is a **future lever**: when disk pressure returns, provision the Space, set the `SPACES_*` env vars, and flip the flag — no code changes required (steps in `docs/operations/disk-space-runbook.md`). The offload sections below (U2 offload path, U3 auto-pull, U6 migration, U8 provisioning) describe that dormant machinery, not shipped-and-configured behavior.
 
 ---
 
@@ -55,7 +57,7 @@ So the orphaned 30 G sits resident indefinitely, directly competing with the 30 
 ## Key Technical Decisions
 
 - **KTD1 — Gzip backups.** Each backup compresses ~710 MB → ~200 MB (SQLite pages compress ~3.5×). Gzip shrinks both the local footprint and every Space upload/download. Restore must transparently decompress.
-- **KTD2 — Offload to a DigitalOcean Space, keep a tiny local window (chosen).** Upload every backup to an S3-compatible Space; keep only the last 6 hourly + newest daily local (~1.5 G). Local backups thus drop from 38 G to ~1.5 G — a bigger, more durable win than gzip alone (~10 G). The Space holds the long-term history cheaply (~$5/mo for 250 G) and *enables longer* retention than the box ever could. **Ordering is safety-critical: upload + verify, then prune local — never prune a backup that isn't confirmed in the Space** (mirrors the codebase's write-then-clear Sheets pattern). Long-term expiry is a Space lifecycle rule (recommend 30–90 daily), decoupled from the local window.
+- **KTD2 — Offload to a DigitalOcean Space, keep a tiny local window (built, DEFERRED).** *Deferred 2026-07-13 — see the implementation-status note above. Backups stay on the droplet for now; this is the re-enable path when space is tight again.* Upload every backup to an S3-compatible Space; keep only the last 6 hourly + newest daily local (~1.5 G). Local backups would drop from 38 G to ~1.5 G — a bigger, more durable win than gzip alone (~11 G). **Ordering is safety-critical: upload + verify, then prune local — never prune a backup that isn't confirmed in the Space** (mirrors the codebase's write-then-clear Sheets pattern). Long-term expiry is a Space lifecycle rule, decoupled from the local window. *Cost note (revisited 2026-07-13): with a pre-existing Spaces subscription this bucket is marginal per-GiB, and since the droplet already has daily DR backups it only needs short retention — at which point plain **Standard** storage at short/thinned retention is cheapest (well under $1/mo) and avoids Cold Storage's 30-day-minimum penalty. Revisit the storage class at enable time.*
 - **KTD3 — Dependency-safe upload via a CLI binary (`s3cmd`), not an npm SDK.** The prod runner is a pruned `.next/standalone` image; an untraced npm dep like `@aws-sdk/client-s3` risks being pruned (per the untraced-modules learning). `python3` is already in the runner and `s3cmd` is apt-installable — add it to the existing runner apt line. The backup script (plain `.mjs`) shells out to `s3cmd`, matching the curl-based cron style. Alternative considered: `rclone` (single binary, nicer sync) — viable, but `s3cmd` is lighter given python3 is present.
 - **KTD4 — No droplet resize.** Stay on 193 G; reclaim + offload provide ample headroom. Resize is documented in the runbook as a ready-to-pull lever (steps + threshold) if disk creeps back despite the fixes — not planned work.
 - **KTD5 — Independent cache sweep, not a change to `evictIfOverLimit`.** The eviction function's contract (maintain the cap, skip the active deployment, run on download) is correct for its job and should not be overloaded. Add a *separate* sweep that reclaims cache dirs with no active or pending processing job. Reuse the existing "is there an active audio/ML job" locking primitives to decide what's safe to delete.
@@ -242,6 +244,8 @@ When `BACKUP_OFFLOAD_ENABLED` is false, fall back to the gzip-local-only path wi
 
 ### U8. Provision the Space, credentials, and `s3cmd` in the image
 
+> **DEFERRED (2026-07-13).** Not executed. The `s3cmd` image install and the `SPACES_*`/`BACKUP_OFFLOAD_ENABLED` env plumbing shipped (dormant, flag off); the operator steps below — creating the Space, keys, and lifecycle rule — are the re-enable checklist for when disk pressure returns.
+
 **Goal:** Stand up the S3-compatible bucket and the in-container tooling/credentials the backup + restore scripts depend on, behind the offload feature flag.
 
 **Requirements:** R3, R7
@@ -301,10 +305,12 @@ When `BACKUP_OFFLOAD_ENABLED` is false, fall back to the gzip-local-only path wi
 
 ## Scope Boundaries
 
-**In scope:** one-time reclaim; gzip + Space-offload backups (last 6 hourly + newest daily local); auto-pull restore; Space/credentials/`s3cmd` provisioning behind a feature flag; independent cache sweep; proactive disk alert; ops runbook.
+**In scope (shipped):** one-time reclaim; gzip backups (retention unchanged at 48h hourly + 7 daily); independent cache sweep; proactive disk alert; ops runbook.
+
+**Built but deferred (2026-07-13):** the DigitalOcean Space offload — upload path, auto-pull restore, one-time migration, and `s3cmd`/env provisioning — all behind `BACKUP_OFFLOAD_ENABLED` (default off). Backups stay on the droplet; re-enable when space is tight again (runbook has the checklist). See the implementation-status note in the Summary.
 
 **Deferred to Follow-Up Work:**
-- Update the CLAUDE.md **Backups** section to mention the `.db.gz` format once U2/U3 land.
+- Update the CLAUDE.md **Backups** section to mention the `.db.gz` format.
 - Consider lowering `CT_IMAGE_CACHE_MAX_GB` or making eviction disk-pressure-aware (not just cap-aware) — a deeper change to `evictIfOverLimit` beyond this fix.
 - Thumbnail growth (15 G, growing) — a separate retention/eviction question, not touched here.
 

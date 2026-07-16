@@ -5,7 +5,7 @@ import { useEffect, useRef } from "react";
 export const SHORTCUTS = [
   { key: "←/→", description: "Imagen anterior/siguiente", category: "navigation" },
   { key: "1-9", description: "Seleccionar detección / asignar especie frecuente", category: "navigation" },
-  { key: "0", description: "Repetir última especie asignada", category: "annotation" },
+  { key: "0", description: "Última especie: en la caja, o todas (sin selección)", category: "annotation" },
   { key: "Esc", description: "Cerrar selector / deseleccionar", category: "navigation" },
   { key: "v", description: "Verificar todo y avanzar", category: "annotation" },
   { key: "d / ⌫ / Supr", description: "Eliminar detección", category: "annotation" },
@@ -35,6 +35,10 @@ interface AnnotationShortcutOptions {
   onCycleBrightness?: () => void;
   onAssignSpeciesByIndex?: (index: number) => void;
   onAssignLastSpecies?: () => void;
+  /** No detection selected + "0" pressed: assign the last species to all
+   *  (animal) boxes in the image and verify them. The animal-only filtering
+   *  lives in the handler, not here. */
+  onAssignLastSpeciesToAll?: () => void;
   isDialogOpen?: boolean;
   /** True when the contextual species picker popover is open. While open,
    *  Radix owns Esc — the global handler must early-return so it does not
@@ -51,6 +55,50 @@ interface AnnotationShortcutOptions {
    */
   searchInputRef?: React.RefObject<HTMLInputElement | null>;
   isDrawing?: boolean;
+}
+
+/**
+ * Intent produced by resolving a digit key (0-9) against the current
+ * selection state. Extracted as a pure function so the branch logic is
+ * unit-testable without a DOM (the Vitest environment is `node`).
+ */
+export type DigitKeyAction =
+  | { type: "assignLast" }
+  | { type: "assignByIndex"; index: number }
+  | { type: "assignLastToAll" }
+  | { type: "selectDetection"; index: number }
+  | { type: "none" };
+
+/**
+ * Pure resolver for digit-key behavior:
+ *
+ *   Detection selected:  0 → repeat last species on that box
+ *                        1-9 → assign frecuente slot
+ *   No detection:        0 → assign last species to ALL boxes (handler filters
+ *                            to animals)
+ *                        1-9 → select detection by number (when in range)
+ */
+export function resolveDigitKeyAction(
+  key: string,
+  ctx: {
+    selectedDetectionId: number | null | undefined;
+    detectionCount: number | undefined;
+  }
+): DigitKeyAction {
+  if (!/^[0-9]$/.test(key)) return { type: "none" };
+
+  if (ctx.selectedDetectionId != null) {
+    if (key === "0") return { type: "assignLast" };
+    return { type: "assignByIndex", index: parseInt(key, 10) - 1 };
+  }
+
+  // No detection selected.
+  if (key === "0") return { type: "assignLastToAll" };
+  const index = parseInt(key, 10) - 1;
+  if (ctx.detectionCount && index < ctx.detectionCount) {
+    return { type: "selectDetection", index };
+  }
+  return { type: "none" };
 }
 
 export function useAnnotationShortcuts(opts: AnnotationShortcutOptions) {
@@ -188,24 +236,31 @@ export function useAnnotationShortcuts(opts: AnnotationShortcutOptions) {
           break;
         default:
           if (!hasModifier && /^[0-9]$/.test(e.key)) {
-            if (o.selectedDetectionId != null) {
-              // Detection selected:
-              //   1-9 → assign species by frecuente slot
-              //   0   → repeat last assigned species
-              e.preventDefault();
-              if (e.key === "0") {
-                o.onAssignLastSpecies?.();
-              } else {
-                const index = parseInt(e.key, 10) - 1;
-                o.onAssignSpeciesByIndex?.(index);
-              }
-            } else if (/^[1-9]$/.test(e.key)) {
-              // No detection selected → select detection by number
-              const index = parseInt(e.key, 10) - 1;
-              if (o.detectionCount && index < o.detectionCount) {
+            const action = resolveDigitKeyAction(e.key, {
+              selectedDetectionId: o.selectedDetectionId,
+              detectionCount: o.detectionCount,
+            });
+            switch (action.type) {
+              case "assignLast":
                 e.preventDefault();
-                o.onSelectDetection?.(index);
-              }
+                o.onAssignLastSpecies?.();
+                break;
+              case "assignByIndex":
+                e.preventDefault();
+                o.onAssignSpeciesByIndex?.(action.index);
+                break;
+              case "assignLastToAll":
+                // No detection selected + "0": assign last species to all
+                // (animal) boxes and verify.
+                e.preventDefault();
+                o.onAssignLastSpeciesToAll?.();
+                break;
+              case "selectDetection":
+                e.preventDefault();
+                o.onSelectDetection?.(action.index);
+                break;
+              case "none":
+                break;
             }
           }
       }

@@ -37,6 +37,7 @@ import {
 } from "@/components/ui/select";
 import {
   bulkVerify,
+  bulkAssignSpecies,
   createManualDetection,
   deleteDetection,
   assignSpecies,
@@ -130,6 +131,15 @@ export function ImageAnnotationClient({
   const [bboxesHidden, setBboxesHidden] = useState(false);
   const [brightness, setBrightness] = useState(DEFAULT_BRIGHTNESS);
   const [deleteDialogDetectionId, setDeleteDialogDetectionId] = useState<number | null>(null);
+  // Pending "0"-assign-all confirmation. Set only when the bulk assign would
+  // overwrite one or more already-verified boxes with a different species —
+  // guards an accidental press on a freshly-navigated, already-correct image.
+  const [bulkConfirm, setBulkConfirm] = useState<{
+    animalIds: number[];
+    scientificName: string;
+    label: string;
+    overwriteCount: number;
+  } | null>(null);
   // Most recently assigned species, scoped per job in sessionStorage. Drives
   // the "Última" popover row + the `0` hotkey for repeating the previous
   // species across a 3-photo burst. Survives arrow-key navigation; resets
@@ -150,6 +160,7 @@ export function ImageAnnotationClient({
   const popoverSearchInputRef = useRef<HTMLInputElement>(null);
   const anchorRef = useRef<HTMLDivElement>(null);
   const deleteButtonRef = useRef<HTMLButtonElement>(null);
+  const bulkConfirmButtonRef = useRef<HTMLButtonElement>(null);
   const [, startTransition] = useTransition();
   const isVerifyingRef = useRef(false);
   const [nameDisplay, cycleDisplay] = useNameDisplay();
@@ -211,7 +222,7 @@ export function ImageAnnotationClient({
   });
   const [addSpeciesError, setAddSpeciesError] = useState<string | null>(null);
 
-  const isDialogOpen = deleteDialogDetectionId !== null || addSpeciesOpen;
+  const isDialogOpen = deleteDialogDetectionId !== null || addSpeciesOpen || bulkConfirm !== null;
   const { containerRef: zoomContainerRef, wrapperRef: zoomWrapperRef, style: zoomStyle, panHandlers, scale: zoomScale, isPanning, isZooming, resetZoom } = useImageZoom({ disabled: isDialogOpen });
 
   // Reset brightness when navigating to a different image. Adjusting the
@@ -365,6 +376,91 @@ export function ImageAnnotationClient({
     if (current === lastSpecies.scientificName) return;
     handleSelectSpecies(lastSpecies.scientificName);
   }, [lastSpecies, selectedDetection, handleSelectSpecies]);
+
+  // Run the bulk assign-all. Shares `isVerifyingRef` with handleQuickVerifyAll;
+  // reset in `finally` so a failed call never soft-locks both the bulk-assign
+  // and the `v` verify-and-advance hotkeys.
+  const runBulkAssignAll = useCallback(
+    (animalIds: number[], scientificName: string, label: string) => {
+      if (isVerifyingRef.current) return;
+      isVerifyingRef.current = true;
+      startTransition(async () => {
+        try {
+          const result = await bulkAssignSpecies(animalIds, scientificName);
+          if (result.success) {
+            toast.success(
+              result.data.count === 1
+                ? `1 caja asignada a ${label}`
+                : `${result.data.count} cajas asignadas a ${label}`
+            );
+            refresh();
+          } else {
+            toast.error(result.error);
+          }
+        } finally {
+          isVerifyingRef.current = false;
+        }
+      });
+    },
+    [refresh]
+  );
+
+  // "0" with no box selected: assign the last species to every ANIMAL box in
+  // the image and verify them (assignSpecies semantics — match ML → verified,
+  // else corrected). Person/vehicle boxes (detectionClass !== 0) are skipped so
+  // they are never relabeled as the animal. When one or more boxes are ALREADY
+  // verified with a different species, a confirmation dialog fires first so an
+  // accidental press on an already-correct image can't silently overwrite human
+  // decisions; the all-unverified common case runs immediately (one keystroke).
+  const handleAssignLastSpeciesToAll = useCallback(() => {
+    if (bulkConfirm) return; // a confirmation is already pending
+    if (!lastSpecies) {
+      toast("Asigna una especie primero para poder repetirla");
+      return;
+    }
+    const animalDetections = detections.filter((d) => d.detectionClass === 0);
+    if (animalDetections.length === 0) {
+      toast("No hay detecciones de animales");
+      return;
+    }
+    const animalIds = animalDetections.map((d) => d.id);
+
+    const label =
+      nameDisplay === "common"
+        ? lastSpecies.commonName || lastSpecies.scientificName
+        : nameDisplay === "spanish"
+          ? lastSpecies.spanishName ||
+            lastSpecies.commonName ||
+            lastSpecies.scientificName
+          : lastSpecies.scientificName;
+
+    // Count already-verified boxes whose species would actually change.
+    const overwriteCount = animalDetections.filter((d) => {
+      const ident = d.identification;
+      if (!ident || ident.verificationStatus === "unverified") return false;
+      const current = ident.correctedSpecies || ident.species;
+      return current !== lastSpecies.scientificName;
+    }).length;
+
+    if (overwriteCount > 0) {
+      setBulkConfirm({
+        animalIds,
+        scientificName: lastSpecies.scientificName,
+        label,
+        overwriteCount,
+      });
+      return;
+    }
+
+    runBulkAssignAll(animalIds, lastSpecies.scientificName, label);
+  }, [bulkConfirm, detections, lastSpecies, nameDisplay, runBulkAssignAll]);
+
+  const handleConfirmBulkAssign = useCallback(() => {
+    if (!bulkConfirm) return;
+    const { animalIds, scientificName, label } = bulkConfirm;
+    setBulkConfirm(null);
+    runBulkAssignAll(animalIds, scientificName, label);
+  }, [bulkConfirm, runBulkAssignAll]);
 
   const handleDeleteDetection = useCallback((detectionId: number) => {
     setDeleteDialogDetectionId(detectionId);
@@ -520,6 +616,7 @@ export function ImageAnnotationClient({
       }
     } : undefined,
     onAssignLastSpecies: canEdit ? handleAssignLastSpecies : undefined,
+    onAssignLastSpeciesToAll: canEdit ? handleAssignLastSpeciesToAll : undefined,
     detectionCount: detections.length,
     selectedDetectionId: selectedBoxId,
     isPickerOpen: picker.open,
@@ -724,6 +821,46 @@ export function ImageAnnotationClient({
               onClick={handleConfirmDelete}
             >
               Eliminar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>}
+
+      {/* Bulk assign-all confirmation — fires only when already-verified boxes
+          would be overwritten. Editors only. */}
+      {canEdit && <Dialog
+        open={bulkConfirm !== null}
+        onOpenChange={(open) => {
+          if (!open) setBulkConfirm(null);
+        }}
+      >
+        <DialogContent
+          onOpenAutoFocus={(e) => {
+            e.preventDefault();
+            bulkConfirmButtonRef.current?.focus();
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>Reasignar todas las cajas de animales</DialogTitle>
+            <DialogDescription>
+              {bulkConfirm && (
+                <>
+                  Se asignará <strong>{bulkConfirm.label}</strong> a{" "}
+                  {bulkConfirm.animalIds.length}{" "}
+                  {bulkConfirm.animalIds.length === 1 ? "caja" : "cajas"} de animales.{" "}
+                  {bulkConfirm.overwriteCount === 1
+                    ? "1 caja ya verificada con otra especie será sobrescrita."
+                    : `${bulkConfirm.overwriteCount} cajas ya verificadas con otra especie serán sobrescritas.`}
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBulkConfirm(null)}>
+              Cancelar
+            </Button>
+            <Button ref={bulkConfirmButtonRef} onClick={handleConfirmBulkAssign}>
+              Reasignar
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -5300,6 +5300,110 @@ export async function assignSpecies(
   }
 }
 
+/**
+ * Bulk-assign one species to a set of detections in a single access check +
+ * revalidate. Applies the same per-detection semantics as `assignSpecies`:
+ * when `newSpecies` matches the detection's ML prediction the identification
+ * is marked `verified`; otherwise it is `corrected` with `correctedSpecies`
+ * set. Assignment already flips verification status, so "assign + verify" is
+ * one operation per box.
+ *
+ * Callers pass a pre-filtered set (e.g. animal detections only for the "0"
+ * assign-all hotkey). The animal-only policy lives at the call site, not
+ * here, so this action stays a generic "assign a species to these detections".
+ */
+export async function bulkAssignSpecies(
+  detectionIds: number[],
+  newSpecies: string
+): Promise<ActionResult<{ count: number }>> {
+  const user = await requirePermission("camera-trap", "editor");
+
+  try {
+    if (detectionIds.length === 0) {
+      return { success: true, data: { count: 0 } };
+    }
+
+    // Verify access to every affected deployment (one check per distinct
+    // deployment), mirroring bulkVerify.
+    const depRows = await db
+      .select({ deploymentId: images.deploymentId })
+      .from(detections)
+      .innerJoin(images, eq(detections.imageId, images.id))
+      .where(inArray(detections.id, detectionIds))
+      .groupBy(images.deploymentId);
+    for (const row of depRows) {
+      await requireDeploymentAccess(user, row.deploymentId);
+    }
+
+    // Load current detection class + existing identification for each
+    // detection in one query.
+    const rows = await db
+      .select({
+        detectionId: detections.id,
+        detectionClass: detections.detectionClass,
+        identId: identifications.id,
+        identSpecies: identifications.species,
+      })
+      .from(detections)
+      .leftJoin(identifications, eq(identifications.detectionId, detections.id))
+      .where(inArray(detections.id, detectionIds));
+
+    let count = 0;
+    for (const row of rows) {
+      // Match against the ORIGINAL ML prediction (identifications.species),
+      // exactly as assignSpecies does — a box already corrected to another
+      // species still matches on its ML original.
+      const isMatch = newSpecies === row.identSpecies;
+      if (row.identId != null) {
+        await db
+          .update(identifications)
+          .set({
+            verificationStatus: isMatch ? "verified" : "corrected",
+            correctedSpecies: isMatch ? null : newSpecies,
+            verifiedBy: user.email,
+            verifiedAt: new Date(),
+          })
+          .where(eq(identifications.id, row.identId));
+      } else {
+        // Defensive: detection with no ML identification (rare for animal
+        // boxes, which the ML pipeline always classifies). Mirror the
+        // person/vehicle promotion path in assignSpecies.
+        await db.insert(identifications).values({
+          detectionId: row.detectionId,
+          species: newSpecies,
+          confidence: 1,
+          modelVersion: "manual",
+          verificationStatus: "corrected",
+          correctedSpecies: null,
+          verifiedBy: user.email,
+          verifiedAt: new Date(),
+        });
+        if (row.detectionClass !== 0) {
+          await db
+            .update(detections)
+            .set({ detectionClass: 0 })
+            .where(eq(detections.id, row.detectionId));
+        }
+      }
+      count++;
+    }
+
+    for (const row of depRows) {
+      await maybeAutoCompleteDeployment(row.deploymentId, user.email);
+    }
+    revalidatePath(CAMERA_TRAP_PATH);
+    return { success: true, data: { count } };
+  } catch (error) {
+    return {
+      success: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Error al asignar especie en lote",
+    };
+  }
+}
+
 export async function createManualDetection(
   imageId: number,
   bbox: { x: number; y: number; width: number; height: number }

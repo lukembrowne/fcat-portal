@@ -53,6 +53,7 @@ export function AnnotationHelpPanel() {
                 <li>Clic en un cuadro (o tecla <Kbd>1-9</Kbd>) — aparece el selector</li>
                 <li>Asigne especie con clic o tecla <Kbd>1-9</Kbd> (slot fijo por sesión)</li>
                 <li>Tecla <Kbd>0</Kbd> repite la última especie asignada (útil en ráfagas de 3 fotos)</li>
+                <li>Sin ninguna caja seleccionada, <Kbd>0</Kbd> asigna la última especie a <strong>todas las cajas de animales</strong> y las verifica</li>
                 <li>Se verifica automáticamente al asignar especie</li>
                 <li>Eliminar detecciones falsas: botón <Kbd>🗑</Kbd> o tecla <Kbd>d</Kbd></li>
                 <li>Dibujar nuevos cuadros: clic y arrastrar en la imagen</li>
@@ -67,7 +68,7 @@ export function AnnotationHelpPanel() {
               <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-xs">
                 <ShortcutRow keys="← →" desc="Imagen anterior/siguiente" />
                 <ShortcutRow keys="1-9" desc="Seleccionar detección / asignar frecuente" />
-                <ShortcutRow keys="0" desc="Repetir última especie asignada" />
+                <ShortcutRow keys="0" desc="Última especie: en la caja, o todas (sin selección)" />
                 <ShortcutRow keys="v" desc="Verificar todo y avanzar" />
                 <ShortcutRow keys="d / ⌫" desc="Eliminar detección" />
                 <ShortcutRow keys="b" desc="Confirmar/desconfirmar vacía" />
@@ -97,6 +98,7 @@ export function AnnotationHelpPanel() {
               <ul className="list-disc list-inside space-y-1 text-xs text-muted-foreground">
                 <li>Los slots <Kbd>1-9</Kbd> quedan fijos durante la sesión</li>
                 <li><Kbd>0</Kbd> repite la última especie — ideal para ráfagas de 3 fotos</li>
+                <li><Kbd>0</Kbd> sin selección aplica la última especie a todas las cajas de animales de la foto</li>
                 <li>Con el selector abierto, escriba para buscar especies raras</li>
                 <li><Kbd>v</Kbd> verifica todo y avanza</li>
               </ul>

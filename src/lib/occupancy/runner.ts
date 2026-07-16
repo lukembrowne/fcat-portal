@@ -14,9 +14,9 @@ import { log } from "@/lib/log";
  * wins, else `Rscript` on PATH (installed into the image alongside the ML venv).
  */
 
-const R_SCRIPT = path.join(process.cwd(), "scripts", "occupancy-runner.R");
+export const R_SCRIPT = path.join(process.cwd(), "scripts", "occupancy-runner.R");
 
-function resolveRscript(): string {
+export function resolveRscript(): string {
   return process.env.OCCUPANCY_RSCRIPT_PATH || process.env.RSCRIPT_PATH || "Rscript";
 }
 
@@ -146,6 +146,11 @@ export function runOccupancyModel(
         return; // ignore non-JSON noise
       }
       switch (msg.type) {
+        // Worker-loop mode emits "ready" once at startup carrying the versions
+        // (replacing the old per-config "version" line). Single-shot callers send
+        // one config then close stdin, so the loop fits once and exits; we read
+        // the ready line for versions and the single result/error for the fit.
+        case "ready":
         case "version":
           version = { unmarked: String(msg.unmarked), R: String(msg.R) };
           break;
@@ -155,7 +160,7 @@ export function runOccupancyModel(
         case "error":
           runnerError = String(msg.message ?? "unknown R error");
           break;
-        // "complete" is a terminal marker; nothing to do.
+        // "complete" is a legacy terminal marker; nothing to do.
       }
     });
 

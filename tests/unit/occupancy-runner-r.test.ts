@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
-import { spawnSync } from "node:child_process";
+import { spawnSync, spawn } from "node:child_process";
+import { createInterface } from "node:readline";
+import nodePath from "node:path";
 
 // server-only throws outside a Next server bundle; neutralize it (same pattern as
 // tests/unit/system-events.test.ts). log is stubbed so the bridge's debug call is inert.
@@ -23,6 +25,67 @@ function rReady(): boolean {
 }
 
 const utc = (y: number, m: number, d: number) => new Date(Date.UTC(y, m - 1, d));
+
+/**
+ * Drive the R worker-loop directly: spawn one Rscript, write each config as its
+ * own line, close stdin, and collect every parsed NDJSON message. Exercises the
+ * persistent-loop contract the pool (src/lib/occupancy/pool.ts) relies on — one
+ * `ready`, then one result/error per config, all from a SINGLE process.
+ */
+function runLoop(
+  configs: Record<string, unknown>[],
+): Promise<{ messages: { type: string; id?: number | null; [k: string]: unknown }[]; code: number | null }> {
+  return new Promise((resolve) => {
+    const script = nodePath.join(process.cwd(), "scripts", "occupancy-runner.R");
+    const proc = spawn("Rscript", [script], { stdio: ["pipe", "pipe", "pipe"] });
+    const messages: { type: string; id?: number | null; [k: string]: unknown }[] = [];
+    const rl = createInterface({ input: proc.stdout });
+    rl.on("line", (line) => {
+      const t = line.trim();
+      if (!t) return;
+      try {
+        messages.push(JSON.parse(t));
+      } catch {
+        /* ignore non-JSON noise */
+      }
+    });
+    proc.on("close", (code) => resolve({ messages, code }));
+    for (const c of configs) proc.stdin.write(JSON.stringify(c) + "\n");
+    proc.stdin.end();
+  });
+}
+
+/** A minimal, fittable single-covariate config (25 sites, forest gradient). */
+async function fittableConfig(id: number): Promise<Record<string, unknown>> {
+  const { buildDetectionFrame } = await import("@/lib/occupancy/detection-history");
+  const { assembleRunConfig } = await import("@/lib/occupancy/config");
+  const sites = Array.from({ length: 25 }, (_, i) => ({
+    siteId: `S${i}`,
+    siteName: `S${i}`,
+    latitude: 0,
+    longitude: 0,
+    windowStart: utc(2026, 1, 1),
+    windowEnd: utc(2026, 1, 30),
+  }));
+  const forest = sites.map((_, i) => i / 25);
+  let seed = 7 + id;
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+  const events: { siteId: string; captureDay: Date }[] = [];
+  sites.forEach((s, i) => {
+    if (rnd() < forest[i] * 0.9 + 0.05) {
+      for (let o = 0; o < 6; o++) {
+        if (rnd() < 0.45) events.push({ siteId: s.siteId, captureDay: utc(2026, 1, 2 + o * 5) });
+      }
+    }
+  });
+  const frame = buildDetectionFrame(sites, events, { binWidth: 5 });
+  const { config } = assembleRunConfig(frame, {
+    species: `Sp${id}`,
+    stream: "camera",
+    siteCovariates: [{ name: "forest", kind: "continuous", values: forest }],
+  });
+  return { ...config, id };
+}
 
 describe.skipIf(!rReady())("runOccupancyModel (real R subprocess)", () => {
   it("fits occu end-to-end and returns effects + grid predictions", async () => {
@@ -115,4 +178,60 @@ describe.skipIf(!rReady())("runOccupancyModel (real R subprocess)", () => {
     });
     expect(res.success).toBe(false);
   }, 60_000);
+});
+
+describe.skipIf(!rReady())("occupancy-runner.R worker loop", () => {
+  it("loads unmarked once and fits many configs from a single process", async () => {
+    const { messages, code } = await runLoop([
+      await fittableConfig(1),
+      await fittableConfig(2),
+      await fittableConfig(3),
+    ]);
+    expect(code).toBe(0);
+    // Exactly one ready line, carrying the unmarked version.
+    const ready = messages.filter((m) => m.type === "ready");
+    expect(ready.length).toBe(1);
+    expect(String(ready[0].unmarked)).toMatch(/^\d+\./);
+    // One result per config, ids echoed and correlated.
+    const results = messages.filter((m) => m.type === "result");
+    expect(results.length).toBe(3);
+    expect(results.map((r) => r.id).sort()).toEqual([1, 2, 3]);
+  }, 90_000);
+
+  it("isolates a per-config fit failure — the worker survives and keeps fitting", async () => {
+    // Bad config (id=1): one site, one occasion, no covariates → occu cannot fit.
+    const bad = {
+      id: 1,
+      species: "Bad",
+      stream: "camera",
+      binWidth: 5,
+      y: [[0]],
+      siteCovs: {},
+      siteFactors: [],
+      obsCovs: { effort: [["full"]] },
+      obsFactors: ["effort"],
+      psiFormula: "~1",
+      detFormula: "~effort",
+      grid: null,
+    };
+    const good = await fittableConfig(2);
+    const { messages, code } = await runLoop([bad, good]);
+    expect(code).toBe(0);
+    // The bad config emits a tagged error; the worker did NOT exit — the next
+    // config still returns a result.
+    const err = messages.find((m) => m.type === "error");
+    expect(err?.id).toBe(1);
+    const ok = messages.find((m) => m.type === "result");
+    expect(ok?.id).toBe(2);
+  }, 90_000);
+
+  it("does not emit a grid prediction when no grid is supplied", async () => {
+    // fittableConfig passes no gridCovariates → cfg.grid is null → the expensive
+    // per-cell-SE grid predict must NOT run (the gradient-only guard, verified at
+    // the R layer). Habitat/null variants rely on this.
+    const { messages } = await runLoop([await fittableConfig(1)]);
+    const result = messages.find((m) => m.type === "result");
+    expect(result).toBeDefined();
+    expect(result!.prediction).toBeUndefined();
+  }, 90_000);
 });

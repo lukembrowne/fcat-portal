@@ -19,7 +19,15 @@ import {
 } from "./covariates";
 import { getSyntheticSiteIds, cohortSitesFor } from "./cohort";
 import { assembleRunConfig, type GridCovariateSpec } from "./config";
-import { runOccupancyModel, type OccupancyPrediction, type OccupancyCurvePoint, type OccupancyHabitatBar } from "./runner";
+import {
+  runOccupancyModel,
+  type OccupancyRunConfig,
+  type OccupancyRunResult,
+  type OccupancyPrediction,
+  type OccupancyCurvePoint,
+  type OccupancyHabitatBar,
+} from "./runner";
+import { createOccupancyPool, registerPoolForShutdown } from "./pool";
 import { runForestCover, type RasterGridCell } from "./raster";
 import { renderRasterSurfaces, paddedBbox, type RasterModelSpec } from "./surface";
 import { classifyModelIdentifiability } from "./separation";
@@ -60,6 +68,40 @@ export interface BuildRunResult {
   nModels: number;
   nEligible: number;
   durationMs: number;
+}
+
+/**
+ * One model to fit: the R config plus a `persist` closure that records the result
+ * (row + effects + artifacts) once it comes back. Collected in Phase A, fitted in
+ * Phase B via the warm worker pool (or the serial fallback). `persist` closes over
+ * the run-scoped prepared statements and the shared render/prediction accumulators.
+ */
+interface FitJob {
+  config: OccupancyRunConfig;
+  /** Progress-toast label, e.g. "Cámaras · Panthera onca". */
+  label: string;
+  persist: (res: OccupancyRunResult) => void;
+}
+
+/**
+ * Grid-prediction guard (U4): ONLY the `gradient` variant may carry an AOI
+ * prediction grid into R. A grid triggers the expensive per-cell-SE `predict()`
+ * over the full AOI (~4,732 cells) — running it for `habitat` or `null` would be
+ * ~3× the grid cost per species for surfaces those variants never render. The
+ * caller already gates grid construction on `variant === "gradient"`; this is the
+ * tripwire that makes a future regression fail loudly instead of silently
+ * tripling the grid cost. Exported for direct testing.
+ */
+export function assertGradientOnlyGrid(
+  variant: "gradient" | "habitat" | "null",
+  hasGrid: boolean,
+): void {
+  if (variant !== "gradient" && hasGrid) {
+    throw new Error(
+      `occupancy: grid prediction attached to non-gradient variant "${variant}" — ` +
+        `only the gradient variant may render an AOI ψ surface`,
+    );
+  }
 }
 
 function rawClient(): BetterSqlite3.Database {
@@ -173,10 +215,11 @@ export async function runOccupancyBuild(opts: BuildRunOptions = {}): Promise<Bui
   let nModels = 0;
   let nEligible = 0;
 
-  // Species total for progress (perStream computed above, before the run row).
+  // Species total for the prep-phase progress messages (perStream computed above,
+  // before the run row). The fit phase (Phase B) switches the denominator to the
+  // total number of R fits once eligibility is known.
   const totalSpecies = perStream.reduce((a, s) => a + s.species.length, 0);
-  let done = 0;
-  // Publish the total up front so the progress toast shows "0 de N" immediately
+  // Publish a total up front so the progress toast shows "0 de N" immediately
   // rather than "0 de 0" while covariates/rasters are prepared.
   opts.onProgress?.(0, totalSpecies, "Preparando covariables…");
 
@@ -235,21 +278,27 @@ export async function runOccupancyBuild(opts: BuildRunOptions = {}): Promise<Bui
     habitat: (id: string) => habitatBySiteId.get(id),
   };
 
-  // Fit + persist ONE ψ variant for a species. Shared by all variants so the
-  // fit/persist/artifact flow lives in one place; only the covariate subset and
-  // the artifact kind differ. `gradient` writes the ψ map surface + response
-  // curves; `habitat` writes the habitat-use bars (no map); `null` (ψ~1) is the
-  // intercept-only AIC baseline and writes no artifacts. Mutates nModels via closure.
-  const fitVariant = async (
+  // Build a fit JOB for ONE ψ variant: the R config plus a `persist` closure that
+  // records the result once it comes back. Splitting fit-from-persist lets the fit
+  // phase run through a warm worker pool (concurrent, out of order) while every
+  // persist still runs serially on the single-threaded event loop — so the DB
+  // writes (synchronous better-sqlite3) never race and result order is irrelevant.
+  // `gradient` writes the ψ map surface + response curves; `habitat` writes the
+  // habitat-use bars (no map); `null` (ψ~1) is the intercept-only AIC baseline and
+  // writes no artifacts. GRID PREDICTION is attached ONLY for gradient (guarded
+  // below) — habitat/null never carry a grid into R.
+  const buildFitJob = (
     variant: "gradient" | "habitat" | "null",
     frame: ReturnType<typeof buildDetectionFrame>,
     sp: string,
     stream: "camera" | "audio",
     siteCovariates: ReturnType<typeof toCovariateSpecs>["covariates"],
     variantDropped: { name: string; reason: string }[],
-  ): Promise<void> => {
+  ): FitJob => {
     const gridSpecs =
       variant === "gradient" && raster ? buildGridCovariates(raster.grid, siteCovariates) : undefined;
+    // Fail loudly if a future change ever attaches a grid to a non-gradient variant.
+    assertGradientOnlyGrid(variant, gridSpecs !== undefined);
     const { config, standardizations, dropped: cfgDropped } = assembleRunConfig(frame, {
       species: sp,
       stream,
@@ -259,8 +308,9 @@ export async function runOccupancyBuild(opts: BuildRunOptions = {}): Promise<Bui
     });
     const allDropped = [...variantDropped, ...cfgDropped];
     const droppedJson = allDropped.length ? JSON.stringify(allDropped) : null;
+    const streamLabel = stream === "camera" ? "Cámaras" : "Audio";
 
-    const res = await runOccupancyModel(config);
+  const persist = (res: OccupancyRunResult): void => {
     if (!res.success) {
       log.warn({ species: sp, stream, variant, error: res.error }, "occupancy_fit_failed");
       insModel.run(
@@ -345,8 +395,16 @@ export async function runOccupancyBuild(opts: BuildRunOptions = {}): Promise<Bui
     }
     // 'null' (ψ~1): no covariates → no map, curves, or bars; the row + AIC is all.
     nModels++;
+    };
+
+    return { config, label: `${streamLabel} · ${sp}`, persist };
   };
 
+  // --- Phase A: cheap per-stream/species setup → collect the fit jobs ---------
+  // Snapshot covariates, gate on eligibility (ineligible species get one cheap
+  // 'combined' row with no R fit), and materialize the gradient/habitat/null fit
+  // jobs. No R is spawned here; this just enumerates the work.
+  const allJobs: FitJob[] = [];
   for (const { stream, inputs, species } of perStream) {
     // Snapshot covariates for the whole site pool once per stream.
     const poolInputs: SiteCovariateInput[] = inputs.sites.map(
@@ -368,10 +426,7 @@ export async function runOccupancyBuild(opts: BuildRunOptions = {}): Promise<Bui
     // cohort where it was detected. No-op in production (no synthetic sites).
     const synthetic = getSyntheticSiteIds(inputs);
 
-    const streamLabel = stream === "camera" ? "Cámaras" : "Audio";
     for (const sp of species) {
-      done++;
-      opts.onProgress?.(done, totalSpecies, `${streamLabel} · ${sp}`);
       const events = bySpecies.get(sp) ?? [];
       const frame = buildDetectionFrame(cohortSitesFor(inputs.sites, events, synthetic), events, {
         binWidth,
@@ -409,16 +464,56 @@ export async function runOccupancyBuild(opts: BuildRunOptions = {}): Promise<Bui
       const gradientDropped = specDropped.filter((d) => gradientDroppedNames.has(d.name));
       const habitatDropped = specDropped.filter((d) => !gradientDroppedNames.has(d.name));
 
-      // Always fit gradient (it is the mappable, baseline model — reduces to ψ~1
-      // when no continuous covariate is available). Fit habitat only when a usable
-      // habitat factor exists; otherwise there is no habitat model to speak of.
-      // Always fit the ψ~1 null last as the AIC baseline the others are compared to.
-      await fitVariant("gradient", frame, sp, stream, gradientSpecs, gradientDropped);
+      // Always fit gradient (the mappable, baseline model — reduces to ψ~1 when no
+      // continuous covariate is available). Fit habitat only when a usable factor
+      // exists. Always fit the ψ~1 null as the AIC baseline the others compare to.
+      allJobs.push(buildFitJob("gradient", frame, sp, stream, gradientSpecs, gradientDropped));
       if (habitatSpecs.length > 0) {
-        await fitVariant("habitat", frame, sp, stream, habitatSpecs, habitatDropped);
+        allJobs.push(buildFitJob("habitat", frame, sp, stream, habitatSpecs, habitatDropped));
       }
-      await fitVariant("null", frame, sp, stream, [], []);
+      allJobs.push(buildFitJob("null", frame, sp, stream, [], []));
       nEligible++;
+    }
+  }
+
+  // --- Phase B: fit every job -------------------------------------------------
+  // Warm pool (default): submit all jobs to N persistent R workers and persist
+  // each result as it resolves — concurrent fits, serial persists, order-
+  // independent. Fallback (OCCUPANCY_WARM_POOL=false): the legacy spawn-one-
+  // Rscript-per-model serial path, kept as a no-redeploy revert lever.
+  const totalFits = allJobs.length;
+  let completed = 0;
+  const tick = (label: string): void => {
+    completed++;
+    opts.onProgress?.(completed, totalFits, label);
+  };
+  opts.onProgress?.(0, totalFits, "Ajustando modelos…");
+
+  const useWarmPool = process.env.OCCUPANCY_WARM_POOL !== "false";
+  if (totalFits === 0) {
+    // No eligible species — nothing to fit.
+  } else if (useWarmPool) {
+    const pool = createOccupancyPool();
+    registerPoolForShutdown(pool);
+    try {
+      // pool.submit resolves (never rejects) with a result; persist handles the
+      // failure branch. Every .then callback runs serially on the event loop.
+      await Promise.all(
+        allJobs.map((job) =>
+          pool.submit(job.config).then((res) => {
+            job.persist(res);
+            tick(job.label);
+          }),
+        ),
+      );
+    } finally {
+      await pool.shutdown();
+    }
+  } else {
+    for (const job of allJobs) {
+      const res = await runOccupancyModel(job.config);
+      job.persist(res);
+      tick(job.label);
     }
   }
 

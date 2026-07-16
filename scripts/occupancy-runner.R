@@ -1,16 +1,26 @@
 #!/usr/bin/env Rscript
 # Occupancy model runner — single-season single-species (MacKenzie) via unmarked::occu.
 #
-# Contract (mirrors scripts/birdnet-runner.py): reads ONE JSON config object from
-# stdin, streams NDJSON result lines to stdout, one JSON object per line, each
-# tagged with a `type`. The TS bridge (src/lib/occupancy/runner.ts) parses these.
-# The process resolves with exit code 0 on success (after emitting {type:"result"})
-# or non-zero after emitting {type:"error"}; it never prompts.
+# WORKER-LOOP contract (mirrors scripts/model-server.py): loads jsonlite +
+# unmarked ONCE, emits {type:"ready"}, then reads ONE JSON config object per line
+# from stdin and streams back ONE NDJSON result (or error) line per config,
+# looping until stdin EOF. This lets a persistent pool of these processes fit many
+# models without paying the ~1.3s R+unmarked startup per model. The TS bridge
+# (src/lib/occupancy/pool.ts) drives the pool; src/lib/occupancy/runner.ts drives
+# a single-shot fit (one config + stdin close → one fit → exit 0), which this loop
+# also satisfies, so the same script backs both paths.
 #
-# Input config shape:
+# Per-config error isolation: a fit failure emits {type:"error", id} and the loop
+# CONTINUES to the next config — one bad model never kills the worker. Only a
+# fatal startup problem (library load, unreadable stdin) exits non-zero. A native
+# crash inside unmarked still kills the process; the pool detects the exit and
+# respawns.
+#
+# Input config shape (one per line):
 #   {
+#     "id": int | null,                          # echoed back for request/response correlation
 #     "species": str, "stream": "camera"|"audio", "binWidth": int,
-#     "y": [[0|1|null, ...], ...],              # sites x occasions detection history
+#     "y": [[0|1|null, ...], ...],               # sites x occasions detection history
 #     "siteCovs":   { "<name>": [ ... nSites ] },
 #     "siteFactors": ["habitat", ...],           # which siteCovs are categorical
 #     "obsCovs":    { "<name>": [[ ... occ], ...] }, # sites x occasions
@@ -18,13 +28,13 @@
 #                                                #   (effort is numeric/continuous)
 #     "psiFormula": "~forest + elev + habitat",  # occupancy (state) formula
 #     "detFormula": "~effort",                   # detection formula
-#     "grid":       { "<name>": [ ... nCells ] } | null  # optional prediction grid
+#     "grid":       { "<name>": [ ... nCells ] } | null  # optional prediction grid (gradient only)
 #   }
 #
 # Emits:
-#   {"type":"version", ...}
-#   {"type":"result", ...model summary + predictions...}
-#   {"type":"error","message": "..."}
+#   {"type":"ready", "unmarked": "...", "R": "..."}   # once, at startup
+#   {"type":"result", "id": ..., ...model summary + predictions...}
+#   {"type":"error", "id": ..., "message": "..."}
 
 suppressWarnings(suppressMessages({
   library(jsonlite)
@@ -36,33 +46,20 @@ emit <- function(obj) {
   flush(stdout())
 }
 
-fail <- function(msg) {
-  emit(list(type = "error", message = as.character(msg)))
-  quit(status = 1, save = "no")
-}
+# Cell accessors: null / length-0 -> NA (never a length-zero replacement).
+numCell <- function(v) if (is.null(v) || length(v) == 0) NA_real_ else as.numeric(v)[1]
+chrCell <- function(v) if (is.null(v) || length(v) == 0) NA_character_ else as.character(v)[1]
 
-main <- function() {
-  emit(list(
-    type = "version",
-    unmarked = as.character(packageVersion("unmarked")),
-    R = paste(R.version$major, R.version$minor, sep = ".")
-  ))
-
-  raw <- paste(readLines("stdin", warn = FALSE), collapse = "\n")
-  if (!nzchar(raw)) fail("empty config on stdin")
-  # simplifyVector=FALSE keeps everything as nested lists so JSON null stays a
-  # length-0 element (rather than being dropped by simplification), which is the
-  # only reliable way to preserve NA positions in the ragged detection history.
-  cfg <- fromJSON(raw, simplifyVector = FALSE)
-
-  # Cell accessors: null / length-0 -> NA (never a length-zero replacement).
-  numCell <- function(v) if (is.null(v) || length(v) == 0) NA_real_ else as.numeric(v)[1]
-  chrCell <- function(v) if (is.null(v) || length(v) == 0) NA_character_ else as.character(v)[1]
+# Fit ONE config and emit exactly one {type:"result"}. On any problem it calls
+# stop() (or a helper that does), which the loop's tryCatch turns into a tagged
+# {type:"error"} line — so per-request failures never terminate the worker.
+fitOne <- function(cfg) {
+  reqId <- if (is.null(cfg$id)) NA_integer_ else cfg$id
 
   # --- detection-history matrix (JSON null -> NA) ---
   yrows <- cfg$y
   nSites <- length(yrows)
-  if (nSites == 0) fail("no sites in detection history")
+  if (nSites == 0) stop("no sites in detection history")
   nOcc <- length(yrows[[1]])
   y <- matrix(NA_real_, nrow = nSites, ncol = nOcc)
   for (i in seq_len(nSites)) {
@@ -109,21 +106,21 @@ main <- function() {
   siteCovsArg <- if (ncol(siteCovs) > 0) siteCovs else NULL
   umf <- tryCatch(
     unmarkedFrameOccu(y = y, siteCovs = siteCovsArg, obsCovs = obsCovsArg),
-    error = function(e) fail(paste("unmarkedFrameOccu failed:", conditionMessage(e)))
+    error = function(e) stop(paste("unmarkedFrameOccu failed:", conditionMessage(e)))
   )
 
   form <- as.formula(paste(cfg$detFormula, cfg$psiFormula))
   t0 <- Sys.time()
   m <- tryCatch(
     occu(form, data = umf),
-    error = function(e) fail(paste("occu fit failed:", conditionMessage(e)))
+    error = function(e) stop(paste("occu fit failed:", conditionMessage(e)))
   )
   fitSecs <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
 
   # Coefficient table (link scale): estimate, se, z, p for state + det params.
   est <- tryCatch(coef(m), error = function(e) NULL)
   se <- tryCatch(SE(m), error = function(e) rep(NA_real_, length(est)))
-  if (is.null(est)) fail("model produced no coefficients (did not converge)")
+  if (is.null(est)) stop("model produced no coefficients (did not converge)")
   z <- est / se
   pval <- 2 * pnorm(-abs(z))
   effects <- lapply(seq_along(est), function(k) {
@@ -148,6 +145,7 @@ main <- function() {
 
   result <- list(
     type = "result",
+    id = reqId,
     species = cfg$species,
     stream = cfg$stream,
     nSites = nSites,
@@ -215,7 +213,9 @@ main <- function() {
     }
   }
 
-  # --- optional AOI grid prediction ---
+  # --- optional AOI grid prediction (gradient variant only — cfg$grid is null
+  # for habitat/null variants, so this expensive per-cell-SE predict never runs
+  # for them; see src/lib/occupancy/build-run.ts grid guard) ---
   if (!is.null(cfg$grid)) {
     gridN <- length(cfg$grid[[1]])
     gridDF <- data.frame(row.names = seq_len(gridN))
@@ -251,7 +251,47 @@ main <- function() {
   }
 
   emit(result)
-  emit(list(type = "complete"))
 }
 
-tryCatch(main(), error = function(e) fail(conditionMessage(e)))
+main <- function() {
+  emit(list(
+    type = "ready",
+    unmarked = as.character(packageVersion("unmarked")),
+    R = paste(R.version$major, R.version$minor, sep = ".")
+  ))
+
+  con <- file("stdin", open = "r")
+  on.exit(close(con), add = TRUE)
+  repeat {
+    line <- readLines(con, n = 1L, warn = FALSE)
+    if (length(line) == 0) break            # EOF — stdin closed, drain complete
+    if (!nzchar(trimws(line))) next         # skip blank keep-alive lines
+    cfg <- tryCatch(
+      fromJSON(line, simplifyVector = FALSE),
+      error = function(e) {
+        emit(list(type = "error", id = NA_integer_,
+                  message = paste("bad config json:", conditionMessage(e))))
+        NULL
+      }
+    )
+    if (is.null(cfg)) next
+    # simplifyVector=FALSE keeps everything as nested lists so JSON null stays a
+    # length-0 element (rather than being dropped by simplification), which is the
+    # only reliable way to preserve NA positions in the ragged detection history.
+    tryCatch(
+      fitOne(cfg),
+      error = function(e) emit(list(
+        type = "error",
+        id = if (is.null(cfg$id)) NA_integer_ else cfg$id,
+        message = conditionMessage(e)
+      ))
+    )
+  }
+}
+
+# Only startup/IO failures reach here (per-config errors are caught in main's
+# loop). Emit a fatal error line and exit non-zero so the pool can surface it.
+tryCatch(main(), error = function(e) {
+  emit(list(type = "error", id = NA_integer_, message = conditionMessage(e)))
+  quit(status = 1, save = "no")
+})

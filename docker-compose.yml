@@ -53,6 +53,13 @@ services:
       - TZ=America/New_York
       - FLAC_COMPRESSION_BATCH_SIZE=20
       - FLAC_COMPRESSION_WORKERS=8
+      # Occupancy fitting: warm pool of persistent R workers (each loads unmarked
+      # once, fits many models). OCCUPANCY_WORKERS = pool size (flat 4 to leave
+      # cores for co-tenants on the shared droplet; capped at core count).
+      # OCCUPANCY_WARM_POOL=false reverts to the legacy spawn-one-Rscript-per-model
+      # path — an emergency lever if the pool misbehaves on the nightly cron.
+      - OCCUPANCY_WORKERS=${OCCUPANCY_WORKERS:-4}
+      - OCCUPANCY_WARM_POOL=${OCCUPANCY_WARM_POOL:-true}
       # Multi-Shared-Drive fan-out flags (SHARED_DRIVE_DISCOVERY_ENABLED,
       # SHARED_DRIVE_ROUTING_ENABLED) are NOT pinned here so they can be set like
       # every other option: .env.local in dev, server .env in prod. Both default

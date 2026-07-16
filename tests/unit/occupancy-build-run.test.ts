@@ -38,7 +38,7 @@ const DDL = `
   );
   CREATE TABLE biochoco_deployments (
     id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT, ct_project_id INTEGER, name TEXT NOT NULL, site_name TEXT,
-    latitude REAL, longitude REAL, date_start TEXT, date_end TEXT, status TEXT,
+    latitude REAL, longitude REAL, date_start TEXT, date_end TEXT, valid_start TEXT, valid_end TEXT, status TEXT,
     excluded INTEGER DEFAULT 0, field_notes TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch()), updated_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
@@ -209,6 +209,87 @@ describe.skipIf(!rReady())("runOccupancyBuild (integration, real R)", () => {
     expect(ineligible[0].ineligible_reasons_json).toBeTruthy();
     expect(ineligible[0].estimated_occupancy).toBeNull();
   }, 120_000);
+
+  // Canonical projection of a run's models — everything that must be identical
+  // regardless of HOW the fits were dispatched (fit_seconds excluded: it is
+  // wall-clock and varies run to run).
+  const projectModels = (runId: number) =>
+    (
+      sqlite
+        .prepare(
+          `SELECT species, stream, variant, sufficient_data, psi_formula, det_formula,
+                  n_sites, n_sites_detected, total_detections, n_occasions,
+                  ROUND(estimated_occupancy, 6) AS psi, ROUND(aic, 4) AS aic, convergence
+           FROM occupancy_models WHERE run_id = ?
+           ORDER BY species, stream, variant`,
+        )
+        .all(runId) as Record<string, unknown>[]
+    );
+
+  it("R3: warm-pool and serial paths produce an identical model row set", async () => {
+    const { runOccupancyBuild } = await import("@/lib/occupancy/build-run");
+    const saved = process.env.OCCUPANCY_WARM_POOL;
+    try {
+      // Warm pool (default).
+      delete process.env.OCCUPANCY_WARM_POOL;
+      const poolRun = await runOccupancyBuild({ createdBy: "pool@test" });
+      const poolRows = projectModels(poolRun.runId);
+
+      // Serial spawn-per-model fallback, same seeded inputs.
+      process.env.OCCUPANCY_WARM_POOL = "false";
+      const serialRun = await runOccupancyBuild({ createdBy: "serial@test" });
+      const serialRows = projectModels(serialRun.runId);
+
+      expect(poolRows.length).toBeGreaterThan(0);
+      expect(poolRows).toEqual(serialRows);
+      // Same total model count both ways.
+      expect(poolRun.nModels).toBe(serialRun.nModels);
+      expect(poolRun.nEligible).toBe(serialRun.nEligible);
+    } finally {
+      if (saved === undefined) delete process.env.OCCUPANCY_WARM_POOL;
+      else process.env.OCCUPANCY_WARM_POOL = saved;
+    }
+  }, 180_000);
+
+  it("R7: progress advances monotonically and ends at the total fit count", async () => {
+    const { runOccupancyBuild } = await import("@/lib/occupancy/build-run");
+    const ticks: { done: number; total: number }[] = [];
+    const res = await runOccupancyBuild({
+      onProgress: (done, total) => ticks.push({ done, total }),
+    });
+
+    // Monotonic non-decreasing `done` across the whole run (prep ticks report 0).
+    for (let i = 1; i < ticks.length; i++) {
+      expect(ticks[i].done).toBeGreaterThanOrEqual(ticks[i - 1].done);
+    }
+    // The fit phase's denominator = number of R fits = every non-'combined' model
+    // (each eligible variant is fitted exactly once).
+    const totalFits = (
+      sqlite
+        .prepare("SELECT COUNT(*) AS n FROM occupancy_models WHERE run_id = ? AND variant != 'combined'")
+        .get(res.runId) as { n: number }
+    ).n;
+    const fitTicks = ticks.filter((t) => t.total === totalFits);
+    expect(fitTicks.length).toBeGreaterThan(0);
+    expect(Math.max(...fitTicks.map((t) => t.done))).toBe(totalFits);
+  }, 120_000);
+});
+
+describe("assertGradientOnlyGrid (U4 grid-prediction guard)", () => {
+  it("allows a grid only for the gradient variant", async () => {
+    const { assertGradientOnlyGrid } = await import("@/lib/occupancy/build-run");
+    expect(() => assertGradientOnlyGrid("gradient", true)).not.toThrow();
+    expect(() => assertGradientOnlyGrid("gradient", false)).not.toThrow();
+    // Non-gradient variants with NO grid are the normal case — fine.
+    expect(() => assertGradientOnlyGrid("habitat", false)).not.toThrow();
+    expect(() => assertGradientOnlyGrid("null", false)).not.toThrow();
+  });
+
+  it("throws if a grid is attached to habitat or null (regression tripwire)", async () => {
+    const { assertGradientOnlyGrid } = await import("@/lib/occupancy/build-run");
+    expect(() => assertGradientOnlyGrid("habitat", true)).toThrow(/non-gradient variant "habitat"/);
+    expect(() => assertGradientOnlyGrid("null", true)).toThrow(/non-gradient variant "null"/);
+  });
 });
 
 describe("checkCovariateInfrastructure", () => {

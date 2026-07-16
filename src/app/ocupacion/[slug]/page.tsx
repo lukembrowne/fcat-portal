@@ -84,6 +84,18 @@ export default async function SpeciesOccupancyPage({
   // unambiguous. Matches OCCUPANCY_BUFFER_METERS used at fit time.
   const forestBufferM = Number(process.env.OCCUPANCY_BUFFER_METERS ?? 500);
 
+  // Per-site detection status (keyed by deployment id) from the on-demand
+  // detection frame — merged onto the map's sampling points so each marker can
+  // show whether the species was detected there, and how many times.
+  const detBySite = new Map((inputSample?.rows ?? []).map((r) => [r.siteId, r]));
+  const mapSites = model?.prediction
+    ? model.prediction.sites.map((s) => ({
+        ...s,
+        detected: detBySite.get(s.siteId)?.detected ?? null,
+        detections: detBySite.get(s.siteId)?.detections ?? null,
+      }))
+    : [];
+
   return (
     <div className="p-6 max-w-screen-2xl mx-auto space-y-6">
       <div className="text-sm">
@@ -184,7 +196,7 @@ export default async function SpeciesOccupancyPage({
                   hasElevation={model.prediction.hasElevation}
                   bbox={model.prediction.bbox}
                   cells={model.prediction.cells}
-                  sites={model.prediction.sites}
+                  sites={mapSites}
                 />
               ) : (
                 <div className="rounded-lg border p-6 text-sm text-muted-foreground">

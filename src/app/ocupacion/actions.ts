@@ -302,8 +302,18 @@ export interface SpeciesModelDetail {
     psiMax: number | null;
     nCells: number | null;
     cells: MapCell[];
-    /** Deployment locations in this species' model cohort (sampling points). */
-    sites: { lat: number; lng: number }[];
+    /** Deployment locations in this species' model cohort (sampling points),
+     *  with the site's ψ covariates for the map marker popup. Detection status
+     *  is merged in on the page from getModelInputSample (keyed by siteId). */
+    sites: {
+      siteId: string;
+      siteName: string | null;
+      lat: number;
+      lng: number;
+      habitat: string | null;
+      elevation: number | null;
+      forestCover: number | null;
+    }[];
   } | null;
 }
 
@@ -510,18 +520,38 @@ export async function getSpeciesModel(
     // split by the OCC-SEED marker and pick the group whose size matches the
     // model's n_sites (cohort isolation put the species in exactly one group).
     const sitePts = db.all(sql`
-      SELECT sc.latitude AS lat, sc.longitude AS lng,
+      SELECT sc.site_id AS siteId, sc.site_name AS siteName,
+             sc.latitude AS lat, sc.longitude AS lng,
+             sc.habitat AS habitat, sc.elevation AS elevation,
+             sc.forest_cover AS forestCover,
              (d.name LIKE 'OCC-SEED-%') AS synthetic
       FROM occupancy_site_covariates sc
       JOIN biochoco_deployments d ON d.id = CAST(sc.site_id AS INTEGER)
       WHERE sc.run_id = ${runId} AND sc.stream = ${stream}
         AND sc.latitude IS NOT NULL AND sc.longitude IS NOT NULL
-    `) as { lat: number; lng: number; synthetic: number }[];
+    `) as {
+      siteId: string;
+      siteName: string | null;
+      lat: number;
+      lng: number;
+      habitat: string | null;
+      elevation: number | null;
+      forestCover: number | null;
+      synthetic: number;
+    }[];
     const synth = sitePts.filter((p) => p.synthetic);
     const real = sitePts.filter((p) => !p.synthetic);
     const cohort =
       synth.length === baseRow.nSites ? synth : real.length === baseRow.nSites ? real : sitePts;
-    const sites = cohort.map((p) => ({ lat: p.lat, lng: p.lng }));
+    const sites = cohort.map((p) => ({
+      siteId: p.siteId,
+      siteName: p.siteName,
+      lat: p.lat,
+      lng: p.lng,
+      habitat: p.habitat,
+      elevation: p.elevation,
+      forestCover: p.forestCover,
+    }));
 
     return {
       success: true,
@@ -825,6 +855,8 @@ export async function getCrossSpeciesData(): Promise<ActionResult<CrossSpeciesDa
 export interface DetectionSampleRow {
   siteId: string;
   siteName: string;
+  /** Whether the species was detected at this site (≥1 in-window detection). */
+  detected: boolean;
   /** Occasions actually surveyed at this site (non-NA cells). */
   occasions: number;
   /** In-window detections at this site. */
@@ -942,6 +974,7 @@ export async function getModelInputSample(
       .map(({ p, i }) => ({
         siteId: p.siteId,
         siteName: p.siteName,
+        detected: p.detected,
         occasions: p.occasions,
         detections: p.detections,
         cells: frame.y[i],

@@ -8,6 +8,7 @@ import {
   LayersControl,
   LayerGroup,
   CircleMarker,
+  Popup,
   GeoJSON,
   useMapEvents,
 } from "react-leaflet";
@@ -27,6 +28,17 @@ export interface MapCell {
 export interface MapSite {
   lat: number;
   lng: number;
+  /** Deployment id — enables the marker popup + the "Ver despliegue" link. */
+  siteId?: string;
+  siteName?: string | null;
+  habitat?: string | null;
+  /** Meters. */
+  elevation?: number | null;
+  /** 0..1 forest-cover fraction within the sampling buffer. */
+  forestCover?: number | null;
+  /** Whether the species was detected here. null = unknown (e.g. richness map). */
+  detected?: boolean | null;
+  detections?: number | null;
 }
 
 /** Legend/hover mode: per-species occupancy (ψ) or cross-species richness (Σψ). */
@@ -48,6 +60,53 @@ export interface OccupancyMapProps {
 }
 
 const pct = (v: number) => `${(v * 100).toFixed(0)}%`;
+
+// Detected sites read as solid emerald with a white ring (legible over the
+// viridis ψ surface); not-detected are hollow slate; unknown (richness map or
+// no matching detection row) keeps the neutral white dot.
+function markerStyle(detected?: boolean | null) {
+  if (detected === true)
+    return { color: "#ffffff", weight: 1.5, fillColor: "#059669", fillOpacity: 0.95 };
+  if (detected === false)
+    return { color: "#0f172a", weight: 1, fillColor: "#ffffff", fillOpacity: 0.75 };
+  return { color: "#0f172a", weight: 1, fillColor: "#ffffff", fillOpacity: 0.9 };
+}
+const markerRadius = (detected?: boolean | null) =>
+  detected === true ? 5 : detected === false ? 4 : 3;
+
+/** Click popup for a sampling site: detection status + the ψ covariates. */
+function SitePopup({ site }: { site: MapSite }) {
+  return (
+    <div className="text-[12px] leading-snug">
+      <div className="font-semibold">{site.siteName || `Sitio ${site.siteId}`}</div>
+      <div className="mt-0.5">
+        {site.detected == null ? (
+          <span className="text-gray-500">Detección sin dato</span>
+        ) : site.detected ? (
+          <span className="font-medium text-emerald-700">
+            Detectada
+            {site.detections != null ? ` · ${site.detections} detección(es)` : ""}
+          </span>
+        ) : (
+          <span className="text-gray-500">No detectada</span>
+        )}
+      </div>
+      <dl className="mt-1 space-y-0.5 text-gray-600">
+        <div>Hábitat: {site.habitat || "—"}</div>
+        <div>Elevación: {site.elevation != null ? `${site.elevation.toFixed(0)} m` : "—"}</div>
+        <div>Bosque: {site.forestCover != null ? pct(site.forestCover) : "—"}</div>
+      </dl>
+      {site.siteId != null ? (
+        <a
+          href={`/camera-trap/${site.siteId}`}
+          className="mt-1 inline-block font-medium text-sky-700 hover:underline"
+        >
+          Ver despliegue →
+        </a>
+      ) : null}
+    </div>
+  );
+}
 
 /** Nearest-cell probe: on mousemove report the closest grid cell for the readout. */
 function HoverProbe({ cells, onHover }: { cells: MapCell[]; onHover: (c: MapCell | null) => void }) {
@@ -140,6 +199,9 @@ export function OccupancyMap({
   ];
   const viewBounds = (sites && siteViewBounds(sites)) || aoiBounds;
   const isRichness = legend.kind === "richness";
+  // Only show the detected/no-detected key when the markers actually carry
+  // detection status (per-species map), not on the cross-species richness map.
+  const hasDetectionData = !!sites?.some((s) => s.detected != null);
   const url = (name: string) => `/api/ocupacion/surface/${runId}/${name}`;
 
   return (
@@ -186,12 +248,13 @@ export function OccupancyMap({
             <LayersControl.Overlay checked name={`Sitios de muestreo (${sites.length})`}>
               <LayerGroup>
                 {sites.map((s, i) => (
-                  <CircleMarker
-                    key={i}
-                    center={[s.lat, s.lng]}
-                    radius={3}
-                    pathOptions={{ color: "#0f172a", weight: 1, fillColor: "#ffffff", fillOpacity: 0.9 }}
-                  />
+                  <CircleMarker key={i} center={[s.lat, s.lng]} pathOptions={markerStyle(s.detected)} radius={markerRadius(s.detected)}>
+                    {s.siteId != null ? (
+                      <Popup>
+                        <SitePopup site={s} />
+                      </Popup>
+                    ) : null}
+                  </CircleMarker>
                 ))}
               </LayerGroup>
             </LayersControl.Overlay>
@@ -214,6 +277,21 @@ export function OccupancyMap({
           />
           <span>{isRichness ? legend.max.toFixed(1) : "100%"}</span>
         </div>
+        {hasDetectionData ? (
+          <div className="mt-1 flex items-center gap-3 border-t pt-1">
+            <span className="flex items-center gap-1">
+              <span
+                className="inline-block h-2 w-2 rounded-full border border-white"
+                style={{ background: "#059669" }}
+              />
+              Detectada
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="inline-block h-2 w-2 rounded-full border border-slate-900 bg-white" />
+              No detectada
+            </span>
+          </div>
+        ) : null}
       </div>
 
       {/* Hover readout */}

@@ -6,6 +6,8 @@ import { log } from "@/lib/log";
 import { claimAndEmitStart, processNextQueueable } from "@/lib/job-queue";
 import { recordEvent, buildJobCompletionEvent, type JobCompletionExtras } from "@/lib/system-events";
 import { runOccupancyBuild } from "./build-run";
+import { computeReadinessResult } from "./readiness-compute";
+import { computeReadinessFingerprint, saveReadinessSnapshot } from "./readiness-snapshot";
 
 /**
  * Background processor for an `OCCUPANCY_MODEL` job. Runs a full occupancy build
@@ -69,6 +71,17 @@ export async function processOccupancyJob(jobId: number): Promise<void> {
       nModels: result.nModels,
       nEligible: result.nEligible,
     });
+
+    // Refresh the /ocupacion readiness snapshot so the page reflects this run's
+    // data without a manual press. Isolated in its own try/catch: a snapshot
+    // write failure must never fail an otherwise-successful modeling run.
+    try {
+      const readiness = await computeReadinessResult();
+      const fingerprint = computeReadinessFingerprint();
+      saveReadinessSnapshot({ result: readiness, fingerprint, generatedBy: "batch" });
+    } catch (snapErr) {
+      log.error({ err: snapErr, jobId }, "[occupancy] readiness snapshot refresh failed (non-fatal)");
+    }
 
     log.info(
       {

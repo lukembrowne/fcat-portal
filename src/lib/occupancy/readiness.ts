@@ -35,8 +35,9 @@ export interface ReadinessSpeciesRow {
   species: string;
   /**
    * Display names + IUCN status resolved from `biochoco_species`, populated by
-   * the server action (getOccupancyReadiness) — NOT by the pure compute. Null
-   * when the species is absent from the lookup; callers fall back to `species`.
+   * the readiness computation (computeReadinessResult) — NOT by the pure compute
+   * in this file. Null when the species is absent from the lookup; callers fall
+   * back to `species`.
    */
   commonName?: string | null;
   spanishName?: string | null;

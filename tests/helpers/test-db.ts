@@ -468,6 +468,16 @@ const CAMERA_TRAP_DDL =
     revoked_at INTEGER,
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
+  CREATE TABLE occupancy_readiness_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bin_width_days INTEGER NOT NULL DEFAULT 5,
+    audio_confidence_threshold REAL NOT NULL DEFAULT 0.7,
+    result_json TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    generated_by TEXT,
+    generated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
 `;
 
 export function createTestDb() {

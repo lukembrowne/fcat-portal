@@ -1361,6 +1361,41 @@ export const occupancyPublicTokens = sqliteTable(
   (table) => [index("idx_occupancy_public_tokens_token").on(table.token)]
 );
 
+// Cached data-readiness report for /ocupacion. The full report is expensive to
+// compute (it materializes every image + audio file + detection), so it is
+// snapshotted here as a JSON blob and rendered instantly on page load. A cheap
+// data `fingerprint` (COUNT/MAX aggregates over the BioChoco pool) lets the page
+// detect that underlying data changed and prompt a refresh. Rows are always
+// inserted (never upserted); the latest by generated_at for a config wins.
+export const occupancyReadinessSnapshots = sqliteTable(
+  "occupancy_readiness_snapshots",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    binWidthDays: integer("bin_width_days").notNull().default(5),
+    audioConfidenceThreshold: real("audio_confidence_threshold")
+      .notNull()
+      .default(0.7),
+    /** Serialized OccupancyReadinessResult (JSON). */
+    resultJson: text("result_json").notNull(),
+    /** Cheap data fingerprint captured when this snapshot was generated. */
+    fingerprint: text("fingerprint").notNull(),
+    generatedBy: text("generated_by"),
+    generatedAt: integer("generated_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [
+    index("idx_occupancy_readiness_snapshots_config").on(
+      table.binWidthDays,
+      table.audioConfidenceThreshold,
+      table.generatedAt,
+    ),
+  ]
+);
+
 export type OccupancyRun = typeof occupancyRuns.$inferSelect;
 export type OccupancyModel = typeof occupancyModels.$inferSelect;
 export type OccupancyCovariateEffect =
@@ -1368,6 +1403,8 @@ export type OccupancyCovariateEffect =
 export type OccupancyPrediction = typeof occupancyPredictions.$inferSelect;
 export type OccupancySiteCovariate = typeof occupancySiteCovariates.$inferSelect;
 export type OccupancyPublicToken = typeof occupancyPublicTokens.$inferSelect;
+export type OccupancyReadinessSnapshot =
+  typeof occupancyReadinessSnapshots.$inferSelect;
 
 // ---------------------------------------------------------------------------
 // Share Tokens (public share links for camera trap deployments)

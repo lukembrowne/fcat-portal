@@ -610,6 +610,21 @@ const statements = [
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
   )`,
   `CREATE INDEX IF NOT EXISTS idx_occupancy_public_tokens_token ON occupancy_public_tokens(token)`,
+  // Readiness snapshots: cached /ocupacion data-readiness report (JSON blob) +
+  // a cheap data fingerprint, so the page renders instantly instead of
+  // recomputing the full report on every load. Always inserted (never upserted);
+  // reads take the latest by generated_at for a given config.
+  `CREATE TABLE IF NOT EXISTS occupancy_readiness_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bin_width_days INTEGER NOT NULL DEFAULT 5,
+    audio_confidence_threshold REAL NOT NULL DEFAULT 0.7,
+    result_json TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    generated_by TEXT,
+    generated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_occupancy_readiness_snapshots_config ON occupancy_readiness_snapshots(bin_width_days, audio_confidence_threshold, generated_at)`,
 
   // Upload Count Snapshots (daily aggregate of Drive upload counts)
   `CREATE TABLE IF NOT EXISTS upload_count_snapshots (

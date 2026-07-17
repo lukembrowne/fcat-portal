@@ -11,6 +11,10 @@ import type { OccupancySite } from "./detection-history";
 import type { ReadinessDetection, OccupancyStream } from "./readiness";
 import type { SiteCovariateInput } from "./covariates";
 import { DEFAULT_CONFIDENCE_THRESHOLD } from "@/lib/audio-confidence";
+import {
+  selectCanonicalAudioFiles,
+  type AudioSubsampleSummary,
+} from "./audio-subsample";
 
 /**
  * Shared data fetch for occupancy: resolves the surveyed-site pool (with windows
@@ -33,6 +37,21 @@ const EXCLUDED_OCCUPANCY_SPECIES = new Set(["homo sapiens", "unknown", "aves"]);
 export function isExcludedOccupancySpecies(species: string | null | undefined): boolean {
   return species != null && EXCLUDED_OCCUPANCY_SPECIES.has(species.trim().toLowerCase());
 }
+
+/**
+ * SQL subquery for the BioChoco-project deployment ids. Used to scope the image,
+ * audio-file, and detection scans so rows belonging to OTHER camera-trap projects
+ * are never materialized. Those rows are already dropped downstream in JS
+ * (windows are only consulted for pool deployments; detections are filtered by
+ * `poolIds.has(siteId)`), so moving the filter into SQL changes no results — it
+ * just avoids pulling every project's images/recordings into Node on a DB that
+ * grows without bound. Fresh fragment per call to avoid reusing one descriptor
+ * across multiple embedded queries.
+ */
+export const biochocoDeploymentPool = () => sql`
+  SELECT id FROM biochoco_deployments
+  WHERE ct_project_id = (SELECT id FROM ct_projects WHERE name = 'BioChoco')
+`;
 
 export interface DeploymentRow {
   id: number;
@@ -74,6 +93,13 @@ export interface OccupancyStreamInputs {
    * silently dropping those detections.
    */
   dateWindowAnomalies: DateWindowAnomaly[];
+  /**
+   * Audio-stream only: summary of the recording-schedule subsampling applied to
+   * equalize survey effort across 5-min and 10-min recorders (one recording per
+   * 10-minute wall-clock bucket per deployment). Undefined for the camera
+   * stream, which has no duty cycle to normalize.
+   */
+  audioSubsample?: AudioSubsampleSummary;
 }
 
 /** A deployment whose file capture dates fall outside its ODK survey window. */
@@ -277,6 +303,7 @@ export function fetchOccupancyInputs(
     const images = db.all(sql`
       SELECT deployment_id, filename, exif_timestamp AS exif, file_modified AS file_modified
       FROM biochoco_images
+      WHERE deployment_id IN (${biochocoDeploymentPool()})
     `) as {
       deployment_id: number;
       filename: string | null;
@@ -303,6 +330,7 @@ export function fetchOccupancyInputs(
       JOIN biochoco_detections d ON d.id = id.detection_id
       JOIN biochoco_images img ON img.id = d.image_id
       WHERE id.verification_status IN ('verified', 'corrected')
+        AND img.deployment_id IN (${biochocoDeploymentPool()})
     `) as {
       species: string;
       deployment_id: number;
@@ -343,23 +371,35 @@ export function fetchOccupancyInputs(
 
   // audio — filenames embed dates, so no file_modified fallback needed
   const audioFilesRows = db.all(sql`
-    SELECT deployment_id, filename FROM audio_files
-  `) as { deployment_id: number; filename: string | null }[];
+    SELECT id, deployment_id, filename FROM audio_files
+    WHERE deployment_id IN (${biochocoDeploymentPool()})
+  `) as { id: number; deployment_id: number; filename: string | null }[];
   const windows = deriveWindows(
     audioFilesRows.map((r) => ({ deployment_id: r.deployment_id, filename: r.filename, exif: null })),
   );
   const { sites, covariateInputs, dropped, anomalies } = buildSites(deployments, windows, "audio");
 
+  // Recording-schedule subsampling: BioChoco recorders ran two duty cycles
+  // (1-min-every-5-min vs 10-min). To equalize survey effort, a detection only
+  // counts when its source file is the canonical "kept" recording — the first
+  // file in each 10-min wall-clock bucket per deployment. Windows above are
+  // derived over the FULL file set (before this filter), so the kept set can
+  // never move a survey-window boundary (see plan KTD3). The `audio_file_id`
+  // the filter keys on comes from audio_detections, surfaced via the join.
+  const { keptIds, summary: audioSubsample } = selectCanonicalAudioFiles(audioFilesRows);
+
   const rows = db.all(sql`
     SELECT COALESCE(NULLIF(ai.corrected_species, ''), ai.species) AS species,
            af.deployment_id AS deployment_id,
-           af.filename AS filename
+           af.filename AS filename,
+           af.id AS audio_file_id
     FROM audio_identifications ai
     JOIN audio_detections ad ON ad.id = ai.audio_detection_id
     JOIN audio_files af ON af.id = ad.audio_file_id
-    WHERE ai.confidence >= ${confidenceThreshold}
-       OR ai.verification_status IN ('verified', 'corrected')
-  `) as { species: string; deployment_id: number; filename: string | null }[];
+    WHERE af.deployment_id IN (${biochocoDeploymentPool()})
+      AND (ai.confidence >= ${confidenceThreshold}
+           OR ai.verification_status IN ('verified', 'corrected'))
+  `) as { species: string; deployment_id: number; filename: string | null; audio_file_id: number }[];
 
   const poolIds = new Set(sites.map((s) => s.siteId));
   const detections: ReadinessDetection[] = [];
@@ -368,6 +408,10 @@ export function fetchOccupancyInputs(
     if (!r.species || isExcludedOccupancySpecies(r.species)) continue;
     const siteId = String(r.deployment_id);
     if (!poolIds.has(siteId)) continue;
+    // Subsample: skip detections whose source file was not kept. This is not a
+    // "no-date drop" — it is a deliberate survey-effort equalization, applied
+    // uniformly (including to verified/corrected detections, per plan R2).
+    if (!keptIds.has(r.audio_file_id)) continue;
     const day = parseCaptureDayFromFilename(r.filename);
     if (!day) {
       detectionsDroppedNoDate++;
@@ -382,5 +426,6 @@ export function fetchOccupancyInputs(
     droppedSites: dropped,
     detectionsDroppedNoDate,
     dateWindowAnomalies: anomalies,
+    audioSubsample,
   };
 }

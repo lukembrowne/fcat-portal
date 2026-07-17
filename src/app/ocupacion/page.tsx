@@ -4,13 +4,18 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ReadinessTable, type StatusMap } from "./readiness-table";
 import { NameLangProvider } from "./name-lang";
 import { RunControl } from "./run-control";
+import { ReadinessSnapshotControl } from "./readiness-snapshot-control";
 import {
-  getOccupancyReadiness,
+  getOccupancyReadinessSnapshot,
   getLatestOccupancyRun,
   listSpeciesModelStatus,
 } from "./actions";
 import type { ReadinessReport, OccupancyStream } from "@/lib/occupancy/readiness";
 import type { DateWindowAnomaly } from "@/lib/occupancy/fetch";
+import {
+  formatCadenceLabel,
+  type AudioSubsampleReport,
+} from "@/lib/occupancy/audio-subsample-report";
 
 export const metadata = {
   title: "Modelos de ocupación",
@@ -32,6 +37,7 @@ function StreamSection({
   report,
   dropped,
   dateAnomalies,
+  subsample,
   stream,
   modeled,
 }: {
@@ -40,9 +46,11 @@ function StreamSection({
   report: ReadinessReport;
   dropped: number;
   dateAnomalies: DateWindowAnomaly[];
+  subsample?: AudioSubsampleReport | null;
   stream: OccupancyStream;
   modeled: StatusMap;
 }) {
+  const degenerate = subsample?.deployments.filter((d) => d.degenerate) ?? [];
   return (
     <Card>
       <CardHeader>
@@ -98,6 +106,77 @@ function StreamSection({
             </ul>
           </div>
         ) : null}
+        {subsample && subsample.filesTotal > 0 ? (
+          <div className="space-y-2">
+            {subsample.filesDropped > 0 ? (
+              <p className="text-xs text-muted-foreground">
+                <strong>Submuestreo de grabaciones:</strong> {subsample.filesDropped.toLocaleString("es")} de{" "}
+                {subsample.filesTotal.toLocaleString("es")} grabaciones omitidas para igualar el
+                esfuerzo de muestreo a una cadencia de {subsample.bucketMinutes} min (una grabación por
+                intervalo). Las instalaciones a 5 min se reducen a la mitad; las de 10 min quedan
+                prácticamente iguales.
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Submuestreo de grabaciones: sin submuestreo (ninguna instalación tenía cadencia más densa
+                que {subsample.bucketMinutes} min).
+              </p>
+            )}
+            {degenerate.length > 0 ? (
+              <div className="rounded-md border border-amber-500/60 bg-amber-50/50 dark:bg-amber-950/20 p-3 space-y-1">
+                <p className="text-xs font-medium text-amber-800 dark:text-amber-300">
+                  {degenerate.length} instalación(es) con cadencia densa pero sin submuestreo aplicado
+                  (nombres de archivo no legibles o cadencia no reconocida). Su esfuerzo de muestreo NO
+                  es comparable con el resto — revise los nombres de archivo.
+                </p>
+                <ul className="text-xs text-amber-700 dark:text-amber-400 list-disc pl-5 space-y-0.5">
+                  {degenerate.map((d) => (
+                    <li key={d.deploymentId}>
+                      <Link href={`/audio/${d.deploymentId}`} className="hover:underline font-medium">
+                        {d.siteName}
+                      </Link>
+                      : {formatCadenceLabel(d.nativeCadenceSeconds)}, {d.filesDropped} omitidas
+                      {d.filesUnparsed > 0 ? `, ${d.filesUnparsed} sin fecha legible` : ""}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            <details className="text-xs text-muted-foreground">
+              <summary className="cursor-pointer select-none hover:text-foreground">
+                Detalle por instalación ({subsample.deployments.length})
+              </summary>
+              <div className="mt-2 overflow-x-auto">
+                <table className="w-full text-left">
+                  <thead className="text-muted-foreground">
+                    <tr>
+                      <th className="pr-3 font-medium">Instalación</th>
+                      <th className="pr-3 font-medium">Cadencia</th>
+                      <th className="pr-3 font-medium text-right">Total</th>
+                      <th className="pr-3 font-medium text-right">Conservadas</th>
+                      <th className="pr-3 font-medium text-right">Omitidas</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {subsample.deployments.map((d) => (
+                      <tr key={d.deploymentId} className={d.degenerate ? "text-amber-700 dark:text-amber-400" : ""}>
+                        <td className="pr-3">
+                          <Link href={`/audio/${d.deploymentId}`} className="hover:underline">
+                            {d.siteName}
+                          </Link>
+                        </td>
+                        <td className="pr-3">{formatCadenceLabel(d.nativeCadenceSeconds)}</td>
+                        <td className="pr-3 text-right tabular-nums">{d.filesTotal.toLocaleString("es")}</td>
+                        <td className="pr-3 text-right tabular-nums">{d.filesKept.toLocaleString("es")}</td>
+                        <td className="pr-3 text-right tabular-nums">{d.filesDropped.toLocaleString("es")}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+          </div>
+        ) : null}
         <ReadinessTable rows={report.species} stream={stream} modeled={modeled} />
       </CardContent>
     </Card>
@@ -109,8 +188,15 @@ export default async function OccupancyPage() {
   const isAdmin =
     user.globalRole === "super_admin" ||
     user.permissions.some((p) => p.projectId === "camera-trap" && p.role === "admin");
+  // Editors and admins may refresh the readiness snapshot (the heavy recompute
+  // moved off page load); viewers see the timestamp + stale hint only.
+  const isEditor =
+    user.globalRole === "super_admin" ||
+    user.permissions.some(
+      (p) => p.projectId === "camera-trap" && (p.role === "admin" || p.role === "editor"),
+    );
   const [result, runInfo, modeled] = await Promise.all([
-    getOccupancyReadiness(),
+    getOccupancyReadinessSnapshot(),
     getLatestOccupancyRun(),
     listSpeciesModelStatus(),
   ]);
@@ -132,16 +218,7 @@ export default async function OccupancyPage() {
     );
   }
 
-  const {
-    camera,
-    audio,
-    cameraSitesDropped,
-    audioSitesDropped,
-    cameraDateAnomalies,
-    audioDateAnomalies,
-    generatedAt,
-  } = result.data;
-  const t = camera.thresholds;
+  const { snapshot, stale, generatedAt } = result.data;
 
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-6">
@@ -160,6 +237,10 @@ export default async function OccupancyPage() {
           isAdmin={isAdmin}
           info={runInfo.success ? runInfo.data : { run: null, activeJob: null }}
         />
+      </div>
+
+      <div className="rounded-lg border px-4 py-2">
+        <ReadinessSnapshotControl isEditor={isEditor} stale={stale} generatedAt={generatedAt} />
       </div>
 
       <NameLangProvider>
@@ -186,38 +267,56 @@ export default async function OccupancyPage() {
         </Link>
       ) : null}
 
-      <StreamSection
-        title="Cámaras trampa"
-        subtitle="Solo instalaciones verificadas (imágenes confirmadas) y no excluidas; solo detecciones verificadas o corregidas."
-        report={camera}
-        dropped={cameraSitesDropped}
-        dateAnomalies={cameraDateAnomalies}
-        stream="camera"
-        modeled={modeledByStream("camera")}
-      />
+      {snapshot ? (
+        <>
+          <StreamSection
+            title="Cámaras trampa"
+            subtitle="Solo instalaciones verificadas (imágenes confirmadas) y no excluidas; solo detecciones verificadas o corregidas."
+            report={snapshot.camera}
+            dropped={snapshot.cameraSitesDropped}
+            dateAnomalies={snapshot.cameraDateAnomalies}
+            stream="camera"
+            modeled={modeledByStream("camera")}
+          />
 
-      <StreamSection
-        title="Grabaciones de audio"
-        subtitle={`Mismas instalaciones verificadas y no excluidas que cámaras trampa. Detecciones con confianza ≥ ${(audio.confidenceThreshold ?? 0.7).toFixed(2)} (o verificadas). La confianza de BirdNET no es una probabilidad y varía entre especies — umbral global como primer criterio.`}
-        report={audio}
-        dropped={audioSitesDropped}
-        dateAnomalies={audioDateAnomalies}
-        stream="audio"
-        modeled={modeledByStream("audio")}
-      />
+          <StreamSection
+            title="Grabaciones de audio"
+            subtitle={`Mismas instalaciones verificadas y no excluidas que cámaras trampa. Detecciones con confianza ≥ ${(snapshot.audio.confidenceThreshold ?? 0.7).toFixed(2)} (o verificadas). La confianza de BirdNET no es una probabilidad y varía entre especies — umbral global como primer criterio.`}
+            report={snapshot.audio}
+            dropped={snapshot.audioSitesDropped}
+            dateAnomalies={snapshot.audioDateAnomalies}
+            subsample={snapshot.audioSubsample}
+            stream="audio"
+            modeled={modeledByStream("audio")}
+          />
+        </>
+      ) : (
+        <Card>
+          <CardContent className="py-8 text-center text-sm text-muted-foreground space-y-1">
+            <p>Aún no se ha calculado la disponibilidad de datos.</p>
+            {isEditor ? (
+              <p>Presione «Actualizar disponibilidad» para calcularla.</p>
+            ) : null}
+          </CardContent>
+        </Card>
+      )}
       </NameLangProvider>
 
-      <footer className="text-xs text-muted-foreground border-t pt-4 space-y-1">
-        <p>
-          <strong>Métodos:</strong> ocasiones de {camera.binWidth} días; sitio = instalación;
-          ventana de muestreo por fechas de instalación/retiro (ODK) unida a las fechas de captura
-          (nombre de archivo, EXIF o fecha de archivo). Las <em>ocasiones</em> son el ancho de la
-          matriz de muestreo (máximo entre sitios), por eso son iguales para todas las especies.
-          Umbrales de elegibilidad: ≥{t.minSites} sitios, ≥{t.minSitesDetected} sitios con detección,
-          ≥{t.minDetections} detecciones, ≥{t.minOccasions} ocasiones.
-        </p>
-        <p>Generado: {new Date(generatedAt).toLocaleString("es-EC")}</p>
-      </footer>
+      {snapshot ? (
+        <footer className="text-xs text-muted-foreground border-t pt-4 space-y-1">
+          <p>
+            <strong>Métodos:</strong> ocasiones de {snapshot.camera.binWidth} días; sitio = instalación;
+            ventana de muestreo por fechas de instalación/retiro (ODK) unida a las fechas de captura
+            (nombre de archivo, EXIF o fecha de archivo). Las <em>ocasiones</em> son el ancho de la
+            matriz de muestreo (máximo entre sitios), por eso son iguales para todas las especies.
+            Umbrales de elegibilidad: ≥{snapshot.camera.thresholds.minSites} sitios,
+            ≥{snapshot.camera.thresholds.minSitesDetected} sitios con detección,
+            ≥{snapshot.camera.thresholds.minDetections} detecciones,
+            ≥{snapshot.camera.thresholds.minOccasions} ocasiones.
+          </p>
+          <p>Generado: {generatedAt ? new Date(generatedAt).toLocaleString("es-EC") : "—"}</p>
+        </footer>
+      ) : null}
     </div>
   );
 }

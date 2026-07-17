@@ -6,8 +6,17 @@ import { processingJobs, occupancyRuns, species } from "@/db/schema";
 import { requirePermission } from "@/lib/auth";
 import { log } from "@/lib/log";
 import type { ActionResult } from "@/lib/types";
-import { computeReadiness, type ReadinessReport } from "@/lib/occupancy/readiness";
-import { fetchOccupancyInputs, type DateWindowAnomaly } from "@/lib/occupancy/fetch";
+import { fetchOccupancyInputs } from "@/lib/occupancy/fetch";
+import {
+  computeReadinessResult,
+  type OccupancyReadinessResult,
+} from "@/lib/occupancy/readiness-compute";
+import {
+  computeReadinessFingerprint,
+  loadLatestReadinessSnapshot,
+  saveReadinessSnapshot,
+} from "@/lib/occupancy/readiness-snapshot";
+import { recordEvent } from "@/lib/system-events";
 import { buildDetectionFrame } from "@/lib/occupancy/detection-history";
 import { getSyntheticSiteIds, cohortSitesFor } from "@/lib/occupancy/cohort";
 import { DEFAULT_BIN_WIDTH_DAYS } from "@/lib/occupancy/occasions";
@@ -38,67 +47,74 @@ import { naiveOccupancyByHabitat, type HabitatNaiveRow } from "@/lib/occupancy/h
 import fs from "node:fs";
 import nodePath from "node:path";
 
-export interface OccupancyReadinessResult {
-  camera: ReadinessReport;
-  audio: ReadinessReport;
-  /** Deployments dropped from a stream's site pool for want of a survey window. */
-  cameraSitesDropped: number;
-  audioSitesDropped: number;
-  /** Deployments whose file dates fall outside their ODK survey window. */
-  cameraDateAnomalies: DateWindowAnomaly[];
-  audioDateAnomalies: DateWindowAnomaly[];
-  generatedAt: string;
+/** What the page needs to render the readiness snapshot + its freshness. */
+export interface OccupancyReadinessSnapshotView {
+  /** The stored readiness report, or null on cold start (no snapshot yet). */
+  snapshot: OccupancyReadinessResult | null;
+  /** True when live data has changed since the snapshot was generated. */
+  stale: boolean;
+  /** When the snapshot was generated (ISO), or null on cold start. */
+  generatedAt: string | null;
+  /** Who generated it (email or "batch"), or null. */
+  generatedBy: string | null;
 }
 
-export interface OccupancyReadinessOptions {
-  binWidth?: number;
-  confidenceThreshold?: number;
-}
-
-export async function getOccupancyReadiness(
-  opts: OccupancyReadinessOptions = {},
-): Promise<ActionResult<OccupancyReadinessResult>> {
+/**
+ * Read-only: return the stored readiness snapshot for the page. Renders instantly
+ * — NEVER runs the full recompute. Computes only the cheap fingerprint to flag
+ * whether underlying data changed since the snapshot ("hay datos nuevos").
+ */
+export async function getOccupancyReadinessSnapshot(): Promise<
+  ActionResult<OccupancyReadinessSnapshotView>
+> {
   await requirePermission("camera-trap", "viewer");
-
-  const binWidth = opts.binWidth ?? DEFAULT_BIN_WIDTH_DAYS;
-  const confidenceThreshold = opts.confidenceThreshold ?? DEFAULT_CONFIDENCE_THRESHOLD;
-
   try {
-    const cam = fetchOccupancyInputs("camera", {});
-    const camera = computeReadiness(cam.sites, cam.detections, {
-      stream: "camera",
-      binWidth,
-      detectionsDroppedNoDate: cam.detectionsDroppedNoDate,
-    });
-
-    const aud = fetchOccupancyInputs("audio", { confidenceThreshold });
-    const audio = computeReadiness(aud.sites, aud.detections, {
-      stream: "audio",
-      binWidth,
-      confidenceThreshold,
-      detectionsDroppedNoDate: aud.detectionsDroppedNoDate,
-    });
-
-    // Enrich both reports with common/Spanish names + IUCN status from the
-    // shared species lookup (joined by scientific name). Species absent from
-    // the lookup keep null names; the table falls back to the scientific string.
-    await enrichReadinessNames([camera, audio]);
-
+    const loaded = loadLatestReadinessSnapshot();
+    const currentFingerprint = computeReadinessFingerprint();
+    // Compare the STORED fingerprint column (not a field on the result blob)
+    // against the freshly computed one.
+    const stale = loaded != null && loaded.fingerprint !== currentFingerprint;
     return {
       success: true,
       data: {
-        camera,
-        audio,
-        cameraSitesDropped: cam.droppedSites,
-        audioSitesDropped: aud.droppedSites,
-        cameraDateAnomalies: cam.dateWindowAnomalies,
-        audioDateAnomalies: aud.dateWindowAnomalies,
-        generatedAt: new Date().toISOString(),
+        snapshot: loaded?.result ?? null,
+        stale,
+        generatedAt: loaded ? loaded.generatedAt.toISOString() : null,
+        generatedBy: loaded?.generatedBy ?? null,
       },
     };
   } catch (error) {
-    log.error({ err: error }, "getOccupancyReadiness failed");
-    return { success: false, error: "No se pudo calcular la disponibilidad de datos de ocupación." };
+    log.error({ err: error }, "getOccupancyReadinessSnapshot failed");
+    return { success: false, error: "No se pudo cargar la disponibilidad de datos de ocupación." };
+  }
+}
+
+/**
+ * Editor+ (foreground): recompute the readiness report, store it as a fresh
+ * snapshot with the current fingerprint, and return it. This is the expensive
+ * path — deliberately behind an explicit button, not the page load.
+ */
+export async function refreshOccupancyReadiness(): Promise<
+  ActionResult<OccupancyReadinessResult>
+> {
+  const user = await requirePermission("camera-trap", "editor");
+  try {
+    const startedAt = Date.now();
+    const result = await computeReadinessResult();
+    const fingerprint = computeReadinessFingerprint();
+    saveReadinessSnapshot({ result, fingerprint, generatedBy: user.email });
+    await recordEvent({
+      source: "camera-trap",
+      eventType: "occupancy_readiness.refreshed",
+      summary: "Disponibilidad de ocupación actualizada",
+      projectId: "camera-trap",
+      actorEmail: user.email,
+      durationMs: Date.now() - startedAt,
+    });
+    return { success: true, data: result };
+  } catch (error) {
+    log.error({ err: error }, "refreshOccupancyReadiness failed");
+    return { success: false, error: "No se pudo actualizar la disponibilidad de datos de ocupación." };
   }
 }
 
@@ -127,40 +143,6 @@ export async function getOccupancySpeciesInfo(
   return row ?? null;
 }
 
-/**
- * Mutates each report's species rows in place, attaching common/Spanish names +
- * IUCN status from `biochoco_species` (joined by scientific name). Occupancy
- * stores bare binomials for both streams, so this resolves against the full
- * lookup table (the `camera_selectable` flag is irrelevant here). Species not
- * in the lookup keep null names — the table falls back to the scientific string.
- */
-async function enrichReadinessNames(reports: ReadinessReport[]): Promise<void> {
-  const names = new Set<string>();
-  for (const rep of reports) {
-    for (const row of rep.species) names.add(row.species);
-  }
-  if (names.size === 0) return;
-
-  const rows = await db
-    .select({
-      scientificName: species.scientificName,
-      commonName: species.commonName,
-      spanishName: species.spanishName,
-      iucnStatus: species.iucnStatus,
-    })
-    .from(species)
-    .where(inArray(species.scientificName, [...names]));
-  const byName = new Map(rows.map((r) => [r.scientificName, r]));
-
-  for (const rep of reports) {
-    for (const row of rep.species) {
-      const sp = byName.get(row.species);
-      row.commonName = sp?.commonName ?? null;
-      row.spanishName = sp?.spanishName ?? null;
-      row.iucnStatus = sp?.iucnStatus ?? null;
-    }
-  }
-}
 
 /**
  * Admin-only: enqueue an occupancy modeling run. Single-flight — refuses if a run

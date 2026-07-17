@@ -3,7 +3,7 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { log } from "@/lib/log";
 import { occupancyReadinessSnapshots } from "@/db/schema";
-import { biochocoDeploymentPool } from "./fetch";
+import { biochocoDeploymentPool, occupancySiteGate } from "./fetch";
 import { DEFAULT_BIN_WIDTH_DAYS } from "./occasions";
 import { DEFAULT_CONFIDENCE_THRESHOLD } from "@/lib/audio-confidence";
 import type { OccupancyReadinessResult } from "./readiness-compute";
@@ -75,13 +75,16 @@ export function computeReadinessFingerprint(
   const cameraPool = countMax(sql`
     SELECT COUNT(*) AS n, COALESCE(MAX(id), 0) AS m
     FROM biochoco_deployments
-    WHERE status IN ('verified', 'verified_empty') AND excluded_camera = 0
+    WHERE ${occupancySiteGate("camera")} AND excluded_camera = 0
       AND ct_project_id = (SELECT id FROM ct_projects WHERE name = 'BioChoco')
   `);
+  // Audio pool tracks BirdNET completion (occupancySiteGate("audio")), so a
+  // deployment finishing its BirdNET run moves this probe → "hay datos nuevos"
+  // fires even though the camera `status` gate would not have changed.
   const audioPool = countMax(sql`
     SELECT COUNT(*) AS n, COALESCE(MAX(id), 0) AS m
     FROM biochoco_deployments
-    WHERE status IN ('verified', 'verified_empty') AND excluded_audio = 0
+    WHERE ${occupancySiteGate("audio")} AND excluded_audio = 0
       AND ct_project_id = (SELECT id FROM ct_projects WHERE name = 'BioChoco')
   `);
   const images = countMax(sql`

@@ -58,6 +58,12 @@ const DDL = `
     audio_detection_id INTEGER NOT NULL, species TEXT NOT NULL, confidence REAL,
     model_version TEXT, verification_status TEXT
   );
+  CREATE TABLE biochoco_processing_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    deployment_id INTEGER, job_type TEXT NOT NULL DEFAULT 'ml',
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
 `;
 
 function freshDb() {

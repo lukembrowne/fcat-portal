@@ -66,6 +66,10 @@ const DDL = `
     id INTEGER PRIMARY KEY AUTOINCREMENT, audio_detection_id INTEGER NOT NULL, species TEXT NOT NULL, confidence REAL,
     model_version TEXT, verification_status TEXT, corrected_species TEXT
   );
+  CREATE TABLE biochoco_processing_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, deployment_id INTEGER, job_type TEXT NOT NULL DEFAULT 'ml',
+    status TEXT NOT NULL DEFAULT 'pending', created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
   CREATE TABLE occupancy_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL DEFAULT 'pending', trigger TEXT DEFAULT 'manual',
     bin_width_days INTEGER, audio_confidence_threshold REAL, thresholds_json TEXT, n_models INTEGER DEFAULT 0,

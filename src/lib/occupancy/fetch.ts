@@ -53,6 +53,44 @@ export const biochocoDeploymentPool = () => sql`
   WHERE ct_project_id = (SELECT id FROM ct_projects WHERE name = 'BioChoco')
 `;
 
+/**
+ * Per-stream site-eligibility gate for the occupancy deployment pool. A "site" is
+ * a `biochoco_deployments` row (one physical location carrying camera + audio),
+ * but the two streams confirm a site as surveyed by DIFFERENT signals:
+ *
+ *   - camera: `status IN ('verified','verified_empty')` — the camera-image review
+ *     lifecycle, set only by the camera-trap verification workflow.
+ *   - audio: has ≥1 completed BirdNET analysis run. Audio review lives on
+ *     `audio_identifications.verification_status`, and NOTHING in the audio path
+ *     ever sets `biochoco_deployments.status`. Gating audio on that camera field
+ *     (the old behavior) capped the audio site count at the number of
+ *     camera-verified deployments, so a deployment fully analyzed for birds but
+ *     with unreviewed imagery was silently excluded (prod 2026-07: 53 audio sites
+ *     vs 72 with a completed BirdNET run — 20 deployments whose cameras were only
+ *     `scanned`/`processed` were being dropped). Gating on BirdNET completion
+ *     instead makes the audio site count track audio coverage, decoupled from
+ *     camera verification. The BirdNET pipeline is recorded under job_type
+ *     `audio_analysis` (older name `birdnet`) — both are matched. `status =
+ *     'completed'` keeps true-absence sites (analyzed, zero qualifying
+ *     detections), which a detection-count gate would wrongly drop; verified in
+ *     prod that this set is a superset of every deployment with audio detections.
+ *     The per-stream `excluded_{camera,audio}` flag (applied separately by the
+ *     caller) still handles failed-sensor exclusion.
+ *
+ * Fresh fragment per call so the same descriptor is never reused across two
+ * embedded queries. Used as an unqualified predicate on `biochoco_deployments`,
+ * so `id`/`status` bind to that table (the callers `SELECT ... FROM
+ * biochoco_deployments`).
+ */
+export const occupancySiteGate = (stream: OccupancyStream) =>
+  stream === "camera"
+    ? sql`status IN ('verified', 'verified_empty')`
+    : sql`id IN (
+        SELECT deployment_id FROM biochoco_processing_jobs
+        WHERE job_type IN ('birdnet', 'audio_analysis') AND status = 'completed'
+          AND deployment_id IS NOT NULL
+      )`;
+
 export interface DeploymentRow {
   id: number;
   site_name: string | null;
@@ -278,10 +316,10 @@ export function fetchOccupancyInputs(
 ): OccupancyStreamInputs {
   const confidenceThreshold = opts.confidenceThreshold ?? DEFAULT_CONFIDENCE_THRESHOLD;
 
-  // Occupancy site pool = BioChoco camera-trap deployments whose imagery is
-  // confirmed: verified (or verified_empty — a real survey with zero detections,
-  // kept as an absence site) and not excluded. Exclusion is PER STREAM: the
-  // camera stream drops excluded_camera=1 deployments, the audio stream drops
+  // Occupancy site pool = BioChoco deployments confirmed as surveyed for THIS
+  // stream (see occupancySiteGate: camera imagery verified, or audio has ≥1
+  // completed BirdNET run) and not excluded. Exclusion is PER STREAM: the camera
+  // stream drops excluded_camera=1 deployments, the audio stream drops
   // excluded_audio=1, so a failed audio recorder (CCN-010) leaves the camera in
   // the analysis and vice versa. Scoped to the BioChoco ct project so deployments
   // belonging to OTHER camera-trap projects (which have no BioChoco ODK site
@@ -295,7 +333,7 @@ export function fetchOccupancyInputs(
            date_start, date_end, valid_start, valid_end, field_notes
     FROM biochoco_deployments
     WHERE ${excludedCol} = 0
-      AND status IN ('verified', 'verified_empty')
+      AND ${occupancySiteGate(stream)}
       AND ct_project_id = (SELECT id FROM ct_projects WHERE name = 'BioChoco')
   `) as DeploymentRow[];
 

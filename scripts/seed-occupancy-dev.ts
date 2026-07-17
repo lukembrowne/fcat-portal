@@ -282,6 +282,13 @@ export function seedOccupancyDev(
        (audio_detection_id, species, confidence, model_version, verification_status)
      VALUES (?, ?, ?, 'OCC-SEED', 'unverified')`,
   );
+  // A completed BirdNET analysis job marks the deployment as acoustically
+  // surveyed — the occupancy audio site gate keys on this (occupancySiteGate),
+  // not on the camera-image `status`. One per seeded deployment mirrors reality.
+  const insAudioJob = db.prepare(
+    `INSERT INTO biochoco_processing_jobs (deployment_id, job_type, status)
+     VALUES (?, 'audio_analysis', 'completed')`,
+  );
 
   const nowSec = 1751800000; // fixed epoch seconds (deterministic; ~2025-07)
   const baseDate = new Date(Date.UTC(2026, 0, 5));
@@ -338,6 +345,7 @@ export function seedOccupancyDev(
       ).lastInsertRowid,
     );
     result.sites++;
+    insAudioJob.run(depId);
 
     let imgSeq = 0;
     // Camera detections.

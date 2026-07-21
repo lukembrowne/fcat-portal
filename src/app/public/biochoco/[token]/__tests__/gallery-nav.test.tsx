@@ -22,7 +22,7 @@ import {
   lightboxArrowState,
   LIGHTBOX_PREV_LABEL,
   LIGHTBOX_NEXT_LABEL,
-} from "../species-lightbox";
+} from "@/lib/landowner/copy";
 import type { SpeciesImageRow } from "@/app/biochoco/resultados/actions";
 
 const TOKEN = "abc123";

@@ -131,6 +131,49 @@ export function presentIucnStatuses(
 }
 
 /**
+ * Compact one-line stats caption for the species showcase heading, e.g.
+ * "3 especies · 150 detecciones · 1 ave · 2 mamíferos". Empty taxonomic groups
+ * are omitted; all counts pluralize. Pure — relocated here from the (deleted)
+ * species carousel so the merged showcase and its test can share it.
+ */
+export function buildSpeciesStatsText(species: SiteSpecies[]): string {
+  const speciesCount = species.length;
+  const detections = species.reduce((sum, s) => sum + s.detectionCount, 0);
+  const birds = species.filter((s) => s.taxonomicType === "bird").length;
+  const mammals = species.filter((s) => s.taxonomicType === "mammal").length;
+
+  const parts = [
+    `${speciesCount} ${speciesCount === 1 ? "especie" : "especies"}`,
+    `${detections} ${detections === 1 ? "detección" : "detecciones"}`,
+  ];
+  if (birds > 0) parts.push(`${birds} ${birds === 1 ? "ave" : "aves"}`);
+  if (mammals > 0)
+    parts.push(`${mammals} ${mammals === 1 ? "mamífero" : "mamíferos"}`);
+
+  return parts.join(" · ");
+}
+
+/** Spanish aria-labels for the fullscreen-gallery prev/next arrows. */
+export const LIGHTBOX_PREV_LABEL = "Imagen anterior";
+export const LIGHTBOX_NEXT_LABEL = "Imagen siguiente";
+
+/**
+ * Pure helper: which desktop arrows to show for a given gallery position. Prev
+ * hides at the first image, next at the last; both hide when there's ≤1 image.
+ * Relocated here from the (deleted) species lightbox; still used by the
+ * featured-photo `StarredGalleryLightbox`.
+ */
+export function lightboxArrowState(
+  current: number,
+  total: number,
+): { showPrev: boolean; showNext: boolean } {
+  return {
+    showPrev: total > 1 && current > 0,
+    showNext: total > 1 && current < total - 1,
+  };
+}
+
+/**
  * Seed for the fullscreen featured-photo gallery (U11): the tapped tile opens a
  * viewer over the FULL starred set, starting at the tapped image. When the site
  * has no starred photos the block's own imageIds are used as the fallback set.

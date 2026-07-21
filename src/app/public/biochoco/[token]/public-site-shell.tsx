@@ -10,16 +10,10 @@ import { getHabitatName } from "@/app/biochoco/overview/types";
 import { SiteResultsContent } from "@/app/biochoco/resultados/[siteId]/site-results-content";
 import { formatSiteDateRange } from "@/app/biochoco/resultados/[siteId]/site-header-stats";
 import { ContactForm } from "./contact-form";
-import { SpeciesCarousel } from "./species-carousel";
-import { SpeciesTable } from "./species-table";
+import { SpeciesShowcase } from "./species-showcase";
 import { StoryStat } from "./story-stat";
 import { PageShare } from "./page-share";
 import { PhotoShareButton } from "@/components/photo-share-button";
-import {
-  lightboxArrowState,
-  LIGHTBOX_NEXT_LABEL,
-  LIGHTBOX_PREV_LABEL,
-} from "./species-lightbox";
 import { formatClipDuration } from "@/lib/landowner/format-audio";
 import { iucnChip } from "@/lib/landowner/iucn-chip";
 import {
@@ -27,6 +21,9 @@ import {
   presentIucnStatuses,
   starredGallerySeed,
   landownerDisplayName,
+  lightboxArrowState,
+  LIGHTBOX_NEXT_LABEL,
+  LIGHTBOX_PREV_LABEL,
 } from "@/lib/landowner/copy";
 import {
   ArrowRight,
@@ -252,19 +249,13 @@ export function PublicSiteShell({
         />
       ))}
 
-      <SpeciesCarousel
-        species={data.species}
-        token={token}
-        resolveImageUrl={resolveImageUrl}
-      />
-
-      <ConservationKey species={data.species} />
-
-      <SpeciesTable
+      <SpeciesShowcase
         species={data.species}
         resolveImageUrl={resolveImageUrl}
         speciesHref={speciesHref}
       />
+
+      <ConservationKey species={data.species} />
 
       <SiteResultsContent
         data={data}
@@ -652,7 +643,7 @@ function ContentBlock({
                 Junto a{" "}
                 <span className="font-extrabold text-amber-400">
                   {block.siteCount}{" "}
-                  {block.siteCount === 1 ? "finca" : "fincas"}
+                  {block.siteCount === 1 ? "sitio" : "sitios"}
                 </span>
                 , usted contribuye a monitorear la biodiversidad del Chocó.
               </p>

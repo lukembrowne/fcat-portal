@@ -22,14 +22,9 @@ vi.mock("@/app/public/biochoco/[token]/contact-form", () => ({
 vi.mock("@/components/photo-share-button", () => ({
   PhotoShareButton: () => <button>compartir</button>,
 }));
-// The lightbox pulls a "use server" action (DB deps). It only mounts on a card
-// tap, so the static shell render never needs it — stub it out to stay light.
-vi.mock("@/app/public/biochoco/[token]/species-lightbox", () => ({
-  SpeciesLightbox: () => null,
-}));
 
 import { PublicSiteShell } from "@/app/public/biochoco/[token]/public-site-shell";
-import { buildSpeciesStatsText } from "@/app/public/biochoco/[token]/species-carousel";
+import { buildSpeciesStatsText } from "@/lib/landowner/copy";
 import {
   StoryStat,
   buildStoryStatText,
@@ -199,7 +194,7 @@ describe("PublicSiteShell", () => {
     expect(iContext).toBeGreaterThan(-1);
     expect(iContext).toBeLessThan(iNote);
     expect(iSummary).toBeGreaterThan(iNote);
-    expect(html).toContain("42 fincas");
+    expect(html).toContain("42 sitios");
   });
 
   it("renders the species grid and the contact form at the end", () => {

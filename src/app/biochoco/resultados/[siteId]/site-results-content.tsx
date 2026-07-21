@@ -37,11 +37,14 @@ interface SiteResultsContentProps {
    *   client JS), and per-deployment links to /biochoco/ibutton/[id].
    *   Audio panels (BirdNET species + acoustic indices) render when
    *   audio data is present.
-   * - "public"  hides habitat photos, the temperature chart, per-deployment
-   *   links, AND all audio panels. Section ORDER otherwise matches.
+   * - "public"  hides habitat photos, the ENTIRE temperature section
+   *   (heading + summary stat cards, not just the chart), per-deployment
+   *   links, AND all audio panels. A plain-language habitat explainer is
+   *   shown above the habitat stat grid. Section ORDER otherwise matches.
    *
    * Section order: Fauna → Aves (BirdNET) → Índices acústicos → Hábitat →
-   * Temperatura. Audio sections are omitted when the site has no audio.
+   * Temperatura (internal only). Audio sections are omitted when the site
+   * has no audio.
    */
   variant: "internal" | "public";
   /** Site label woven into per-photo share captions (public view only). */
@@ -127,16 +130,26 @@ export function SiteResultsContent({
         habitat={data.habitat}
         totalCount={data.habitatAssessmentCount}
         showPhotos={variant === "internal"}
+        isPublic={variant === "public"}
       />
 
-      <Separator />
+      {/*
+        Temperature is internal-only for now: the public landowner page hides
+        it entirely (heading + summary stat cards) while there are known
+        data-quality issues with the iButton readings. Internal keeps it.
+      */}
+      {variant === "internal" && (
+        <>
+          <Separator />
 
-      <TemperatureOverlay
-        temperature={data.temperature}
-        temperatureStats={data.temperatureStats}
-        showChart={variant === "internal"}
-        showDeploymentLinks={variant === "internal"}
-      />
+          <TemperatureOverlay
+            temperature={data.temperature}
+            temperatureStats={data.temperatureStats}
+            showChart
+            showDeploymentLinks
+          />
+        </>
+      )}
     </div>
   );
 }

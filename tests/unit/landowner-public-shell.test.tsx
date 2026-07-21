@@ -16,7 +16,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 vi.mock("@/app/biochoco/resultados/[siteId]/site-results-content", () => ({
   SiteResultsContent: () => <div data-testid="site-results">GRID_ESPECIES</div>,
 }));
-vi.mock("@/app/public/(chrome)/biochoco/[token]/contact-form", () => ({
+vi.mock("@/app/public/biochoco/[token]/contact-form", () => ({
   ContactForm: () => <div data-testid="contact-form">FORM_CONTACTO</div>,
 }));
 vi.mock("@/components/photo-share-button", () => ({
@@ -24,16 +24,16 @@ vi.mock("@/components/photo-share-button", () => ({
 }));
 // The lightbox pulls a "use server" action (DB deps). It only mounts on a card
 // tap, so the static shell render never needs it — stub it out to stay light.
-vi.mock("@/app/public/(chrome)/biochoco/[token]/species-lightbox", () => ({
+vi.mock("@/app/public/biochoco/[token]/species-lightbox", () => ({
   SpeciesLightbox: () => null,
 }));
 
-import { PublicSiteShell } from "@/app/public/(chrome)/biochoco/[token]/public-site-shell";
-import { buildSpeciesStatsText } from "@/app/public/(chrome)/biochoco/[token]/species-carousel";
+import { PublicSiteShell } from "@/app/public/biochoco/[token]/public-site-shell";
+import { buildSpeciesStatsText } from "@/app/public/biochoco/[token]/species-carousel";
 import {
   StoryStat,
   buildStoryStatText,
-} from "@/app/public/(chrome)/biochoco/[token]/story-stat";
+} from "@/app/public/biochoco/[token]/story-stat";
 import type { PublicSiteDetail } from "@/app/biochoco/resultados/actions";
 import type { SiteSpecies } from "@/app/biochoco/resultados/types";
 
@@ -78,7 +78,7 @@ describe("buildStoryStatText", () => {
   it("omits the days clause when days === 0", () => {
     const t = buildStoryStatText({ speciesCount: 37, days: 0 });
     expect(t.sub).not.toMatch(/día/);
-    expect(t.sub).toContain("sin molestar al bosque");
+    expect(t.sub).toContain("Nuestras cámaras y grabadores registraron esta vida");
   });
 
   it("uses singular día for exactly 1 day", () => {
@@ -149,7 +149,7 @@ describe("PublicSiteShell", () => {
     );
     expect(html).toContain("/api/public/site-images/tok123/42?size=large");
     expect(html).toContain("Finca La Esperanza");
-    expect(html).toContain("Esto vive en su finca");
+    expect(html).toContain("Esto vive en su tierra");
   });
 
   it("falls back to a text header when there is no hero image", () => {
@@ -162,7 +162,7 @@ describe("PublicSiteShell", () => {
     // No <img> hero, but the name + eyebrow still render.
     expect(html).not.toContain("<img");
     expect(html).toContain("Finca La Esperanza");
-    expect(html).toContain("Esto vive en su finca");
+    expect(html).toContain("Esto vive en su tierra");
   });
 
   it("renders the video placeholder when no intro video is configured", () => {
@@ -180,7 +180,7 @@ describe("PublicSiteShell", () => {
     expect(html).toContain("/api/public/intro-video");
   });
 
-  it("renders content blocks in configured order", () => {
+  it("promotes projectContext above the config-ordered blocks (U6)", () => {
     const data = makeData({
       contentBlocks: [
         { type: "note", text: "NOTA_FCAT" },
@@ -194,9 +194,11 @@ describe("PublicSiteShell", () => {
     const iNote = html.indexOf("NOTA_FCAT");
     const iSummary = html.indexOf("RESUMEN_TEXTO");
     const iContext = html.indexOf("SOBRE_PROYECTO");
-    expect(iNote).toBeGreaterThan(-1);
+    // projectContext is pulled out of config order and rendered first (right
+    // under the video); the remaining blocks keep their configured order.
+    expect(iContext).toBeGreaterThan(-1);
+    expect(iContext).toBeLessThan(iNote);
     expect(iSummary).toBeGreaterThan(iNote);
-    expect(iContext).toBeGreaterThan(iSummary);
     expect(html).toContain("42 fincas");
   });
 

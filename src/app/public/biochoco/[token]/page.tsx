@@ -1,4 +1,7 @@
 import type { Metadata } from "next";
+import { and, eq, inArray } from "drizzle-orm";
+import { db } from "@/db";
+import { images } from "@/db/schema";
 import {
   fetchSiteDetailByToken,
   recordSiteView,
@@ -11,6 +14,23 @@ interface PageProps {
 
 const PUBLIC_BASE_URL =
   process.env.NEXT_PUBLIC_BASE_URL || "https://portal.fcat-ecuador.org";
+
+/**
+ * The site's starred image ids, scoped to the token's deployment snapshot. The
+ * TOKEN is the auth here (this page is unauthenticated) — we deliberately do NOT
+ * call the editor-permission `fetchSiteStarredPhotoOptions`. Mirrors the same
+ * deployment-snapshot gate the token page already trusts. Seeds the mobile
+ * tap-to-fullscreen gallery of all starred photos (U11).
+ */
+async function fetchStarredImageIds(depIds: number[]): Promise<number[]> {
+  if (depIds.length === 0) return [];
+  const rows = await db
+    .select({ id: images.id })
+    .from(images)
+    .where(and(eq(images.starred, true), inArray(images.deploymentId, depIds)))
+    .orderBy(images.starredAt, images.id);
+  return rows.map((r) => r.id);
+}
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { token } = await params;
@@ -82,8 +102,16 @@ export default async function PublicBiochocoSitePage({ params }: PageProps) {
   await recordSiteView(token);
 
   const hasIntroVideo = Boolean(process.env.LANDOWNER_INTRO_VIDEO_DRIVE_FILE_ID);
+  const starredImageIds = await fetchStarredImageIds(data.deploymentIds);
+  const publicUrl = `${PUBLIC_BASE_URL}/public/biochoco/${token}`;
 
   return (
-    <PublicSiteShell data={data} token={token} hasIntroVideo={hasIntroVideo} />
+    <PublicSiteShell
+      data={data}
+      token={token}
+      hasIntroVideo={hasIntroVideo}
+      starredImageIds={starredImageIds}
+      publicUrl={publicUrl}
+    />
   );
 }

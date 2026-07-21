@@ -14,7 +14,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { X } from "lucide-react";
+import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { PhotoShareButton } from "@/components/photo-share-button";
 import {
   fetchSpeciesImagesByToken,
@@ -30,6 +30,24 @@ interface SpeciesLightboxProps {
 }
 
 const GALLERY_PAGE_SIZE = 60;
+
+/** Spanish aria-labels for the desktop prev/next arrows (exported for tests). */
+export const LIGHTBOX_PREV_LABEL = "Imagen anterior";
+export const LIGHTBOX_NEXT_LABEL = "Imagen siguiente";
+
+/**
+ * Pure helper: which desktop arrows to show for a given position. Prev hides
+ * at the first image, next at the last; both hide when there's ≤1 image.
+ */
+export function lightboxArrowState(
+  current: number,
+  total: number,
+): { showPrev: boolean; showNext: boolean } {
+  return {
+    showPrev: total > 1 && current > 0,
+    showNext: total > 1 && current < total - 1,
+  };
+}
 
 export function SpeciesLightbox({
   token,
@@ -87,6 +105,21 @@ export function SpeciesLightbox({
 
   const total = images?.length ?? 0;
 
+  // Programmatically scroll the snap track to a given index. The container's
+  // CSS (`scroll-smooth motion-reduce:scroll-auto`) supplies the smooth /
+  // reduced-motion behavior, so a plain scrollTo respects the user's setting.
+  const scrollToIndex = useCallback(
+    (idx: number) => {
+      const el = trackRef.current;
+      if (!el) return;
+      const clamped = Math.max(0, Math.min(idx, total - 1));
+      el.scrollTo({ left: clamped * el.clientWidth });
+    },
+    [total],
+  );
+
+  const { showPrev, showNext } = lightboxArrowState(current, total);
+
   return (
     <div
       className="fixed inset-0 z-50 flex flex-col bg-black/95 text-white"
@@ -127,9 +160,30 @@ export function SpeciesLightbox({
 
       {/* Body */}
       <div
-        className="relative flex-1 overflow-hidden"
+        className="group relative flex-1 overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Desktop prev/next arrows (hover-revealed). Touch devices swipe. */}
+        {showPrev && (
+          <button
+            type="button"
+            onClick={() => scrollToIndex(current - 1)}
+            aria-label={LIGHTBOX_PREV_LABEL}
+            className="absolute left-3 top-1/2 z-20 hidden -translate-y-1/2 rounded-full bg-white/10 p-2.5 opacity-0 transition hover:bg-white/20 focus-visible:opacity-100 group-hover:opacity-100 sm:flex"
+          >
+            <ChevronLeft className="h-6 w-6" />
+          </button>
+        )}
+        {showNext && (
+          <button
+            type="button"
+            onClick={() => scrollToIndex(current + 1)}
+            aria-label={LIGHTBOX_NEXT_LABEL}
+            className="absolute right-3 top-1/2 z-20 hidden -translate-y-1/2 rounded-full bg-white/10 p-2.5 opacity-0 transition hover:bg-white/20 focus-visible:opacity-100 group-hover:opacity-100 sm:flex"
+          >
+            <ChevronRight className="h-6 w-6" />
+          </button>
+        )}
         {images === null ? (
           <div className="flex h-full items-center justify-center">
             <span className="h-8 w-8 animate-spin rounded-full border-2 border-white/25 border-t-white" />

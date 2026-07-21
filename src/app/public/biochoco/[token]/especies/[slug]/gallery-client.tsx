@@ -27,7 +27,29 @@ import {
 import { useImageZoom } from "@/hooks/use-image-zoom";
 import { PhotoShareButton } from "@/components/photo-share-button";
 import { Download, ChevronLeft, ChevronRight, X } from "lucide-react";
+import { preloadImage, type PreloadHandle } from "@/lib/annotation-prefetch";
 import type { SpeciesImageRow } from "@/app/biochoco/resultados/actions";
+
+/**
+ * Pure helper: the large-image URLs of the neighbours of `index`, so we can
+ * warm the browser cache before the user hits ← / →. `null` at the ends.
+ * Exported for tests.
+ */
+export function adjacentPreloadUrls(
+  token: string,
+  images: SpeciesImageRow[],
+  index: number | null,
+): { prev: string | null; next: string | null } {
+  if (index == null || index < 0 || index >= images.length) {
+    return { prev: null, next: null };
+  }
+  const build = (i: number) =>
+    `/api/public/site-images/${token}/${images[i].id}?size=large`;
+  return {
+    prev: index > 0 ? build(index - 1) : null,
+    next: index < images.length - 1 ? build(index + 1) : null,
+  };
+}
 
 interface GalleryClientProps {
   token: string;
@@ -62,6 +84,18 @@ export function GalleryClient({
       i != null && i < images.length - 1 ? i + 1 : i
     );
   }, [images.length]);
+
+  // Warm the browser cache for the adjacent images so ← / → paint instantly.
+  useEffect(() => {
+    if (openIndex == null) return;
+    const { prev, next } = adjacentPreloadUrls(token, images, openIndex);
+    const handles: PreloadHandle[] = [];
+    if (next) handles.push(preloadImage(next));
+    if (prev) handles.push(preloadImage(prev));
+    return () => {
+      for (const h of handles) h.cancel();
+    };
+  }, [openIndex, token, images]);
 
   // Keyboard nav while the dialog is open. Escape is handled by Radix.
   useEffect(() => {

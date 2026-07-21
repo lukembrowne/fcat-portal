@@ -37,9 +37,11 @@ import {
   parsePageConfig,
   serializePageConfig,
   defaultConfigFromLegacy,
+  enforceFeaturedPhotosSingleton,
+  validateFeaturedPhotoIds,
   type PageConfig,
 } from "@/lib/landowner/page-config";
-import { CONTENT } from "@/app/public/biochoco-overview/content";
+import { PROJECT_CONTEXT_BLURB } from "@/lib/landowner/copy";
 import type { HabitatAssessment } from "../habitat/types";
 import type {
   ResultadosData,
@@ -1061,6 +1063,40 @@ export async function fetchSitePhotoOptions(
 }
 
 /**
+ * List the site's STARRED photos for the featured-photos picker — every image
+ * flagged `starred = true` whose deployment is in the active token's snapshot,
+ * ordered by when it was starred. These are the photos the team curated by
+ * hand, and the picker's default source. Same gating as fetchSitePhotoOptions
+ * (editor-only + token-snapshot scoped); returns [] if no active link or no
+ * starred photos, which is the builder's cue to fall back to "Todas".
+ */
+export async function fetchSiteStarredPhotoOptions(
+  siteId: string
+): Promise<SitePhotoOption[]> {
+  await requirePermission("biochoco", "editor");
+
+  const depIds = await activeTokenDepIds(siteId);
+  if (depIds.length === 0) return [];
+
+  const rows = await db
+    .select({
+      imageId: images.id,
+      filename: images.filename,
+    })
+    .from(images)
+    .where(
+      and(
+        eq(images.starred, true),
+        inArray(images.deploymentId, depIds)
+      )
+    )
+    .orderBy(images.starredAt, images.id)
+    .limit(200);
+
+  return rows.map((r) => ({ imageId: r.imageId, label: r.filename }));
+}
+
+/**
  * Persist the page-builder config on a site's active share token. The incoming
  * config is re-validated for shape (parsePageConfig) and every media id is
  * checked against the site's snapshot — invalid ids are stripped rather than
@@ -1092,11 +1128,13 @@ export async function updateSitePageConfig(
       return { success: false, error: "No hay un enlace activo para este sitio" };
     }
 
-    // Never trust the client object — re-parse through the shape validator.
-    const clean = parsePageConfig(JSON.stringify(config));
-    if (!clean) {
+    // Never trust the client object — re-parse through the shape validator,
+    // then collapse to a single "Fotos destacadas" block (singleton, KTD-2).
+    const parsed = parsePageConfig(JSON.stringify(config));
+    if (!parsed) {
       return { success: false, error: "Configuración inválida" };
     }
+    const clean = enforceFeaturedPhotosSingleton(parsed);
 
     let depIds: number[] = [];
     try {
@@ -1160,7 +1198,7 @@ export async function updateSitePageConfig(
           });
           break;
         case "featuredPhotos": {
-          const kept = b.imageIds.filter((id) => validImages.has(id));
+          const kept = validateFeaturedPhotoIds(b.imageIds, validImages);
           if (kept.length > 0) blocks.push({ type: "featuredPhotos", imageIds: kept });
           break;
         }
@@ -1284,10 +1322,13 @@ async function resolveFeaturedAudio(
  * ends with the "Sobre el proyecto BioChoco" card and never shows two.
  */
 async function resolveContentBlocks(
-  config: PageConfig,
+  rawConfig: PageConfig,
   depIds: number[],
   projectContext: { blurb: string; siteCount: number | null }
 ): Promise<ResolvedContentBlock[]> {
+  // "Fotos destacadas" is a singleton: never emit two, even from a legacy
+  // config that stored duplicates (KTD-2).
+  const config = enforceFeaturedPhotosSingleton(rawConfig);
   // One query for every featured-photo id across all such blocks.
   const wantedPhotoIds = new Set<number>();
   for (const b of config.blocks) {
@@ -1323,7 +1364,7 @@ async function resolveContentBlocks(
         break;
       }
       case "featuredPhotos": {
-        const imageIds = b.imageIds.filter((id) => validPhotoIds.has(id));
+        const imageIds = validateFeaturedPhotoIds(b.imageIds, validPhotoIds);
         if (imageIds.length > 0) out.push({ type: "featuredPhotos", imageIds });
         break;
       }
@@ -1480,7 +1521,9 @@ export const fetchSiteDetailByToken = cache(
       (heroBlock?.type === "hero" ? heroBlock.imageId : null) ??
       tokenRow.heroImageId;
     const contentBlocks = await resolveContentBlocks(config, depIds, {
-      blurb: CONTENT.es.learn.intro,
+      // Landowner-scoped copy (Spanish, audience-specific) — NOT the shared
+      // overview intro (English), which feeds the divulgation overview page.
+      blurb: PROJECT_CONTEXT_BLURB,
       siteCount: sites.length > 0 ? sites.length : null,
     });
 

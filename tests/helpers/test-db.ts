@@ -321,6 +321,26 @@ const CAMERA_TRAP_DDL =
     details TEXT
   );
 
+  CREATE TABLE site_share_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token TEXT NOT NULL UNIQUE,
+    biochoco_site_id TEXT NOT NULL,
+    deployment_ids TEXT NOT NULL,
+    hero_image_id INTEGER,
+    landowner_note TEXT,
+    featured_audio_id INTEGER,
+    page_config TEXT,
+    first_viewed_at INTEGER,
+    last_viewed_at INTEGER,
+    view_count INTEGER NOT NULL DEFAULT 0,
+    created_by TEXT NOT NULL,
+    label TEXT,
+    revoked_at INTEGER,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+  CREATE UNIQUE INDEX idx_site_share_tokens_site_active
+    ON site_share_tokens(biochoco_site_id) WHERE revoked_at IS NULL;
+
   CREATE TABLE audio_files (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     deployment_id INTEGER NOT NULL REFERENCES biochoco_deployments(id) ON DELETE CASCADE,

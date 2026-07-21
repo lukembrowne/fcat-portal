@@ -112,6 +112,42 @@ export function serializePageConfig(config: PageConfig): string {
 }
 
 /**
+ * Collapse a config so it carries AT MOST ONE `featuredPhotos` block: the first
+ * such block is kept in place, any later ones are dropped. All other blocks
+ * (and their order) are preserved.
+ *
+ * "Fotos destacadas" is a singleton section (see the page-builder refinement
+ * plan, KTD-2). Enforced defensively here so it holds no matter how the config
+ * was produced — builder save, a legacy config with duplicates, or the public
+ * resolver — and a page can never render two "Fotos destacadas" sections.
+ */
+export function enforceFeaturedPhotosSingleton(config: PageConfig): PageConfig {
+  let seen = false;
+  const blocks: PageBlock[] = [];
+  for (const b of config.blocks) {
+    if (b.type === "featuredPhotos") {
+      if (seen) continue; // drop every featuredPhotos after the first
+      seen = true;
+    }
+    blocks.push(b);
+  }
+  return { version: config.version, blocks };
+}
+
+/**
+ * Keep only the featured-photo ids that survive snapshot validation, in their
+ * original order. An empty result means the block resolves to nothing (it is
+ * neither persisted nor rendered). Shared by the save sanitizer and the public
+ * resolver so both apply the exact same token-snapshot gate.
+ */
+export function validateFeaturedPhotoIds(
+  imageIds: number[],
+  validIds: Set<number>,
+): number[] {
+  return imageIds.filter((id) => validIds.has(id));
+}
+
+/**
  * Build a config equivalent to the legacy per-token fields, in the current
  * default render order (hero, then note, then featured audio). Used by the
  * one-time backfill and as the fallback when a token has no page_config yet, so

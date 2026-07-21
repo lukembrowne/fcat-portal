@@ -19,6 +19,13 @@ interface HabitatSectionProps {
    * so they don't load on the public landowner-share view.
    */
   showPhotos?: boolean;
+  /**
+   * Public landowner-share variant. Hides the slope / distance-to-edge /
+   * disturbance metrics (and their explainer bullets), which are less
+   * meaningful to a landowner and — for non-forest sites — can read oddly.
+   * Internal keeps the full set.
+   */
+  isPublic?: boolean;
 }
 
 function StatCard({ label, value }: { label: string; value: string | number }) {
@@ -72,6 +79,7 @@ export function HabitatSection({
   habitat,
   totalCount,
   showPhotos = true,
+  isPublic = false,
 }: HabitatSectionProps) {
   return (
     <section>
@@ -94,6 +102,43 @@ export function HabitatSection({
             </p>
           )}
 
+          {/* Plain-language explainer — helps landowners read the stats below */}
+          <div className="rounded-lg bg-muted/60 p-4 space-y-2 text-sm">
+            <p>
+              Estas cifras describen el bosque de su tierra. Nuestro equipo las
+              midió en el campo para mostrar qué tan sano y protector es su
+              hábitat para la fauna.
+            </p>
+            <ul className="space-y-1 text-muted-foreground">
+              <li>
+                <strong>Cobertura y altura del dosel:</strong> qué tan cerrado y
+                alto es el techo de árboles. Más cobertura y más altura significan
+                un bosque más maduro que da sombra, agua y refugio.
+              </li>
+              <li>
+                <strong>Árboles y sotobosque:</strong> la cantidad de árboles
+                grandes y la vegetación baja. Juntos ofrecen comida y escondite a
+                los animales.
+              </li>
+              {!isPublic && (
+                <>
+                  <li>
+                    <strong>Pendiente:</strong> qué tan inclinado es el terreno.
+                  </li>
+                  <li>
+                    <strong>Distancia al borde:</strong> qué tan adentro del
+                    bosque está el sitio. Cuanto más lejos del borde, más
+                    tranquilo para la vida silvestre.
+                  </li>
+                  <li>
+                    <strong>Perturbaciones:</strong> señales de actividad humana
+                    o cambios recientes en el bosque.
+                  </li>
+                </>
+              )}
+            </ul>
+          </div>
+
           {/* Stats grid */}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
             <StatCard
@@ -115,26 +160,36 @@ export function HabitatSection({
                 (habitat.understoryDensity || "—")
               }
             />
-            <StatCard
-              label="Pendiente"
-              value={
-                SLOPE_LABELS[habitat.slopeCategory] ??
-                (habitat.slopeCategory || "—")
-              }
-            />
-            <StatCard
-              label="Dist. al borde"
-              value={habitat.distanceToEdgeM ? `${habitat.distanceToEdgeM}m` : "—"}
-            />
+            {!isPublic && (
+              <>
+                <StatCard
+                  label="Pendiente"
+                  value={
+                    SLOPE_LABELS[habitat.slopeCategory] ??
+                    (habitat.slopeCategory || "—")
+                  }
+                />
+                <StatCard
+                  label="Dist. al borde"
+                  value={
+                    habitat.distanceToEdgeM
+                      ? `${habitat.distanceToEdgeM}m`
+                      : "—"
+                  }
+                />
+              </>
+            )}
           </div>
 
-          {habitat.disturbanceSigns && habitat.disturbanceSigns !== "none" && (
-            <p className="text-sm">
-              <strong>Perturbaciones:</strong>{" "}
-              {DISTURBANCE_LABELS[habitat.disturbanceSigns] ??
-                habitat.disturbanceSigns}
-            </p>
-          )}
+          {!isPublic &&
+            habitat.disturbanceSigns &&
+            habitat.disturbanceSigns !== "none" && (
+              <p className="text-sm">
+                <strong>Perturbaciones:</strong>{" "}
+                {DISTURBANCE_LABELS[habitat.disturbanceSigns] ??
+                  habitat.disturbanceSigns}
+              </p>
+            )}
 
           {showPhotos && (
             <>

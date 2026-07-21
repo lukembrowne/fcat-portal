@@ -23,9 +23,9 @@ export function buildStoryStatText({ speciesCount, days }: StoryStatProps): {
       ? ` a lo largo de ${days} ${days === 1 ? "día" : "días"} de monitoreo`
       : "";
   return {
-    lead: "En su bosque encontramos",
+    lead: "En su tierra encontramos",
     unit,
-    sub: `Nuestras cámaras y grabadores registraron esta vida${dayClause}, sin molestar al bosque.`,
+    sub: `Nuestras cámaras y grabadores registraron esta vida${dayClause}.`,
   };
 }
 

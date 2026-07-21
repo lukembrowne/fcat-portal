@@ -158,8 +158,13 @@ uv pip install --python "$ML_PYTHON" librosa soundfile numpy matplotlib Pillow
 echo "[ml-setup] Installing scikit-maad + scipy (acoustic indices)..."
 uv pip install --python "$ML_PYTHON" scikit-maad scipy
 
-echo "[ml-setup] Installing birdnet-analyzer..."
-uv pip install --python "$ML_PYTHON" birdnet-analyzer
+# Pinned so a venv rebuild never silently upgrades the model. birdnet-analyzer
+# 2.4.0 ships the BirdNET GLOBAL 6K V2.4 model; the per-detection model_version
+# stamp (scripts/birdnet-runner.py) records the resolved version. To upgrade,
+# bump this pin deliberately, rebuild the venv, and expect new detections to
+# carry the new birdnet-analyzer@<version> stamp.
+echo "[ml-setup] Installing birdnet-analyzer (pinned)..."
+uv pip install --python "$ML_PYTHON" "birdnet-analyzer==2.4.0"
 
 # Occupancy modeling covariate pipeline: raster sampling (forest cover, DEM),
 # coordinate projection for metric buffers, and AOI polygon geometry.

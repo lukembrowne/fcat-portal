@@ -25,12 +25,38 @@ export const MONTHLY_EXPENSE_PROPORTIONS = [
 /** Days in each month (non-leap year) */
 export const DAYS_IN_MONTHS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
-/** Account categories excluded from "operating expenses" for runway calculation */
+/**
+ * Account categories excluded from "operating expenses" for runway calculation.
+ *
+ * These are large, lumpy capital / financing outlays — NOT recurring operating
+ * costs — so they are kept out of the annual operating-budget figure and out of
+ * the month-by-month "Gastos Proy." spread. Track them instead as one-off
+ * entries in the Proyecciones table ("Gastos Adic."), which is where they hit
+ * the projected balance. Keeping a capital item in BOTH places double-counts it.
+ *
+ * NOTE: only the capital vehicle *purchase* ("Purchase new Vehicles") is
+ * excluded. Recurring vehicle running costs (Vehicle - Maintenance / Insurance /
+ * Gasoline and Oil / Revision and Matricula) are genuine operating expenses and
+ * stay IN the operating budget.
+ */
 export const NON_OPERATING_CATEGORIES = [
   "Land acquisition",
   "New construction",
   "Loan repayment",
+  "Purchase new Vehicles",
 ];
+
+/**
+ * Human-readable Spanish labels for the excluded capital/financing categories,
+ * shown in the cash-flow UI so it's clear what the operating figure leaves out.
+ * Keep in sync with NON_OPERATING_CATEGORIES.
+ */
+export const NON_OPERATING_LABELS_ES: Record<string, string> = {
+  "Land acquisition": "compra de terreno",
+  "New construction": "construcción",
+  "Loan repayment": "pago de préstamos",
+  "Purchase new Vehicles": "compra de vehículos",
+};
 
 /** Budget categories defined in the annual budget */
 export const BUDGET_CATEGORIES = [

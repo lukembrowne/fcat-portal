@@ -14,6 +14,7 @@ import type { CashflowMonthRow, MonthlyAmount } from "../types";
 import {
   MONTHLY_EXPENSE_PROPORTIONS,
   NON_OPERATING_CATEGORIES,
+  NON_OPERATING_LABELS_ES,
   CASH_RESERVE_TARGET,
 } from "../constants";
 import { monthSequence } from "../lib/calculations";
@@ -35,6 +36,10 @@ export interface CashflowData {
   metrics: {
     lastBankBalance: number;
     annualOperatingExpenses: number;
+    /** Full annual budget before excluding capital/financing categories */
+    totalBudget: number;
+    /** Capital/financing categories excluded from the operating figure */
+    excludedCategories: { category: string; label: string; amount: number }[];
     runwayOnHandMonths: number;
     runwayProjectedMonths: number | null;
     goingNegativeDate: string | null;
@@ -70,10 +75,25 @@ export async function fetchCashflowData(): Promise<ActionResult<CashflowData>> {
       .all();
 
     const totalBudget = budgetRows.reduce((sum, r) => sum + r.amount, 0);
-    const nonOperating = budgetRows
-      .filter((r) => NON_OPERATING_CATEGORIES.includes(r.category))
-      .reduce((sum, r) => sum + r.amount, 0);
+    // Excluded (capital / financing) categories, aggregated by category with a
+    // Spanish label, so the UI can show exactly what the operating figure leaves
+    // out. Only categories with a non-zero budgeted amount are surfaced.
+    const excludedByCategory = new Map<string, number>();
+    for (const r of budgetRows) {
+      if (NON_OPERATING_CATEGORIES.includes(r.category)) {
+        excludedByCategory.set(r.category, (excludedByCategory.get(r.category) ?? 0) + r.amount);
+      }
+    }
+    const nonOperating = [...excludedByCategory.values()].reduce((sum, a) => sum + a, 0);
     const annualOperatingExpenses = totalBudget - nonOperating;
+    const excludedCategories = [...excludedByCategory.entries()]
+      .filter(([, amount]) => amount !== 0)
+      .map(([category, amount]) => ({
+        category,
+        label: NON_OPERATING_LABELS_ES[category] ?? category,
+        amount,
+      }))
+      .sort((a, b) => b.amount - a.amount);
 
     // 2. Revenue by month (all time)
     const revenueByMonth = db
@@ -252,6 +272,8 @@ export async function fetchCashflowData(): Promise<ActionResult<CashflowData>> {
         metrics: {
           lastBankBalance,
           annualOperatingExpenses,
+          totalBudget,
+          excludedCategories,
           runwayOnHandMonths,
           runwayProjectedMonths,
           goingNegativeDate,

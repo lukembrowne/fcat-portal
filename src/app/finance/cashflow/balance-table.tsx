@@ -10,8 +10,36 @@ import {
 } from "@/components/ui/table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Download } from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { Download, Info } from "lucide-react";
 import type { CashflowMonthRow } from "../types";
+
+/** A column header with an info tooltip explaining what the column contains. */
+function HeaderWithTip({ label, tip }: { label: string; tip: string }) {
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            className="ml-auto inline-flex items-center gap-1 hover:text-foreground"
+          >
+            {label}
+            <Info className="h-3 w-3 opacity-60" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent className="max-w-xs text-left font-normal normal-case">
+          {tip}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
 
 function fmt(n: number | null): string {
   if (n === null) return "—";
@@ -95,11 +123,26 @@ export function BalanceTable({ monthRows }: { monthRows: CashflowMonthRow[] }) {
                 <TableRow>
                   <TableHead className="whitespace-nowrap">Fecha</TableHead>
                   <TableHead className="text-right whitespace-nowrap">Ingresos</TableHead>
-                  <TableHead className="text-right whitespace-nowrap">Gastos</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">
+                    <HeaderWithTip
+                      label="Gastos"
+                      tip="Gastos reales registrados en el Libro Mayor para ese mes."
+                    />
+                  </TableHead>
                   <TableHead className="text-right whitespace-nowrap">Neto</TableHead>
                   <TableHead className="text-right whitespace-nowrap">Ing. Proy.</TableHead>
-                  <TableHead className="text-right whitespace-nowrap">Gastos Proy.</TableHead>
-                  <TableHead className="text-right whitespace-nowrap">Gastos Adic.</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">
+                    <HeaderWithTip
+                      label="Gastos Proy."
+                      tip="Estimación de gastos operativos: el presupuesto operativo anual (sin capital ni financiamiento) repartido mes a mes. NO incluye las proyecciones puntuales."
+                    />
+                  </TableHead>
+                  <TableHead className="text-right whitespace-nowrap">
+                    <HeaderWithTip
+                      label="Gastos Adic."
+                      tip="Gastos puntuales de la tabla de Proyecciones (p. ej. compra de vehículo, pago de préstamo). Se registran solo aquí para no duplicarlos con Gastos Proy."
+                    />
+                  </TableHead>
                   <TableHead className="text-right whitespace-nowrap">Saldo</TableHead>
                   <TableHead className="text-right whitespace-nowrap">Saldo Proy.</TableHead>
                 </TableRow>

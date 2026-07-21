@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { SortIcon } from "@/components/sort-icon";
-import { IucnCode } from "@/components/iucn-code";
+import { IucnCode, getIucnCategory } from "@/components/iucn-code";
 import { useNameLang, displayCommonName } from "./name-lang";
 import type { ReadinessSpeciesRow, OccupancyStream } from "@/lib/occupancy/readiness";
 import type { SpeciesModelStatus } from "@/lib/occupancy/model-status";
@@ -23,6 +23,7 @@ export type StatusMap = Map<string, SpeciesModelStatus>;
 type SortKey =
   | "commonName"
   | "species"
+  | "iucnStatus"
   | "nSites"
   | "nSitesDetected"
   | "totalDetections"
@@ -32,9 +33,53 @@ type SortKey =
   | "modeledPsi"
   | "eligible";
 
+/**
+ * Conservation-severity rank for sorting (higher = more threatened). Codes that
+ * `getIucnCategory` hides (DD, unassessed, unknown) collapse to 0 and always
+ * sort last, mirroring how unmodeled p/ψ nulls are handled.
+ */
+const IUCN_RANK: Record<string, number> = {
+  EX: 8,
+  EW: 7,
+  CR: 6,
+  EN: 5,
+  VU: 4,
+  NT: 3,
+  LC: 2,
+};
+
+function iucnRank(status: string | null | undefined): number {
+  const cat = getIucnCategory(status);
+  return cat ? IUCN_RANK[cat.code] ?? 0 : 0;
+}
+
+/** Filter bucket for a row: the meaningful code, or "none" for DD/unassessed. */
+function iucnFilterKey(status: string | null | undefined): string {
+  const cat = getIucnCategory(status);
+  return cat ? cat.code : "none";
+}
+
+/** Spanish labels for the conservation-status filter dropdown. */
+const IUCN_FILTER_LABELS: Record<string, string> = {
+  CR: "CR — En peligro crítico",
+  EN: "EN — En peligro",
+  VU: "VU — Vulnerable",
+  NT: "NT — Casi amenazada",
+  LC: "LC — Preocupación menor",
+  none: "Sin evaluar",
+};
+
+const THREATENED_CODES = ["CR", "EN", "VU"];
+
 const COLUMNS: { key: SortKey; label: string; numeric: boolean; title?: string }[] = [
   { key: "commonName", label: "Nombre común", numeric: false },
   { key: "species", label: "Nombre científico", numeric: false },
+  {
+    key: "iucnStatus",
+    label: "UICN",
+    numeric: false,
+    title: "Categoría de la Lista Roja de la UICN (— si no evaluada). Ordena por severidad.",
+  },
   { key: "nSitesDetected", label: "Sitios con detección", numeric: true },
   { key: "nSites", label: "Sitios muestreados", numeric: true },
   {
@@ -87,6 +132,8 @@ export function ReadinessTable({
   // Default: eligible first, then most-spread — matches the action's ordering.
   const [sortKey, setSortKey] = useState<SortKey>("nSitesDetected");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  // Conservation-status filter: "all", "threatened" (CR/EN/VU), or a bucket key.
+  const [iucnFilter, setIucnFilter] = useState<string>("all");
 
   const merged: Row[] = useMemo(
     () =>
@@ -113,6 +160,14 @@ export function ReadinessTable({
         cmp = displayName(a).localeCompare(displayName(b));
       } else if (sortKey === "species") {
         cmp = a.species.localeCompare(b.species);
+      } else if (sortKey === "iucnStatus") {
+        // Sort by conservation severity; unassessed/DD (rank 0) always last.
+        const ar = iucnRank(a.iucnStatus);
+        const br = iucnRank(b.iucnStatus);
+        if (ar === 0 && br === 0) cmp = 0;
+        else if (ar === 0) return 1;
+        else if (br === 0) return -1;
+        else cmp = ar - br;
       } else if (sortKey === "eligible") {
         cmp = (a.eligible ? 1 : 0) - (b.eligible ? 1 : 0);
       } else {
@@ -139,6 +194,21 @@ export function ReadinessTable({
     }
   };
 
+  // Conservation-status buckets actually present in this stream, ordered by
+  // severity so the dropdown only offers meaningful choices.
+  const iucnOptions = useMemo(() => {
+    const present = new Set(merged.map((r) => iucnFilterKey(r.iucnStatus)));
+    return ["CR", "EN", "VU", "NT", "LC", "none"].filter((c) => present.has(c));
+  }, [merged]);
+  const hasThreatened = iucnOptions.some((c) => THREATENED_CODES.includes(c));
+
+  const filtered = useMemo(() => {
+    if (iucnFilter === "all") return sorted;
+    if (iucnFilter === "threatened")
+      return sorted.filter((r) => THREATENED_CODES.includes(iucnFilterKey(r.iucnStatus)));
+    return sorted.filter((r) => iucnFilterKey(r.iucnStatus) === iucnFilter);
+  }, [sorted, iucnFilter]);
+
   if (rows.length === 0) {
     return (
       <p className="text-sm text-muted-foreground py-4">
@@ -149,6 +219,33 @@ export function ReadinessTable({
 
   return (
     <div className="space-y-2">
+      <div className="flex items-center gap-2">
+        <label
+          htmlFor={`iucn-filter-${stream}`}
+          className="text-xs text-muted-foreground"
+        >
+          Estado de conservación (UICN)
+        </label>
+        <select
+          id={`iucn-filter-${stream}`}
+          value={iucnFilter}
+          onChange={(e) => setIucnFilter(e.target.value)}
+          className="h-8 rounded-md border border-input bg-background px-2 text-xs shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
+        >
+          <option value="all">Todas</option>
+          {hasThreatened && <option value="threatened">Amenazadas (CR/EN/VU)</option>}
+          {iucnOptions.map((c) => (
+            <option key={c} value={c}>
+              {IUCN_FILTER_LABELS[c] ?? c}
+            </option>
+          ))}
+        </select>
+        {iucnFilter !== "all" && (
+          <span className="text-xs text-muted-foreground">
+            {filtered.length} de {sorted.length}
+          </span>
+        )}
+      </div>
       <div className="overflow-x-auto">
         <Table>
           <TableHeader>
@@ -171,27 +268,37 @@ export function ReadinessTable({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {sorted.map((r) => {
+            {filtered.length === 0 && (
+              <TableRow>
+                <TableCell
+                  colSpan={COLUMNS.length}
+                  className="text-center text-sm text-muted-foreground py-6"
+                >
+                  Ninguna especie coincide con este estado de conservación.
+                </TableCell>
+              </TableRow>
+            )}
+            {filtered.map((r) => {
               const isModeled = r.status?.kind === "modeled";
               return (
                 <TableRow key={r.species}>
                   <TableCell className="font-medium">
-                    <span className="inline-flex items-center gap-1.5">
-                      {isModeled ? (
-                        <Link
-                          href={`/ocupacion/${encodeURIComponent(r.species)}?stream=${stream}`}
-                          className="text-emerald-700 dark:text-emerald-400 hover:underline"
-                        >
-                          {displayName(r)}
-                        </Link>
-                      ) : (
-                        displayName(r)
-                      )}
-                      <IucnCode status={r.iucnStatus} />
-                    </span>
+                    {isModeled ? (
+                      <Link
+                        href={`/ocupacion/${encodeURIComponent(r.species)}?stream=${stream}`}
+                        className="text-emerald-700 dark:text-emerald-400 hover:underline"
+                      >
+                        {displayName(r)}
+                      </Link>
+                    ) : (
+                      displayName(r)
+                    )}
                   </TableCell>
                   <TableCell className="italic text-muted-foreground">
                     {r.species}
+                  </TableCell>
+                  <TableCell>
+                    <IucnCode status={r.iucnStatus} />
                   </TableCell>
                   <TableCell className="text-right">{r.nSitesDetected}</TableCell>
                   <TableCell className="text-right">{r.nSites}</TableCell>

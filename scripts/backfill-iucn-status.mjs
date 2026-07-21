@@ -72,15 +72,38 @@ export function extractCategoryCode(obj) {
 }
 
 /**
- * Pick the latest assessment from a taxa response's `assessments[]`: prefer the
- * one flagged `latest === true`, else the newest by `year_published`. Exported
- * for testing.
+ * True when an assessment's `scopes[]` includes the GLOBAL scope. The v4 API
+ * codes Global as scope `"1"` (description "Global"); we also match on the text
+ * to be robust to code changes. Exported for testing.
+ */
+export function isGlobalScope(assessment) {
+  const scopes = assessment?.scopes;
+  if (!Array.isArray(scopes)) return false;
+  return scopes.some(
+    (s) => s?.code === "1" || /global/i.test(s?.description?.en || s?.description || "")
+  );
+}
+
+/**
+ * Pick the latest GLOBAL assessment from a taxa response's `assessments[]`.
+ *
+ * The API returns assessments across ALL scopes — Global plus regional ones
+ * (Mediterranean, Europe, national Red Lists). A taxon can have MULTIPLE
+ * assessments flagged `latest === true`, one per scope, and regional categories
+ * routinely differ from the global one (e.g. Osprey is LC globally but EN in the
+ * Mediterranean). The Red List "category" we surface must be the GLOBAL one, so
+ * we filter to Global scope FIRST, then prefer `latest === true`, else newest by
+ * `year_published`. Returns null when the taxon has no global assessment (a
+ * regional-only match must not masquerade as the global category). Exported for
+ * testing.
  */
 export function pickLatestAssessment(assessments) {
   if (!Array.isArray(assessments) || assessments.length === 0) return null;
+  const global = assessments.filter(isGlobalScope);
+  if (global.length === 0) return null;
   return (
-    assessments.find((a) => a?.latest === true) ??
-    [...assessments].sort(
+    global.find((a) => a?.latest === true) ??
+    [...global].sort(
       (a, b) => (Number(b?.year_published) || 0) - (Number(a?.year_published) || 0)
     )[0]
   );

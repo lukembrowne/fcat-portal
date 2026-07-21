@@ -7,8 +7,14 @@ import Database from "better-sqlite3";
 import {
   buildSpeciesQuery,
   extractCategoryCode,
+  isGlobalScope,
   pickLatestAssessment,
 } from "../../scripts/backfill-iucn-status.mjs";
+
+/** Global scope as the v4 API emits it. */
+const GLOBAL = [{ code: "1", description: { en: "Global" } }];
+/** A regional scope (e.g. the Mediterranean assessment that broke Osprey). */
+const MEDITERRANEAN = [{ code: "2", description: { en: "Mediterranean" } }];
 
 describe("buildSpeciesQuery", () => {
   it("selects all species-rank, non-system rows by default", () => {
@@ -71,21 +77,52 @@ describe("extractCategoryCode", () => {
   });
 });
 
+describe("isGlobalScope", () => {
+  it("matches scope code '1' and a 'Global' description", () => {
+    expect(isGlobalScope({ scopes: GLOBAL })).toBe(true);
+    expect(isGlobalScope({ scopes: [{ description: { en: "Global" } }] })).toBe(true);
+  });
+
+  it("rejects regional scopes and missing scopes", () => {
+    expect(isGlobalScope({ scopes: MEDITERRANEAN })).toBe(false);
+    expect(isGlobalScope({})).toBe(false);
+    expect(isGlobalScope(null)).toBe(false);
+  });
+});
+
 describe("pickLatestAssessment", () => {
-  it("prefers the assessment flagged latest === true", () => {
+  it("prefers the GLOBAL assessment flagged latest === true", () => {
     const a = pickLatestAssessment([
-      { assessment_id: 1, year_published: "2005", latest: false },
-      { assessment_id: 2, year_published: "1998", latest: true },
+      { assessment_id: 1, year_published: "2005", latest: false, scopes: GLOBAL },
+      { assessment_id: 2, year_published: "1998", latest: true, scopes: GLOBAL },
     ]);
     expect(a.assessment_id).toBe(2);
   });
 
-  it("falls back to the newest year_published when none flagged", () => {
+  it("ignores a latest regional assessment in favor of the global one (Osprey bug)", () => {
+    // Osprey: Mediterranean EN (latest) sorts first, but the global LC must win.
     const a = pickLatestAssessment([
-      { assessment_id: 1, year_published: "2005" },
-      { assessment_id: 2, year_published: "2021" },
+      { assessment_id: 1, year_published: "2022", latest: true, red_list_category_code: "EN", scopes: MEDITERRANEAN },
+      { assessment_id: 2, year_published: "2021", latest: true, red_list_category_code: "LC", scopes: GLOBAL },
     ]);
     expect(a.assessment_id).toBe(2);
+    expect(extractCategoryCode(a)).toBe("LC");
+  });
+
+  it("falls back to the newest global year_published when none flagged", () => {
+    const a = pickLatestAssessment([
+      { assessment_id: 1, year_published: "2005", scopes: GLOBAL },
+      { assessment_id: 2, year_published: "2021", scopes: GLOBAL },
+    ]);
+    expect(a.assessment_id).toBe(2);
+  });
+
+  it("returns null when only regional assessments exist (no global category)", () => {
+    expect(
+      pickLatestAssessment([
+        { assessment_id: 1, year_published: "2022", latest: true, scopes: MEDITERRANEAN },
+      ])
+    ).toBeNull();
   });
 
   it("returns null for empty/non-array input", () => {

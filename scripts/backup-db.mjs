@@ -197,6 +197,12 @@ async function main() {
     gzPath = await gzipFile(backupPath);
     gzBytes = fs.statSync(gzPath).size;
     fs.unlinkSync(backupPath); // remove the uncompressed copy
+    // The integrity check opened the WAL-mode backup, creating -wal/-shm
+    // sidecars. The .db is gone now, so clean up its orphaned sidecars too.
+    for (const ext of ["-wal", "-shm"]) {
+      const sidecar = backupPath + ext;
+      if (fs.existsSync(sidecar)) fs.unlinkSync(sidecar);
+    }
     console.log(
       `[backup] Compressed: ${gzFilename} (${(gzBytes / 1024 / 1024).toFixed(1)}MB, ` +
         `${((1 - gzBytes / sizeBytes) * 100).toFixed(0)}% smaller)`,

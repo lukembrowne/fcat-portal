@@ -106,7 +106,11 @@ function logStartupHealth(dbPath: string) {
     if (fs.existsSync(backupDir)) {
       const backups = fs
         .readdirSync(backupDir)
-        .filter((f) => f.startsWith("portal-") && f.endsWith(".db"))
+        // Backups are compressed to .db.gz; keep matching legacy .db too.
+        .filter(
+          (f) =>
+            f.startsWith("portal-") && (f.endsWith(".db.gz") || f.endsWith(".db"))
+        )
         .sort()
         .reverse();
 

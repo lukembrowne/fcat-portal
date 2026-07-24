@@ -1054,6 +1054,13 @@ const migrations = [
   // set doesn't flood the annotation dropdown. Name/IUCN resolution ignores
   // this flag; only getSpeciesList() filters on it (2026-07-16).
   `ALTER TABLE biochoco_species ADD COLUMN camera_selectable INTEGER NOT NULL DEFAULT 1`,
+
+  // Species public content for finca pages: one free-text field (role in the
+  // forest + optional management tip). Plain TEXT, nullable, edited in
+  // /biochoco/fichas-especies (2026-07-24). The earlier split ecological_role/
+  // management_tip columns (added 2026-07-23) are superseded; they may linger
+  // unused in dev DBs but are never read/written.
+  `ALTER TABLE biochoco_species ADD COLUMN public_content TEXT`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }

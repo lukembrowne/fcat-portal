@@ -41,6 +41,7 @@ function makeData(overrides: Partial<PublicSiteDetail> = {}): PublicSiteDetail {
     species: [
       {
         photoImageId: 99,
+        galleryImageIds: [99],
         speciesName: "Leopardus pardalis",
         spanishName: "Ocelote",
         commonName: "Ocelot",

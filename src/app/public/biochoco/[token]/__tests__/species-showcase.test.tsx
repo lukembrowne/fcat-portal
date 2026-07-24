@@ -20,6 +20,8 @@ function sp(overrides: Partial<SiteSpecies> = {}): SiteSpecies {
     detectionCount: 1,
     avgConfidence: 0,
     photoImageId: 1,
+    galleryImageIds: [1],
+    publicContent: null,
     iucnStatus: "LC",
     ...overrides,
   } as SiteSpecies;
@@ -27,7 +29,7 @@ function sp(overrides: Partial<SiteSpecies> = {}): SiteSpecies {
 
 const resolveImageUrl = (id: number, size: "thumb" | "large") =>
   `/img/${id}/${size}`;
-// Distinguishable per-name href so we can assert which cards are linked.
+// Distinguishable per-name href so we can assert which rows are linked.
 const speciesHref = (name: string) =>
   `/gallery/${name.toLowerCase().replace(/\s+/g, "-")}`;
 
@@ -37,6 +39,7 @@ function render(species: SiteSpecies[]) {
       species={species}
       resolveImageUrl={resolveImageUrl}
       speciesHref={speciesHref}
+      onTapPhoto={() => {}}
     />,
   );
 }
@@ -70,13 +73,14 @@ describe("SpeciesShowcase", () => {
     expect(html.indexOf("Mucho riesgo")).toBeLessThan(html.indexOf("Poco riesgo"));
   });
 
-  it("shows the IUCN chip label for assessed species and none for null", () => {
-    const assessed = render([sp({ spanishName: "Evaluado", iucnStatus: "EN" })]);
-    expect(assessed).toContain("En peligro"); // iucn-chip label for EN
-    const unassessed = render([
-      sp({ spanishName: "Sin evaluar", iucnStatus: null }),
-    ]);
-    expect(unassessed).not.toContain("En peligro");
+  it("shows the detection count (registros) inline with the name", () => {
+    const html = render([sp({ spanishName: "Ocelote", detectionCount: 12 })]);
+    expect(html).toContain("12 registros");
+  });
+
+  it("does not render an IUCN conservation-status chip", () => {
+    const html = render([sp({ spanishName: "Evaluado", iucnStatus: "EN" })]);
+    expect(html).not.toContain("En peligro"); // conservation status removed from cards
   });
 
   it("renders the species-stats caption", () => {
@@ -86,6 +90,18 @@ describe("SpeciesShowcase", () => {
     ]);
     expect(html).toContain("2 especies");
     expect(html).toContain("5 detecciones");
+  });
+
+  it("renders the species contextual content inline (paragraph + bullet)", () => {
+    const html = render([
+      sp({
+        spanishName: "Guatusa",
+        publicContent: "Dispersa semillas.\n- Vacunar",
+      }),
+    ]);
+    expect(html).toContain("Dispersa semillas.");
+    expect(html).toContain("<li"); // bullet line becomes a list item
+    expect(html).toContain("Vacunar");
   });
 
   it("renders nothing for an empty species list", () => {

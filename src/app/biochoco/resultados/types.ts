@@ -45,6 +45,17 @@ export interface SiteSpecies {
   photoImageId: number | null;
   /** IUCN Red List category code (LC/NT/VU/EN/CR/…), null when unassessed. */
   iucnStatus: string | null;
+  /**
+   * Public finca-page content authored in /biochoco/fichas-especies. Global per
+   * species (same for every site), plain text. Null when not yet written.
+   */
+  publicContent: string | null;
+  /**
+   * The resolved gallery photo ids for this species (star-first / auto-capped,
+   * see resolveSpeciesGallery). The public showcase opens the swipe lightbox
+   * over these directly, so `photoImageId` is `galleryImageIds[0] ?? null`.
+   */
+  galleryImageIds: number[];
 }
 
 export interface TemperatureReading {

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { PageBuilder } from "../../resultados/[siteId]/page-builder";
 import { SharePanel } from "./share-panel";
+import { SpeciesPhotoCurator } from "./species-photo-curator";
 import type { PageConfig } from "@/lib/landowner/page-config";
 
 interface SiteShareLink {
@@ -65,11 +66,14 @@ export function BuilderShell({ siteId, siteName, shareLink }: BuilderShellProps)
       />
 
       {shareLink && (
-        <PageBuilder
-          siteId={siteId}
-          token={shareLink.token}
-          initialConfig={shareLink.pageConfig}
-        />
+        <>
+          <SpeciesPhotoCurator siteId={siteId} token={shareLink.token} />
+          <PageBuilder
+            siteId={siteId}
+            token={shareLink.token}
+            initialConfig={shareLink.pageConfig}
+          />
+        </>
       )}
     </div>
   );

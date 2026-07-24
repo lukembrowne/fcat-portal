@@ -47,6 +47,10 @@ export function buildBiochocoPublicNav({
       label: "Páginas de fincas",
       href: "/biochoco/paginas-publicas",
     });
+    publicChildren.push({
+      label: "Fichas de especies",
+      href: "/biochoco/fichas-especies",
+    });
   }
   if (isSuperAdmin) {
     publicChildren.push({

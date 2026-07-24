@@ -593,6 +593,14 @@ export const species = sqliteTable("biochoco_species", {
   cameraSelectable: integer("camera_selectable", { mode: "boolean" })
     .notNull()
     .default(true),
+  // Public finca-page content (plain text, rendered on the landowner pages).
+  // Global per species, so editing once propagates to every finca page showing
+  // that species. Authored in /biochoco/fichas-especies. One free-text field
+  // covering the animal's role in the forest and, where relevant (dogs, cats,
+  // poultry, livestock), an optional management tip. Null when not yet written.
+  // (Supersedes the earlier split ecological_role/management_tip columns, which
+  // may linger unused in older dev DBs.)
+  publicContent: text("public_content"),
 });
 
 // ---------------------------------------------------------------------------

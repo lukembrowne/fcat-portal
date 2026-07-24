@@ -23,10 +23,11 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import {
   fetchSiteDetailByToken,
-  fetchSpeciesImagesForDeployments,
+  fetchSpeciesGalleryImages,
 } from "@/app/biochoco/resultados/actions";
 import { ChevronLeft, ChevronRight, ArrowLeft } from "lucide-react";
 import { GalleryClient } from "./gallery-client";
+import { SpeciesContentCard } from "../../species-content-card";
 
 interface PageProps {
   params: Promise<{ token: string; slug: string }>;
@@ -111,7 +112,7 @@ export default async function PublicSpeciesGalleryPage({
   }
 
   const page = parsePage(sp.page);
-  const result = await fetchSpeciesImagesForDeployments(
+  const result = await fetchSpeciesGalleryImages(
     data.deploymentIds,
     species.speciesName,
     page,
@@ -124,6 +125,15 @@ export default async function PublicSpeciesGalleryPage({
   const hasNext = safePage < totalPages;
 
   const display = species.spanishName ?? species.commonName ?? species.speciesName;
+
+  // Caption explaining a curated / sampled gallery so a shrunken photo count
+  // never looks like missing data.
+  const galleryCaption =
+    result.mode === "starred"
+      ? "Fotos destacadas seleccionadas por el equipo."
+      : result.mode === "capped"
+        ? `Mostrando una selección de ${result.totalCount} fotos de ${result.totalAvailable}.`
+        : null;
 
   return (
     <div className="space-y-6">
@@ -147,10 +157,17 @@ export default async function PublicSpeciesGalleryPage({
         <p className="text-sm text-muted-foreground">
           {species.detectionCount}{" "}
           {species.detectionCount === 1 ? "detección" : "detecciones"} ·{" "}
-          {result.totalCount}{" "}
-          {result.totalCount === 1 ? "imagen" : "imágenes"}
+          {result.totalAvailable}{" "}
+          {result.totalAvailable === 1 ? "imagen" : "imágenes"}
         </p>
       </header>
+
+      {/* Shared species context (role in the forest + optional management tip) */}
+      <SpeciesContentCard publicContent={species.publicContent} />
+
+      {galleryCaption && (
+        <p className="text-xs text-muted-foreground">{galleryCaption}</p>
+      )}
 
       {/* Image grid (client-enhanced with zoomable viewer) */}
       {result.images.length === 0 ? (

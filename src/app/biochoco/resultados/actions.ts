@@ -42,6 +42,11 @@ import {
   type PageConfig,
 } from "@/lib/landowner/page-config";
 import { PROJECT_CONTEXT_BLURB } from "@/lib/landowner/copy";
+import {
+  resolveSpeciesGallery,
+  type GalleryCandidate,
+  type GalleryMode,
+} from "@/lib/landowner/species-gallery";
 import type { HabitatAssessment } from "../habitat/types";
 import type {
   ResultadosData,
@@ -469,6 +474,7 @@ async function fetchSpeciesForDeployments(
       commonName: species.commonName,
       taxonomicType: species.type,
       iucnStatus: species.iucnStatus,
+      publicContent: species.publicContent,
       detectionCount: sql<number>`count(*)`,
       avgConfidence: sql<number>`round(avg(${identifications.confidence}), 3)`,
     })
@@ -490,26 +496,16 @@ async function fetchSpeciesForDeployments(
     )
     .orderBy(sql`count(*) DESC`);
 
-  // For each species, find the best photo (highest confidence verified detection)
+  // For each species, resolve its gallery set (star-first / auto-capped) once.
+  // The hero is the first resolved image; the full resolved id list drives the
+  // public showcase's one-click swipe lightbox. Same per-species query count as
+  // the old best-photo lookup, but now the policy lives in one place.
   const result: SiteSpecies[] = [];
   for (const row of rows) {
-    let photoImageId: number | null = null;
-    // Find highest-confidence verified detection for this species
-    const [photo] = await db
-      .select({ imageId: images.id })
-      .from(identifications)
-      .innerJoin(detections, eq(identifications.detectionId, detections.id))
-      .innerJoin(images, eq(detections.imageId, images.id))
-      .where(
-        and(
-          inArray(images.deploymentId, depIds),
-          sql`coalesce(${identifications.correctedSpecies}, ${identifications.species}) = ${row.speciesName}`,
-          inArray(identifications.verificationStatus, ["verified", "corrected"])
-        )
-      )
-      .orderBy(sql`${identifications.confidence} DESC`)
-      .limit(1);
-    if (photo) photoImageId = photo.imageId;
+    const candidates = await fetchSpeciesCandidates(depIds, row.speciesName);
+    const galleryImageIds = resolveSpeciesGallery(candidates).images.map(
+      (c) => c.id
+    );
 
     result.push({
       speciesName: row.speciesName,
@@ -517,9 +513,11 @@ async function fetchSpeciesForDeployments(
       commonName: row.commonName,
       taxonomicType: row.taxonomicType,
       iucnStatus: row.iucnStatus,
+      publicContent: row.publicContent,
       detectionCount: row.detectionCount,
       avgConfidence: row.avgConfidence,
-      photoImageId,
+      photoImageId: galleryImageIds[0] ?? null,
+      galleryImageIds,
     });
   }
 
@@ -1096,6 +1094,163 @@ export async function fetchSiteStarredPhotoOptions(
   return rows.map((r) => ({ imageId: r.imageId, label: r.filename }));
 }
 
+// ---------------------------------------------------------------------------
+// Per-species photo curation (builder) — star/unstar the photos that lead each
+// species' public gallery. Reuses biochoco_images.starred (the same flag the
+// featured-photos picker uses); the public gallery (fetchSpeciesGalleryImages)
+// shows starred photos first. Biochoco-editor gated + token-snapshot scoped.
+// ---------------------------------------------------------------------------
+
+/** A species at the site, with how many of its photos are currently starred. */
+export interface CurationSpecies {
+  speciesName: string;
+  label: string;
+  detectionCount: number;
+  starredCount: number;
+  previewImageId: number | null;
+}
+
+/** One photo of a species, with its current starred state, for the curator grid. */
+export interface CurationPhoto {
+  id: number;
+  filename: string;
+  starred: boolean;
+  confidence: number;
+}
+
+/** Species observed at the site + their starred-photo counts, for the curator list. */
+export async function fetchCurationSpecies(
+  siteId: string
+): Promise<CurationSpecies[]> {
+  await requirePermission("biochoco", "editor");
+
+  const depIds = await activeTokenDepIds(siteId);
+  if (depIds.length === 0) return [];
+
+  const speciesList = await fetchSpeciesForDeployments(depIds);
+
+  const starredRows = await db
+    .select({
+      name: sql<string>`coalesce(${identifications.correctedSpecies}, ${identifications.species})`,
+      count: sql<number>`count(distinct ${images.id})`,
+    })
+    .from(identifications)
+    .innerJoin(detections, eq(identifications.detectionId, detections.id))
+    .innerJoin(images, eq(detections.imageId, images.id))
+    .where(
+      and(
+        inArray(images.deploymentId, depIds),
+        eq(images.starred, true),
+        inArray(identifications.verificationStatus, ["verified", "corrected"])
+      )
+    )
+    .groupBy(
+      sql`coalesce(${identifications.correctedSpecies}, ${identifications.species})`
+    );
+
+  const starredMap = new Map(starredRows.map((r) => [r.name, Number(r.count)]));
+
+  return speciesList.map((s) => ({
+    speciesName: s.speciesName,
+    label: s.spanishName || s.commonName || s.speciesName,
+    detectionCount: s.detectionCount,
+    starredCount: starredMap.get(s.speciesName) ?? 0,
+    previewImageId: s.photoImageId,
+  }));
+}
+
+/** All photos of a species at the site (capped), for the curator grid. */
+export async function fetchSpeciesPhotosForCuration(
+  siteId: string,
+  speciesName: string
+): Promise<CurationPhoto[]> {
+  await requirePermission("biochoco", "editor");
+
+  const depIds = await activeTokenDepIds(siteId);
+  if (depIds.length === 0) return [];
+
+  const speciesMatch = sql`coalesce(${identifications.correctedSpecies}, ${identifications.species}) = ${speciesName}`;
+
+  const rows = await db
+    .select({
+      id: images.id,
+      filename: images.filename,
+      starred: images.starred,
+      confidence: sql<number>`max(${identifications.confidence})`,
+    })
+    .from(identifications)
+    .innerJoin(detections, eq(identifications.detectionId, detections.id))
+    .innerJoin(images, eq(detections.imageId, images.id))
+    .where(
+      and(
+        inArray(images.deploymentId, depIds),
+        inArray(identifications.verificationStatus, ["verified", "corrected"]),
+        speciesMatch
+      )
+    )
+    .groupBy(images.id, images.filename, images.starred)
+    .orderBy(sql`coalesce(${images.exifTimestamp}, ${images.fileModified}) DESC`)
+    .limit(500);
+
+  return rows.map((r) => ({
+    id: r.id,
+    filename: r.filename,
+    starred: !!r.starred,
+    confidence: r.confidence ?? 0,
+  }));
+}
+
+/**
+ * Star/unstar one photo from the finca-page builder. Biochoco-editor gated (a
+ * separate role from camera-trap, so this does NOT reuse toggleStarred). The
+ * image must belong to the site's active token snapshot — the same cross-site
+ * guard the image proxy enforces — so a builder can only curate their own
+ * site's photos.
+ */
+export async function toggleSpeciesPhotoStar(
+  siteId: string,
+  imageId: number
+): Promise<ActionResult<{ starred: boolean }>> {
+  const user = await requirePermission("biochoco", "editor");
+
+  try {
+    const depIds = await activeTokenDepIds(siteId);
+    if (depIds.length === 0) {
+      return { success: false, error: "No hay un enlace activo para este sitio" };
+    }
+
+    const [image] = await db
+      .select({
+        id: images.id,
+        deploymentId: images.deploymentId,
+        starred: images.starred,
+      })
+      .from(images)
+      .where(eq(images.id, imageId));
+
+    if (!image || !depIds.includes(image.deploymentId)) {
+      return { success: false, error: "Imagen no encontrada en este sitio" };
+    }
+
+    const newValue = !image.starred;
+    await db
+      .update(images)
+      .set({
+        starred: newValue,
+        starredBy: newValue ? user.email : null,
+        starredAt: newValue ? new Date() : null,
+      })
+      .where(eq(images.id, imageId));
+
+    return { success: true, data: { starred: newValue } };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Error al actualizar",
+    };
+  }
+}
+
 /**
  * Persist the page-builder config on a site's active share token. The incoming
  * config is re-validated for shape (parsePageConfig) and every media id is
@@ -1624,6 +1779,120 @@ export async function fetchSpeciesImagesForDeployments(
       confidence: r.confidence ?? 0,
     })),
     totalCount: Number(totalCount ?? 0),
+    page: safePage,
+    pageSize,
+  };
+}
+
+export interface SpeciesGalleryResult {
+  images: SpeciesImageRow[];
+  /** Images shown after curation/capping (total across all pages of the resolved set). */
+  totalCount: number;
+  /** Verified images available for the species BEFORE curation/capping (for context copy). */
+  totalAvailable: number;
+  /** How the shown set was chosen — see resolveSpeciesGallery. */
+  mode: GalleryMode;
+  page: number;
+  pageSize: number;
+}
+
+/**
+ * Resolve which of a species' photos to show on the public finca gallery, then
+ * paginate. Unlike fetchSpeciesImagesForDeployments (which returns every
+ * verified image), this applies the star-first / auto-cap policy in
+ * resolveSpeciesGallery so landowners see a curated, non-overwhelming set:
+ *   - starred photos win (the team's "destacadas");
+ *   - else all photos when there are few;
+ *   - else the highest-confidence sample when there are many.
+ * The decision runs in JS over the species' candidate images (bounded per
+ * species per site); pagination then slices the resolved set.
+ */
+/**
+ * Load every verified/corrected image of a species (within the deployments),
+ * newest-first, with the fields `resolveSpeciesGallery` needs to pick the shown
+ * set. Single source of truth for the candidate query — used by both the public
+ * per-species page and the showcase's per-species gallery-id resolution.
+ */
+async function fetchSpeciesCandidates(
+  depIds: number[],
+  speciesName: string
+): Promise<GalleryCandidate[]> {
+  if (depIds.length === 0) return [];
+
+  const speciesMatch = sql`coalesce(${identifications.correctedSpecies}, ${identifications.species}) = ${speciesName}`;
+
+  const rows = await db
+    .select({
+      id: images.id,
+      filename: images.filename,
+      exifTimestamp: images.exifTimestamp,
+      starred: images.starred,
+      starredAt: images.starredAt,
+      confidence: sql<number>`max(${identifications.confidence})`,
+    })
+    .from(identifications)
+    .innerJoin(detections, eq(identifications.detectionId, detections.id))
+    .innerJoin(images, eq(detections.imageId, images.id))
+    .where(
+      and(
+        inArray(images.deploymentId, depIds),
+        inArray(identifications.verificationStatus, ["verified", "corrected"]),
+        speciesMatch
+      )
+    )
+    .groupBy(
+      images.id,
+      images.filename,
+      images.exifTimestamp,
+      images.starred,
+      images.starredAt
+    )
+    .orderBy(sql`coalesce(${images.exifTimestamp}, ${images.fileModified}) DESC`);
+
+  return rows.map((r) => ({
+    id: r.id,
+    filename: r.filename,
+    exifTimestamp: r.exifTimestamp,
+    confidence: r.confidence ?? 0,
+    starred: !!r.starred,
+    starredAt: r.starredAt ? r.starredAt.getTime() : null,
+  }));
+}
+
+export async function fetchSpeciesGalleryImages(
+  depIds: number[],
+  speciesName: string,
+  page: number,
+  pageSize: number
+): Promise<SpeciesGalleryResult> {
+  if (depIds.length === 0 || pageSize <= 0) {
+    return {
+      images: [],
+      totalCount: 0,
+      totalAvailable: 0,
+      mode: "all",
+      page: Math.max(1, Math.floor(page)),
+      pageSize,
+    };
+  }
+
+  const candidates = await fetchSpeciesCandidates(depIds, speciesName);
+  const resolved = resolveSpeciesGallery(candidates);
+
+  const safePage = Math.max(1, Math.floor(page));
+  const offset = (safePage - 1) * pageSize;
+  const pageItems = resolved.images.slice(offset, offset + pageSize);
+
+  return {
+    images: pageItems.map((c) => ({
+      id: c.id,
+      filename: c.filename,
+      exifTimestamp: c.exifTimestamp,
+      confidence: c.confidence,
+    })),
+    totalCount: resolved.images.length,
+    totalAvailable: resolved.totalAvailable,
+    mode: resolved.mode,
     page: safePage,
     pageSize,
   };

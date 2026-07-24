@@ -5,7 +5,6 @@ import type {
   PublicSiteDetail,
   ResolvedContentBlock,
 } from "@/app/biochoco/resultados/actions";
-import type { SiteSpecies } from "@/app/biochoco/resultados/types";
 import { getHabitatName } from "@/app/biochoco/overview/types";
 import { SiteResultsContent } from "@/app/biochoco/resultados/[siteId]/site-results-content";
 import { formatSiteDateRange } from "@/app/biochoco/resultados/[siteId]/site-header-stats";
@@ -15,10 +14,7 @@ import { StoryStat } from "./story-stat";
 import { PageShare } from "./page-share";
 import { PhotoShareButton } from "@/components/photo-share-button";
 import { formatClipDuration } from "@/lib/landowner/format-audio";
-import { iucnChip } from "@/lib/landowner/iucn-chip";
 import {
-  IUCN_MEANINGS,
-  presentIucnStatuses,
   starredGallerySeed,
   landownerDisplayName,
   lightboxArrowState,
@@ -35,6 +31,7 @@ import {
   X,
   ChevronLeft,
   ChevronRight,
+  Download,
 } from "lucide-react";
 
 interface PublicSiteShellProps {
@@ -80,6 +77,12 @@ export function PublicSiteShell({
     },
     [starredImageIds],
   );
+  // Species showcase: open the swipe lightbox over that species' resolved
+  // gallery ids directly (one click), starting at the tapped image.
+  const openSpeciesGallery = useCallback((ids: number[], tappedId: number) => {
+    if (ids.length === 0) return;
+    setGallery({ ids, startIndex: Math.max(0, ids.indexOf(tappedId)) });
+  }, []);
 
   // projectContext is force-appended LAST by the resolver, but the public page
   // shows it directly under the video (U6). Pull it out of the config-ordered
@@ -253,9 +256,8 @@ export function PublicSiteShell({
         species={data.species}
         resolveImageUrl={resolveImageUrl}
         speciesHref={speciesHref}
+        onTapPhoto={openSpeciesGallery}
       />
-
-      <ConservationKey species={data.species} />
 
       <SiteResultsContent
         data={data}
@@ -282,52 +284,6 @@ export function PublicSiteShell({
         )}
       </div>
     </div>
-  );
-}
-
-/**
- * Plain-language key for the IUCN conservation-status chips shown on the species
- * cards (U8). Lists ONLY the statuses actually present among this site's
- * species; renders nothing when none are assessed (DD/unknown never appear).
- */
-function ConservationKey({ species }: { species: SiteSpecies[] }) {
-  const codes = presentIucnStatuses(species);
-  if (codes.length === 0) return null;
-
-  return (
-    <section className="space-y-3 rounded-2xl border bg-muted/30 p-5">
-      <div className="space-y-1">
-        <p className="inline-flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.22em] text-muted-foreground">
-          <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-          Estado de conservación
-        </p>
-        <p className="text-xs text-muted-foreground">
-          Qué significan las etiquetas de color en las fotos de arriba
-        </p>
-      </div>
-      <ul className="space-y-2">
-        {codes.map((code) => {
-          const chip = iucnChip(code);
-          if (!chip) return null;
-          return (
-            <li key={code} className="flex items-start gap-2.5 text-sm">
-              <span
-                aria-hidden
-                className="mt-1 inline-block h-3.5 w-3.5 flex-none rounded-full"
-                style={{ backgroundColor: chip.color }}
-              />
-              <span className="leading-snug">
-                <span className="font-semibold">{chip.label}</span>
-                {" — "}
-                <span className="text-muted-foreground">
-                  {IUCN_MEANINGS[code]}
-                </span>
-              </span>
-            </li>
-          );
-        })}
-      </ul>
-    </section>
   );
 }
 
@@ -471,12 +427,23 @@ function StarredGalleryLightbox({
                   loading="lazy"
                   draggable={false}
                 />
-                <PhotoShareButton
-                  imagePath={largeUrl}
-                  caption="Fauna registrada en mi finca — Monitoreo FCAT BioChoco"
-                  variant="overlay"
-                  className="absolute right-3 top-3 z-10"
-                />
+                <div className="absolute right-3 top-3 z-10 flex items-center gap-2">
+                  <a
+                    href={`${largeUrl}&download=1`}
+                    download={`FCAT-foto-${id}.jpg`}
+                    onClick={(e) => e.stopPropagation()}
+                    aria-label="Descargar foto"
+                    className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-2 text-xs font-semibold text-white backdrop-blur hover:bg-white/20"
+                  >
+                    <Download className="h-4 w-4" />
+                    <span className="hidden sm:inline">Descargar</span>
+                  </a>
+                  <PhotoShareButton
+                    imagePath={largeUrl}
+                    caption="Fauna registrada en mi finca — Monitoreo FCAT BioChoco"
+                    variant="overlay"
+                  />
+                </div>
               </div>
             );
           })}

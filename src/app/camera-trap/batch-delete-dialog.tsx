@@ -104,7 +104,7 @@ export function BatchDeleteDialog({
             )}
             {stats.hasUploadCounts && (
               <p className="text-amber-600 dark:text-amber-500 font-medium">
-                Los conteos de archivos subidos (BioChoco) también se perderán
+                Los conteos de archivos subidos (BioChocó) también se perderán
               </p>
             )}
           </div>

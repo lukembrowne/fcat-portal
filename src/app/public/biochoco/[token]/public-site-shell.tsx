@@ -143,7 +143,7 @@ export function PublicSiteShell({
                 className="h-9 w-auto flex-none rounded bg-white/90 p-1 shadow-sm"
               />
               <span className="text-base font-bold tracking-tight drop-shadow-md sm:text-lg">
-                BioChoco
+                BioChocó
               </span>
             </div>
           </div>
@@ -181,7 +181,7 @@ export function PublicSiteShell({
           <header className="space-y-3">
             {/* Text wordmark stands in for the removed chrome header when there
                 is no hero image to fold the logo into. */}
-            <span className="block text-lg font-semibold">BioChoco</span>
+            <span className="block text-lg font-semibold">BioChocó</span>
             <p className="inline-flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.22em] text-muted-foreground">
               <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
               Esto vive en su tierra
@@ -440,7 +440,7 @@ function StarredGalleryLightbox({
                   </a>
                   <PhotoShareButton
                     imagePath={largeUrl}
-                    caption="Fauna registrada en mi finca — Monitoreo FCAT BioChoco"
+                    caption="Fauna registrada en mi finca — Monitoreo FCAT BioChocó"
                     variant="overlay"
                   />
                 </div>
@@ -526,7 +526,7 @@ function ContentBlock({
                 </button>
                 <PhotoShareButton
                   imagePath={resolveImageUrl(id, "large")}
-                  caption="Fauna registrada en mi finca — Monitoreo FCAT BioChoco"
+                  caption="Fauna registrada en mi finca — Monitoreo FCAT BioChocó"
                   variant="overlay"
                   className="absolute right-2 top-2 z-10"
                 />
@@ -600,7 +600,7 @@ function ContentBlock({
           <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-emerald-500/25 blur-2xl" />
           <div className="relative space-y-2">
             <h3 className="text-xl font-extrabold tracking-tight">
-              Sobre el proyecto BioChoco
+              Sobre el proyecto BioChocó
             </h3>
             <p className="text-[14.5px] leading-relaxed text-emerald-100/80">
               {block.blurb}

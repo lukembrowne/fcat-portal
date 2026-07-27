@@ -89,8 +89,8 @@ const CSS = `
 .bc-root .rule{height:3px;width:52px;background:var(--forest);border-radius:2px;margin-bottom:22px}
 .bc-root .paper{background:var(--paper);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
 
-/* actions (portal-only wrapper) — floated over the hero, top-right */
-.bc-root .hero-actions{position:absolute;top:16px;right:16px;z-index:20;display:flex;gap:8px;align-items:center}
+/* actions (portal-only wrapper) — inline in the hero, just above the meta line */
+.bc-root .hero-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:26px}
 .bc-root .abtn{font-family:var(--sans);font-size:13px;font-weight:600;color:var(--forest-deep);background:rgba(255,253,247,.92);backdrop-filter:blur(6px);border:1px solid rgba(228,220,201,.9);border-radius:999px;padding:6px 13px;cursor:pointer;text-decoration:none;box-shadow:0 1px 6px rgba(15,28,14,.28)}
 .bc-root .abtn:hover{background:#fffdf7;text-decoration:none}
 
@@ -102,7 +102,7 @@ const CSS = `
 .bc-root .hero .eyebrow{color:#cfe0bd;margin-bottom:18px}
 .bc-root .hero h1{font-size:clamp(46px,9vw,104px);letter-spacing:-.01em;margin:0 0 8px;color:#fff;text-shadow:0 2px 24px rgba(10,24,8,.5)}
 .bc-root .hero__sub{font-family:var(--serif);font-size:clamp(19px,2.6vw,27px);font-weight:400;max-width:32ch;line-height:1.3;color:#eef3e6;text-shadow:0 1px 14px rgba(10,24,8,.5)}
-.bc-root .hero__meta{margin-top:26px;display:flex;flex-wrap:wrap;gap:10px 22px;font-size:14px;color:#d7e3c8;align-items:center}
+.bc-root .hero__meta{margin-top:12px;display:flex;flex-wrap:wrap;gap:10px 22px;font-size:14px;color:#d7e3c8;align-items:center}
 .bc-root .chip{display:inline-flex;align-items:center;gap:8px;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.28);padding:5px 13px;border-radius:999px;font-size:13px}
 .bc-root .chip .dot{width:7px;height:7px;border-radius:50%;background:var(--canopy)}
 
@@ -112,8 +112,6 @@ const CSS = `
 .bc-root .obj .num{font-family:var(--serif);font-size:15px;font-weight:600;color:var(--forest);letter-spacing:.02em}
 .bc-root .obj h3{font-size:19px;margin:8px 0 6px}
 .bc-root .obj p{margin:0;color:var(--ink-soft);font-size:15px;line-height:1.55}
-.bc-root .people{margin-top:26px;background:var(--sage);border-radius:14px;padding:22px 24px;font-size:16px;line-height:1.6}
-.bc-root .people .ph{font-family:var(--serif);font-size:17px;font-weight:600;color:var(--forest-deep);margin-bottom:8px}
 .bc-root .goals{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:22px}
 .bc-root .goal{background:var(--forest-deep);color:#eef3e6;border-radius:12px;padding:18px 20px}
 .bc-root .goal .t{font-family:var(--serif);font-size:19px;color:#fff;font-weight:600;line-height:1.18}
@@ -132,6 +130,7 @@ const CSS = `
 .bc-root .hab-head h3{font-family:var(--serif);font-size:24px}
 .bc-root .hab-head p{color:var(--ink-soft);font-size:15.5px;margin:8px 0 0;max-width:60ch}
 .bc-root .hab-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:22px}
+.bc-root .field-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:22px}
 .bc-root .hc{background:var(--paper);border:1px solid var(--line);border-radius:13px;overflow:hidden;box-shadow:var(--shadow)}
 .bc-root .hc .ph{aspect-ratio:3/2;width:100%;object-fit:cover;background:var(--sage)}
 .bc-root .hc .bar{height:4px}
@@ -176,7 +175,6 @@ const CSS = `
 .bc-root .bar .fill{display:block;height:100%;border-radius:5px;background:linear-gradient(90deg,var(--forest),var(--canopy))}
 .bc-root .bar.audio .fill{background:linear-gradient(90deg,#3a6ea5,#69a7c9)}
 .bc-root .bar.audio .ct{color:#2f5f8f}
-.bc-root .callout{margin-top:22px;background:var(--sage);border-left:3px solid var(--forest);border-radius:0 10px 10px 0;padding:14px 18px;font-size:14px;color:var(--ink);line-height:1.55}
 
 /* bonus camera-trap media */
 .bc-root .audio-list{list-style:none;padding:0;margin:22px 0 0;display:grid;grid-template-columns:1fr 1fr;gap:22px}
@@ -202,9 +200,14 @@ const CSS = `
 .bc-root .browser .bdots i:nth-child(1){background:#e0655b}.bc-root .browser .bdots i:nth-child(2){background:#e3b341}.bc-root .browser .bdots i:nth-child(3){background:#57a45b}
 .bc-root .browser .baddr{flex:1;background:#fffdf7;border:1px solid var(--line);border-radius:7px;padding:5px 13px;font-size:12.5px;color:var(--ink-soft);max-width:440px}
 .bc-root .browser img{width:100%;display:block}
-.bc-root .shot .cap{padding:14px 4px 0}
+.bc-root .shot .cap{padding:0 4px 14px}
 .bc-root .shot .cap b{font-family:var(--serif);font-size:17px;font-weight:600;display:block;margin-bottom:3px}
 .bc-root .shot .cap span{color:var(--ink-soft);font-size:14px;line-height:1.5}
+.bc-root .also{margin-top:44px;padding-top:30px;border-top:1px solid var(--line)}
+.bc-root .also-t{font-family:var(--serif);font-size:15px;font-weight:600;letter-spacing:.02em;color:var(--forest);text-transform:uppercase;margin-bottom:16px}
+.bc-root .also ul{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:1fr 1fr;gap:12px 30px}
+.bc-root .also li{position:relative;padding-left:22px;color:var(--ink-soft);font-size:14.5px;line-height:1.5}
+.bc-root .also li::before{content:"";position:absolute;left:2px;top:8px;width:7px;height:7px;border-radius:50%;background:var(--canopy)}
 
 /* collaborate */
 .bc-root .list{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:16px}
@@ -213,7 +216,6 @@ const CSS = `
 .bc-root .list li::before{content:"";position:absolute;left:0;top:9px;width:9px;height:9px;border-radius:50%;background:var(--canopy);box-shadow:0 0 0 3px var(--sage)}
 .bc-root .list li b{display:block;font-family:var(--serif);font-size:16.5px;font-weight:600;color:var(--ink);margin-bottom:1px}
 .bc-root .list li span{color:var(--ink-soft)}
-.bc-root .net{margin:28px 0 0;color:var(--ink-soft);font-size:15px;line-height:1.6;max-width:82ch}
 .bc-root .cta{margin-top:46px;background:linear-gradient(135deg,var(--forest-deep),var(--forest));color:#eef3e6;border-radius:18px;padding:38px 40px;box-shadow:var(--shadow)}
 .bc-root .cta h3{color:#fff;font-size:26px;margin-bottom:10px}
 .bc-root .cta p{margin:0 0 22px;color:#d3e2c5;max-width:58ch}
@@ -232,10 +234,11 @@ const CSS = `
   .bc-root .obj-grid,.bc-root .cards,.bc-root .two,.bc-root .opp-list,.bc-root .gal{grid-template-columns:1fr;gap:18px}
   .bc-root .stat{flex-basis:calc(50% - 1px)}
   .bc-root .hab-grid{grid-template-columns:repeat(2,1fr)}
-  .bc-root .goals,.bc-root .contacts{grid-template-columns:1fr}
+  .bc-root .field-grid{grid-template-columns:1fr}
+  .bc-root .goals,.bc-root .contacts,.bc-root .also ul{grid-template-columns:1fr}
 }
 @media print{
-  .bc-root .actions{display:none!important}
+  .bc-root .hero-actions{display:none!important}
   .bc-root{margin:0;width:auto;left:auto;right:auto}
   .bc-root .hero{min-height:0;height:330px}
   .bc-root section{padding:20px 0;break-inside:avoid}
@@ -301,9 +304,10 @@ export function ReportShell({ snapshot }: { snapshot: ReportSnapshot }) {
   const byType = s.cameraSpeciesByType ?? {};
   const tb = (s.audio.bytes / 1e12).toFixed(2);
   const inField = Math.max(0, s.deploymentCount - s.retrievedCount);
-  const audCandidates = Math.floor((s.audioSpeciesCount ?? 0) / 10) * 10;
 
-  // 7 stat tiles: value + interpolated sub, in Desktop order.
+  // 8 stat tiles: value + interpolated sub. Index-coupled to c.stats.tiles
+  // (content.ts) and to the same arrays in download/route.ts — keep all three
+  // in the same order.
   const statVars = {
     cam: rs.cam,
     audio: rs.audio,
@@ -313,14 +317,16 @@ export function ReportShell({ snapshot }: { snapshot: ReportSnapshot }) {
     birds: byType.bird ?? 0,
     tb,
     loggers: s.ibutton.processed,
+    conf: s.audioThreshold,
   };
   const statValues = [
     s.retrievedCount,
     s.cameraTrapDays,
     s.uploadCounts.camPhotos,
-    s.identificationsReviewed,
+    s.totalDetections ?? 0,
     s.cameraRealSpecies,
     s.audio.files,
+    s.audioDetections08 ?? 0,
     s.ibutton.readings,
   ];
 
@@ -336,21 +342,22 @@ export function ReportShell({ snapshot }: { snapshot: ReportSnapshot }) {
         <div className="hero__img" style={{ backgroundImage: "url(/biochoco-overview/hero.jpg)" }} />
         <div className="hero__scrim" />
 
-        {/* Controls float over the hero (portal-only wrapper) */}
-        <div className="hero-actions">
-          <a className="abtn" href={`/public/biochoco-overview/download?lang=${lang}`}>
-            {c.ui.download}
-          </a>
-          <button type="button" className="abtn" onClick={() => window.print()}>
-            {c.ui.print}
-          </button>
-          <LanguageToggle lang={lang} onToggle={setLang} />
-        </div>
-
         <div className="hero__inner">
           <p className="eyebrow">{c.hero.eyebrow}</p>
           <h1>{c.hero.title}</h1>
           <p className="hero__sub">{c.hero.sub}</p>
+
+          {/* Controls (portal-only wrapper) — sit just above the meta line */}
+          <div className="hero-actions">
+            <a className="abtn" href={`/public/biochoco-overview/download?lang=${lang}`}>
+              {c.ui.download}
+            </a>
+            <button type="button" className="abtn" onClick={() => window.print()}>
+              {c.ui.print}
+            </button>
+            <LanguageToggle lang={lang} onToggle={setLang} />
+          </div>
+
           <div className="hero__meta">
             <span className="chip">
               <span className="dot" /> {tpl(c.hero.liveDate, { date: publishedDate })}
@@ -366,7 +373,9 @@ export function ReportShell({ snapshot }: { snapshot: ReportSnapshot }) {
           <div className="section-head">
             <div className="rule" />
             <h2>{c.learn.heading}</h2>
-            <p>{c.learn.intro}</p>
+            {c.learn.intro.map((para, i) => (
+              <p key={i}>{para}</p>
+            ))}
           </div>
           <div className="obj-grid">
             {c.learn.objectives.map((o) => (
@@ -376,10 +385,6 @@ export function ReportShell({ snapshot }: { snapshot: ReportSnapshot }) {
                 <p>{o.body}</p>
               </div>
             ))}
-          </div>
-          <div className="people">
-            <div className="ph">{c.learn.peopleHeading}</div>
-            {c.learn.people}
           </div>
         </div>
       </section>
@@ -532,7 +537,6 @@ export function ReportShell({ snapshot }: { snapshot: ReportSnapshot }) {
                   };
                 })}
               />
-              <p className="callout">{tpl(c.species.audNote, { n: fmt(audCandidates) })}</p>
             </div>
           </div>
         </div>
@@ -547,7 +551,7 @@ export function ReportShell({ snapshot }: { snapshot: ReportSnapshot }) {
               <h2>{c.bonus.heading}</h2>
             </div>
             {snapshot.images.length > 0 && (
-              <div className="hab-grid">
+              <div className="field-grid">
                 {snapshot.images.map((img) => (
                   <figure key={img.imageId} className="hc" style={{ margin: 0 }}>
                     {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -575,6 +579,7 @@ export function ReportShell({ snapshot }: { snapshot: ReportSnapshot }) {
                     <SpectrogramClip
                       src={`/api/public/report-audio/${clip.audioId}`}
                       label={clip.speciesLabel}
+                      pngSrc={clip.spectrogramPng}
                     />
                   </li>
                 ))}
@@ -595,6 +600,10 @@ export function ReportShell({ snapshot }: { snapshot: ReportSnapshot }) {
           <div className="gal">
             {c.platform.gallery.map((shot) => (
               <figure className="shot" key={shot.title}>
+                <figcaption className="cap">
+                  <b>{shot.title}</b>
+                  <span>{shot.caption}</span>
+                </figcaption>
                 <div className="browser">
                   <div className="bchrome">
                     <div className="bdots">
@@ -607,12 +616,16 @@ export function ReportShell({ snapshot }: { snapshot: ReportSnapshot }) {
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={`/biochoco-overview/gallery/${shot.file}`} alt={shot.title} />
                 </div>
-                <figcaption className="cap">
-                  <b>{shot.title}</b>
-                  <span>{shot.caption}</span>
-                </figcaption>
               </figure>
             ))}
+          </div>
+          <div className="also">
+            <div className="also-t">{c.platform.bulletsTitle}</div>
+            <ul>
+              {c.platform.bullets.map((b) => (
+                <li key={b}>{b}</li>
+              ))}
+            </ul>
           </div>
         </div>
       </section>
@@ -638,16 +651,17 @@ export function ReportShell({ snapshot }: { snapshot: ReportSnapshot }) {
               ))}
             </ul>
           </div>
-          <p className="net">{c.collaborate.network}</p>
           <div className="cta">
             <h3>{c.collaborate.ctaHeading}</h3>
             <p>{c.collaborate.ctaBody}</p>
             <div className="contacts">
               {c.contacts.map((contact) => (
-                <div key={contact.email} className="contact">
+                <div key={contact.name} className="contact">
                   <div className="nm">{contact.name}</div>
                   <div className="role">{contact.role}</div>
-                  <a href={`mailto:${contact.email}`}>{contact.email}</a>
+                  {contact.email && (
+                    <a href={`mailto:${contact.email}`}>{contact.email}</a>
+                  )}
                 </div>
               ))}
             </div>

@@ -645,7 +645,7 @@ function BlockEditor({
     case "projectContext":
       return (
         <p className="text-xs text-muted-foreground">
-          Muestra una tarjeta &ldquo;Sobre el proyecto BioChoco&rdquo; con un
+          Muestra una tarjeta &ldquo;Sobre el proyecto BioChocó&rdquo; con un
           enlace a la página del proyecto.
         </p>
       );

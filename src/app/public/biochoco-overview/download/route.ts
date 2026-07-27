@@ -152,8 +152,6 @@ p{color:var(--ink-soft);max-width:64ch}
 .card .model{font-size:12px;color:var(--gold);font-weight:600;margin:2px 0 8px}
 .card h3{font-size:18px;margin:6px 0 4px}
 .card p{font-size:14px;margin:0}
-.people{background:var(--sage);border-radius:12px;padding:18px 20px;margin-top:18px}
-.people .ph{display:block;font-family:var(--serif);font-size:16px;font-weight:600;color:var(--forest-deep);margin-bottom:8px}
 .stats{background:var(--forest-deep);color:#fff;border:0}
 .stats .eyebrow{color:#a9c891}.stats h2{color:#fff}.stats p{color:#cbdabc}
 .stat-grid{display:flex;flex-wrap:wrap;gap:1px;background:rgba(255,255,255,.12);border-radius:12px;overflow:hidden}
@@ -172,7 +170,6 @@ p{color:var(--ink-soft);max-width:64ch}
 .bars li{display:flex;justify-content:space-between;gap:8px;font-size:14px;padding:3px 0;border-bottom:1px solid var(--line)}
 .bars em{color:var(--ink-soft)}
 .bars span{font-variant-numeric:tabular-nums;font-weight:600;color:var(--forest-deep)}
-.callout{background:var(--sage);border-left:3px solid var(--forest);padding:12px 16px;border-radius:0 8px 8px 0;font-size:13px;margin-top:16px}
 .mapnote{background:var(--paper);border:1px dashed var(--line);border-radius:12px;padding:28px;text-align:center;color:var(--ink-soft);font-size:14px}
 figure{margin:0}
 .shot{background:#fff;border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-bottom:24px}
@@ -209,7 +206,6 @@ function buildHtml(
   const span = spanLabel(s.samplingSpan.start, s.samplingSpan.end, lang);
   const tb = (s.audio.bytes / 1e12).toFixed(2);
   const inField = Math.max(0, s.deploymentCount - s.retrievedCount);
-  const audCandidates = Math.floor((s.audioSpeciesCount ?? 0) / 10) * 10;
   const publishedDate = new Date(snapshot.generatedAt).toLocaleDateString(
     lang === "es" ? "es-EC" : "en-US",
     { year: "numeric", month: "long", day: "numeric" },
@@ -224,14 +220,18 @@ function buildHtml(
     birds: byType.bird ?? 0,
     tb,
     loggers: s.ibutton.processed,
+    conf: s.audioThreshold,
   };
+  // Index-coupled to c.stats.tiles (content.ts) and to report-shell.tsx —
+  // keep all three arrays in the same order.
   const statValues = [
     s.retrievedCount,
     s.cameraTrapDays,
     s.uploadCounts.camPhotos,
-    s.identificationsReviewed,
+    s.totalDetections ?? 0,
     s.cameraRealSpecies,
     s.audio.files,
+    s.audioDetections08 ?? 0,
     s.ibutton.readings,
   ];
   const statTiles = c.stats.tiles
@@ -271,7 +271,7 @@ function buildHtml(
     .map((shot, i) => {
       const uri = assets.gallery[i];
       const imgTag = uri ? `<img src="${uri}" alt="${esc(shot.title)}"/>` : "";
-      return `<figure class="shot"><div class="addr">${esc(shot.addr)}</div>${imgTag}<figcaption class="cap"><b>${esc(shot.title)}</b><br/><span>${esc(shot.caption)}</span></figcaption></figure>`;
+      return `<figure class="shot"><figcaption class="cap"><b>${esc(shot.title)}</b><br/><span>${esc(shot.caption)}</span></figcaption><div class="addr">${esc(shot.addr)}</div>${imgTag}</figure>`;
     })
     .join("");
 
@@ -282,7 +282,9 @@ function buildHtml(
   const contacts = c.contacts
     .map(
       (ct) =>
-        `<div class="contact"><div class="cn">${esc(ct.name)}</div><div class="cr">${esc(ct.role)}</div><a href="mailto:${esc(ct.email)}">${esc(ct.email)}</a></div>`,
+        `<div class="contact"><div class="cn">${esc(ct.name)}</div><div class="cr">${esc(ct.role)}</div>${
+          ct.email ? `<a href="mailto:${esc(ct.email)}">${esc(ct.email)}</a>` : ""
+        }</div>`,
     )
     .join("");
 
@@ -330,9 +332,8 @@ function buildHtml(
 
   <section><div class="wrap">
     <div class="rule"></div><h2>${esc(c.learn.heading)}</h2>
-    <p>${esc(c.learn.intro)}</p>
+    ${c.learn.intro.map((p) => `<p>${esc(p)}</p>`).join("")}
     <div class="grid2" style="margin-top:18px">${objectives}</div>
-    <div class="people"><b class="ph">${esc(c.learn.peopleHeading)}</b>${esc(c.learn.people)}</div>
   </div></section>
 
   <section><div class="wrap">
@@ -372,7 +373,7 @@ function buildHtml(
     <p>${esc(c.species.intro)}</p>
     <div class="two" style="margin-top:18px">
       <div><h3>${esc(c.species.onCamera)}</h3><p style="font-size:13px">${esc(tpl(c.species.camCap, { n: fmt(s.cameraRealSpecies) }))}</p><ul class="bars">${cameraSpecies}</ul></div>
-      <div><h3>${esc(c.species.bySound)}</h3><p style="font-size:13px">${esc(tpl(c.species.audCap, { n: fmt(s.audio.files) }))}</p><ul class="bars">${audioSpecies}</ul><p class="callout">${esc(tpl(c.species.audNote, { n: fmt(audCandidates) }))}</p></div>
+      <div><h3>${esc(c.species.bySound)}</h3><p style="font-size:13px">${esc(tpl(c.species.audCap, { n: fmt(s.audio.files) }))}</p><ul class="bars">${audioSpecies}</ul></div>
     </div>
   </div></section>
 
@@ -390,7 +391,6 @@ function buildHtml(
     <div style="margin-top:18px">
       <b style="font-family:var(--serif)">${esc(c.collaborate.oppListTitle)}</b><ul class="list">${oppList}</ul>
     </div>
-    <p style="margin-top:20px">${esc(c.collaborate.network)}</p>
     <div class="cta" style="margin-top:24px">
       <h3>${esc(c.collaborate.ctaHeading)}</h3>
       <p>${esc(c.collaborate.ctaBody)}</p>

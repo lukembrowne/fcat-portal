@@ -8,9 +8,9 @@ import sharp from "sharp";
  * cache key in the site-images route, so a new version invalidates cached
  * watermarked JPEGs without a manual purge.
  */
-export const WATERMARK_VERSION = 1;
+export const WATERMARK_VERSION = 2;
 
-const WATERMARK_TEXT = "FCAT · BioChoco";
+const WATERMARK_TEXT = "FCAT · BioChocó";
 
 // A rounded translucent plate keeps the text legible on light or dark photos.
 // 16px transparent margin on the right / 12px on the bottom becomes the inset

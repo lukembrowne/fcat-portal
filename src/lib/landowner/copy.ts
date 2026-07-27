@@ -37,7 +37,7 @@ export function landownerDisplayName(siteName: string): string {
  * The single Spanish share message reused for both `navigator.share({ text })`
  * and the wa.me deep link. The page URL is appended after it.
  */
-export const PAGE_SHARE_MESSAGE = "Mira lo que vive en su tierra 🌿 — BioChoco";
+export const PAGE_SHARE_MESSAGE = "Mira lo que vive en su tierra 🌿 — BioChocó";
 
 /**
  * Build a WhatsApp deep link (`wa.me`) that pre-fills the share message plus the

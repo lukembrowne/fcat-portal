@@ -120,7 +120,7 @@ describe("presentIucnStatuses (U8)", () => {
 
 describe("buildWhatsAppShareUrl / PAGE_SHARE_MESSAGE (U12)", () => {
   it("uses the approved default share message", () => {
-    expect(PAGE_SHARE_MESSAGE).toBe("Mira lo que vive en su tierra 🌿 — BioChoco");
+    expect(PAGE_SHARE_MESSAGE).toBe("Mira lo que vive en su tierra 🌿 — BioChocó");
   });
 
   it("encodes the message + page URL into a wa.me link", () => {

@@ -214,7 +214,7 @@ export default async function AdminSharedDrivesPage({
           <p>
             Las carpetas de instalaciones nuevas se crean manualmente desde{" "}
             <a href="/biochoco/data" className="underline hover:text-foreground">
-              BioChoco → Datos
+              BioChocó → Datos
             </a>{" "}
             («Crear carpeta»); solo en ese momento se enrutan a un drive. Guía
             completa: <code>docs/operations/shared-drive-provisioning-runbook.md</code>.

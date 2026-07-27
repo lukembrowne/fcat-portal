@@ -714,7 +714,7 @@ async function resolveSiteSnapshot(siteId: string): Promise<{
 }> {
   const ctProjectId = await getBiochocoProjectId();
   if (!ctProjectId) {
-    return { ok: false, error: "Proyecto BioChoco no encontrado" };
+    return { ok: false, error: "Proyecto BioChocó no encontrado" };
   }
 
   const [rawSites, allDeps] = await Promise.all([

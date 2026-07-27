@@ -17,7 +17,7 @@ export default function PublicLayout({
             height={40}
             className="rounded"
           />
-          <span className="text-lg font-semibold">BioChoco</span>
+          <span className="text-lg font-semibold">BioChocó</span>
         </div>
       </header>
 

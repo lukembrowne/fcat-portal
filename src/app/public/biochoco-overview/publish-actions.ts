@@ -41,7 +41,7 @@ export async function publishBiochocoOverview(): Promise<ActionResult<PublishRes
       source: "biochoco-overview",
       eventType: "public_report_published",
       severity: "success",
-      summary: `Página pública BioChoco publicada (${snapshot.images.length} fotos, ${snapshot.audio.length} audios)`,
+      summary: `Página pública BioChocó publicada (${snapshot.images.length} fotos, ${snapshot.audio.length} audios)`,
       actorEmail: user.email,
       details: {
         deployments: snapshot.stats.retrievedCount,

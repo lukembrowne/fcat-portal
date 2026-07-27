@@ -308,7 +308,7 @@ export function buildEmailHtml(
 <html>
 <head><meta charset="utf-8"></head>
 <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1f2937;max-width:800px;margin:0 auto;padding:20px">
-  <h2 style="margin-bottom:4px">BioChoco Datos — Resumen nocturno</h2>
+  <h2 style="margin-bottom:4px">BioChocó Datos — Resumen nocturno</h2>
   <p style="color:#6b7280;margin-top:0">${date} · <span style="color:${errors.length > 0 ? "#dc2626" : "#16a34a"};font-weight:600">${statusLine}</span></p>
 
   ${buildDashboard(delta, audioReport, activity)}

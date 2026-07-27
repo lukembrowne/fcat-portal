@@ -8,9 +8,9 @@ export const dynamic = "force-dynamic";
 const SOURCE_LABELS: Record<(typeof EVENT_SOURCES)[number], string> = {
   admin: "Administración",
   audio: "Audio",
-  "biochoco-overview": "BioChoco · Cronograma",
-  "biochoco-tools": "BioChoco · Herramientas",
-  "biochoco-resultados": "BioChoco · Resultados",
+  "biochoco-overview": "BioChocó · Cronograma",
+  "biochoco-tools": "BioChocó · Herramientas",
+  "biochoco-resultados": "BioChocó · Resultados",
   "camera-trap": "Cámaras Trampa",
   climate: "Clima",
   cron: "Tareas programadas",

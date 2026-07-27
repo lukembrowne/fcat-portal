@@ -15,7 +15,7 @@ export default async function AdminBiochocoOverviewPage() {
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       <div>
-        <h1 className="mb-2 text-3xl font-bold">Página pública BioChoco</h1>
+        <h1 className="mb-2 text-3xl font-bold">Página pública BioChocó</h1>
         <p className="text-muted-foreground">
           Regenera la página pública de divulgación con las estadísticas más
           recientes y la selección curada de fotos y audios. Solo

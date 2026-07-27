@@ -636,7 +636,7 @@ async function sendReport(
     const { error } = await resend.emails.send({
       from: fromEmail,
       to,
-      subject: `BioChoco Datos — Resumen nocturno ${date}`,
+      subject: `BioChocó Datos — Resumen nocturno ${date}`,
       html,
     });
 

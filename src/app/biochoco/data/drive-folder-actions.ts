@@ -244,7 +244,7 @@ export async function createSingleDriveFolder(
         return {
           deploymentId,
           success: false,
-          error: "El proyecto BioChoco no existe en la base de datos.",
+          error: "El proyecto BioChocó no existe en la base de datos.",
         };
       }
       const sel = selectAndReserveSlot(bioChocoProject.id);
@@ -293,7 +293,7 @@ export async function createSingleDriveFolder(
         return {
           deploymentId,
           success: false,
-          error: "La carpeta de Drive del proyecto BioChoco no está configurada.",
+          error: "La carpeta de Drive del proyecto BioChocó no está configurada.",
         };
       }
       rootFolderId = legacyRoot;
@@ -459,7 +459,7 @@ export async function recreateDriveFolder(
       return {
         deploymentId,
         success: false,
-        error: "La carpeta de Drive del proyecto BioChoco no está configurada.",
+        error: "La carpeta de Drive del proyecto BioChocó no está configurada.",
       };
     }
 

@@ -22,10 +22,10 @@ test.describe("public overview download", () => {
     const body = await res.text();
     // Self-contained: images are inlined as data URIs, not remote src.
     expect(body).not.toMatch(/<img[^>]+src="https?:\/\//i);
-    // Faithful copy (Spanish): hero title + a couple of ported section headings.
-    expect(body).toContain("BioChoco");
-    expect(body).toContain("Quién está apareciendo");
-    expect(body).toContain("Una plataforma abierta para toda la red");
+    // Faithful copy (Spanish): hero title + a couple of section headings.
+    expect(body).toContain("BioChocó");
+    expect(body).toContain("Detecciones de especies");
+    expect(body).toContain("Una plataforma integrada de extremo a extremo");
   });
 
   test("english export carries the Desktop's verbatim English headings", async ({ request }) => {
@@ -35,8 +35,8 @@ test.describe("public overview download", () => {
       return;
     }
     const body = await res.text();
-    expect(body).toContain("Who is showing up");
-    expect(body).toContain("One open platform for the whole network");
+    expect(body).toContain("Species detections");
+    expect(body).toContain("An integrated end-to-end platform");
     expect(body).toContain("Where collaborators come in");
   });
 });

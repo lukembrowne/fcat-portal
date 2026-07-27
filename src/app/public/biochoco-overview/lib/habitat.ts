@@ -87,8 +87,8 @@ export const HABITAT: Record<HabitatKey, HabitatMeta> = {
     color: "#66BB6A",
     name: { en: "Reforestation", es: "Reforestación" },
     description: {
-      en: "Active restoration plantings",
-      es: "Plantaciones activas de restauración",
+      en: "Active restoration plantings as part of the Choconexion project",
+      es: "Plantaciones activas de restauración como parte del proyecto Choconexión",
     },
   },
   pasture: {

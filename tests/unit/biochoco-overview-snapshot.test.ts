@@ -3,10 +3,12 @@ import {
   exactCoord,
   isRealSpecies,
   siteCode,
+  stripSpectrograms,
   summarizeCameraSpecies,
   type EffectiveSpeciesRow,
   type SpeciesMeta,
 } from "@/app/public/biochoco-overview/lib/snapshot-transforms";
+import type { ReportSnapshot } from "@/app/public/biochoco-overview/lib/snapshot-types";
 
 describe("siteCode (privacy: landowner names never leak)", () => {
   it("strips the landowner suffix to the site code", () => {
@@ -96,5 +98,66 @@ describe("summarizeCameraSpecies", () => {
     const out = summarizeCameraSpecies(effRows, meta, 1);
     expect(out.cameraTopSpecies).toHaveLength(1);
     expect(out.cameraTopSpecies[0].sci).toBe("Panthera onca");
+  });
+});
+
+describe("stripSpectrograms (page payload never carries inlined images)", () => {
+  const snapshot = (audio: ReportSnapshot["audio"]): ReportSnapshot =>
+    ({
+      slug: "biochoco-overview",
+      generatedAt: "2026-07-27T00:00:00.000Z",
+      generatedBy: null,
+      stats: {} as ReportSnapshot["stats"],
+      images: [],
+      audio,
+    }) as ReportSnapshot;
+
+  it("replaces each data URI with a boolean flag", () => {
+    const out = stripSpectrograms(
+      snapshot([
+        {
+          audioId: 1,
+          speciesLabel: "Ramphastos brevis",
+          caption: { en: "a", es: "a" },
+          spectrogramPng: "data:image/webp;base64,AAAA",
+        },
+      ]),
+    );
+
+    expect(out.audio[0].spectrogramPng).toBeUndefined();
+    expect(out.audio[0].hasSpectrogram).toBe(true);
+    // The guard that matters: no base64 survives anywhere in the serialized
+    // payload React ships to the browser.
+    expect(JSON.stringify(out)).not.toContain("base64");
+  });
+
+  it("flags clips with no pre-rendered image so the page falls back to client FFT", () => {
+    const out = stripSpectrograms(
+      snapshot([
+        { audioId: 2, speciesLabel: "Ortalis erythroptera", caption: { en: "b", es: "b" } },
+      ]),
+    );
+
+    expect(out.audio[0].hasSpectrogram).toBe(false);
+  });
+
+  it("leaves the rest of the snapshot untouched", () => {
+    const input = snapshot([
+      {
+        audioId: 3,
+        speciesLabel: "Pulsatrix perspicillata",
+        caption: { en: "c", es: "c" },
+        spectrogramPng: "data:image/webp;base64,BBBB",
+      },
+    ]);
+    const out = stripSpectrograms(input);
+
+    expect(out.slug).toBe(input.slug);
+    expect(out.generatedAt).toBe(input.generatedAt);
+    expect(out.audio[0].audioId).toBe(3);
+    expect(out.audio[0].speciesLabel).toBe("Pulsatrix perspicillata");
+    expect(out.audio[0].caption).toEqual({ en: "c", es: "c" });
+    // Non-mutating — the stored snapshot the media routes read must keep its image.
+    expect(input.audio[0].spectrogramPng).toBe("data:image/webp;base64,BBBB");
   });
 });

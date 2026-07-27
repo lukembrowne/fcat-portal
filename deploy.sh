@@ -58,6 +58,28 @@ fi
 # Ensure backup directory exists
 ssh "$SERVER" "mkdir -p ${SERVER_PATH}/data/backups"
 
+# Sync the nginx vhost. This used to be a manual first-time-setup step, so the
+# live config silently drifted from the repo: the /_next/static/ and
+# /biochoco-overview/ auth exemptions added for the public overview page were
+# never copied over, and every logged-out visitor got the oauth sign-in HTML in
+# place of the page's JS bundles and images. Only reloads when the file changed,
+# and `nginx -t` gates the reload so a bad config can never take the site down.
+echo ""
+echo "Syncing nginx config..."
+ssh "$SERVER" "cd ${SERVER_PATH} && \
+    if cmp -s nginx/portal.fcat-ecuador.org /etc/nginx/sites-available/portal.fcat-ecuador.org; then \
+        echo '  nginx config already up to date'; \
+    else \
+        cp /etc/nginx/sites-available/portal.fcat-ecuador.org /etc/nginx/sites-available/portal.fcat-ecuador.org.bak && \
+        cp nginx/portal.fcat-ecuador.org /etc/nginx/sites-available/portal.fcat-ecuador.org && \
+        if nginx -t; then \
+            systemctl reload nginx && echo '  nginx config updated and reloaded'; \
+        else \
+            cp /etc/nginx/sites-available/portal.fcat-ecuador.org.bak /etc/nginx/sites-available/portal.fcat-ecuador.org && \
+            echo '  nginx -t FAILED — rolled back, config unchanged' && exit 1; \
+        fi; \
+    fi"
+
 # Run schema migrations (idempotent — safe to run every deploy)
 echo ""
 echo "Running schema migrations..."

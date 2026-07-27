@@ -26,6 +26,20 @@ const FFT_SIZE = 1024;
 const GAIN_DB = 18;
 const RANGE_DB = 72;
 
+// The raw FFT bitmap is one pixel per frame — a 60 s clip at 48 kHz is
+// 5624 x 257 px, ~1.5 MB as PNG, painted into a ~450 x 132 CSS box. Encode at
+// 2x the widest the clip is ever displayed at (the one-column mobile layout,
+// ~920 px) so it stays crisp on retina, and use WebP: on this noisy, colourful
+// content PNG costs ~1 byte/px while WebP costs ~0.15. Together that is ~1.5 MB
+// -> ~70 KB per clip.
+//
+// `fit: "fill"` (not "inside") is deliberate: both the client canvas and the
+// <img> stretch the bitmap to the box without preserving its aspect ratio, so
+// the cached image has to be distorted the same way to look identical.
+const OUT_WIDTH = 1600;
+const OUT_HEIGHT = 264;
+const OUT_QUALITY = 80;
+
 /** Render a mono PCM buffer to a magma spectrogram PNG. */
 export async function renderSpectrogramPng(
   samples: Float32Array,
@@ -58,11 +72,27 @@ export async function renderSpectrogramPng(
     .toBuffer();
 }
 
-/** Render and return a `data:image/png;base64,…` URI, ready to inline in JSON/HTML. */
+/**
+ * Render a display-sized WebP of the spectrogram: the full-resolution FFT
+ * bitmap downscaled to the box it is actually painted into. This is what gets
+ * stored in the snapshot and served to browsers.
+ */
+export async function renderSpectrogramWeb(
+  samples: Float32Array,
+  sampleRate: number,
+): Promise<Buffer> {
+  const full = await renderSpectrogramPng(samples, sampleRate);
+  return sharp(full)
+    .resize({ width: OUT_WIDTH, height: OUT_HEIGHT, fit: "fill" })
+    .webp({ quality: OUT_QUALITY })
+    .toBuffer();
+}
+
+/** Render and return a `data:image/webp;base64,…` URI, ready to store in the snapshot. */
 export async function renderSpectrogramDataUri(
   samples: Float32Array,
   sampleRate: number,
 ): Promise<string> {
-  const png = await renderSpectrogramPng(samples, sampleRate);
-  return `data:image/png;base64,${png.toString("base64")}`;
+  const img = await renderSpectrogramWeb(samples, sampleRate);
+  return `data:image/webp;base64,${img.toString("base64")}`;
 }

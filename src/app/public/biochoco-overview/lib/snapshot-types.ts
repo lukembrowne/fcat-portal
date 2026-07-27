@@ -81,11 +81,21 @@ export interface CuratedAudioClip {
   speciesLabel: string;
   caption: Bilingual;
   /**
-   * Pre-rendered spectrogram as a `data:image/png;base64,…` URI, generated at
-   * publish time. When present the page shows it directly (no client FFT); when
-   * absent the page falls back to computing the spectrogram in the browser.
+   * Pre-rendered spectrogram as a `data:<mime>;base64,…` URI, generated at
+   * publish time.
+   *
+   * SERVER-SIDE ONLY. `stripSpectrograms` removes this before the snapshot is
+   * handed to the client component — inlining it would serialize ~70 KB of
+   * base64 per clip twice (SSR HTML + RSC flight payload). The page loads the
+   * image from `/api/public/report-spectrogram/[id]`, which reads this field.
    */
   spectrogramPng?: string;
+  /**
+   * Client-safe replacement for `spectrogramPng`: true when a pre-rendered
+   * spectrogram exists. When false the page falls back to computing the
+   * spectrogram in the browser.
+   */
+  hasSpectrogram?: boolean;
 }
 
 export interface ReportSnapshot {

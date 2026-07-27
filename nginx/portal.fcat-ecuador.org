@@ -65,6 +65,22 @@ server {
         expires 7d;
     }
 
+    # Site icons. Next's app-router emits <link href="/favicon.ico?...">, and the
+    # browser requests them on the logged-out public pages too. Under `location /`
+    # they 401 → oauth sign-in HTML served as an .ico, so the tab icon breaks.
+    # (nginx `location =` ignores the query string, so the hashed URLs match.)
+    location = /favicon.ico {
+        proxy_pass http://127.0.0.1:3003;
+        proxy_set_header Host $host;
+        expires 7d;
+    }
+
+    location = /icon.svg {
+        proxy_pass http://127.0.0.1:3003;
+        proxy_set_header Host $host;
+        expires 7d;
+    }
+
     # ===== Public pages (no auth) — share links, public dashboard =====
     location /public/ {
         limit_req zone=public_pages burst=15 nodelay;

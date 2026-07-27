@@ -1,15 +1,18 @@
 "use client";
 
 /**
- * A self-contained visual audio clip for the public overview: it fetches the
- * recording, computes an FFT spectrogram in the browser, paints it to a canvas
- * with a warm colormap, and draws a playhead that tracks the native <audio>
- * player underneath. Reuses the same render primitives as the internal
- * annotation tool (`@/lib/audio-fft`, `@/lib/spectrogram-render`).
+ * A visual audio clip for the public overview: a spectrogram image with a
+ * playhead that tracks the native <audio> player underneath.
  *
- * Decoding is deferred until the clip scrolls near the viewport (six clips on
- * one page would otherwise all decode at once), and the raw audio only loads
- * when the user presses play.
+ * Normally the spectrogram was already rendered server-side at publish time and
+ * arrives as `pngSrc` — a lazily-loaded, separately-cacheable image. Without one
+ * (or if it fails to load) the component falls back to fetching the recording
+ * and computing the FFT in the browser, reusing the same render primitives as
+ * the internal annotation tool (`@/lib/audio-fft`, `@/lib/spectrogram-render`).
+ *
+ * On that fallback path, decoding is deferred until the clip scrolls near the
+ * viewport (six clips on one page would otherwise all decode at once). Either
+ * way the raw audio only loads when the user presses play.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -56,9 +59,16 @@ export function SpectrogramClip({
 }: {
   src: string;
   label: string;
-  /** Pre-rendered spectrogram (data URI). When set, shown directly — no client FFT. */
+  /**
+   * URL of the spectrogram pre-rendered at publish time. When it loads, it is
+   * shown directly and no client FFT runs. If the request fails the component
+   * falls back to computing the spectrogram in the browser, so a missing image
+   * degrades instead of leaving an empty box.
+   */
   pngSrc?: string;
 }) {
+  const [pngFailed, setPngFailed] = useState(false);
+  const usePng = Boolean(pngSrc) && !pngFailed;
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -72,7 +82,7 @@ export function SpectrogramClip({
   // when a pre-rendered spectrogram is supplied.
   useEffect(() => {
     const el = wrapRef.current;
-    if (!el || near || pngSrc) return;
+    if (!el || near || usePng) return;
     const io = new IntersectionObserver(
       (entries) => {
         if (entries.some((e) => e.isIntersecting)) {
@@ -84,12 +94,12 @@ export function SpectrogramClip({
     );
     io.observe(el);
     return () => io.disconnect();
-  }, [near, pngSrc]);
+  }, [near, usePng]);
 
   // Fetch → decode → FFT → paint, once, when near. Skipped when a pre-rendered
   // spectrogram is supplied.
   useEffect(() => {
-    if (!near || pngSrc || startedRef.current) return;
+    if (!near || usePng || startedRef.current) return;
     startedRef.current = true;
     let cancelled = false;
     (async () => {
@@ -126,7 +136,7 @@ export function SpectrogramClip({
     return () => {
       cancelled = true;
     };
-  }, [near, src, pngSrc]);
+  }, [near, src, usePng]);
 
   // Playhead tracking, driven by rAF while the clip is playing.
   useEffect(() => {
@@ -170,14 +180,20 @@ export function SpectrogramClip({
   return (
     <div className="spec-clip" ref={wrapRef}>
       <div className="spec-canvas-wrap">
-        {pngSrc ? (
+        {usePng ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img className="spec-canvas" src={pngSrc} alt={`Spectrogram — ${label}`} />
+          <img
+            className="spec-canvas"
+            src={pngSrc}
+            alt={`Spectrogram — ${label}`}
+            loading="lazy"
+            onError={() => setPngFailed(true)}
+          />
         ) : (
           <canvas ref={canvasRef} className="spec-canvas" aria-label={`Spectrogram — ${label}`} />
         )}
         <div className="spec-playhead" ref={playheadRef} />
-        {!pngSrc && stage !== "ready" && (
+        {!usePng && stage !== "ready" && (
           <div className="spec-status">
             {stage === "error" ? "—" : stage === "loading" ? "generating spectrogram…" : ""}
           </div>

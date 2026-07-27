@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { getActiveReportSnapshot, BIOCHOCO_OVERVIEW_SLUG } from "@/lib/public-report-snapshot";
 import { CONTENT, DEFAULT_LANG } from "./content";
+import { stripSpectrograms } from "./lib/snapshot-transforms";
 import { ReportShell } from "./report-shell";
 
 // Cached render, refreshed every 5 minutes and immediately on publish
@@ -41,5 +42,8 @@ export default async function BiochocoOverviewPage() {
     );
   }
 
-  return <ReportShell snapshot={snapshot} />;
+  // Strip the pre-rendered spectrogram data URIs before the snapshot crosses
+  // into the client component — they are megabytes of base64 and would be
+  // serialized twice. ReportShell points <img> at the spectrogram route instead.
+  return <ReportShell snapshot={stripSpectrograms(snapshot)} />;
 }

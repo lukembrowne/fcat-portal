@@ -333,6 +333,11 @@ export function ReportShell({ snapshot }: { snapshot: ReportSnapshot }) {
   const camWild = s.cameraTopSpecies.filter((sp) => !DOMESTIC.has(sp.sci)).slice(0, 9);
   const audTop = s.audioTopSpecies.slice(0, 9);
 
+  // Cache-buster for the spectrogram route: re-publishing re-renders the images
+  // under the same audio ids, so the URL has to change or browsers would keep
+  // serving the previous publish's image from the immutable cache.
+  const specVersion = Date.parse(snapshot.generatedAt) || 0;
+
   return (
     <div className="bc-root">
       <style>{CSS}</style>
@@ -579,7 +584,11 @@ export function ReportShell({ snapshot }: { snapshot: ReportSnapshot }) {
                     <SpectrogramClip
                       src={`/api/public/report-audio/${clip.audioId}`}
                       label={clip.speciesLabel}
-                      pngSrc={clip.spectrogramPng}
+                      pngSrc={
+                        clip.hasSpectrogram
+                          ? `/api/public/report-spectrogram/${clip.audioId}?v=${specVersion}`
+                          : undefined
+                      }
                     />
                   </li>
                 ))}

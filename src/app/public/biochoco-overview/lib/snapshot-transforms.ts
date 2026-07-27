@@ -5,7 +5,12 @@
  * directly. The SQL that feeds these lives in build-snapshot.ts.
  */
 
-import type { CameraSpeciesRow, CuratedAudioClip, CuratedImage } from "./snapshot-types";
+import type {
+  CameraSpeciesRow,
+  CuratedAudioClip,
+  CuratedImage,
+  ReportSnapshot,
+} from "./snapshot-types";
 
 /** Species metadata as stored in biochoco_species (the subset we use). */
 export interface SpeciesMeta {
@@ -122,4 +127,24 @@ export function resolveCuratedAudio(
     else droppedAudioIds.push(entry.audioId);
   }
   return { audio, droppedAudioIds };
+}
+
+/**
+ * Drop the pre-rendered spectrogram data URIs, replacing each with a boolean.
+ *
+ * Must run on every snapshot before it crosses into a client component. React
+ * serializes client-component props TWICE — once into the SSR HTML, once into
+ * the RSC flight payload appended to it — so an inlined spectrogram costs its
+ * base64 size twice per page load and can never be cached separately. Six clips
+ * of full-resolution PNG made the public page a 21 MB document; the page now
+ * points `<img>` at /api/public/report-spectrogram/[id] instead.
+ */
+export function stripSpectrograms(snapshot: ReportSnapshot): ReportSnapshot {
+  return {
+    ...snapshot,
+    audio: snapshot.audio.map(({ spectrogramPng, ...clip }) => ({
+      ...clip,
+      hasSpectrogram: Boolean(spectrogramPng),
+    })),
+  };
 }

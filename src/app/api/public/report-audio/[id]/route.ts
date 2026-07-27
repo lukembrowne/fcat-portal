@@ -5,13 +5,24 @@
  *   /api/public/report-audio/[id]?download=1   → download with attachment header
  *
  * A clip is servable ONLY if its audio_files.id is in the active BioChoco
- * overview snapshot's curated allowlist. Streams from Drive with Range support,
- * mirroring the internal audio stream route (minus its auth).
+ * overview snapshot's curated allowlist.
  *
- * MOBILE-AUDIO FIX: compressed clips are FLAC (`audio/flac`), which iOS Safari
- * cannot decode in `<audio>`. FLAC clips are served as a browser-universal AAC
- * (`audio/mp4`) transcode from a bounded on-disk cache (Range-aware). WAV/AAC/
- * MP3 pass through as raw Drive streams. There is NO amplification vector here
+ * MOBILE-AUDIO FIX: every clip is served as a browser-universal AAC
+ * (`audio/mp4`) transcode from a bounded on-disk cache, whatever its source
+ * format. Two separate reasons, and BOTH have burned this page:
+ *
+ *  - Compressed clips are FLAC, which iOS Safari cannot decode in `<audio>`.
+ *  - Drive's `files.get?alt=media` ignores the `Range` header we forward to it
+ *    and answers 200 with the whole body. iOS probes with a Range request
+ *    before playing and refuses any clip whose server answers 200 instead of
+ *    206 — so the raw-stream path silently broke uncompressed WAV clips on
+ *    iPhone even though WAV itself is a format Safari supports. Only
+ *    `serveCachedM4a` (local file, real 206s) satisfies that probe.
+ *
+ * Transcoding also cuts a 60 s clip from ~5.7 MB of PCM to ~1 MB.
+ *
+ * The raw Drive stream remains as a fallback when ffmpeg fails: degraded
+ * (desktop-only) rather than broken. There is NO amplification vector here
  * (unlike the token-gated site route): the snapshot allowlist is a small fixed
  * set (~6 curated ids), so every eligible id is already bounded.
  */
@@ -25,8 +36,6 @@ import { getReportAudioAllowlist } from "@/lib/public-report-snapshot";
 import { ensureAacTranscode } from "@/lib/audio-transcode";
 import { serveCachedM4a } from "@/lib/audio-serve";
 import { log } from "@/lib/log";
-
-const FLAC_MIME = "audio/flac";
 
 export const dynamic = "force-dynamic";
 
@@ -63,28 +72,27 @@ export async function GET(
   const download = new URL(request.url).searchParams.get("download") === "1";
   const rangeHeader = request.headers.get("range") ?? undefined;
 
-  // FLAC → serve a cached AAC transcode so it plays on iOS/Safari. Bounded by the
-  // snapshot allowlist, so no per-id amplification concern. On failure, fall
-  // through to the raw Drive stream (still plays on desktop; degraded, not broken).
-  if (audioFile.mimeType === FLAC_MIME) {
-    try {
-      const cachePath = await ensureAacTranscode({
-        audioId,
-        driveFileId: audioFile.driveFileId,
-      });
-      return await serveCachedM4a(cachePath, {
-        rangeHeader,
-        download,
-        filename: audioFile.filename,
-        // Same clip content per id → safe to cache immutably, like the raw path.
-        cacheControl: "public, max-age=31536000, immutable",
-      });
-    } catch (err) {
-      log.error(
-        { err, audioId },
-        "[public-report-audio] Transcode failed; falling back to raw Drive stream",
-      );
-    }
+  // Serve a cached AAC transcode so the clip plays on iOS/Safari and honors
+  // Range. Bounded by the snapshot allowlist, so no per-id amplification
+  // concern. On failure, fall through to the raw Drive stream (still plays on
+  // desktop; degraded, not broken).
+  try {
+    const cachePath = await ensureAacTranscode({
+      audioId,
+      driveFileId: audioFile.driveFileId,
+    });
+    return await serveCachedM4a(cachePath, {
+      rangeHeader,
+      download,
+      filename: audioFile.filename,
+      // Same clip content per id → safe to cache immutably, like the raw path.
+      cacheControl: "public, max-age=31536000, immutable",
+    });
+  } catch (err) {
+    log.error(
+      { err, audioId },
+      "[public-report-audio] Transcode failed; falling back to raw Drive stream",
+    );
   }
 
   try {

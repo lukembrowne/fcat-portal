@@ -1,12 +1,14 @@
 /**
- * Tests for /api/public/report-audio/[id] — the mobile-audio fix (FLAC → AAC
- * transcode) plus the unchanged snapshot allowlist gate.
+ * Tests for /api/public/report-audio/[id] — the mobile-audio fix (every source
+ * format → AAC transcode) plus the unchanged snapshot allowlist gate.
  *
  * Verifies:
  *  - A FLAC clip in the allowlist → transcoded AAC served (`audio/mp4`,
  *    `Accept-Ranges: bytes`, immutable cache, NO noindex — public page), once.
  *  - Range request against the cached m4a → 206 with a valid `Content-Range`.
- *  - WAV source → raw Drive passthrough, no transcode.
+ *  - WAV source → ALSO transcoded, never raw Drive passthrough. Drive ignores
+ *    the Range header and answers 200 with the whole body, which iOS Safari
+ *    rejects for `<audio>`; only the local cached file yields real 206s.
  *  - A transcode failure → falls back to the raw Drive stream (still served).
  *  - An id NOT in the allowlist → 404 before any DB/transcode work.
  *
@@ -148,14 +150,42 @@ describe("/api/public/report-audio — FLAC → AAC transcode", () => {
     expect(res.headers.get("Content-Length")).toBe("100");
   });
 
-  it("WAV source → raw Drive passthrough, no transcode", async () => {
+  // Regression: this used to assert raw passthrough for WAV. That silently
+  // broke all five uncompressed clips on iPhone — Drive ignores the forwarded
+  // Range header and replies 200 with the full body, and iOS refuses to play
+  // any `<audio>` source whose server answers its Range probe with a 200.
+  it("WAV source → transcoded too, never raw Drive passthrough", async () => {
     seedAudio({ mimeType: "audio/wav", filename: "clip.wav" });
 
     const res = await call("42");
 
     expect(res.status).toBe(200);
-    expect(ensureAacTranscodeMock).not.toHaveBeenCalled();
-    expect(downloadFileAsStreamMock).toHaveBeenCalledTimes(1);
+    expect(res.headers.get("Content-Type")).toBe("audio/mp4");
+    expect(ensureAacTranscodeMock).toHaveBeenCalledTimes(1);
+    expect(downloadFileAsStreamMock).not.toHaveBeenCalled();
+  });
+
+  it("WAV Range probe → 206, the response iOS requires before it will play", async () => {
+    seedAudio({ mimeType: "audio/wav", filename: "clip.wav" });
+
+    // iOS opens with a tiny probe range exactly like this one.
+    const res = await call("42", { range: "bytes=0-1" });
+
+    expect(res.status).toBe(206);
+    expect(res.headers.get("Content-Range")).toBe("bytes 0-1/1000");
+  });
+
+  it("download=1 → attachment named .m4a, matching the transcoded body", async () => {
+    seedAudio({ mimeType: "audio/wav", filename: "clip.wav" });
+
+    const req = new NextRequest(
+      "http://localhost/api/public/report-audio/42?download=1",
+    );
+    const res = await GET(req, { params: Promise.resolve({ id: "42" }) });
+
+    expect(res.headers.get("Content-Disposition")).toBe(
+      'attachment; filename="clip.m4a"',
+    );
   });
 
   it("transcode failure → falls back to raw Drive stream", async () => {

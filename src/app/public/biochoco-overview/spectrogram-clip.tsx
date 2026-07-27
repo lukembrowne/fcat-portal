@@ -49,7 +49,16 @@ function paint(canvas: HTMLCanvasElement, img: { width: number; height: number; 
   ctx.drawImage(off, 0, 0, canvas.width, canvas.height);
 }
 
-export function SpectrogramClip({ src, label }: { src: string; label: string }) {
+export function SpectrogramClip({
+  src,
+  label,
+  pngSrc,
+}: {
+  src: string;
+  label: string;
+  /** Pre-rendered spectrogram (data URI). When set, shown directly — no client FFT. */
+  pngSrc?: string;
+}) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -59,10 +68,11 @@ export function SpectrogramClip({ src, label }: { src: string; label: string }) 
   const [stage, setStage] = useState<Stage>("idle");
   const [near, setNear] = useState(false);
 
-  // Defer all decode work until the clip is near the viewport.
+  // Defer all decode work until the clip is near the viewport. Skipped entirely
+  // when a pre-rendered spectrogram is supplied.
   useEffect(() => {
     const el = wrapRef.current;
-    if (!el || near) return;
+    if (!el || near || pngSrc) return;
     const io = new IntersectionObserver(
       (entries) => {
         if (entries.some((e) => e.isIntersecting)) {
@@ -74,11 +84,12 @@ export function SpectrogramClip({ src, label }: { src: string; label: string }) 
     );
     io.observe(el);
     return () => io.disconnect();
-  }, [near]);
+  }, [near, pngSrc]);
 
-  // Fetch → decode → FFT → paint, once, when near.
+  // Fetch → decode → FFT → paint, once, when near. Skipped when a pre-rendered
+  // spectrogram is supplied.
   useEffect(() => {
-    if (!near || startedRef.current) return;
+    if (!near || pngSrc || startedRef.current) return;
     startedRef.current = true;
     let cancelled = false;
     (async () => {
@@ -115,7 +126,7 @@ export function SpectrogramClip({ src, label }: { src: string; label: string }) 
     return () => {
       cancelled = true;
     };
-  }, [near, src]);
+  }, [near, src, pngSrc]);
 
   // Playhead tracking, driven by rAF while the clip is playing.
   useEffect(() => {
@@ -159,9 +170,14 @@ export function SpectrogramClip({ src, label }: { src: string; label: string }) 
   return (
     <div className="spec-clip" ref={wrapRef}>
       <div className="spec-canvas-wrap">
-        <canvas ref={canvasRef} className="spec-canvas" aria-label={`Spectrogram — ${label}`} />
+        {pngSrc ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img className="spec-canvas" src={pngSrc} alt={`Spectrogram — ${label}`} />
+        ) : (
+          <canvas ref={canvasRef} className="spec-canvas" aria-label={`Spectrogram — ${label}`} />
+        )}
         <div className="spec-playhead" ref={playheadRef} />
-        {stage !== "ready" && (
+        {!pngSrc && stage !== "ready" && (
           <div className="spec-status">
             {stage === "error" ? "—" : stage === "loading" ? "generating spectrogram…" : ""}
           </div>

@@ -13,6 +13,8 @@ import {
   type SpeciesMeta,
 } from "./snapshot-transforms";
 import { countSitesByHabitat, habitatForSite } from "./habitat";
+import { decodeAudioToPcmMono } from "@/lib/audio-pcm";
+import { renderSpectrogramDataUri } from "@/lib/spectrogram-image";
 
 // BioChoco = ct_projects.id 1 (documented convention; matches extract.mjs).
 const PROJECT_ID = 1;
@@ -320,6 +322,41 @@ async function validBiochocoAudioIds(ids: number[]): Promise<Set<number>> {
 }
 
 /**
+ * Pre-render each curated clip's spectrogram to a base64 PNG (server-side ffmpeg
+ * decode → FFT → sharp), so the public page shows a cached image instead of
+ * decoding + FFT-ing audio in every browser. Per-clip best-effort: a decode or
+ * render failure logs and leaves that clip without an image (the page falls back
+ * to client-side FFT), never failing the publish.
+ */
+async function attachSpectrograms(audio: CuratedAudioClip[]): Promise<CuratedAudioClip[]> {
+  if (audio.length === 0) return audio;
+
+  const ids = audio.map((a) => a.audioId);
+  const rows = await db.all<{ id: number; driveFileId: string | null }>(sql`
+    SELECT id, drive_file_id AS driveFileId FROM audio_files
+     WHERE id IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})`);
+  const driveById = new Map(rows.map((r) => [num(r.id), r.driveFileId]));
+
+  return Promise.all(
+    audio.map(async (clip) => {
+      const driveFileId = driveById.get(clip.audioId);
+      if (!driveFileId) return clip;
+      try {
+        const { samples, sampleRate } = await decodeAudioToPcmMono(driveFileId);
+        const spectrogramPng = await renderSpectrogramDataUri(samples, sampleRate);
+        return { ...clip, spectrogramPng };
+      } catch (err) {
+        log.warn(
+          { audioId: clip.audioId, err },
+          "[public-report] spectrogram pre-render failed; page will fall back to client FFT",
+        );
+        return clip;
+      }
+    }),
+  );
+}
+
+/**
  * Build a full snapshot: live stats + resolved curated media. Curated ids that
  * don't exist or aren't BioChoco's are dropped (logged), never fatal.
  */
@@ -342,12 +379,14 @@ export async function buildSnapshot(
     );
   }
 
+  const audioWithSpectrograms = await attachSpectrograms(audio);
+
   return {
     slug: opts.slug,
     generatedAt: opts.generatedAt,
     generatedBy: opts.generatedBy,
     stats,
     images,
-    audio,
+    audio: audioWithSpectrograms,
   };
 }

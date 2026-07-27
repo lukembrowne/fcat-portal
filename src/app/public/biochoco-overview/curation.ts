@@ -24,22 +24,22 @@ export const CURATED_IMAGES: CuratedImage[] = [
   {
     imageId: 32589,
     speciesLabel: "Leopardus pardalis",
-    caption: { en: "Ocelot padding along a forest trail at night", es: "Ocelote recorriendo un sendero del bosque de noche" },
+    caption: { en: "Ocelot walking along a trail at night", es: "Ocelote recorriendo un sendero del bosque de noche" },
   },
   {
     imageId: 48763,
     speciesLabel: "Leopardus wiedii",
-    caption: { en: "Margay, a small nocturnal cat rarely caught on camera", es: "Margay, un pequeño felino nocturno rara vez captado por una cámara" },
+    caption: { en: "Margay, a small relatively rare nocturnal cat", es: "Margay, un pequeño felino nocturno rara vez captado por una cámara" },
   },
   {
     imageId: 44218,
     speciesLabel: "Dicotyles tajacu",
-    caption: { en: "A collared peccary rooting through the leaf litter", es: "Un pecarí de collar hurgando en la hojarasca" },
+    caption: { en: "A collared peccary often seen traveling in groups", es: "Un pecarí de collar hurgando en la hojarasca" },
   },
   {
     imageId: 598222,
     speciesLabel: "Cuniculus paca",
-    caption: { en: "Lowland paca on a nighttime foraging round", es: "Guanta en su ronda nocturna de forrajeo" },
+    caption: { en: "Lowland paca foraging at night", es: "Guanta en su ronda nocturna de forrajeo" },
   },
   {
     imageId: 35836,
@@ -74,17 +74,17 @@ export const CURATED_AUDIO: CuratedAudioClip[] = [
   {
     audioId: 102593,
     speciesLabel: "Ramphastos ambiguus",
-    caption: { en: "Yellow-throated Toucan calling across the canopy", es: "Tucán goliamarillo llamando sobre el dosel" },
+    caption: { en: "A Yellow-throated Toucan calling from the canopy", es: "Tucán goliamarillo llamando sobre el dosel" },
   },
   {
     audioId: 132338,
     speciesLabel: "Ramphastos brevis",
-    caption: { en: "Chocó Toucan, a Chocó endemic, at close range", es: "Tucán del Chocó, un endémico del Chocó, a corta distancia" },
+    caption: { en: "Chocó Toucan, a Chocó endemic", es: "Tucán del Chocó, un endémico del Chocó, a corta distancia" },
   },
   {
     audioId: 130203,
     speciesLabel: "Cephalopterus penduliger",
-    caption: { en: "Long-wattled Umbrellabird, a threatened Chocó specialty", es: "Pájaro paraguas longuipéndulo, una especialidad amenazada del Chocó" },
+    caption: { en: "Long-wattled Umbrellabird, a threatened Chocó endemic and flagship species for FCAT", es: "Pájaro paraguas longuipéndulo, una especialidad amenazada del Chocó" },
   },
   {
     audioId: 159399,

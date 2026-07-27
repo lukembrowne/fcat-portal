@@ -31,7 +31,6 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { promises as fs } from "fs";
 import { db } from "@/db";
 import { siteShareTokens, audioFiles } from "@/db/schema";
 import { and, eq, isNull, inArray } from "drizzle-orm";
@@ -39,6 +38,7 @@ import { downloadFileAsStream } from "@/lib/drive-client";
 import { isValidShareToken } from "@/lib/public-tokens";
 import { parsePageConfig } from "@/lib/landowner/page-config";
 import { ensureAacTranscode } from "@/lib/audio-transcode";
+import { serveCachedM4a } from "@/lib/audio-serve";
 import { log } from "@/lib/log";
 
 const FLAC_MIME = "audio/flac";
@@ -133,6 +133,10 @@ export async function GET(
         rangeHeader,
         download,
         filename: audioFile.filename,
+        // The curated clip can be swapped by the team; cache a day, not immutable.
+        cacheControl: "public, max-age=86400",
+        // Keep token-gated recordings out of search crawlers.
+        noindex: true,
       });
     } catch (err) {
       // Transcode failed — fall through to the raw Drive stream so the clip is
@@ -199,75 +203,3 @@ function resolveFeaturedAudioId(pageConfig: string | null): number | null {
   return null;
 }
 
-/** Swap a filename's extension to `.m4a` for the transcoded download name. */
-function toM4aName(filename: string): string {
-  return filename.replace(/\.[^./\\]+$/, "") + ".m4a";
-}
-
-/**
- * Parse an HTTP `Range` header against a known total size. Supports a single
- * `bytes=start-end`, `bytes=start-`, and suffix `bytes=-N` form. Returns null
- * (→ serve 200 full) for absent/unsatisfiable/multi-range headers.
- */
-function parseRange(
-  rangeHeader: string | undefined,
-  total: number,
-): { start: number; end: number } | null {
-  if (!rangeHeader) return null;
-  const match = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim());
-  if (!match) return null;
-  const [, startStr, endStr] = match;
-
-  let start: number;
-  let end: number;
-  if (startStr === "") {
-    // Suffix range: last N bytes.
-    if (endStr === "") return null;
-    const n = Number.parseInt(endStr, 10);
-    if (n <= 0) return null;
-    start = Math.max(0, total - n);
-    end = total - 1;
-  } else {
-    start = Number.parseInt(startStr, 10);
-    end = endStr === "" ? total - 1 : Number.parseInt(endStr, 10);
-  }
-
-  if (Number.isNaN(start) || Number.isNaN(end)) return null;
-  if (start > end || start >= total) return null;
-  if (end >= total) end = total - 1;
-  return { start, end };
-}
-
-/**
- * Serve a locally-cached `.m4a` with Range support (206 partial / 200 full),
- * `Content-Type: audio/mp4`, matching the raw route's cache/robots posture.
- */
-async function serveCachedM4a(
-  cachePath: string,
-  opts: { rangeHeader: string | undefined; download: boolean; filename: string },
-): Promise<Response> {
-  const buf = await fs.readFile(cachePath);
-  const total = buf.length;
-
-  const headers: Record<string, string> = {
-    "Content-Type": "audio/mp4",
-    // The curated clip can be swapped by the team; cache a day, not immutable.
-    "Cache-Control": "public, max-age=86400",
-    "Accept-Ranges": "bytes",
-    "X-Robots-Tag": "noindex",
-  };
-  if (opts.download) {
-    headers["Content-Disposition"] = `attachment; filename="${toM4aName(opts.filename)}"`;
-  }
-
-  const range = parseRange(opts.rangeHeader, total);
-  if (range) {
-    const chunk = buf.subarray(range.start, range.end + 1);
-    headers["Content-Range"] = `bytes ${range.start}-${range.end}/${total}`;
-    headers["Content-Length"] = String(chunk.length);
-    return new Response(chunk, { status: 206, headers });
-  }
-
-  headers["Content-Length"] = String(total);
-  return new Response(buf, { status: 200, headers });
-}

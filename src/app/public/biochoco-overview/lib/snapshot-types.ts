@@ -80,6 +80,12 @@ export interface CuratedAudioClip {
   audioId: number;
   speciesLabel: string;
   caption: Bilingual;
+  /**
+   * Pre-rendered spectrogram as a `data:image/png;base64,…` URI, generated at
+   * publish time. When present the page shows it directly (no client FFT); when
+   * absent the page falls back to computing the spectrogram in the browser.
+   */
+  spectrogramPng?: string;
 }
 
 export interface ReportSnapshot {

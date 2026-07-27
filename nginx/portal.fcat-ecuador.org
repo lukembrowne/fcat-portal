@@ -92,6 +92,49 @@ server {
         # NO auth_request — token-validated at application level
     }
 
+    # ===== Public page static assets (no auth) =====
+    # The public overview page (/public/biochoco-overview) is served from the
+    # exempt /public/ location, but the browser then loads its client JS from
+    # /_next/static/* and its media (hero/habitat/gallery images, reserve.geojson)
+    # from /biochoco-overview/*. Both must be reachable WITHOUT oauth or a
+    # logged-out visitor gets those 401'd → redirected to Google sign-in → the
+    # page never hydrates (blank map, dead spectrograms) and images break.
+    # Compiled Next.js bundles are public build artifacts (no secrets; server
+    # actions keep their own auth), so exposing them is safe and standard.
+    location /_next/static/ {
+        proxy_pass http://127.0.0.1:3003;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        # NO auth_request — public build artifacts; no rate limit (a page pulls many chunks)
+    }
+
+    location /_next/image {
+        proxy_pass http://127.0.0.1:3003;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        # NO auth_request — Next image optimizer for public assets
+    }
+
+    location /biochoco-overview/ {
+        limit_req zone=public_pages burst=30 nodelay;
+        proxy_pass http://127.0.0.1:3003;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        # NO auth_request — intentionally-public marketing media
+    }
+
     # ===== Field Uploader API (no oauth2 — Bearer-token validated in the app) =====
     # The desktop field-uploader is a machine client; it can't do an interactive
     # Google login. It authenticates with FIELD_UPLOAD_TOKEN (Bearer), checked in

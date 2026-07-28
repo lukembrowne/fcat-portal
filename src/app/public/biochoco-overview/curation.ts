@@ -22,7 +22,7 @@ import type { CuratedAudioClip, CuratedImage } from "./lib/snapshot-types";
 // game birds). Swap any entry you don't like for another id and re-publish.
 export const CURATED_IMAGES: CuratedImage[] = [
   {
-    imageId: 32589,
+    imageId: 95250,
     speciesLabel: "Leopardus pardalis",
     caption: { en: "Ocelot walking along a trail at night", es: "Ocelote recorriendo un sendero del bosque de noche" },
   },
@@ -42,14 +42,20 @@ export const CURATED_IMAGES: CuratedImage[] = [
     caption: { en: "Lowland paca foraging at night", es: "Guanta en su ronda nocturna de forrajeo" },
   },
   {
-    imageId: 35836,
+    imageId: 2245331,
     speciesLabel: "Dasyprocta punctata",
-    caption: { en: "Central American agouti, the forest's most-photographed mammal", es: "Guatusa, el mamífero más fotografiado del bosque" },
+    caption: {
+      en: "Central American agouti eating a fallen fruit, the forest's most-photographed mammal",
+      es: "Guatusa comiendo un fruto caído, el mamífero más fotografiado del bosque",
+    },
   },
   {
-    imageId: 1848435,
+    imageId: 1848441,
     speciesLabel: "Nasua narica",
-    caption: { en: "A white-nosed coati passing the camera by day", es: "Un cuchucho cruzando frente a la cámara de día" },
+    caption: {
+      en: "A white-nosed coati nosing through the leaf litter by day",
+      es: "Un cuchucho hozando la hojarasca a plena luz del día",
+    },
   },
   {
     imageId: 32667,

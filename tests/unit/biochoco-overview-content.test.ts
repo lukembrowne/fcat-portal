@@ -26,10 +26,12 @@ describe("bilingual content parity", () => {
     expect(es.stats.tiles.length).toBe(8);
     expect(en.platform.gallery.length).toBe(4);
     expect(es.platform.gallery.length).toBe(4);
-    expect(en.collaborate.oppList.length).toBe(5);
-    expect(es.collaborate.oppList.length).toBe(5);
+    expect(en.collaborate.oppList.length).toBe(7);
+    expect(es.collaborate.oppList.length).toBe(7);
     expect(en.contacts.length).toBe(10);
     expect(es.contacts.length).toBe(10);
+    expect(en.acknowledgements.groups.length).toBe(2);
+    expect(es.acknowledgements.groups.length).toBe(2);
   });
 
   it("pins the section headlines (guards against accidental copy drift)", () => {
@@ -42,6 +44,7 @@ describe("bilingual content parity", () => {
     expect(en.species.heading).toBe("Species detections");
     expect(en.platform.heading).toBe("An integrated end-to-end platform");
     expect(en.collaborate.heading).toBe("Where collaborators come in");
+    expect(en.acknowledgements.heading).toBe("Funders and acknowledgements");
   });
 
   it("template strings carry the placeholders the shell interpolates", () => {
@@ -89,5 +92,33 @@ describe("bilingual content parity", () => {
     expect(
       en.contacts.filter((c) => c.email).every((c) => c.email!.endsWith("@fcat-ecuador.org")),
     ).toBe(true);
+  });
+});
+
+describe("acknowledgements", () => {
+  it("has matching per-group entry counts across languages", () => {
+    const { en, es } = CONTENT;
+    expect(en.acknowledgements.groups.map((g) => g.entries.length)).toEqual(
+      es.acknowledgements.groups.map((g) => g.entries.length),
+    );
+    // Funders group carries three entries; institutional support carries one.
+    expect(en.acknowledgements.groups.map((g) => g.entries.length)).toEqual([3, 1]);
+  });
+
+  it("names the three funders in both languages", () => {
+    for (const lang of ["en", "es"] as const) {
+      const funders = CONTENT[lang].acknowledgements.groups[0].entries.map((e) => e.name);
+      expect(funders).toContain("Wedgetail Foundation");
+      expect(funders).toContain("National Science Foundation");
+      expect(funders).toHaveLength(3);
+    }
+  });
+
+  it("keeps MAATE out of the funders group — it supports and permits, it does not fund", () => {
+    for (const lang of ["en", "es"] as const) {
+      const [funders, support] = CONTENT[lang].acknowledgements.groups;
+      expect(funders.entries.some((e) => e.name.includes("MAATE"))).toBe(false);
+      expect(support.entries.some((e) => e.name.includes("MAATE"))).toBe(true);
+    }
   });
 });

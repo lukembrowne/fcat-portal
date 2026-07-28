@@ -46,6 +46,19 @@ export interface StatLabel {
   sub: string;
 }
 
+export interface AckEntry {
+  name: string;
+  /** Optional sub-line — award number, kind of support, etc. */
+  note?: string;
+}
+
+export interface AckGroup {
+  title: string;
+  /** Optional line framing what this group's support is. */
+  body?: string;
+  entries: AckEntry[];
+}
+
 export interface ReportContent {
   hero: {
     eyebrow: string;
@@ -119,6 +132,16 @@ export interface ReportContent {
   };
 
   contacts: Contact[]; // 10 (7 field-team members + 3 emailed contacts)
+
+  acknowledgements: {
+    heading: string;
+    /**
+     * Order is load-bearing: [0] funders, [1] institutional support. MAATE
+     * supports and permits this work but does not fund it, so it must never
+     * sit in the funders group — the unit test asserts that split.
+     */
+    groups: AckGroup[]; // 2
+  };
 
   footer: {
     org: string;
@@ -345,6 +368,30 @@ const en: ReportContent = {
     { name: "Darwin Zambrano", role: "Local biologist (FCATero)" },
   ],
 
+  acknowledgements: {
+    heading: "Funders and acknowledgements",
+    groups: [
+      {
+        title: "Funders",
+        body: "Support for the BioChocó monitoring network comes from:",
+        entries: [
+          { name: "Wedgetail Foundation" },
+          { name: "National Science Foundation" },
+          { name: "Private donors" },
+        ],
+      },
+      {
+        title: "Institutional support",
+        entries: [
+          {
+            name: "Ministry of the Environment, Water and Ecological Transition (MAATE)",
+            note: "Research permitting and institutional support",
+          },
+        ],
+      },
+    ],
+  },
+
   footer: {
     org: "Fundación para la Conservación de los Andes Tropicales",
     tagline: "BioChocó biodiversity monitoring network · Chocó, Ecuador",
@@ -569,6 +616,30 @@ const es: ReportContent = {
     { name: "Julio Loor", role: "Biólogo local (FCATero)" },
     { name: "Darwin Zambrano", role: "Biólogo local (FCATero)" },
   ],
+
+  acknowledgements: {
+    heading: "Financiadores y agradecimientos",
+    groups: [
+      {
+        title: "Financiadores",
+        body: "El apoyo a la red de monitoreo BioChocó proviene de:",
+        entries: [
+          { name: "Wedgetail Foundation" },
+          { name: "National Science Foundation" },
+          { name: "Donantes privados" },
+        ],
+      },
+      {
+        title: "Apoyo institucional",
+        entries: [
+          {
+            name: "Ministerio del Ambiente, Agua y Transición Ecológica (MAATE)",
+            note: "Permisos de investigación y apoyo institucional",
+          },
+        ],
+      },
+    ],
+  },
 
   footer: {
     org: "Fundación para la Conservación de los Andes Tropicales",

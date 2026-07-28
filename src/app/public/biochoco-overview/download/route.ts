@@ -22,7 +22,7 @@ import { downloadFileToBuffer } from "@/lib/drive-client";
 import { getActiveReportSnapshot } from "@/lib/public-report-snapshot";
 import { log } from "@/lib/log";
 import { TOLERANT_DECODE } from "@/lib/image-decode";
-import { CONTENT, DEFAULT_LANG } from "../content";
+import { CONTENT, DEFAULT_LANG, type AckGroup } from "../content";
 import { HABITAT, HAB_ORDER } from "../lib/habitat";
 import { fmt, spanLabel, tpl } from "../lib/format";
 import type { Lang, ReportSnapshot } from "../lib/snapshot-types";
@@ -194,7 +194,26 @@ footer b{color:#fff;font-family:var(--serif)}
 @media(max-width:720px){.grid2,.grid3,.two,.contacts,.stat{grid-template-columns:1fr}.stat{flex-basis:calc(50% - 1px)}}
 `;
 
-function buildHtml(
+/**
+ * Funders & acknowledgements cards. Group order mirrors content.ts: funders
+ * first, institutional support (MAATE — permitting, not funding) second.
+ */
+export function renderAckGroups(groups: AckGroup[]): string {
+  return groups
+    .map((g) => {
+      const entries = g.entries
+        .map(
+          (e) =>
+            `<li><b>${esc(e.name)}</b>${e.note ? `<span>${esc(e.note)}</span>` : ""}</li>`,
+        )
+        .join("");
+      const lead = g.body ? `<p>${esc(g.body)}</p>` : "";
+      return `<div class="card"><h3>${esc(g.title)}</h3>${lead}<ul class="list">${entries}</ul></div>`;
+    })
+    .join("");
+}
+
+export function buildHtml(
   snapshot: ReportSnapshot,
   lang: Lang,
   dataUris: Map<number, string>,
@@ -288,6 +307,8 @@ function buildHtml(
         }</div>`,
     )
     .join("");
+
+  const ackGroups = renderAckGroups(c.acknowledgements.groups);
 
   // Bonus curated camera-trap media (inlined). Omitted when empty.
   const photos = snapshot.images
@@ -397,6 +418,11 @@ function buildHtml(
       <p>${esc(c.collaborate.ctaBody)}</p>
       <div class="contacts">${contacts}</div>
     </div>
+  </div></section>
+
+  <section><div class="wrap">
+    <div class="rule"></div><h2>${esc(c.acknowledgements.heading)}</h2>
+    <div class="grid2" style="margin-top:18px">${ackGroups}</div>
   </div></section>
 
   <footer><div class="wrap">

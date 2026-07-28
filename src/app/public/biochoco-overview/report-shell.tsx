@@ -225,6 +225,17 @@ const CSS = `
 .bc-root .contact .role{color:#a9c891;font-size:12.5px;margin:2px 0 8px}
 .bc-root .contact a{color:#fff;text-decoration:underline;font-size:13.5px;word-break:break-word}
 
+/* funders & acknowledgements */
+.bc-root .ack-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.bc-root .ack{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:22px 24px;box-shadow:var(--shadow)}
+.bc-root .ack h3{font-size:15px;font-weight:600;letter-spacing:.02em;text-transform:uppercase;color:var(--forest)}
+.bc-root .ack .lead{margin:10px 0 0;color:var(--ink-soft);font-size:14.5px;line-height:1.5}
+.bc-root .ack ul{list-style:none;margin:16px 0 0;padding:0;display:flex;flex-direction:column;gap:12px}
+.bc-root .ack li{padding-left:22px;position:relative}
+.bc-root .ack li::before{content:"";position:absolute;left:2px;top:8px;width:7px;height:7px;border-radius:50%;background:var(--canopy)}
+.bc-root .ack .nm{font-family:var(--serif);font-size:16.5px;font-weight:600;color:var(--ink);line-height:1.3}
+.bc-root .ack .note{color:var(--ink-soft);font-size:13.5px;line-height:1.45;margin-top:2px}
+
 /* footer */
 .bc-root .ft{background:#1b3618;color:#bcd0ac;padding:38px 0;font-size:13.5px;line-height:1.6}
 .bc-root .ft b{color:#fff;font-family:var(--serif)}
@@ -235,7 +246,7 @@ const CSS = `
   .bc-root .stat{flex-basis:calc(50% - 1px)}
   .bc-root .hab-grid{grid-template-columns:repeat(2,1fr)}
   .bc-root .field-grid{grid-template-columns:1fr}
-  .bc-root .goals,.bc-root .contacts,.bc-root .also ul{grid-template-columns:1fr}
+  .bc-root .goals,.bc-root .contacts,.bc-root .also ul,.bc-root .ack-grid{grid-template-columns:1fr}
 }
 @media print{
   .bc-root .hero-actions{display:none!important}
@@ -243,7 +254,7 @@ const CSS = `
   .bc-root .hero{min-height:0;height:330px}
   .bc-root section{padding:20px 0;break-inside:avoid}
   .bc-root .stats-band,.bc-root .plat{break-inside:avoid}
-  .bc-root .card,.bc-root .obj,.bc-root .hc,.bc-root .shot,.bc-root .browser,.bc-root .cta,.bc-root .map-shell{break-inside:avoid}
+  .bc-root .card,.bc-root .obj,.bc-root .hc,.bc-root .shot,.bc-root .browser,.bc-root .cta,.bc-root .map-shell,.bc-root .ack{break-inside:avoid}
   .bc-root #map{height:340px}
 }
 `;
@@ -678,7 +689,33 @@ export function ReportShell({ snapshot }: { snapshot: ReportSnapshot }) {
         </div>
       </section>
 
-      {/* 10 · Footer */}
+      {/* 10 · Funders & acknowledgements */}
+      <section>
+        <div className="wrap">
+          <div className="section-head">
+            <div className="rule" />
+            <h2>{c.acknowledgements.heading}</h2>
+          </div>
+          <div className="ack-grid">
+            {c.acknowledgements.groups.map((group) => (
+              <div className="ack" key={group.title}>
+                <h3>{group.title}</h3>
+                {group.body && <p className="lead">{group.body}</p>}
+                <ul>
+                  {group.entries.map((entry) => (
+                    <li key={entry.name}>
+                      <div className="nm">{entry.name}</div>
+                      {entry.note && <div className="note">{entry.note}</div>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* 11 · Footer */}
       <div className="ft">
         <div className="wrap">
           <b>{c.footer.org}</b>

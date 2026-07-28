@@ -112,7 +112,7 @@ export interface ReportContent {
     heading: string;
     intro: string;
     oppListTitle: string;
-    oppList: TitledBody[]; // 5
+    oppList: TitledBody[]; // 7
     ctaHeading: string;
     ctaBody: string;
     contactsHeading: string;
@@ -294,28 +294,36 @@ const en: ReportContent = {
   collaborate: {
     heading: "Where collaborators come in",
     intro:
-      "We designed the BioChocó network as a shared foundation for researchers, and we want you to help us build on it! FCAT works with computer scientists and ecologists at Tulane University, researchers at Universidad San Francisco de Quito, the Cornell Lab of Ornithology, among many others, so collaborators plug into an active, well-connected effort.",
+      "We designed the BioChocó network as a shared foundation for researchers. FCAT collaborates with computer scientists and ecologists at Tulane University, researchers at Universidad San Francisco de Quito, Virginia Tech University, University of Hawaii, the Cornell Lab of Ornithology, among many others, so collaborators plug into an active, well-connected effort.",
     oppListTitle: "Opportunities for collaboration",
     oppList: [
       {
         title: "Occupancy and community modeling",
-        body: "Repeated visits across the land-use gradient support single- and multi-species occupancy and diversity work on birds, mammals, frogs, and insects, drawing on verified species records from camera traps and passive audio recorders.",
+        body: "Repeated visits across the land-use gradient support single- and multi-species occupancy and biodiversity studies on birds, mammals, frogs, and insects, drawing on verified species records from camera traps and passive audio recorders.",
       },
       {
-        title: "Bioacoustics",
-        body: "A large acoustic archive — continuous day-and-night recordings with BirdNET output — for community- and species-level analysis, with expert point counts from ornithologist Juan Freile for ground-truthing.",
+        title: "Restoration and corridor outcomes over time",
+        body: "FCAT is building a biodiversity corridor and running two large-scale restoration and agroforestry projects now, with monitoring stations already in the ground. Collaborators get a before-and-after record with the land-use gradient as built-in reference sites, which supports work on how quickly animal communities recover and whether a new corridor promotes the movement it was designed for.",
       },
       {
-        title: "Machine learning and computer vision",
-        body: "A labeled, growing dataset for classifier training and detection benchmarks, building on our fine-tuned BioCLIP and MegaDetector.",
+        title: "Machine learning across images and audio",
+        body: "A labeled, growing image dataset for classifier training and detection benchmarks, built on our fine-tuned BioCLIP and MegaDetector, plus terabytes of day-and-night audio recordings.",
       },
       {
-        title: "Carbon, habitat, and restoration ecology",
-        body: "Forest-structure data paired with per-station biodiversity and microclimate data, tied to two active restoration and agroforestry experiments.",
+        title: "Agroforestry and sustainable farm design",
+        body: "Monitoring stations sit on roughly 50 working farms, spanning three cacao management systems alongside forest and pasture. That setup can show which agricultural practices promote biodiversity on the farm while still being profitable: shade tree composition, canopy structure, patch size, distance to remaining forest.",
       },
       {
-        title: "Socio-ecological research",
-        body: "Work at the human-environment interface, alongside FCAT's community and land-use research.",
+        title: "Microclimate and thermal ecology",
+        body: "Every station logs temperature every 30 minutes for the length of its deployment, alongside its own camera, audio, and forest-structure record. That pairing supports work on how much heat cacao shade and forest canopy buffer compared to open pasture, and where thermal refugia sit for frogs and insects as the Chocó warms.",
+      },
+      {
+        title: "People and land-use decisions",
+        body: "Roughly 50 landowners host stations and receive a personalized page showing what lives on their land. What practices can help promote and incentivize biodiversity-friendly land-use decisions?",
+      },
+      {
+        title: "Additional taxa or sensors!",
+        body: "We've built the network of 50 farms with landowner agreements in place, and a resident field team that visits every station on a schedule. Collaborators can add a method to sites that already run, whether that is eDNA sampling, bat detectors, arthropod traps, or vegetation plots, and build on the paired camera, audio, microclimate, and structure data at each one.",
       },
     ],
     ctaHeading: "Get in touch!",
@@ -511,7 +519,7 @@ const es: ReportContent = {
   collaborate: {
     heading: "Dónde entran los colaboradores",
     intro:
-      "¡Diseñamos la red BioChocó como una base compartida para investigadores, y queremos que nos ayudes a construir sobre ella! FCAT trabaja con científicos de la computación y ecólogos de la Universidad de Tulane, investigadores de la Universidad San Francisco de Quito y el Cornell Lab of Ornithology, entre muchos otros, de modo que los colaboradores se conectan a un esfuerzo activo y bien vinculado.",
+      "Diseñamos la red BioChocó como una base compartida para investigadores. FCAT trabaja con científicos de la computación y ecólogos de la Universidad de Tulane, investigadores de la Universidad San Francisco de Quito, Virginia Tech University, la Universidad de Hawái y el Cornell Lab of Ornithology, entre muchos otros, de modo que los colaboradores se conectan a un esfuerzo activo y bien vinculado.",
     oppListTitle: "Oportunidades de colaboración",
     oppList: [
       {
@@ -519,20 +527,28 @@ const es: ReportContent = {
         body: "Las visitas repetidas a lo largo del gradiente de uso del suelo permiten trabajos de ocupación de una y múltiples especies y de diversidad en aves, mamíferos, ranas e insectos, a partir de registros verificados de especies provenientes de cámaras trampa y grabadoras de audio pasivas.",
       },
       {
-        title: "Bioacústica",
-        body: "Un amplio archivo acústico —grabaciones continuas de día y de noche con resultados de BirdNET— para análisis a nivel de comunidad y de especie, con conteos por puntos de experto realizados por el ornitólogo Juan Freile para validación en campo.",
+        title: "Resultados de la restauración y los corredores a lo largo del tiempo",
+        body: "FCAT está construyendo un corredor de biodiversidad y ejecutando dos proyectos de restauración y agroforestería a gran escala, con estaciones de monitoreo ya instaladas en el terreno. Los colaboradores obtienen un registro de antes y después, con el gradiente de uso del suelo como sitios de referencia incorporados, lo que permite estudiar qué tan rápido se recuperan las comunidades animales y si un corredor nuevo promueve el movimiento para el que fue diseñado.",
       },
       {
-        title: "Aprendizaje automático y visión por computadora",
-        body: "Un conjunto de datos etiquetado y en crecimiento para entrenar clasificadores y evaluar detección, construyendo sobre nuestro BioCLIP afinado y MegaDetector.",
+        title: "Aprendizaje automático con imágenes y audio",
+        body: "Un conjunto de imágenes etiquetado y en crecimiento para entrenar clasificadores y evaluar detección, construido sobre nuestro BioCLIP afinado y MegaDetector, además de terabytes de grabaciones de audio de día y de noche.",
       },
       {
-        title: "Carbono, hábitat y ecología de la restauración",
-        body: "Datos de estructura del bosque emparejados con datos de biodiversidad y microclima por estación, vinculados a dos experimentos activos de restauración y agroforestería.",
+        title: "Agroforestería y diseño de fincas sostenibles",
+        body: "Las estaciones de monitoreo están ubicadas en unas 50 fincas en producción, que abarcan tres sistemas de manejo de cacao junto con bosque y pastizal. Ese diseño permite identificar qué prácticas agrícolas favorecen la biodiversidad en la finca sin dejar de ser rentables: composición de árboles de sombra, estructura del dosel, tamaño del parche y distancia al bosque remanente.",
       },
       {
-        title: "Investigación socio-ecológica",
-        body: "Trabajo en la interfaz entre el ser humano y el ambiente, junto a la investigación comunitaria y de uso del suelo de FCAT.",
+        title: "Microclima y ecología térmica",
+        body: "Cada estación registra la temperatura cada 30 minutos durante toda su instalación, junto con su propio registro de cámara, audio y estructura del bosque. Esa combinación permite estudiar cuánto calor amortiguan la sombra del cacao y el dosel del bosque frente al pastizal abierto, y dónde se ubican los refugios térmicos para ranas e insectos a medida que el Chocó se calienta.",
+      },
+      {
+        title: "Personas y decisiones de uso del suelo",
+        body: "Unos 50 propietarios albergan estaciones y reciben una página personalizada que muestra qué especies viven en sus tierras. ¿Qué prácticas pueden promover e incentivar decisiones de uso del suelo favorables a la biodiversidad?",
+      },
+      {
+        title: "¡Taxones o sensores adicionales!",
+        body: "Ya construimos la red de 50 fincas con acuerdos con los propietarios y un equipo de campo residente que visita cada estación de forma programada. Los colaboradores pueden sumar un nuevo método a sitios que ya están en funcionamiento, sea muestreo de ADN ambiental, detectores de murciélagos, trampas de artrópodos o parcelas de vegetación, y construir sobre los datos pareados de cámara, audio, microclima y estructura de cada uno.",
       },
     ],
     ctaHeading: "¡Ponte en contacto!",

@@ -31,6 +31,7 @@ import { siteShareTokens, images } from "@/db/schema";
 import { eq, and, sql, inArray } from "drizzle-orm";
 import { downloadFileToBuffer } from "@/lib/drive-client";
 import { getOrGenerateThumbnail } from "@/lib/thumbnail";
+import { TOLERANT_DECODE } from "@/lib/image-decode";
 import { getWatermarkOverlay, WATERMARK_VERSION } from "@/lib/watermark";
 import { isValidShareToken } from "@/lib/public-tokens";
 import { log } from "@/lib/log";
@@ -61,7 +62,7 @@ async function loadOriginalBuffer(
 
 async function resizeLarge(buffer: Buffer): Promise<Buffer> {
   const overlay = await getWatermarkOverlay();
-  return sharp(buffer, { limitInputPixels: LARGE_INPUT_PIXEL_LIMIT })
+  return sharp(buffer, { ...TOLERANT_DECODE, limitInputPixels: LARGE_INPUT_PIXEL_LIMIT })
     .rotate() // honor EXIF orientation, then strip
     .resize({
       width: LARGE_MAX_EDGE,

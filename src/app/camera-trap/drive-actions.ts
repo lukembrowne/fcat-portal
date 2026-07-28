@@ -3,6 +3,7 @@
 import { db } from "@/db";
 import { deployments, images, cameraTrapProjects, processingJobs } from "@/db/schema";
 import { recordEvent, buildJobCompletionEvent } from "@/lib/system-events";
+import { TOLERANT_DECODE } from "@/lib/image-decode";
 import { eq, and, inArray, sql, count } from "drizzle-orm";
 import {
   listDeploymentFolders,
@@ -494,7 +495,7 @@ export async function compressImageBatch(
 
         const originalSize = originalBuffer.length;
 
-        const compressedBuffer = await sharp(originalBuffer)
+        const compressedBuffer = await sharp(originalBuffer, TOLERANT_DECODE)
           // Preserve EXIF (incl. DateTimeOriginal) — sharp strips all metadata by
           // default on re-encode. Current field cameras ship EXIF-less JPEGs so
           // this is a no-op today, but it stops compression from destroying capture
@@ -505,7 +506,8 @@ export async function compressImageBatch(
 
         // Validate compressed output
         const [origMeta, compMeta] = await Promise.all([
-          sharp(originalBuffer).metadata(),
+          sharp(originalBuffer, TOLERANT_DECODE).metadata(),
+          // Our own re-encode — validate it strictly.
           sharp(compressedBuffer).metadata(),
         ]);
         if (
@@ -1123,7 +1125,7 @@ export async function revertJobInternal(
           const originalBuffer = await downloadFileRevision(img.driveFileId!, originalRevision.id);
 
           // Validate the restored file is a valid image
-          const meta = await sharp(originalBuffer).metadata();
+          const meta = await sharp(originalBuffer, TOLERANT_DECODE).metadata();
           if (!meta.width || !meta.height) {
             throw new Error("Restored revision is not a valid image");
           }

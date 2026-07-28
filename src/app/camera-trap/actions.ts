@@ -23,6 +23,7 @@ import {
 } from "@/lib/display-species";
 import { eq, desc, inArray, and, or, gte, ne, sql, count, sum, isNotNull, isNull, notExists } from "drizzle-orm";
 import { runMLPredictions, checkPytorchWildlife, cancelModelServerJob, type MLRunResult } from "@/lib/ml-runner";
+import { TOLERANT_DECODE } from "@/lib/image-decode";
 import {
   downloadDeploymentForProcessing,
   downloadVideosForProcessing,
@@ -641,7 +642,7 @@ export async function processJobInternal(
               try {
                 const thumbPath = path.join(thumbDir, `${id}.jpg`);
                 const imgData = await fs.readFile(framePath);
-                const thumb = await sharp(imgData)
+                const thumb = await sharp(imgData, TOLERANT_DECODE)
                   .resize(400)
                   .jpeg({ quality: 80 })
                   .toBuffer();

@@ -130,11 +130,8 @@ export async function GET(
       });
     } catch (err) {
       log.error({ err, imageId }, "[ct-images] Thumbnail generation failed");
-      const status = isDriveNotFound(err) ? 404 : 502;
-      return NextResponse.json(
-        { error: status === 404 ? "File not found on Drive" : "Drive API error" },
-        { status }
-      );
+      const { status, error } = classifyImageError(err);
+      return NextResponse.json({ error }, { status });
     }
   }
 
@@ -162,11 +159,8 @@ export async function GET(
       });
     } catch (err) {
       log.error({ err, imageId }, "[ct-images] Annotate generation failed");
-      const status = isDriveNotFound(err) ? 404 : 502;
-      return NextResponse.json(
-        { error: status === 404 ? "File not found on Drive" : "Drive API error" },
-        { status }
-      );
+      const { status, error } = classifyImageError(err);
+      return NextResponse.json({ error }, { status });
     }
   }
 
@@ -202,11 +196,8 @@ export async function GET(
     });
   } catch (err) {
     log.error({ err, imageId }, "[ct-images] Failed to serve image");
-    const status = isDriveNotFound(err) ? 404 : 502;
-    return NextResponse.json(
-      { error: status === 404 ? "File not found on Drive" : "Drive API error" },
-      { status }
-    );
+    const { status, error } = classifyImageError(err);
+    return NextResponse.json({ error }, { status });
   }
 }
 
@@ -215,4 +206,23 @@ function isDriveNotFound(err: unknown): boolean {
     return (err as { code: number }).code === 404;
   }
   return false;
+}
+
+/**
+ * Classify a derivative-generation failure.
+ *
+ * The whole pipeline used to collapse to `502 {"error":"Drive API error"}`, which
+ * blamed Drive for what was really libvips refusing to decode a damaged JPEG —
+ * that misattribution is what made POT-001/POT-003 look like a Drive outage. Keep
+ * decode failures distinguishable from transport failures.
+ */
+function classifyImageError(err: unknown): { status: number; error: string } {
+  if (isDriveNotFound(err)) {
+    return { status: 404, error: "File not found on Drive" };
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  if (/VipsJpeg|Corrupt JPEG|premature end|unsupported image format/i.test(message)) {
+    return { status: 415, error: "Corrupt image data — cannot decode" };
+  }
+  return { status: 502, error: "Drive API error" };
 }

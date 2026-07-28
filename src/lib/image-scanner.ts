@@ -9,6 +9,7 @@ import "server-only";
 
 import { promises as fs } from "fs";
 import path from "path";
+import { TOLERANT_DECODE } from "./image-decode";
 
 const IMAGE_EXTENSIONS = new Set([
   ".jpg",
@@ -158,7 +159,7 @@ export async function generateThumbnails(
     const thumbPath = path.join(thumbnailDir, thumbFilename);
 
     try {
-      await sharp(img.path)
+      await sharp(img.path, TOLERANT_DECODE)
         .resize(400, null, { withoutEnlargement: true })
         .jpeg({ quality: 80 })
         .toFile(thumbPath);

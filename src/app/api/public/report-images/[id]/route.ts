@@ -18,6 +18,7 @@ import { images } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { downloadFileToBuffer } from "@/lib/drive-client";
 import { getOrGenerateThumbnail } from "@/lib/thumbnail";
+import { TOLERANT_DECODE } from "@/lib/image-decode";
 import { getReportImageAllowlist } from "@/lib/public-report-snapshot";
 import { log } from "@/lib/log";
 
@@ -45,7 +46,7 @@ async function loadOriginalBuffer(
 }
 
 async function resizeLarge(buffer: Buffer): Promise<Buffer> {
-  return sharp(buffer, { limitInputPixels: LARGE_INPUT_PIXEL_LIMIT })
+  return sharp(buffer, { ...TOLERANT_DECODE, limitInputPixels: LARGE_INPUT_PIXEL_LIMIT })
     .rotate() // honor EXIF orientation, then strip (sharp drops metadata by default)
     .resize({
       width: LARGE_MAX_EDGE,

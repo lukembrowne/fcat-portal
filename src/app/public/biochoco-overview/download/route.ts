@@ -21,6 +21,7 @@ import { inArray } from "drizzle-orm";
 import { downloadFileToBuffer } from "@/lib/drive-client";
 import { getActiveReportSnapshot } from "@/lib/public-report-snapshot";
 import { log } from "@/lib/log";
+import { TOLERANT_DECODE } from "@/lib/image-decode";
 import { CONTENT, DEFAULT_LANG } from "../content";
 import { HABITAT, HAB_ORDER } from "../lib/habitat";
 import { fmt, spanLabel, tpl } from "../lib/format";
@@ -92,7 +93,7 @@ async function inlineCuratedImages(snapshot: ReportSnapshot): Promise<Map<number
     try {
       const original = await loadOriginalBuffer(row.path, row.driveFileId);
       if (!original) continue;
-      const jpeg = await sharp(original, { limitInputPixels: 100_000_000 })
+      const jpeg = await sharp(original, { ...TOLERANT_DECODE, limitInputPixels: 100_000_000 })
         .rotate()
         .resize({ width: 1200, height: 1200, fit: "inside", withoutEnlargement: true })
         .jpeg({ quality: 80, mozjpeg: true })

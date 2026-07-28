@@ -1,6 +1,7 @@
 import path from "path";
 import { promises as fs } from "fs";
 import sharp from "sharp";
+import { TOLERANT_DECODE } from "./image-decode";
 
 export const THUMBNAIL_DIR = path.join(process.cwd(), "data", "thumbnails");
 export const THUMBNAIL_WIDTH = 400;
@@ -88,8 +89,8 @@ export function resizeForTier(
 ): Promise<Buffer> {
   const pipeline =
     tier === THUMB_TIER
-      ? sharp(source).resize(tier.longEdge)
-      : sharp(source).resize(tier.longEdge, tier.longEdge, {
+      ? sharp(source, TOLERANT_DECODE).resize(tier.longEdge)
+      : sharp(source, TOLERANT_DECODE).resize(tier.longEdge, tier.longEdge, {
           fit: "inside",
           withoutEnlargement: true,
         });

@@ -43,6 +43,7 @@ import {
 } from "@/db/schema";
 import { requireAdmin, requirePermission } from "@/lib/auth";
 import type { ActionResult } from "@/lib/types";
+import { TOLERANT_DECODE } from "@/lib/image-decode";
 import {
   uploadLocalFileToSharedDrive,
   deleteDriveFile,
@@ -1642,7 +1643,7 @@ async function cropAndWriteAtomic(
     // Not present — write it below.
   }
 
-  const meta = await sharp(buffer).metadata();
+  const meta = await sharp(buffer, TOLERANT_DECODE).metadata();
   if (!meta.width || !meta.height) {
     throw new Error("image has no dimensions");
   }
@@ -1666,7 +1667,7 @@ async function cropAndWriteAtomic(
   if (top + height > H) height = H - top;
 
   const tmpPath = `${outPath}.tmp`;
-  await sharp(buffer)
+  await sharp(buffer, TOLERANT_DECODE)
     .extract({ left, top, width, height })
     .resize({
       width: quality.cropLongEdge,

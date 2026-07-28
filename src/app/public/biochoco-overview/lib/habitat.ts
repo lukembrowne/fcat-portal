@@ -105,9 +105,40 @@ export const HABITAT: Record<HabitatKey, HabitatMeta> = {
 
 const HABITAT_MAP = rawHabitatMap as Record<string, HabitatKey>;
 
-/** Resolve a site code (e.g. "PRI-001") to its habitat, or "unknown". */
+/**
+ * Site-code prefix → habitat. BioChoco site codes are `XXX-NNN`, where the
+ * three-letter prefix *is* the habitat assignment — this is how the field team
+ * names sites, and it matches ODK's `monitoring_sites` `habitat_type` for all
+ * 101 assessed sites with zero exceptions (and all 81 entries of the legacy
+ * `habitat-map.json`).
+ *
+ * Deriving from the prefix is what keeps newly added sites classified. The JSON
+ * map is a frozen snapshot of the codes that existed when the report was first
+ * ported, so a lookup-only resolver silently dropped every site added since
+ * (PRI-010, POT-006, CCN-002, SEC-002, …) into "Sin clasificar".
+ */
+const HABITAT_BY_PREFIX: Record<string, HabitatKey> = {
+  PRI: "primary_forest",
+  SEC: "secondary_forest",
+  NAC: "cacao_nacional",
+  GIZ: "cacao_giz",
+  CCN: "cacao_ccn",
+  REF: "reforestation",
+  POT: "pasture",
+};
+
+/**
+ * Resolve a site code (e.g. "PRI-001") to its habitat, or "unknown".
+ *
+ * `habitat-map.json` wins so a genuine exception can be pinned by hand; the
+ * three-letter prefix covers everything else. Names that aren't site codes at
+ * all (e.g. the "Datos de comparacion de Ibuto" test deployment) stay unknown.
+ */
 export function habitatForSite(code: string): HabitatKey {
-  return HABITAT_MAP[code] ?? "unknown";
+  const pinned = HABITAT_MAP[code];
+  if (pinned) return pinned;
+  const prefix = /^([A-Za-z]{3})-\d/.exec(code)?.[1];
+  return (prefix && HABITAT_BY_PREFIX[prefix.toUpperCase()]) || "unknown";
 }
 
 /**

@@ -27,11 +27,6 @@ export const CURATED_IMAGES: CuratedImage[] = [
     caption: { en: "Ocelot walking along a trail at night", es: "Ocelote recorriendo un sendero del bosque de noche" },
   },
   {
-    imageId: 48763,
-    speciesLabel: "Leopardus wiedii",
-    caption: { en: "Margay, a small relatively rare nocturnal cat", es: "Margay, un pequeño felino nocturno rara vez captado por una cámara" },
-  },
-  {
     imageId: 44218,
     speciesLabel: "Dicotyles tajacu",
     caption: { en: "A collared peccary often seen traveling in groups", es: "Un pecarí de collar hurgando en la hojarasca" },

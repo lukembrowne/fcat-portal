@@ -1,302 +1,233 @@
 "use client";
 
-import { useState, useTransition, useMemo } from "react";
-import { useRouter } from "next/navigation";
-import { Button } from "@/components/ui/button";
+/**
+ * "Fichas de especies" — the authoring surface for the shared per-species text
+ * that appears on every public finca page.
+ *
+ * Card list rather than a table: each species' text box is always open and
+ * saved in place, because the job here is writing ~63 fichas from scratch, not
+ * editing existing ones (production: 607 species rows, 63 with any verified
+ * detection, 1 with content). A modal per species was the wrong shape for that.
+ *
+ * The default scope is deliberately "con registros" — only species with a
+ * verified detection can appear on a finca page, so the ~544-row BirdNET
+ * audio-only bird tail is behind a toggle instead of burying the work.
+ */
+
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
-import { Textarea } from "@/components/ui/textarea";
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { SortIcon } from "@/components/sort-icon";
-import { updateSpeciesContent } from "./actions";
-import { SPECIES_CONTENT_MAX, type SpeciesContentRow } from "./content-types";
+import { SpeciesCard } from "./species-card";
+import type { SpeciesContentRow } from "./content-types";
+import {
+  buildVisibleSections,
+  type SortKey,
+  type SortDir,
+  type SpeciesScope,
+} from "./list-view";
 
-const TYPE_LABELS: Record<string, string> = {
-  mammal: "Mamífero",
-  bird: "Ave",
-  reptile: "Reptil",
-  amphibian: "Anfibio",
-  insect: "Insecto",
-  system: "Sistema",
-};
+/** Cards rendered before "Mostrar más". Only bites in the "Todas" scope. */
+const CHUNK = 100;
 
-type SortKey = "name" | "type" | "status" | "records";
-type SortDir = "asc" | "desc";
+const SORT_OPTIONS: { key: SortKey; label: string; defaultDir: SortDir }[] = [
+  { key: "records", label: "Registros", defaultDir: "desc" },
+  { key: "name", label: "Nombre", defaultDir: "asc" },
+  { key: "type", label: "Tipo", defaultDir: "asc" },
+  { key: "status", label: "Ficha", defaultDir: "asc" },
+];
 
 interface Props {
   species: SpeciesContentRow[];
 }
 
-function displayName(s: SpeciesContentRow): string {
-  return s.spanishName || s.commonName || s.scientificName;
-}
-
 export function FichasEspeciesClient({ species }: Props) {
-  const router = useRouter();
-  const [isPending, startTransition] = useTransition();
   const [rows, setRows] = useState<SpeciesContentRow[]>(species);
-  const [editId, setEditId] = useState<number | null>(null);
-  const [content, setContent] = useState("");
-  const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  // Default: most camera-trap records first, so the species farmers actually
-  // see lead the list and the audio-bird tail (0 registros) sinks to the bottom.
+  const [scope, setScope] = useState<SpeciesScope>("withRecords");
   const [sortKey, setSortKey] = useState<SortKey>("records");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [dirtyIds, setDirtyIds] = useState<ReadonlySet<number>>(new Set());
+  const [limit, setLimit] = useState(CHUNK);
+
+  // Reset the render window whenever the visible set changes underneath it.
+  const filterKey = `${search}|${scope}|${sortKey}|${sortDir}`;
+  const [lastFilterKey, setLastFilterKey] = useState(filterKey);
+  if (filterKey !== lastFilterKey) {
+    setLastFilterKey(filterKey);
+    setLimit(CHUNK);
+  }
+
+  const { matching, pinned } = useMemo(
+    () =>
+      buildVisibleSections(rows, {
+        search,
+        scope,
+        sortKey,
+        sortDir,
+        alwaysInclude: dirtyIds,
+      }),
+    [rows, search, scope, sortKey, sortDir, dirtyIds]
+  );
+
+  // Pinned (dirty) cards render OUTSIDE the chunk cap. Capping them too would
+  // let a card holding unsaved text fall past the window and unmount — exactly
+  // what pinning exists to prevent.
+  const shown = matching.slice(0, limit);
+  const hiddenCount = matching.length - shown.length;
+
+  const withContent = matching.filter((r) => r.hasContent).length;
+
+  const handleSaved = useCallback((id: number, publicContent: string | null) => {
+    setRows((rs) =>
+      rs.map((r) =>
+        r.id === id
+          ? { ...r, publicContent, hasContent: !!publicContent?.trim() }
+          : r
+      )
+    );
+  }, []);
+
+  const handleDirtyChange = useCallback((id: number, dirty: boolean) => {
+    setDirtyIds((prev) => {
+      if (prev.has(id) === dirty) return prev;
+      const next = new Set(prev);
+      if (dirty) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (dirtyIds.size === 0) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [dirtyIds.size]);
 
   const toggleSort = (key: SortKey) => {
+    const option = SORT_OPTIONS.find((o) => o.key === key);
     if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
     else {
       setSortKey(key);
-      // Records default to descending (most first); text columns to ascending.
-      setSortDir(key === "records" ? "desc" : "asc");
+      setSortDir(option?.defaultDir ?? "asc");
     }
   };
-
-  const filteredSorted = useMemo(() => {
-    const q = search.toLowerCase().trim();
-    let list = rows;
-    if (q) {
-      list = rows.filter(
-        (s) =>
-          s.scientificName.toLowerCase().includes(q) ||
-          s.commonName.toLowerCase().includes(q) ||
-          (s.spanishName && s.spanishName.toLowerCase().includes(q))
-      );
-    }
-    return [...list].sort((a, b) => {
-      let cmp = 0;
-      if (sortKey === "name") cmp = displayName(a).localeCompare(displayName(b));
-      else if (sortKey === "type")
-        cmp = (TYPE_LABELS[a.type] || a.type).localeCompare(TYPE_LABELS[b.type] || b.type);
-      else if (sortKey === "records") {
-        // Most records first (when desc); name as a stable tiebreaker so the
-        // 0-registro tail stays alphabetical rather than arbitrary.
-        cmp = a.detectionCount - b.detectionCount;
-        if (cmp === 0) {
-          // Tiebreak by name ASCENDING regardless of sortDir.
-          const nameCmp = displayName(a).localeCompare(displayName(b));
-          return (sortDir === "asc" ? cmp : -cmp) || nameCmp;
-        }
-      } else {
-        // status: "con ficha" first when asc
-        const av = a.hasContent ? 0 : 1;
-        const bv = b.hasContent ? 0 : 1;
-        cmp = av - bv || displayName(a).localeCompare(displayName(b));
-      }
-      return sortDir === "asc" ? cmp : -cmp;
-    });
-  }, [rows, search, sortKey, sortDir]);
-
-  const openEdit = (s: SpeciesContentRow) => {
-    setEditId(s.id);
-    setContent(s.publicContent ?? "");
-    setError(null);
-  };
-
-  const closeEdit = () => {
-    setEditId(null);
-    setError(null);
-  };
-
-  const handleSave = () => {
-    if (editId === null) return;
-    setError(null);
-    startTransition(async () => {
-      const result = await updateSpeciesContent(editId, {
-        publicContent: content,
-      });
-      if (result.success) {
-        const saved = result.data.publicContent;
-        setRows((rs) =>
-          rs.map((r) =>
-            r.id === editId
-              ? {
-                  ...r,
-                  publicContent: saved,
-                  hasContent: !!saved?.trim(),
-                }
-              : r
-          )
-        );
-        closeEdit();
-        router.refresh();
-      } else {
-        setError(result.error);
-      }
-    });
-  };
-
-  const editSp = editId !== null ? rows.find((r) => r.id === editId) : null;
-  const withContent = rows.filter((r) => r.hasContent).length;
 
   return (
     <>
-      <header className="mb-6">
+      <header className="mb-5">
         <h1 className="text-2xl font-bold">Fichas de especies</h1>
-        <p className="text-sm text-muted-foreground mt-1">
+        <p className="mt-1 text-sm text-muted-foreground">
           Texto que aparece en las páginas públicas de las fincas. Es el mismo
           para todos los sitios: al editarlo aquí se actualiza en todas las
           páginas que muestran esa especie.
         </p>
-        <p className="text-xs text-muted-foreground mt-1">
-          {withContent} de {rows.length} especies con ficha
+        <p className="mt-1 text-xs text-muted-foreground">
+          {withContent} de {matching.length} especies con ficha
+          {dirtyIds.size > 0 && (
+            <span className="ml-2 text-amber-600">
+              · {dirtyIds.size} sin guardar
+            </span>
+          )}
         </p>
       </header>
 
-      <div className="mb-4">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <Input
           placeholder="Buscar por nombre científico, común o español..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="max-w-md"
+          className="sm:max-w-xs"
         />
-      </div>
 
-      <div className="border rounded-lg">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <SortableHead label="Especie" col="name" cur={sortKey} dir={sortDir} onSort={toggleSort} />
-              <SortableHead label="Tipo" col="type" cur={sortKey} dir={sortDir} onSort={toggleSort} />
-              <SortableHead label="Registros" col="records" cur={sortKey} dir={sortDir} onSort={toggleSort} />
-              <SortableHead label="Ficha" col="status" cur={sortKey} dir={sortDir} onSort={toggleSort} />
-              <TableHead className="w-[100px]">Acciones</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {filteredSorted.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
-                  No se encontraron especies
-                </TableCell>
-              </TableRow>
-            )}
-            {filteredSorted.map((s) => (
-              <TableRow key={s.id}>
-                <TableCell>
-                  <div className="font-medium">{displayName(s)}</div>
-                  <div className="text-xs text-muted-foreground italic">
-                    {s.scientificName}
-                  </div>
-                </TableCell>
-                <TableCell>
-                  <Badge variant="secondary" className="text-xs">
-                    {TYPE_LABELS[s.type] || s.type}
-                  </Badge>
-                </TableCell>
-                <TableCell>
-                  {s.detectionCount > 0 ? (
-                    <span className="tabular-nums">
-                      {s.detectionCount.toLocaleString("es")}
-                    </span>
-                  ) : (
-                    <span className="text-muted-foreground">—</span>
-                  )}
-                </TableCell>
-                <TableCell>
-                  {s.hasContent ? (
-                    <Badge className="text-xs bg-emerald-100 text-emerald-800 hover:bg-emerald-100">
-                      Con ficha
-                    </Badge>
-                  ) : (
-                    <Badge variant="outline" className="text-xs text-muted-foreground">
-                      Sin ficha
-                    </Badge>
-                  )}
-                </TableCell>
-                <TableCell>
-                  <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => openEdit(s)}>
-                    Editar
-                  </Button>
-                </TableCell>
-              </TableRow>
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex rounded-md border text-xs">
+            {(
+              [
+                ["withRecords", "Con registros"],
+                ["all", "Todas"],
+              ] as const
+            ).map(([value, label], i) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setScope(value)}
+                className={`px-2.5 py-1.5 ${i === 0 ? "rounded-l-md" : "rounded-r-md"} ${
+                  scope === value
+                    ? "bg-foreground text-background"
+                    : "hover:bg-muted"
+                }`}
+              >
+                {label}
+              </button>
             ))}
-          </TableBody>
-        </Table>
+          </div>
+
+          <div className="flex flex-wrap gap-1 text-xs">
+            {SORT_OPTIONS.map((o) => (
+              <button
+                key={o.key}
+                type="button"
+                onClick={() => toggleSort(o.key)}
+                className={`inline-flex items-center gap-1 rounded-md border px-2.5 py-1.5 ${
+                  sortKey === o.key
+                    ? "bg-foreground text-background"
+                    : "hover:bg-muted"
+                }`}
+              >
+                {o.label}
+                <SortIcon direction={sortKey === o.key ? sortDir : false} />
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
-      <Dialog open={editId !== null} onOpenChange={(open) => { if (!open) closeEdit(); }}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>
-              {editSp ? displayName(editSp) : "Editar ficha"}
-            </DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div>
-              <Label htmlFor="content">Información de la especie</Label>
-              <Textarea
-                id="content"
-                value={content}
-                onChange={(e) => setContent(e.target.value)}
-                rows={7}
-                maxLength={SPECIES_CONTENT_MAX}
-                placeholder={
-                  "Ej: La guatusa dispersa semillas y ayuda a la regeneración del bosque.\n\nPara perros, gatos, gallinas, ganado o cerdos, puede incluir un consejo de manejo:\n- Vacunar y esterilizar\n- No dejarlos sueltos de noche"
-                }
-              />
-              <p className="text-xs text-muted-foreground mt-1">
-                Describe el papel del animal en el bosque y, si aplica (perros,
-                gatos, gallinas, ganado, cerdos), un consejo de manejo. Deja una
-                línea en blanco para separar párrafos y usa un guion (-) al
-                inicio de una línea para viñetas.
-              </p>
-            </div>
-            {error && <p className="text-sm text-destructive">{error}</p>}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={closeEdit} disabled={isPending}>
-              Cancelar
-            </Button>
-            <Button onClick={handleSave} disabled={isPending}>
-              {isPending ? "Guardando..." : "Guardar"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </>
-  );
-}
+      {matching.length === 0 && pinned.length === 0 ? (
+        <p className="py-12 text-center text-sm text-muted-foreground">
+          No se encontraron especies
+        </p>
+      ) : (
+        <div className="space-y-3">
+          {shown.map((s) => (
+            <SpeciesCard
+              key={s.id}
+              species={s}
+              onDirtyChange={handleDirtyChange}
+              onSaved={handleSaved}
+            />
+          ))}
 
-function SortableHead({
-  label,
-  col,
-  cur,
-  dir,
-  onSort,
-}: {
-  label: string;
-  col: SortKey;
-  cur: SortKey;
-  dir: SortDir;
-  onSort: (k: SortKey) => void;
-}) {
-  return (
-    <TableHead>
-      <button
-        type="button"
-        className="inline-flex items-center gap-1 cursor-pointer hover:text-foreground"
-        onClick={() => onSort(col)}
-      >
-        {label}
-        <SortIcon direction={cur === col ? dir : false} />
-      </button>
-    </TableHead>
+          {pinned.length > 0 && (
+            <>
+              <p className="pt-2 text-xs text-muted-foreground">
+                Fuera del filtro actual, con cambios sin guardar:
+              </p>
+              {pinned.map((s) => (
+                <SpeciesCard
+                  key={s.id}
+                  species={s}
+                  onDirtyChange={handleDirtyChange}
+                  onSaved={handleSaved}
+                />
+              ))}
+            </>
+          )}
+
+          {hiddenCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setLimit((l) => l + CHUNK)}
+              className="w-full rounded-lg border border-dashed py-3 text-sm text-muted-foreground hover:bg-muted"
+            >
+              Mostrar más ({hiddenCount} restantes)
+            </button>
+          )}
+        </div>
+      )}
+    </>
   );
 }

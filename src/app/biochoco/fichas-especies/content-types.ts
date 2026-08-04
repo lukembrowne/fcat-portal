@@ -22,4 +22,12 @@ export interface SpeciesContentRow {
   /** Verified/corrected detections of this species (across the DB) — for prioritizing. */
   detectionCount: number;
   hasContent: boolean;
+  /**
+   * Image of this species' highest-confidence verified/corrected identification,
+   * shown as the card thumbnail. Null when the species has no verified
+   * detections. Served through `/api/ct-images/{id}?size=thumb`, which gates on
+   * camera-trap project access — so the card must degrade gracefully when a
+   * biochoco-only editor gets a 403.
+   */
+  representativeImageId: number | null;
 }

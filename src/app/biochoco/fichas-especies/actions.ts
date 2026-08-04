@@ -2,7 +2,7 @@
 
 import { requirePermission } from "@/lib/auth";
 import { db } from "@/db";
-import { species, identifications } from "@/db/schema";
+import { species, identifications, detections } from "@/db/schema";
 import { eq, sql, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { recordEvent } from "@/lib/system-events";
@@ -39,6 +39,30 @@ export async function fetchSpeciesContentList(): Promise<SpeciesContentRow[]> {
 
   const countMap = new Map(counts.map((c) => [c.name, Number(c.count)]));
 
+  // One representative image per species — the one attached to its
+  // highest-confidence verified/corrected identification. SQLite's bare-column
+  // rule returns the row matching `max()`, so `imageId` comes from that row.
+  //
+  // Deliberately a second query with an explicit join rather than folding the
+  // join into the count above: an identification whose detection row is missing
+  // would be dropped by the join and would silently lower the count.
+  const repImages = await db
+    .select({
+      name: sql<string>`coalesce(${identifications.correctedSpecies}, ${identifications.species})`,
+      imageId: detections.imageId,
+      topConfidence: sql<number>`max(${identifications.confidence})`,
+    })
+    .from(identifications)
+    .innerJoin(detections, eq(detections.id, identifications.detectionId))
+    .where(
+      inArray(identifications.verificationStatus, ["verified", "corrected"])
+    )
+    .groupBy(
+      sql`coalesce(${identifications.correctedSpecies}, ${identifications.species})`
+    );
+
+  const imageMap = new Map(repImages.map((r) => [r.name, r.imageId]));
+
   return speciesRows
     .map((s) => ({
       id: s.id,
@@ -49,6 +73,7 @@ export async function fetchSpeciesContentList(): Promise<SpeciesContentRow[]> {
       publicContent: s.publicContent,
       detectionCount: countMap.get(s.scientificName) ?? 0,
       hasContent: !!s.publicContent?.trim(),
+      representativeImageId: imageMap.get(s.scientificName) ?? null,
     }))
     .sort((a, b) => {
       const aSeen = a.detectionCount > 0 ? 1 : 0;

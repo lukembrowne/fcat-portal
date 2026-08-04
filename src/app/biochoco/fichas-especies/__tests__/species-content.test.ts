@@ -100,6 +100,138 @@ describe("fetchSpeciesContentList", () => {
     expect(armadillo?.hasContent).toBe(false);
   });
 
+  it("returns null representativeImageId when a species has no identifications", async () => {
+    const list = await fetchSpeciesContentList();
+    expect(list.find((s) => s.id === guatusaId)?.representativeImageId).toBeNull();
+  });
+
+  it("picks the image of the highest-confidence verified identification", async () => {
+    const [dep] = db
+      .insert(schema.deployments)
+      .values({ projectId: "camera-trap", name: "TST-002_V1", status: "processed" })
+      .returning()
+      .all();
+
+    // Two verified identifications of the guatusa at different confidences,
+    // each on its own image — the higher-confidence one should win.
+    const imageIds: number[] = [];
+    for (const [filename, confidence] of [
+      ["low.jpg", 0.4],
+      ["high.jpg", 0.95],
+    ] as const) {
+      const [img] = db
+        .insert(schema.images)
+        .values({ deploymentId: dep.id, filename, status: "processed" })
+        .returning()
+        .all();
+      const [det] = db
+        .insert(schema.detections)
+        .values({
+          imageId: img.id,
+          bboxX: 0,
+          bboxY: 0,
+          bboxWidth: 1,
+          bboxHeight: 1,
+          detectionConfidence: confidence,
+        })
+        .returning()
+        .all();
+      db.insert(schema.identifications)
+        .values({
+          detectionId: det.id,
+          species: "Dasyprocta punctata",
+          confidence,
+          verificationStatus: "verified",
+        })
+        .run();
+      imageIds.push(img.id);
+    }
+
+    const list = await fetchSpeciesContentList();
+    const guatusa = list.find((s) => s.id === guatusaId);
+    expect(guatusa?.representativeImageId).toBe(imageIds[1]);
+    expect(guatusa?.detectionCount).toBe(2);
+  });
+
+  it("ignores unverified identifications when picking the image", async () => {
+    const [dep] = db
+      .insert(schema.deployments)
+      .values({ projectId: "camera-trap", name: "TST-003_V1", status: "processed" })
+      .returning()
+      .all();
+    const [img] = db
+      .insert(schema.images)
+      .values({ deploymentId: dep.id, filename: "unverified.jpg", status: "processed" })
+      .returning()
+      .all();
+    const [det] = db
+      .insert(schema.detections)
+      .values({
+        imageId: img.id,
+        bboxX: 0,
+        bboxY: 0,
+        bboxWidth: 1,
+        bboxHeight: 1,
+        detectionConfidence: 0.99,
+      })
+      .returning()
+      .all();
+    db.insert(schema.identifications)
+      .values({
+        detectionId: det.id,
+        species: "Dasyprocta punctata",
+        confidence: 0.99,
+        verificationStatus: "unverified",
+      })
+      .run();
+
+    const list = await fetchSpeciesContentList();
+    const guatusa = list.find((s) => s.id === guatusaId);
+    expect(guatusa?.representativeImageId).toBeNull();
+    expect(guatusa?.detectionCount).toBe(0);
+  });
+
+  it("attributes a corrected identification's image to the corrected species", async () => {
+    const [dep] = db
+      .insert(schema.deployments)
+      .values({ projectId: "camera-trap", name: "TST-004_V1", status: "processed" })
+      .returning()
+      .all();
+    const [img] = db
+      .insert(schema.images)
+      .values({ deploymentId: dep.id, filename: "corrected.jpg", status: "processed" })
+      .returning()
+      .all();
+    const [det] = db
+      .insert(schema.detections)
+      .values({
+        imageId: img.id,
+        bboxX: 0,
+        bboxY: 0,
+        bboxWidth: 1,
+        bboxHeight: 1,
+        detectionConfidence: 0.8,
+      })
+      .returning()
+      .all();
+    // Model said guatusa; a human corrected it to armadillo.
+    db.insert(schema.identifications)
+      .values({
+        detectionId: det.id,
+        species: "Dasyprocta punctata",
+        correctedSpecies: "Dasypus novemcinctus",
+        confidence: 0.8,
+        verificationStatus: "corrected",
+      })
+      .run();
+
+    const list = await fetchSpeciesContentList();
+    expect(
+      list.find((s) => s.id === armadilloId)?.representativeImageId
+    ).toBe(img.id);
+    expect(list.find((s) => s.id === guatusaId)?.representativeImageId).toBeNull();
+  });
+
   it("orders species with detections before those without", async () => {
     // Give the armadillo a verified detection so it should sort first.
     const [dep] = db

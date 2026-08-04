@@ -5,17 +5,21 @@ import { db } from "@/db";
 import {
   financeTransactions,
   financeBudgetItems,
-  financeSueldosGrants,
-  financeSueldosTotals,
+  financePeople,
+  financePeopleGroups,
+  financeSalaries,
+  financeFundingSources,
+  financeSalaryAllocations,
   financeUploads,
 } from "@/db/schema";
 import type { ActionResult } from "@/lib/types";
 import type { UploadPreview } from "../types";
 import { parseLibroMayor } from "../lib/parse-libro-mayor";
 import { parseBudgetExcel } from "../lib/parse-budget";
-import { parseSueldosExcel } from "../lib/parse-sueldos";
+import { parseSueldosExcel, normalizeName } from "../lib/parse-sueldos";
+import { isPlanningYear } from "@/lib/finance/sueldos-fields";
 import { revalidatePath } from "next/cache";
-import { sql } from "drizzle-orm";
+import { sql, eq, and } from "drizzle-orm";
 import { recordEvent } from "@/lib/system-events";
 
 // --- LibroMayor upload ---
@@ -317,69 +321,480 @@ export async function commitBudget(
   }
 }
 
-// --- Sueldos upload ---
+// --- Sueldos import ---
+//
+// Unlike the other finance uploads, this one UPSERTS. Replace-all is safe when
+// a file is the only source of truth; once salaries are edited on the page it
+// would silently destroy that work. So: match by name, update what is found,
+// insert what is not, delete nothing. Allocation targets that can't be matched
+// block the commit rather than being dropped — that silent drop is the specific
+// defect the old importer had.
 
-export async function commitSueldos(
+export interface SueldosImportPreview {
+  detectedYear: number | null;
+  requestedYear: number;
+  /** People in the file that don't exist yet. */
+  newPeople: { name: string; role: string | null; group: string | null; annualCost: number }[];
+  /** People that exist and whose salary for this year the file would CHANGE. */
+  salaryChanges: { name: string; from: number | null; to: number }[];
+  /** People that exist with this salary already — no-ops. */
+  unchangedCount: number;
+  newSources: { name: string; status: "funded" | "pending" }[];
+  existingSourceCount: number;
+  allocationCount: number;
+  /**
+   * Allocation targets that matched neither a person nor a group. The commit
+   * refuses while any of these are unresolved.
+   */
+  unresolvedTargets: { rawTarget: string; lineCount: number; suggestions: string[] }[];
+  /** Options the resolver offers: every person and group known after import. */
+  resolutionOptions: { value: string; label: string }[];
+  warnings: string[];
+}
+
+/** Everything the parse + matching step produces, shared by preview and commit. */
+function analyzeSueldosFile(parsed: ReturnType<typeof parseSueldosExcel>, year: number) {
+  const existingPeople = db
+    .select({
+      id: financePeople.id,
+      name: financePeople.name,
+      groupId: financePeople.groupId,
+    })
+    .from(financePeople)
+    .all();
+  const existingGroups = db
+    .select({ id: financePeopleGroups.id, name: financePeopleGroups.name })
+    .from(financePeopleGroups)
+    .all();
+  const existingSources = db
+    .select({ id: financeFundingSources.id, name: financeFundingSources.name })
+    .from(financeFundingSources)
+    .all();
+  const existingSalaries = db
+    .select({
+      personId: financeSalaries.personId,
+      year: financeSalaries.year,
+      annualCost: financeSalaries.annualCost,
+    })
+    .from(financeSalaries)
+    .all();
+
+  const personByKey = new Map(existingPeople.map((p) => [normalizeName(p.name), p]));
+  const groupByKey = new Map(existingGroups.map((g) => [normalizeName(g.name), g]));
+  const sourceByKey = new Map(existingSources.map((s) => [normalizeName(s.name), s]));
+  const salaryByPersonYear = new Map(
+    existingSalaries.map((s) => [`${s.personId}:${s.year}`, s.annualCost])
+  );
+
+  // People from the file, plus the ones already stored, form the match universe
+  // — an allocation may name someone the salary sheet doesn't list.
+  const fileKeys = new Set(parsed.people.map((p) => normalizeName(p.name)));
+  const knownPersonKeys = new Set([...personByKey.keys(), ...fileKeys]);
+  const knownGroupKeys = new Set([
+    ...groupByKey.keys(),
+    ...parsed.groups.map((g) => normalizeName(g)),
+  ]);
+
+  const unresolved = new Map<string, number>();
+  for (const a of parsed.allocations) {
+    if (knownPersonKeys.has(a.targetKey) || knownGroupKeys.has(a.targetKey)) continue;
+    unresolved.set(a.rawTarget, (unresolved.get(a.rawTarget) ?? 0) + 1);
+  }
+
+  return {
+    existingPeople,
+    existingGroups,
+    personByKey,
+    groupByKey,
+    sourceByKey,
+    salaryByPersonYear,
+    unresolved,
+    year,
+  };
+}
+
+/** First-letter + surname overlap, used only to ORDER the manual picker. Never
+ *  used to auto-match — see the Zambrano note in parse-sueldos.ts. */
+function suggestionsFor(
+  rawTarget: string,
+  people: { name: string }[],
+  groups: { name: string }[]
+): string[] {
+  const target = normalizeName(rawTarget);
+  const parts = target.split(" ").filter(Boolean);
+  const scored = [
+    ...people.map((p) => ({ label: p.name, key: normalizeName(p.name) })),
+    ...groups.map((g) => ({ label: g.name, key: normalizeName(g.name) })),
+  ].map((c) => {
+    const cParts = c.key.split(" ").filter(Boolean);
+    const shared = parts.filter((p) => cParts.includes(p)).length;
+    return { label: c.label, shared };
+  });
+  return scored
+    .filter((s) => s.shared > 0)
+    .sort((a, b) => b.shared - a.shared)
+    .slice(0, 5)
+    .map((s) => s.label);
+}
+
+export async function previewSueldosImport(
   formData: FormData
-): Promise<ActionResult<{ grantCount: number; totalCount: number }>> {
+): Promise<ActionResult<SueldosImportPreview>> {
+  await requirePermission("finance", "admin");
+
+  const file = formData.get("file") as File | null;
+  const yearRaw = formData.get("year");
+  if (!file) return { success: false, error: "No se seleccionó ningún archivo" };
+
+  try {
+    const parsed = parseSueldosExcel(await file.arrayBuffer());
+    if (parsed.errors.length > 0) {
+      return { success: false, error: parsed.errors.join("; ") };
+    }
+
+    const year =
+      typeof yearRaw === "string" && yearRaw
+        ? parseInt(yearRaw, 10)
+        : (parsed.detectedYear ?? new Date().getFullYear());
+    if (!isPlanningYear(year)) {
+      return { success: false, error: `Año inválido: ${year}` };
+    }
+
+    const a = analyzeSueldosFile(parsed, year);
+
+    const newPeople: SueldosImportPreview["newPeople"] = [];
+    const salaryChanges: SueldosImportPreview["salaryChanges"] = [];
+    let unchangedCount = 0;
+
+    for (const p of parsed.people) {
+      const existing = a.personByKey.get(normalizeName(p.name));
+      if (!existing) {
+        newPeople.push({
+          name: p.name,
+          role: p.role,
+          group: p.group,
+          annualCost: p.annualCost,
+        });
+        continue;
+      }
+      const current = a.salaryByPersonYear.get(`${existing.id}:${year}`) ?? null;
+      if (current == null || Math.abs(current - p.annualCost) > 0.005) {
+        salaryChanges.push({ name: existing.name, from: current, to: p.annualCost });
+      } else {
+        unchangedCount++;
+      }
+    }
+
+    const newSources = parsed.sources
+      .filter((s) => !a.sourceByKey.has(normalizeName(s.name)))
+      .map((s) => ({ name: s.name, status: s.status }));
+
+    const resolutionOptions = [
+      ...a.existingGroups.map((g) => ({ value: `group:${g.name}`, label: `${g.name} (grupo)` })),
+      ...[
+        ...new Set([...a.existingPeople.map((p) => p.name), ...parsed.people.map((p) => p.name)]),
+      ]
+        .sort((x, y) => x.localeCompare(y, "es"))
+        .map((n) => ({ value: `person:${n}`, label: n })),
+    ];
+
+    return {
+      success: true,
+      data: {
+        detectedYear: parsed.detectedYear,
+        requestedYear: year,
+        newPeople,
+        salaryChanges,
+        unchangedCount,
+        newSources,
+        existingSourceCount: parsed.sources.length - newSources.length,
+        allocationCount: parsed.allocations.length,
+        unresolvedTargets: [...a.unresolved.entries()].map(([rawTarget, lineCount]) => ({
+          rawTarget,
+          lineCount,
+          suggestions: suggestionsFor(
+            rawTarget,
+            [...a.existingPeople, ...parsed.people.map((p) => ({ name: p.name }))],
+            a.existingGroups
+          ),
+        })),
+        resolutionOptions,
+        warnings: parsed.warnings,
+      },
+    };
+  } catch (e) {
+    return {
+      success: false,
+      error: `Error al analizar el archivo: ${e instanceof Error ? e.message : String(e)}`,
+    };
+  }
+}
+
+export async function commitSueldosImport(
+  formData: FormData
+): Promise<ActionResult<{
+  peopleCreated: number;
+  salariesWritten: number;
+  sourcesCreated: number;
+  allocationsCreated: number;
+}>> {
   await requirePermission("finance", "admin");
   const user = await getCurrentUser();
 
   const file = formData.get("file") as File | null;
+  const yearRaw = formData.get("year");
   if (!file) return { success: false, error: "No se seleccionó ningún archivo" };
 
-  try {
-    const buffer = await file.arrayBuffer();
-    const { grants, totals, errors } = parseSueldosExcel(buffer);
+  // { "Luzia Mendez": "person:Lucia Mendez" } from the preview's resolver.
+  let resolutions: Record<string, string> = {};
+  const resolutionsRaw = formData.get("resolutions");
+  if (typeof resolutionsRaw === "string" && resolutionsRaw) {
+    try {
+      const parsedRes = JSON.parse(resolutionsRaw);
+      if (parsedRes && typeof parsedRes === "object") {
+        resolutions = parsedRes as Record<string, string>;
+      }
+    } catch {
+      return { success: false, error: "No se pudieron leer las correspondencias de nombres" };
+    }
+  }
 
-    if (grants.length === 0 && totals.length === 0) {
+  try {
+    const parsed = parseSueldosExcel(await file.arrayBuffer());
+    if (parsed.errors.length > 0) {
+      return { success: false, error: parsed.errors.join("; ") };
+    }
+
+    const year =
+      typeof yearRaw === "string" && yearRaw
+        ? parseInt(yearRaw, 10)
+        : (parsed.detectedYear ?? new Date().getFullYear());
+    if (!isPlanningYear(year)) {
+      return { success: false, error: `Año inválido: ${year}` };
+    }
+
+    const a = analyzeSueldosFile(parsed, year);
+
+    // Every unresolved target must have been mapped, or nothing is written.
+    const stillUnresolved = [...a.unresolved.keys()].filter((t) => !resolutions[t]);
+    if (stillUnresolved.length > 0) {
       return {
         success: false,
-        error: errors.join("; ") || "No se encontraron datos de sueldos",
+        error: `Faltan correspondencias para: ${stillUnresolved.join(", ")}`,
       };
     }
 
-    db.transaction((tx) => {
-      tx.run(sql`DELETE FROM finance_sueldos_grants`);
-      tx.run(sql`DELETE FROM finance_sueldos_totals`);
+    let peopleCreated = 0;
+    let salariesWritten = 0;
+    let sourcesCreated = 0;
+    let allocationsCreated = 0;
 
-      if (grants.length > 0) {
-        tx.insert(financeSueldosGrants).values(grants).run();
+    db.transaction((tx) => {
+      const groupIdByKey = new Map(
+        tx
+          .select({ id: financePeopleGroups.id, name: financePeopleGroups.name })
+          .from(financePeopleGroups)
+          .all()
+          .map((g) => [normalizeName(g.name), g.id])
+      );
+
+      // Groups the file references but the database lacks (only if push-schema
+      // seeding was skipped).
+      for (const gName of parsed.groups) {
+        if (groupIdByKey.has(normalizeName(gName))) continue;
+        const row = tx
+          .insert(financePeopleGroups)
+          .values({ name: gName })
+          .returning({ id: financePeopleGroups.id })
+          .get();
+        groupIdByKey.set(normalizeName(gName), row.id);
       }
-      if (totals.length > 0) {
-        tx.insert(financeSueldosTotals).values(totals).run();
+
+      // --- People + salaries (upsert; never delete) ---
+      const personIdByKey = new Map(
+        tx
+          .select({ id: financePeople.id, name: financePeople.name })
+          .from(financePeople)
+          .all()
+          .map((p) => [normalizeName(p.name), p.id])
+      );
+
+      for (const p of parsed.people) {
+        const key = normalizeName(p.name);
+        const groupId = p.group ? (groupIdByKey.get(normalizeName(p.group)) ?? null) : null;
+        let personId = personIdByKey.get(key);
+
+        if (personId == null) {
+          const row = tx
+            .insert(financePeople)
+            .values({ name: p.name, role: p.role, groupId })
+            .returning({ id: financePeople.id })
+            .get();
+          personId = row.id;
+          personIdByKey.set(key, personId);
+          peopleCreated++;
+        } else {
+          tx.update(financePeople)
+            .set({ role: p.role, groupId, updatedAt: new Date() })
+            .where(eq(financePeople.id, personId))
+            .run();
+        }
+
+        const existingSalary = tx
+          .select({ id: financeSalaries.id })
+          .from(financeSalaries)
+          .where(and(eq(financeSalaries.personId, personId), eq(financeSalaries.year, year)))
+          .get();
+
+        if (existingSalary) {
+          tx.update(financeSalaries)
+            .set({ annualCost: p.annualCost, updatedAt: new Date() })
+            .where(eq(financeSalaries.id, existingSalary.id))
+            .run();
+        } else {
+          tx.insert(financeSalaries)
+            .values({ personId, year, annualCost: p.annualCost })
+            .run();
+        }
+        salariesWritten++;
+      }
+
+      // --- Sources (upsert) ---
+      const sourceIdByKey = new Map(
+        tx
+          .select({ id: financeFundingSources.id, name: financeFundingSources.name })
+          .from(financeFundingSources)
+          .all()
+          .map((s) => [normalizeName(s.name), s.id])
+      );
+
+      for (const s of parsed.sources) {
+        const key = normalizeName(s.name);
+        const existingId = sourceIdByKey.get(key);
+        if (existingId == null) {
+          const row = tx
+            .insert(financeFundingSources)
+            .values({
+              name: s.name,
+              status: s.status,
+              defaultStartDate: s.defaultStartDate,
+              defaultEndDate: s.defaultEndDate,
+            })
+            .returning({ id: financeFundingSources.id })
+            .get();
+          sourceIdByKey.set(key, row.id);
+          sourcesCreated++;
+        } else {
+          tx.update(financeFundingSources)
+            .set({ status: s.status, updatedAt: new Date() })
+            .where(eq(financeFundingSources.id, existingId))
+            .run();
+        }
+      }
+
+      // --- Allocation lines ---
+      // Re-running must not duplicate: a line is identified by
+      // (source, target, amount, period), and an exact repeat is skipped.
+      const existingLines = new Set(
+        tx
+          .select({
+            sourceId: financeSalaryAllocations.sourceId,
+            personId: financeSalaryAllocations.personId,
+            groupId: financeSalaryAllocations.groupId,
+            amount: financeSalaryAllocations.amount,
+            startDate: financeSalaryAllocations.startDate,
+            endDate: financeSalaryAllocations.endDate,
+          })
+          .from(financeSalaryAllocations)
+          .all()
+          .map(
+            (l) =>
+              `${l.sourceId}|${l.personId ?? ""}|${l.groupId ?? ""}|${l.amount}|${l.startDate}|${l.endDate}`
+          )
+      );
+
+      for (const alloc of parsed.allocations) {
+        const sourceId = sourceIdByKey.get(normalizeName(alloc.sourceName));
+        if (sourceId == null) continue;
+
+        // Resolve the target: direct key match first, then the user's mapping.
+        let personId: number | null = null;
+        let groupId: number | null = null;
+
+        const directGroup = groupIdByKey.get(alloc.targetKey);
+        const directPerson = personIdByKey.get(alloc.targetKey);
+
+        if (directGroup != null) groupId = directGroup;
+        else if (directPerson != null) personId = directPerson;
+        else {
+          const mapping = resolutions[alloc.rawTarget];
+          if (!mapping) continue;
+          const idx = mapping.indexOf(":");
+          const kind = mapping.slice(0, idx);
+          const name = normalizeName(mapping.slice(idx + 1));
+          if (kind === "group") groupId = groupIdByKey.get(name) ?? null;
+          else personId = personIdByKey.get(name) ?? null;
+          if (personId == null && groupId == null) continue;
+        }
+
+        const fingerprint = `${sourceId}|${personId ?? ""}|${groupId ?? ""}|${alloc.amount}|${alloc.startDate}|${alloc.endDate}`;
+        if (existingLines.has(fingerprint)) continue;
+        existingLines.add(fingerprint);
+
+        tx.insert(financeSalaryAllocations)
+          .values({
+            sourceId,
+            personId,
+            groupId,
+            amount: alloc.amount,
+            startDate: alloc.startDate,
+            endDate: alloc.endDate,
+            notes: alloc.notes,
+          })
+          .run();
+        allocationsCreated++;
       }
 
       tx.insert(financeUploads)
         .values({
           fileType: "sueldos",
           fileName: file.name,
-          rowCount: grants.length + totals.length,
+          rowCount: parsed.people.length + parsed.allocations.length,
           uploadedBy: user?.email || "unknown",
         })
         .run();
     });
 
     db.run(sql`PRAGMA wal_checkpoint(PASSIVE)`);
+
     await recordEvent({
       source: "finance",
-      eventType: "finance_upload_sueldos",
-      summary: `Sueldos cargados: ${file.name} (${grants.length} grant${grants.length === 1 ? "" : "s"}, ${totals.length} total${totals.length === 1 ? "" : "es"})`,
+      eventType: "finance_sueldos_import",
+      summary: `Sueldos importados desde ${file.name}: ${peopleCreated} persona${peopleCreated === 1 ? "" : "s"} nueva${peopleCreated === 1 ? "" : "s"}, ${sourcesCreated} fuente${sourcesCreated === 1 ? "" : "s"} nueva${sourcesCreated === 1 ? "" : "s"}, ${allocationsCreated} línea${allocationsCreated === 1 ? "" : "s"} (año ${year})`,
       severity: "success",
       actorEmail: user?.email ?? null,
       projectId: "finance",
       targetType: "finance_upload",
-      details: { fileName: file.name, grantCount: grants.length, totalCount: totals.length, fileType: "sueldos" },
+      details: {
+        fileName: file.name,
+        year,
+        peopleCreated,
+        salariesWritten,
+        sourcesCreated,
+        allocationsCreated,
+      },
     });
-    revalidatePath("/finance");
+
+    revalidatePath("/finance/sueldos");
+    revalidatePath("/finance/data");
     return {
       success: true,
-      data: { grantCount: grants.length, totalCount: totals.length },
+      data: { peopleCreated, salariesWritten, sourcesCreated, allocationsCreated },
     };
   } catch (e) {
     return {
       success: false,
-      error: `Error al procesar sueldos: ${e instanceof Error ? e.message : String(e)}`,
+      error: `Error al importar sueldos: ${e instanceof Error ? e.message : String(e)}`,
     };
   }
 }

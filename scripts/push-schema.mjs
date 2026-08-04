@@ -318,6 +318,73 @@ const statements = [
     monthly_cost REAL NOT NULL
   )`,
 
+  // Finance — Salary planning: pooled staff groups (FCATeros, FCATeros Ext.)
+  `CREATE TABLE IF NOT EXISTS finance_people_groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+
+  // Finance — Salary planning: the payroll roster
+  `CREATE TABLE IF NOT EXISTS finance_people (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    role TEXT,
+    group_id INTEGER REFERENCES finance_people_groups(id) ON DELETE SET NULL,
+    active INTEGER NOT NULL DEFAULT 1,
+    notes TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_finance_people_group ON finance_people(group_id)`,
+
+  // Finance — Salary planning: one fully-loaded annual salary per person per year
+  `CREATE TABLE IF NOT EXISTS finance_salaries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    person_id INTEGER NOT NULL REFERENCES finance_people(id) ON DELETE CASCADE,
+    year INTEGER NOT NULL,
+    annual_cost REAL NOT NULL,
+    notes TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_finance_salaries_person_year
+     ON finance_salaries(person_id, year)`,
+
+  // Finance — Salary planning: funding sources (planning-local, NOT grants FKs)
+  `CREATE TABLE IF NOT EXISTS finance_funding_sources (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('funded', 'pending')),
+    default_start_date TEXT,
+    default_end_date TEXT,
+    notes TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+
+  // Finance — Salary planning: funding lines. The CHECK enforces person XOR
+  // group; Drizzle models this only at the type level, which never reaches SQLite.
+  `CREATE TABLE IF NOT EXISTS finance_salary_allocations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_id INTEGER NOT NULL REFERENCES finance_funding_sources(id) ON DELETE CASCADE,
+    person_id INTEGER REFERENCES finance_people(id) ON DELETE CASCADE,
+    group_id INTEGER REFERENCES finance_people_groups(id) ON DELETE CASCADE,
+    amount REAL NOT NULL,
+    start_date TEXT NOT NULL,
+    end_date TEXT NOT NULL,
+    notes TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    CHECK ((person_id IS NULL) <> (group_id IS NULL))
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_finance_alloc_source ON finance_salary_allocations(source_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_finance_alloc_person ON finance_salary_allocations(person_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_finance_alloc_group ON finance_salary_allocations(group_id)`,
+
   // Finance — Projections
   `CREATE TABLE IF NOT EXISTS finance_projections (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1499,6 +1566,25 @@ for (const [id, name, desc] of coreProjects) {
 
 const totalProjects = db.prepare("SELECT COUNT(*) as count FROM projects").get();
 console.log(`Projects: ${projectsAdded} new, ${totalProjects.count} total`);
+
+// --- Seed salary-planning staff groups ---
+// The two pooled groups the Sueldos sheet already uses. Idempotent, so the
+// import and the page can both assume they exist.
+const financeGroups = [
+  ["FCATeros", "Personal de campo agrupado en el rol de pagos", 1],
+  ["FCATeros Ext.", "Extensionistas", 2],
+];
+
+const insertFinanceGroup = db.prepare(
+  "INSERT OR IGNORE INTO finance_people_groups (name, description, sort_order) VALUES (?, ?, ?)"
+);
+
+let financeGroupsAdded = 0;
+for (const [name, description, sortOrder] of financeGroups) {
+  const result = insertFinanceGroup.run(name, description, sortOrder);
+  if (result.changes > 0) financeGroupsAdded++;
+}
+console.log(`Finance staff groups: ${financeGroupsAdded} new, ${financeGroups.length} total`);
 
 // --- Seed camera trap projects from existing deployment projectLabels ---
 const ctProjectInsert = db.prepare(

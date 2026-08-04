@@ -32,6 +32,11 @@ vi.mock("@/db/schema", () => ({
   financeCategoryMap: "financeCategoryMap",
   financeSueldosGrants: "financeSueldosGrants",
   financeSueldosTotals: "financeSueldosTotals",
+  financePeople: "financePeople",
+  financePeopleGroups: "financePeopleGroups",
+  financeSalaries: "financeSalaries",
+  financeFundingSources: "financeFundingSources",
+  financeSalaryAllocations: "financeSalaryAllocations",
   financeProjections: "financeProjections",
   financeUploads: "financeUploads",
   climateReadings: "climateReadings",
@@ -97,7 +102,16 @@ vi.mock("@/app/finance/lib/parse-budget", () => ({
 }));
 
 vi.mock("@/app/finance/lib/parse-sueldos", () => ({
-  parseSueldosExcel: vi.fn(),
+  parseSueldosExcel: vi.fn(() => ({
+    detectedYear: null,
+    people: [],
+    groups: [],
+    sources: [],
+    allocations: [],
+    warnings: [],
+    errors: [],
+  })),
+  normalizeName: (v: string) => v.toLowerCase(),
 }));
 
 vi.mock("@/app/finance/lib/calculations", () => ({
@@ -223,7 +237,12 @@ describe("action permission guards", () => {
         ["fetchBudgetData", financeBudget.fetchBudgetData, []],
         ["fetchCategoryLinkEditorData", financeBudget.fetchCategoryLinkEditorData, []],
         ["fetchCashflowData", financeCashflow.fetchCashflowData, []],
-        ["fetchSueldosData", financeSueldos.fetchSueldosData, [2026]],
+        [
+          "fetchSueldosPlanning",
+          financeSueldos.fetchSueldosPlanning,
+          [2026, "all", "2026-01-01", "2026-12-31"],
+        ],
+        ["fetchSueldosTargets", financeSueldos.fetchSueldosTargets, []],
         ["fetchAnnualData", financeAnnual.fetchAnnualData, []],
         ["fetchLastUploads", financeData.fetchLastUploads, []],
       ];
@@ -241,7 +260,32 @@ describe("action permission guards", () => {
         ["previewBudget", financeData.previewBudget, [new FormData()]],
         ["commitBudget", financeData.commitBudget, [new FormData()]],
         ["setCategoryLink", financeBudget.setCategoryLink, ["ACME", "Food"]],
-        ["commitSueldos", financeData.commitSueldos, [new FormData()]],
+        ["previewSueldosImport", financeData.previewSueldosImport, [new FormData()]],
+        ["commitSueldosImport", financeData.commitSueldosImport, [new FormData()]],
+        // Salary planning mutations are admin-only: the data is sensitive and
+        // the page is readable by any finance viewer.
+        [
+          "createPerson",
+          financeSueldos.createPerson,
+          [{ name: "X", role: null, groupId: null, year: 2026, annualCost: null }],
+        ],
+        ["deletePerson", financeSueldos.deletePerson, [1]],
+        [
+          "createFundingSource",
+          financeSueldos.createFundingSource,
+          [{ name: "X", status: "pending", defaultStartDate: null, defaultEndDate: null }],
+        ],
+        ["deleteFundingSource", financeSueldos.deleteFundingSource, [1]],
+        [
+          "createAllocation",
+          financeSueldos.createAllocation,
+          [{ sourceId: 1, target: "person:1", amount: "1", startDate: null, endDate: null, notes: null }],
+        ],
+        ["deleteAllocation", financeSueldos.deleteAllocation, [1]],
+        ["updatePersonField", financeSueldos.updatePersonField, [1, "role", "x"]],
+        ["updateSalaryForYear", financeSueldos.updateSalaryForYear, [1, "2026", "100"]],
+        ["updateSourceField", financeSueldos.updateSourceField, [1, "notes", "x"]],
+        ["updateAllocationField", financeSueldos.updateAllocationField, [1, "notes", "x"]],
         ["addProjection", financeCashflow.addProjection, [new FormData()]],
         ["updateProjection", financeCashflow.updateProjection, [new FormData()]],
         ["deleteProjection", financeCashflow.deleteProjection, [new FormData()]],

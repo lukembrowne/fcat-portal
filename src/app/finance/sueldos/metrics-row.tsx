@@ -1,68 +1,100 @@
 "use client";
 
+/**
+ * The four planning metrics plus the ledger metric.
+ *
+ * The two answer different questions from different filters, and the labels say
+ * so: the planning figures follow the YEAR selector, the ledger figure follows
+ * the layout's date range. Without that distinction the two dollar amounts on
+ * one screen read as contradicting each other.
+ */
+
 import { Card, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { DollarSign } from "lucide-react";
+import { DollarSign, Wallet, TriangleAlert, PieChart } from "lucide-react";
+import { formatMoney, formatPercent } from "@/lib/finance/sueldos-fields";
+import type { Coverage } from "../lib/sueldos-planning";
 
-type GrantFilter = "all" | "funded" | "pending";
-
-const FILTERS: { value: GrantFilter; label: string }[] = [
-  { value: "all", label: "Todos" },
-  { value: "funded", label: "Solo Financiado" },
-  { value: "pending", label: "Solo Pendiente" },
-];
-
-function fmt(n: number): string {
-  return "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+function Metric({
+  label,
+  value,
+  hint,
+  icon,
+  tone,
+}: {
+  label: string;
+  value: string;
+  hint: string;
+  icon: React.ReactNode;
+  tone?: string;
+}) {
+  return (
+    <Card className="py-4 gap-1">
+      <CardContent className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="text-xs font-medium text-muted-foreground">{label}</p>
+          <p className={`mt-0.5 text-xl font-bold tabular-nums ${tone ?? ""}`}>{value}</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">{hint}</p>
+        </div>
+        <span className="shrink-0">{icon}</span>
+      </CardContent>
+    </Card>
+  );
 }
 
 export function MetricsRow({
+  total,
   totalSpent,
-  grantFilter,
-  onFilterChange,
+  year,
 }: {
+  total: Coverage;
   totalSpent: number;
-  grantFilter: GrantFilter;
-  onFilterChange: (f: GrantFilter) => void;
+  year: number;
 }) {
-  return (
-    <div className="grid gap-3 md:grid-cols-2">
-      {/* Total salary spend */}
-      <Card className="py-4 gap-1">
-        <CardContent className="flex items-start justify-between">
-          <div className="min-w-0">
-            <p className="text-xs font-medium text-muted-foreground">
-              Total Gastado en Sueldos
-            </p>
-            <p className="text-xl font-bold mt-0.5">{fmt(totalSpent)}</p>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              En el período seleccionado
-            </p>
-          </div>
-          <DollarSign className="h-4 w-4 shrink-0 text-green-600 dark:text-green-400" />
-        </CardContent>
-      </Card>
+  const overFunded = total.state === "over";
 
-      {/* Grant status filter */}
-      <Card className="py-4 gap-1">
-        <CardContent>
-          <p className="text-xs font-medium text-muted-foreground mb-2">
-            Filtro por Estado de Financiamiento
-          </p>
-          <div className="flex flex-wrap gap-2">
-            {FILTERS.map((f) => (
-              <Button
-                key={f.value}
-                variant={grantFilter === f.value ? "default" : "outline"}
-                size="sm"
-                onClick={() => onFilterChange(f.value)}
-              >
-                {f.label}
-              </Button>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
+  return (
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+      <Metric
+        label="Costo total de sueldos"
+        value={formatMoney(total.cost)}
+        hint={`Planificado para ${year}`}
+        icon={<Wallet className="h-4 w-4 text-muted-foreground" />}
+      />
+      <Metric
+        label="Financiado"
+        value={formatMoney(total.funded)}
+        hint={`Asignado a ${year}`}
+        icon={<DollarSign className="h-4 w-4 text-green-600 dark:text-green-400" />}
+      />
+      <Metric
+        label={overFunded ? "Sobrefinanciado" : "Sin cubrir"}
+        value={formatMoney(overFunded ? total.overfunded : total.uncovered)}
+        hint={overFunded ? `Excedente en ${year}` : `Falta cubrir en ${year}`}
+        icon={
+          <TriangleAlert
+            className={`h-4 w-4 ${overFunded ? "text-amber-600" : "text-red-600 dark:text-red-400"}`}
+          />
+        }
+        tone={
+          overFunded
+            ? "text-amber-700 dark:text-amber-500"
+            : total.uncovered > 0
+              ? "text-red-600 dark:text-red-400"
+              : ""
+        }
+      />
+      <Metric
+        label="% cubierto"
+        value={total.cost > 0 ? formatPercent(total.percentCovered) : "—"}
+        hint={`Del costo de ${year}`}
+        icon={<PieChart className="h-4 w-4 text-muted-foreground" />}
+      />
+      <Metric
+        label="Gastado en sueldos"
+        value={formatMoney(totalSpent)}
+        hint="Libro mayor · período seleccionado arriba"
+        icon={<DollarSign className="h-4 w-4 text-muted-foreground" />}
+      />
     </div>
   );
 }

@@ -876,6 +876,154 @@ export const financeSueldosTotals = sqliteTable("finance_sueldos_totals", {
 });
 
 // ---------------------------------------------------------------------------
+// Finance — Salary planning (people, per-year salaries, funding allocations)
+//
+// Replaces the pair above (finance_sueldos_grants / finance_sueldos_totals),
+// which encoded person as a free-text string on BOTH sides — the reason a
+// spelling drift like "Luzia"/"Lucia" silently dropped a funding row. Here a
+// person is a row and everything points at it, so that failure can only happen
+// once, during import, where it is surfaced for a human to resolve.
+//
+// The old tables are intentionally left in place, unread, for one release as a
+// rollback path. See docs/plans/2026-08-03-002-feat-sueldos-in-portal-planning-plan.md.
+// ---------------------------------------------------------------------------
+
+/**
+ * A pooled staff group — "FCATeros", "FCATeros Ext.". A group's annual cost is
+ * ALWAYS derived from its members' salaries, never stored, so it cannot drift
+ * from the rows that sum to it (the spreadsheet stored both and they could).
+ */
+export const financePeopleGroups = sqliteTable("finance_people_groups", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull().unique(),
+  description: text("description"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+  updatedAt: integer("updated_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+
+/**
+ * Everyone on the payroll. `name` is unique because the Excel import matches on
+ * it — uniqueness is what makes that match deterministic.
+ * `role` is the sheet's "Figura en rol pagos" (free text; the eight distinct
+ * values seen so far aren't a stable enough set to constrain).
+ */
+export const financePeople = sqliteTable(
+  "finance_people",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    name: text("name").notNull().unique(),
+    role: text("role"),
+    groupId: integer("group_id").references(() => financePeopleGroups.id, {
+      onDelete: "set null",
+    }),
+    active: integer("active", { mode: "boolean" }).notNull().default(true),
+    notes: text("notes"),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+    updatedAt: integer("updated_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [index("idx_finance_people_group").on(table.groupId)]
+);
+
+/**
+ * One fully-loaded annual salary per person per year — the sheet's "COSTO AL
+ * PROYECTO ANUAL", which already includes décimo tercero/cuarto, aporte
+ * patronal and fondos de reserva. Monthly cost is derived (annual / 12), not
+ * stored; the old table stored both and they could disagree.
+ */
+export const financeSalaries = sqliteTable(
+  "finance_salaries",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    personId: integer("person_id")
+      .notNull()
+      .references(() => financePeople.id, { onDelete: "cascade" }),
+    year: integer("year").notNull(),
+    annualCost: real("annual_cost").notNull(),
+    notes: text("notes"),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+    updatedAt: integer("updated_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [
+    uniqueIndex("idx_finance_salaries_person_year").on(table.personId, table.year),
+  ]
+);
+
+/**
+ * A funding source as salary planning sees it. Deliberately NOT a foreign key
+ * into `grants` — planning and the grant pipeline change on different cadences,
+ * and `status` here is a two-value planning flag, not the seven-state pipeline.
+ *
+ * The default period pre-fills new allocation lines; each line's own dates are
+ * authoritative (GIZ already runs to four different end dates across its lines).
+ */
+export const financeFundingSources = sqliteTable("finance_funding_sources", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull().unique(),
+  status: text("status", { enum: ["funded", "pending"] })
+    .notNull()
+    .default("pending"),
+  defaultStartDate: text("default_start_date"),
+  defaultEndDate: text("default_end_date"),
+  notes: text("notes"),
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+  updatedAt: integer("updated_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+
+/**
+ * One funding line: a dollar amount from one source covering one target over
+ * one period. The target is a person XOR a group — enforced by a SQLite CHECK
+ * in scripts/push-schema.mjs, since Drizzle's `enum`/type-level modelling never
+ * reaches the database.
+ */
+export const financeSalaryAllocations = sqliteTable(
+  "finance_salary_allocations",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    sourceId: integer("source_id")
+      .notNull()
+      .references(() => financeFundingSources.id, { onDelete: "cascade" }),
+    personId: integer("person_id").references(() => financePeople.id, {
+      onDelete: "cascade",
+    }),
+    groupId: integer("group_id").references(() => financePeopleGroups.id, {
+      onDelete: "cascade",
+    }),
+    amount: real("amount").notNull(),
+    startDate: text("start_date").notNull(),
+    endDate: text("end_date").notNull(),
+    notes: text("notes"),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+    updatedAt: integer("updated_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [
+    index("idx_finance_alloc_source").on(table.sourceId),
+    index("idx_finance_alloc_person").on(table.personId),
+    index("idx_finance_alloc_group").on(table.groupId),
+  ]
+);
+
+// ---------------------------------------------------------------------------
 // Finance — Projections (user-editable cashflow projections)
 // ---------------------------------------------------------------------------
 
@@ -1619,6 +1767,24 @@ export type NewFinanceSueldosGrant = typeof financeSueldosGrants.$inferInsert;
 
 export type FinanceSueldosTotal = typeof financeSueldosTotals.$inferSelect;
 export type NewFinanceSueldosTotal = typeof financeSueldosTotals.$inferInsert;
+
+export type FinancePeopleGroup = typeof financePeopleGroups.$inferSelect;
+export type NewFinancePeopleGroup = typeof financePeopleGroups.$inferInsert;
+
+export type FinancePerson = typeof financePeople.$inferSelect;
+export type NewFinancePerson = typeof financePeople.$inferInsert;
+
+export type FinanceSalary = typeof financeSalaries.$inferSelect;
+export type NewFinanceSalary = typeof financeSalaries.$inferInsert;
+
+export type FinanceFundingSource = typeof financeFundingSources.$inferSelect;
+export type NewFinanceFundingSource = typeof financeFundingSources.$inferInsert;
+
+export type FinanceSalaryAllocation = typeof financeSalaryAllocations.$inferSelect;
+export type NewFinanceSalaryAllocation = typeof financeSalaryAllocations.$inferInsert;
+
+/** Two-value planning flag on a funding source — NOT the grants pipeline status. */
+export type FinanceFundingStatus = FinanceFundingSource["status"];
 
 export type FinanceProjection = typeof financeProjections.$inferSelect;
 export type NewFinanceProjection = typeof financeProjections.$inferInsert;

@@ -4,12 +4,9 @@ import { useState, useRef, useId, type ReactNode } from "react";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Upload, CheckCircle, AlertCircle, Loader2 } from "lucide-react";
-import {
-  commitLibroMayor,
-  commitSueldos,
-  previewLibroMayor,
-} from "./actions";
+import { commitLibroMayor, previewLibroMayor } from "./actions";
 import { BudgetUploadCard } from "./budget-upload-card";
+import { SueldosImportCard } from "./sueldos-import-card";
 
 interface LastUpload {
   fileName: string;
@@ -221,22 +218,7 @@ export function UploadShell({ lastUploads }: UploadShellProps) {
 
         <BudgetUploadCard lastUpload={lastUploads.budget} />
 
-        <UploadCard
-          title="Sueldos (Excel)"
-          description='Archivo Excel con hojas "Timelines" (financiamiento por persona) y "Sueldos" (costo total por persona).'
-          accept=".xlsx,.xls"
-          lastUpload={lastUploads.sueldos}
-          onUpload={async (formData) => {
-            const result = await commitSueldos(formData);
-            if (!result.success) {
-              return { success: false, message: result.error };
-            }
-            return {
-              success: true,
-              message: `${result.data.grantCount} grants y ${result.data.totalCount} personas importados`,
-            };
-          }}
-        />
+        <SueldosImportCard lastUpload={lastUploads.sueldos} />
       </div>
     </div>
   );

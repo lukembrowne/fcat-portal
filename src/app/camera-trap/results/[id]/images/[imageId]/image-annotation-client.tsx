@@ -6,9 +6,10 @@ import type { DetectionWithIdentification } from "@/components/annotation-toolba
 import { AnnotationPickerPopover } from "@/components/annotation-picker-popover";
 import { AnnotationToolsSidebar } from "@/components/annotation-tools-sidebar";
 import {
-  brightnessFilter,
+  imageAdjustFilter,
   DEFAULT_BRIGHTNESS,
-} from "@/lib/brightness-filter";
+  DEFAULT_CONTRAST,
+} from "@/lib/image-filter";
 import { Popover, PopoverAnchor } from "@/components/ui/popover";
 import { useAnnotationPicker } from "@/hooks/use-annotation-picker";
 import { useNameDisplay } from "@/lib/species-display";
@@ -130,6 +131,7 @@ export function ImageAnnotationClient({
   const [selectedBoxId, setSelectedBoxId] = useState<number | null>(null);
   const [bboxesHidden, setBboxesHidden] = useState(false);
   const [brightness, setBrightness] = useState(DEFAULT_BRIGHTNESS);
+  const [contrast, setContrast] = useState(DEFAULT_CONTRAST);
   const [deleteDialogDetectionId, setDeleteDialogDetectionId] = useState<number | null>(null);
   // Pending "0"-assign-all confirmation. Set only when the bulk assign would
   // overwrite one or more already-verified boxes with a different species —
@@ -225,16 +227,17 @@ export function ImageAnnotationClient({
   const isDialogOpen = deleteDialogDetectionId !== null || addSpeciesOpen || bulkConfirm !== null;
   const { containerRef: zoomContainerRef, wrapperRef: zoomWrapperRef, style: zoomStyle, panHandlers, scale: zoomScale, isPanning, isZooming, resetZoom } = useImageZoom({ disabled: isDialogOpen });
 
-  // Reset brightness when navigating to a different image. Adjusting the
-  // overblown image is a per-image action — auto-persisting would silently
-  // dim every subsequent image.
+  // Reset both adjustments when navigating to a different image. Correcting an
+  // overblown or flat frame is a per-image action — auto-persisting would
+  // silently dim or crush every subsequent image.
   useEffect(() => {
     setBrightness(DEFAULT_BRIGHTNESS);
+    setContrast(DEFAULT_CONTRAST);
   }, [imageId]);
 
   const imageFilter = useMemo(
-    () => brightnessFilter(brightness) || undefined,
-    [brightness],
+    () => imageAdjustFilter(brightness, contrast) || undefined,
+    [brightness, contrast],
   );
 
   const cycleBrightness = useCallback(() => {
@@ -679,6 +682,8 @@ export function ImageAnnotationClient({
             onDismissDateSuggestion={() => setSuggestionDismissed(true)}
             brightness={brightness}
             onBrightnessChange={setBrightness}
+            contrast={contrast}
+            onContrastChange={setContrast}
             jobId={jobId}
             onBack={onBack}
           />

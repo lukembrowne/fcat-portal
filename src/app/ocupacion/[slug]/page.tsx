@@ -8,6 +8,8 @@ import { DetectionSampleTable } from "../detection-sample-table";
 import { HabitatNaiveTable } from "../habitat-naive-table";
 import { isSeparated } from "@/lib/occupancy/separation";
 import { IucnCode } from "@/components/iucn-code";
+import { speciesSlug } from "@/lib/species-slug";
+import { describeThresholdEs } from "@/lib/occupancy/threshold-drift";
 
 export const dynamic = "force-dynamic";
 
@@ -60,6 +62,9 @@ export default async function SpeciesOccupancyPage({
   const model = result.success ? result.data : null;
   const inputSample = sampleResult.success ? sampleResult.data : null;
   const commonName = speciesInfo?.commonName || null;
+  // Audio only — camera detections carry no confidence score, so there is no
+  // filter to describe and nothing that can fall out of date.
+  const filter = model?.confidenceFilter ?? null;
 
   // Habitat levels whose coefficient blew up (complete separation) are not
   // estimable — flag them so the bar chart shows "no estimable" instead of a
@@ -127,8 +132,55 @@ export default async function SpeciesOccupancyPage({
           {model?.fittedAt ? (
             <> · Modelo ajustado el {formatFittedAt(model.fittedAt)}</>
           ) : null}
+          {/* Which detections went in. Without it the page reports an occupancy
+              estimate with no way to tell how BirdNET's scores were cut. */}
+          {filter ? (
+            <>
+              {" "}
+              · Detecciones filtradas con{" "}
+              {describeThresholdEs(filter.atRun, filter.globalThreshold)}
+            </>
+          ) : null}
         </p>
       </header>
+
+      {/* The model on this page was fitted through a confidence filter that has
+          since been replaced. Nothing recomputes on read — the estimate, the
+          site count and the matrix below all belong to the old filter — so the
+          only honest fix is to re-run the batch. */}
+      {filter?.stale ? (
+        <Card className="border-amber-500/60 bg-amber-50/50 dark:bg-amber-950/20">
+          <CardHeader>
+            <CardTitle className="text-base text-amber-800 dark:text-amber-300">
+              Este modelo no usa el umbral de confianza vigente
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            <p>
+              Se ajustó con las detecciones que pasaban{" "}
+              <strong>{describeThresholdEs(filter.atRun, filter.globalThreshold)}</strong>. Desde
+              entonces la validación de umbrales definió para esta especie{" "}
+              <strong>{describeThresholdEs(filter.now, filter.globalThreshold, filter.nowSource)}</strong>
+              , así que las cifras de esta página (ocupación, sitios, detecciones) siguen
+              correspondiendo al filtro anterior.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Los modelos no se recalculan solos: hay que volver a correr el batch para que
+              incorporen el umbral nuevo.{" "}
+              <Link href="/ocupacion" className="font-medium hover:underline">
+                Actualizar modelos en Ocupación
+              </Link>{" "}
+              ·{" "}
+              <Link
+                href={`/audio/validacion/${speciesSlug(species)}`}
+                className="font-medium hover:underline"
+              >
+                Ver la validación de esta especie
+              </Link>
+            </p>
+          </CardContent>
+        </Card>
+      ) : null}
 
       {!model ? (
         <Card>
@@ -425,6 +477,17 @@ export default async function SpeciesOccupancyPage({
                 usada para predecir la superficie de ψ). Covariables continuas estandarizadas; curvas
                 retransformadas a la escala original. Fila en negrita (*) = efecto con IC 95% que
                 excluye 0.
+                {filter ? (
+                  <>
+                    {" "}
+                    Las detecciones de audio que entraron a este ajuste pasaron{" "}
+                    {describeThresholdEs(filter.atRun, filter.globalThreshold)}
+                    {filter.stale
+                      ? `; hoy rige ${describeThresholdEs(filter.now, filter.globalThreshold, filter.nowSource)}, y este ajuste todavía no lo incorpora`
+                      : ""}
+                    .
+                  </>
+                ) : null}
               </p>
               {inputSample && inputSample.rows.length > 0 ? (
                 <div className="border-t pt-4">

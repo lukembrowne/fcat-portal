@@ -10,6 +10,7 @@ import {
 } from "./audio-subsample-report";
 import { DEFAULT_BIN_WIDTH_DAYS } from "./occasions";
 import { DEFAULT_CONFIDENCE_THRESHOLD } from "@/lib/audio-confidence";
+import { loadActiveSpeciesThresholds } from "@/lib/birdnet-validation/threshold-map";
 
 /**
  * The live data-readiness computation for /ocupacion, extracted here (out of the
@@ -88,6 +89,8 @@ export async function computeReadinessResult(
   const binWidth = opts.binWidth ?? DEFAULT_BIN_WIDTH_DAYS;
   const confidenceThreshold = opts.confidenceThreshold ?? DEFAULT_CONFIDENCE_THRESHOLD;
 
+  const speciesThresholds = await loadActiveSpeciesThresholds();
+
   const cam = fetchOccupancyInputs("camera", {});
   const camera = computeReadiness(cam.sites, cam.detections, {
     stream: "camera",
@@ -95,7 +98,7 @@ export async function computeReadinessResult(
     detectionsDroppedNoDate: cam.detectionsDroppedNoDate,
   });
 
-  const aud = fetchOccupancyInputs("audio", { confidenceThreshold });
+  const aud = fetchOccupancyInputs("audio", { confidenceThreshold, speciesThresholds });
   const audio = computeReadiness(aud.sites, aud.detections, {
     stream: "audio",
     binWidth,

@@ -1325,6 +1325,241 @@ export const acousticIndices = sqliteTable(
 );
 
 // ---------------------------------------------------------------------------
+// BirdNET threshold validation (Wood & Kahl 2024)
+// ---------------------------------------------------------------------------
+//
+// BirdNET's confidence score is not a probability and is not comparable across
+// species: the same 0.9 means "almost certainly right" for one species and
+// "almost certainly wrong" for another. To convert score -> probability we draw
+// a score-bin-stratified sample of a species' detections, have an expert review
+// each clip, and fit glm(outcome ~ logit) in R. The confidence value at which
+// 95% of retained detections are true positives becomes that species' threshold.
+//
+// One campaign per species drives the whole cycle; samples hold the reviewed
+// clips; thresholds hold the fit output (or an explicit reason it is unusable).
+
+export const birdnetValidationCampaigns = sqliteTable(
+  "birdnet_validation_campaigns",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    species: text("species").notNull(),
+    // Nullable = campaign spans every camera-trap project the user can reach.
+    ctProjectId: integer("ct_project_id").references(() => cameraTrapProjects.id, {
+      onDelete: "set null",
+    }),
+    // `draft` is the failure state, not the first step: the sample is drawn
+    // when the species is added, so a healthy row starts at `sampled`.
+    // Keep in sync with the CHECK constraint in scripts/push-schema.mjs —
+    // Drizzle's enum is TypeScript-only and will not reject a bad value.
+    status: text("status", {
+      enum: [
+        "draft",
+        "sampled",
+        "reviewing",
+        "fitted",
+        "unusable",
+        "applied",
+        "abandoned",
+      ],
+    })
+      .notNull()
+      .default("draft"),
+    targetSampleSize: integer("target_sample_size").notNull().default(200),
+    // 9 gives clean 0.1-wide deciles over [0.1, 1.0]. Keep in sync with
+    // DEFAULT_BIN_COUNT in src/lib/birdnet-validation/types.ts (not imported:
+    // the schema must not depend on lib).
+    binCount: integer("bin_count").notNull().default(9),
+    // Stored so a draw is reproducible: the candidate ordering is a pure
+    // function of (seed, identification id). See lib/birdnet-validation/sampling.
+    seed: integer("seed").notNull(),
+    sampledAt: integer("sampled_at", { mode: "timestamp" }),
+    abandonedReason: text("abandoned_reason"),
+    // Whose reviews the logistic fit consumes. Under full overlap every
+    // reviewer answers every clip, so the fit MUST pick exactly one review per
+    // sample — pooling all of them is pseudo-replication and reports a
+    // falsely tight interval. Null is legal only while at most one reviewer
+    // has answered; see resolveFitEligibleReviews in fit-eligibility.ts.
+    primaryReviewerEmail: text("primary_reviewer_email"),
+    createdBy: text("created_by").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [
+    // At most one live campaign per species per project scope. Abandoned
+    // campaigns drop out so a species can be retried after a failed attempt.
+    // The authoritative DDL in scripts/push-schema.mjs indexes
+    // COALESCE(ct_project_id, -1): SQLite treats every NULL as distinct, so a
+    // bare nullable column would let two all-projects campaigns coexist.
+    uniqueIndex("idx_birdnet_campaigns_species_scope")
+      .on(table.species, table.ctProjectId)
+      .where(sql`status != 'abandoned'`),
+    index("idx_birdnet_campaigns_status").on(table.status),
+  ]
+);
+
+export const birdnetValidationSamples = sqliteTable(
+  "birdnet_validation_samples",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    campaignId: integer("campaign_id")
+      .notNull()
+      .references(() => birdnetValidationCampaigns.id, { onDelete: "cascade" }),
+    audioIdentificationId: integer("audio_identification_id")
+      .notNull()
+      .references(() => audioIdentifications.id, { onDelete: "cascade" }),
+    // Snapshot at draw time. The identification's own confidence/deployment can
+    // change later (a correction, a re-scope); the fit must stay reproducible
+    // against what was actually shown to the reviewer.
+    confidence: real("confidence").notNull(),
+    binIndex: integer("bin_index").notNull(),
+    deploymentId: integer("deployment_id"),
+    siteName: text("site_name"),
+    // Snapshot from the live ODK site lookup; null when ODK was unavailable.
+    habitat: text("habitat"),
+    // Same order for every reviewer: full overlap means everyone walks the
+    // identical list, and only their own answers are filtered out of it.
+    orderIndex: integer("order_index").notNull(),
+  },
+  (table) => [
+    uniqueIndex("idx_birdnet_samples_campaign_ident").on(
+      table.campaignId,
+      table.audioIdentificationId
+    ),
+    index("idx_birdnet_samples_queue").on(table.campaignId, table.orderIndex),
+  ]
+);
+
+/**
+ * One row per (clip, reviewer).
+ *
+ * The uniqueness constraint is the whole point: it makes "reviewer B silently
+ * overwrites reviewer A" unrepresentable rather than merely forbidden by a
+ * guard someone could forget to write. Review outcomes deliberately do NOT
+ * live as columns on the sample row.
+ *
+ * `reviewerEmail` is free text with no FK to `users`, preserving the
+ * token-gated external-reviewer path the original validation plan left open.
+ */
+export const birdnetValidationReviews = sqliteTable(
+  "birdnet_validation_reviews",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    sampleId: integer("sample_id")
+      .notNull()
+      .references(() => birdnetValidationSamples.id, { onDelete: "cascade" }),
+    reviewerEmail: text("reviewer_email").notNull(),
+    outcome: text("outcome", {
+      enum: ["correct", "incorrect", "uncertain"],
+    }).notNull(),
+    notes: text("notes"),
+    reviewedAt: integer("reviewed_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [
+    uniqueIndex("idx_birdnet_reviews_sample_reviewer").on(
+      table.sampleId,
+      table.reviewerEmail
+    ),
+    // Drives the per-reviewer queue's NOT EXISTS lookup.
+    index("idx_birdnet_reviews_reviewer").on(table.reviewerEmail, table.sampleId),
+    // Drives the agreement and disagreement reads, which group by sample.
+    index("idx_birdnet_reviews_sample").on(table.sampleId),
+  ]
+);
+
+/**
+ * Who is expected to review a campaign.
+ *
+ * A denominator, not a gate: `grabaciones` editor permission already grants
+ * access, and recording a review auto-enrolls. The roster exists so the
+ * campaign page can render "Gloria 0/200" for someone who has not started,
+ * which a roster derived from existing reviews cannot express.
+ */
+export const birdnetValidationCampaignReviewers = sqliteTable(
+  "birdnet_validation_campaign_reviewers",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    campaignId: integer("campaign_id")
+      .notNull()
+      .references(() => birdnetValidationCampaigns.id, { onDelete: "cascade" }),
+    reviewerEmail: text("reviewer_email").notNull(),
+    addedBy: text("added_by").notNull(),
+    addedAt: integer("added_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [
+    uniqueIndex("idx_birdnet_campaign_reviewers_unique").on(
+      table.campaignId,
+      table.reviewerEmail
+    ),
+  ]
+);
+
+export const birdnetSpeciesThresholds = sqliteTable(
+  "birdnet_species_thresholds",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    campaignId: integer("campaign_id")
+      .notNull()
+      .references(() => birdnetValidationCampaigns.id, { onDelete: "cascade" }),
+    species: text("species").notNull(),
+    nReviewed: integer("n_reviewed").notNull(),
+    nCorrect: integer("n_correct").notNull(),
+    nUncertain: integer("n_uncertain").notNull().default(0),
+    // Coefficients are on the BirdNET logit scale: x = log(conf / (1 - conf)).
+    intercept: real("intercept"),
+    slope: real("slope"),
+    converged: integer("converged", { mode: "boolean" }).notNull().default(false),
+    thresholdConf90: real("threshold_conf_90"),
+    thresholdConf95: real("threshold_conf_95"),
+    thresholdConf99: real("threshold_conf_99"),
+    thresholdSe95: real("threshold_se_95"),
+    ciLower95: real("ci_lower_95"),
+    ciUpper95: real("ci_upper_95"),
+    // Spanish reason when no usable threshold exists (complete separation,
+    // non-positive slope, threshold above 1.0, insufficient sample). Mutually
+    // exclusive with thresholdConf95 being set.
+    unusableReason: text("unusable_reason"),
+    /**
+     * How this row got its threshold.
+     *
+     * `fit` is the logistic regression. `no_filter` is a person recording that
+     * a species needs no threshold at all — the answer when every review came
+     * back correct, which the fit CANNOT express: complete separation produces
+     * no coefficients, so there is nothing to apply, and the species silently
+     * keeps the global 0.70 and loses its true positives below it. Stored
+     * explicitly rather than inferred from `threshold_conf_95 = 0.1`, because
+     * a fitted threshold is allowed to land on the floor too and the audit
+     * trail must never present a human decision as a model's output.
+     */
+    source: text("source", { enum: ["fit", "no_filter"] })
+      .notNull()
+      .default("fit"),
+    // Thresholds are valid only for the model that produced the scores.
+    modelVersion: text("model_version"),
+    // Provenance: whose reviews this fit consumed. Compared against the
+    // campaign's current primary to warn that an existing fit is stale.
+    primaryReviewerEmail: text("primary_reviewer_email"),
+    isActive: integer("is_active", { mode: "boolean" }).notNull().default(false),
+    fittedAt: integer("fitted_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+    appliedAt: integer("applied_at", { mode: "timestamp" }),
+    appliedBy: text("applied_by"),
+  },
+  (table) => [
+    // At most one applied threshold per species portal-wide.
+    uniqueIndex("idx_birdnet_thresholds_active_species")
+      .on(table.species)
+      .where(sql`is_active = 1`),
+    index("idx_birdnet_thresholds_campaign").on(table.campaignId),
+  ]
+);
+
+// ---------------------------------------------------------------------------
 // Occupancy modeling (single-season single-species via unmarked::occu)
 // ---------------------------------------------------------------------------
 //
@@ -1356,6 +1591,12 @@ export const occupancyRuns = sqliteTable(
       .default(0.7),
     // JSON snapshot of the eligibility thresholds used this run (reproducibility).
     thresholdsJson: text("thresholds_json"),
+    // JSON snapshot of the APPLIED per-species BirdNET confidence thresholds
+    // (species -> value) in force when this run's audio detections were read.
+    // Distinct from thresholds_json above, which holds eligibility cut-offs.
+    // Without it a run stops being reproducible the moment a threshold is
+    // applied or reverted.
+    speciesThresholdsJson: text("species_thresholds_json"),
     nModels: integer("n_models").notNull().default(0),
     nEligible: integer("n_eligible").notNull().default(0),
     durationMs: integer("duration_ms"),
@@ -1814,6 +2055,28 @@ export type NewAudioDetection = typeof audioDetections.$inferInsert;
 
 export type AudioIdentification = typeof audioIdentifications.$inferSelect;
 export type NewAudioIdentification = typeof audioIdentifications.$inferInsert;
+
+export type BirdnetValidationCampaign =
+  typeof birdnetValidationCampaigns.$inferSelect;
+export type NewBirdnetValidationCampaign =
+  typeof birdnetValidationCampaigns.$inferInsert;
+
+export type BirdnetValidationSample = typeof birdnetValidationSamples.$inferSelect;
+export type NewBirdnetValidationSample =
+  typeof birdnetValidationSamples.$inferInsert;
+
+export type BirdnetValidationReview = typeof birdnetValidationReviews.$inferSelect;
+export type NewBirdnetValidationReview =
+  typeof birdnetValidationReviews.$inferInsert;
+
+export type BirdnetValidationCampaignReviewer =
+  typeof birdnetValidationCampaignReviewers.$inferSelect;
+export type NewBirdnetValidationCampaignReviewer =
+  typeof birdnetValidationCampaignReviewers.$inferInsert;
+
+export type BirdnetSpeciesThreshold = typeof birdnetSpeciesThresholds.$inferSelect;
+export type NewBirdnetSpeciesThreshold =
+  typeof birdnetSpeciesThresholds.$inferInsert;
 
 export type UploadCountSnapshot = typeof uploadCountSnapshots.$inferSelect;
 export type NewUploadCountSnapshot = typeof uploadCountSnapshots.$inferInsert;

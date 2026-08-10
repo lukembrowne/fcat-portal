@@ -412,6 +412,7 @@ const CAMERA_TRAP_DDL =
     bin_width_days INTEGER NOT NULL DEFAULT 5,
     audio_confidence_threshold REAL NOT NULL DEFAULT 0.7,
     thresholds_json TEXT,
+    species_thresholds_json TEXT,
     n_models INTEGER NOT NULL DEFAULT 0,
     n_eligible INTEGER NOT NULL DEFAULT 0,
     duration_ms INTEGER,
@@ -499,6 +500,97 @@ const CAMERA_TRAP_DDL =
     generated_at INTEGER NOT NULL DEFAULT (unixepoch()),
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
+
+  CREATE TABLE birdnet_validation_campaigns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    species TEXT NOT NULL,
+    ct_project_id INTEGER REFERENCES ct_projects(id) ON DELETE SET NULL,
+    status TEXT NOT NULL DEFAULT 'draft'
+      CHECK(status IN ('draft','sampled','reviewing','fitted','unusable','applied','abandoned')),
+    target_sample_size INTEGER NOT NULL DEFAULT 200,
+    bin_count INTEGER NOT NULL DEFAULT 9,
+    seed INTEGER NOT NULL,
+    sampled_at INTEGER,
+    abandoned_reason TEXT,
+    primary_reviewer_email TEXT,
+    created_by TEXT NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+  CREATE UNIQUE INDEX idx_birdnet_campaigns_species_scope
+    ON birdnet_validation_campaigns(species, COALESCE(ct_project_id, -1))
+    WHERE status != 'abandoned';
+  CREATE INDEX idx_birdnet_campaigns_status ON birdnet_validation_campaigns(status);
+
+  CREATE TABLE birdnet_validation_samples (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id INTEGER NOT NULL REFERENCES birdnet_validation_campaigns(id) ON DELETE CASCADE,
+    audio_identification_id INTEGER NOT NULL REFERENCES audio_identifications(id) ON DELETE CASCADE,
+    confidence REAL NOT NULL,
+    bin_index INTEGER NOT NULL,
+    deployment_id INTEGER,
+    site_name TEXT,
+    habitat TEXT,
+    order_index INTEGER NOT NULL
+  );
+  CREATE UNIQUE INDEX idx_birdnet_samples_campaign_ident
+    ON birdnet_validation_samples(campaign_id, audio_identification_id);
+  CREATE INDEX idx_birdnet_samples_queue
+    ON birdnet_validation_samples(campaign_id, order_index);
+
+  CREATE TABLE birdnet_validation_reviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sample_id INTEGER NOT NULL REFERENCES birdnet_validation_samples(id) ON DELETE CASCADE,
+    reviewer_email TEXT NOT NULL,
+    outcome TEXT NOT NULL CHECK(outcome IN ('correct','incorrect','uncertain')),
+    notes TEXT,
+    reviewed_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+  CREATE UNIQUE INDEX idx_birdnet_reviews_sample_reviewer
+    ON birdnet_validation_reviews(sample_id, reviewer_email);
+  CREATE INDEX idx_birdnet_reviews_reviewer
+    ON birdnet_validation_reviews(reviewer_email, sample_id);
+  CREATE INDEX idx_birdnet_reviews_sample
+    ON birdnet_validation_reviews(sample_id);
+
+  CREATE TABLE birdnet_validation_campaign_reviewers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id INTEGER NOT NULL REFERENCES birdnet_validation_campaigns(id) ON DELETE CASCADE,
+    reviewer_email TEXT NOT NULL,
+    added_by TEXT NOT NULL,
+    added_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+  CREATE UNIQUE INDEX idx_birdnet_campaign_reviewers_unique
+    ON birdnet_validation_campaign_reviewers(campaign_id, reviewer_email);
+
+  CREATE TABLE birdnet_species_thresholds (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id INTEGER NOT NULL REFERENCES birdnet_validation_campaigns(id) ON DELETE CASCADE,
+    species TEXT NOT NULL,
+    n_reviewed INTEGER NOT NULL,
+    n_correct INTEGER NOT NULL,
+    n_uncertain INTEGER NOT NULL DEFAULT 0,
+    intercept REAL,
+    slope REAL,
+    converged INTEGER NOT NULL DEFAULT 0,
+    threshold_conf_90 REAL,
+    threshold_conf_95 REAL,
+    threshold_conf_99 REAL,
+    threshold_se_95 REAL,
+    ci_lower_95 REAL,
+    ci_upper_95 REAL,
+    unusable_reason TEXT,
+    source TEXT NOT NULL DEFAULT 'fit' CHECK(source IN ('fit', 'no_filter')),
+    model_version TEXT,
+    primary_reviewer_email TEXT,
+    is_active INTEGER NOT NULL DEFAULT 0,
+    fitted_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    applied_at INTEGER,
+    applied_by TEXT
+  );
+  CREATE UNIQUE INDEX idx_birdnet_thresholds_active_species
+    ON birdnet_species_thresholds(species) WHERE is_active = 1;
+  CREATE INDEX idx_birdnet_thresholds_campaign
+    ON birdnet_species_thresholds(campaign_id);
 `;
 
 export function createTestDb() {

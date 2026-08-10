@@ -29,18 +29,6 @@ Internal web application for FCAT staff and collaborators. Domain: `portal.fcat-
 - **Permissions**: `requirePermission(projectId, minRole)` for read/write actions. `requireAdmin()` for admin actions.
 - **System events instrumentation**: Any server action, background job, cron, or admin-facing mutation should consider calling `recordEvent()` (from `@/lib/system-events`). Default **yes** for: terminal transitions on `processing_jobs` (use `buildJobCompletionEvent(job)` after the DB update), destructive user actions, admin/permission changes, bulk data uploads, cron job completions, external sync runs. Default **no** for: high-frequency per-row reads/writes (verification clicks, autosaves, status-message ticks) — emit one event at the end of the batch/loop instead. New job types must extend `JOB_LABELS` and `AUDIO_JOB_TYPES` in `src/lib/system-events.ts`; the coverage-guard unit test will fail otherwise.
 
-## Commands
-
-```bash
-npm run dev          # Start dev server
-npm test             # Run Vitest in watch mode
-npm run test:run     # Run Vitest once
-npm run test:e2e     # Run Playwright E2E tests
-npm run test:all     # Run all tests (Vitest + Playwright)
-npm run build        # Production build
-npm run lint         # ESLint
-```
-
 ## Docker
 
 ```bash
@@ -57,43 +45,10 @@ When working in this project's Docker environment, always verify that file paths
 
 ## Database
 
-- Schema in `src/db/schema.ts`
-- Connection in `src/db/index.ts`
 - Push schema: `node scripts/push-schema.mjs`
 - Seed dev data: `npx tsx scripts/seed-dev.ts`
 
-### Backups
-
-Hourly automated backups via host cron + SQLite's online backup API. Backups live in `data/backups/` (persisted on host via Docker volume).
-
-```bash
-# Manual backup (inside container or via docker compose exec)
-node scripts/backup-db.mjs
-
-# From host
-docker compose exec -T portal node scripts/backup-db.mjs
-
-# Restore (run from project root on host)
-./scripts/restore-db.sh              # Interactive — lists backups to choose from
-./scripts/restore-db.sh latest       # Restore most recent backup
-./scripts/restore-db.sh portal-2026-02-12T14-00-00.db  # Restore specific backup
-```
-
-**Retention**: all hourly backups for 48h, one daily for 7 days, older deleted automatically.
-
-**Cron** runs inside the Docker container via Debian's cron daemon (started by `docker-entrypoint.sh`). Crontab at `scripts/crontab`, installed to `/etc/cron.d/portal-backup`. Timestamps are US Eastern (America/New_York). To check logs: `cat data/backups/cron.log`.
-
-**If restore fails** (portal won't start after restore), the pre-restore copy is at `data/portal.db.pre-restore`:
-```bash
-cp data/portal.db.pre-restore data/portal.db && docker compose start portal
-```
-
-### Corruption Prevention
-
-- `busy_timeout = 5000` — prevents SQLITE_BUSY on concurrent writes
-- All bulk operations (finance uploads, climate uploads, ML detections) use transactions
-- Graceful shutdown checkpoints WAL on SIGTERM/SIGINT
-- Startup integrity check + health report (DB size, WAL size, backup freshness)
+Backups, restore, and retention: see the `db-backup-restore` skill.
 
 When fixing database queries, always check for edge cases where records have NULL foreign keys or were created outside the normal flow (e.g., manual detections with null jobId). Run the fix against real data scenarios, not just the happy path.
 
@@ -136,11 +91,35 @@ When fixing database queries, always check for edge cases where records have NUL
 
 ## Occupancy modeling (`/ocupacion`)
 
-- **Warm R worker pool.** The batch fits models via a build-scoped pool of persistent R workers (`src/lib/occupancy/pool.ts`): each worker runs `scripts/occupancy-runner.R` in **worker-loop mode** (loads `unmarked` ONCE, emits `{type:"ready"}`, then fits one config per stdin line until EOF), so the ~1.3s R+`unmarked` startup is paid once per worker instead of once per model. Replaces the old spawn-one-Rscript-per-model design (`runOccupancyModel`), which is now only the revert fallback. Mirrors the warm ML model server (`src/lib/ml-runner.ts`).
-- **Fit is concurrent, persist is serial.** `runOccupancyBuild` (`src/lib/occupancy/build-run.ts`) runs in two phases: Phase A enumerates fit jobs (cheap; ineligible species get one no-fit `combined` row), Phase B submits ALL jobs to the pool and persists each result in its `.then` handler. JS is single-threaded, so fits run in parallel in R while every DB write runs serially on the event loop — order-independent, no locking, better-sqlite3 stays synchronous.
-- **Knobs:** `OCCUPANCY_WORKERS` (pool size; default **4**, floored at 1, capped at core count — flat conservative default to protect co-tenants on the shared droplet). `OCCUPANCY_WARM_POOL=false` reverts to the serial spawn-per-model path (emergency lever, no redeploy). Each worker pins BLAS/OMP threads to 1 (`OMP_NUM_THREADS=1` etc.) since parallelism comes from the pool, not intra-fit threads — the OPPOSITE of `ml-runner`, which wants all cores in its one process. `OCCUPANCY_RSCRIPT_PATH` points at the bundled Rscript in prod.
-- **Fault isolation:** a per-model timeout (120s) or a worker crash fails ONLY that model (persisted `sufficient_data=0` with a Spanish reason, never a throw) and respawns a replacement worker so pool capacity is preserved. R-level per-config errors `stop()` inside a `tryCatch` and the worker keeps looping.
-- **Grid prediction is gradient-only.** Only the `gradient` variant carries an AOI prediction grid into R; `habitat`/`null` never do (the per-cell-SE `predict()` over ~4,732 cells is the largest per-species cost). Enforced by `assertGradientOnlyGrid` in build-run.ts.
+Warm R worker pool, concurrent-fit/serial-persist, knobs, and fault isolation: see `src/lib/occupancy/CLAUDE.md` (loads automatically when working in that directory).
+
+## BirdNET threshold validation (`/audio/validacion`)
+
+- **Why**: BirdNET confidence is not a probability and is not comparable across species (Wood & Kahl 2024). A campaign draws a score-bin-stratified sample of one species' detections, an expert reviews each clip, and `glm(outcome ~ logit)` in R yields the confidence value at which 95% of retained detections are true.
+- **Sampling** (`src/lib/birdnet-validation/`): uniform across 9 score-bin deciles over [0.1, 1.0], with within-bin draws spread round-robin across deployments so one noisy site can't dominate a bin. Reproducible from a stored seed via a Knuth hash over `(seed, identification id)` — SQLite has no seedable RNG. Habitat is snapshotted from the live ODK lookup for reporting only; it is never a sampling quota, because ODK can be down.
+- **The sample is drawn when the species is added, not as a later step.** `createCampaign` inserts the row and then calls `drawSampleCore`, so a species reaches `sampled` and is reviewable immediately. A failed draw does NOT fail the call — the species stays created in `draft` and its row offers "Preparar" (`drawSample`), because the bulk importer needs exactly that isolation per species. `draft` therefore means "the draw failed", not "not started yet"; it is the one stage coloured amber.
+- **The draw costs ~2 s and the cost barely depends on the species.** Measured end to end on the dev database (SQL + ODK habitat + the 200-row insert): 1.4–2.0 s per species, from *Tringa flavipes* (93 detections, 93 clips drawn) to *Ramphastos ambiguus* (173,641). The floor is ~170 ms per score bin — nine windowed queries each paying the species-index scan on the 2.5M-row `audio_identifications` table — so abundance barely moves it. That flatness is why the importer's chunk size is the only lever: there is no cheap species to batch more of. A cold first query costs ~12 s while the page cache warms; that is the process starting, not the species.
+- **There was a `triage` stage until 2026-08-10.** Ten top-scoring clips (`drawTopScoring`) reviewed first, as a cheap go/no-go before committing a reviewer to 200. The mechanism worked; the stage did not. It cost a whole extra step to explain at every boundary, and in practice it was skipped — 28 of 35 species sat in `triage` with zero reviews. Removed along with `triage_size`, `triage_true_positives` and `is_triage`. The bail-out it protected now lives at the end of every review batch, where "Descartar esta especie" sits beside "Cargar siguientes"; the honest cost is that the first exit point is 50 clips in rather than 10.
+- **Deployment stratification is enforced per bin, and holds in practice.** `drawFromBin`'s `ROW_NUMBER() OVER (PARTITION BY af.deployment_id ...)` takes every site's first pick before any site's second. Measured: each of the 9 bins drew 22–23 clips from 22–23 *distinct* deployments — one clip per site per bin — and the realised sample is less site-concentrated than the population (top site 4.5% vs 6.2%).
+- **Clips and spectrograms are built lazily, per clip, and cached.** Nothing is fetched at draw time. On the first request for `/api/audio/validation-clip?sample=N`, the server downloads that one source recording from Drive to a temp file, cuts detection ±3 s to a ~100 KB AAC, atomically renames it into `data/cache/birdnet-clips/N.m4a`, and deletes the temp source. The spectrogram (`N.webp`) is rendered from the already-cut clip, not the original — that is what guarantees image and audio cover the same window. Single-flight, atomic rename, LRU under `BIRDNET_CLIP_CACHE_MAX_GB` (default 5). The review client warms two clips ahead.
+- **Delete vs. discard are different actions.** `deleteCampaign` removes a species that should never have been added (cascading its samples and roster) and is REFUSED once any review or fit exists — the cascade would take a colleague's listening with it, and the review count is taken across all reviewers, not the caller's. `abandonCampaign` records a decision to stop and is reversible via `restoreCampaign`, whose target stage is derived from existing rows (`deriveRestoredStatus`) rather than stored; the partial unique index excludes abandoned rows, so a restore can collide with a restarted campaign and says so in Spanish.
+- **The bulk importer has no species limit; the limit is per request.** `COMMIT_CHUNK_SIZE` (5) bounds one `commitSpeciesImport` call and the client walks the list in slices, because each species costs a full stratified draw. Five was measured at 8.9 s for a full chunk — the same worst case the previous chunk of ten had when a species cost a 0.2–1.3 s triage draw. Chunking is safe only because the action is fault-isolated per species — a slice boundary is never a rollback boundary. `MAX_PASTE_ROWS` (2000) is a paste-sanity ceiling that refuses rather than trimming.
+- **Blinding is load-bearing, in two directions**: the review UI hides the BirdNET score unless the reviewer explicitly ticks "Mostrar la confianza de BirdNET", and it never reveals another reviewer's answer. Answering used to reveal the score for 320 ms before advancing, as calibration feedback; that was removed on 2026-08-10 because it leaks across a run rather than within a clip — twenty revealed scores teach the reviewer where this species' scores sit, and the twenty-first judgment is no longer independent of them. Seeing the score first anchors the judgment, correlating the outcome with the predictor and inflating the fitted slope. Seeing a colleague's answer turns the agreement statistic into a measure of deference. `getReviewQueue` therefore returns no outcome field at all, and there is a test asserting on payload shape (a field can reach the client and simply not be rendered).
+- **Multiple reviewers, one fit input.** Every rostered reviewer answers every clip — no partitioning — and reviews live in `birdnet_validation_reviews` keyed `UNIQUE(sample_id, reviewer_email)`, so one reviewer cannot displace another's answer. The fit consumes exactly ONE review per clip, chosen by `resolveFitEligibleReviews` (`src/lib/birdnet-validation/fit-eligibility.ts`): the campaign's `primary_reviewer_email`, else the sole reviewer, else it REFUSES. Pooling would be pseudo-replication — 3 reviewers × 200 clips is 600 rows carrying 200 observations' information, shrinking the threshold SE by ~1/√3 and reporting a CI ~42% tighter than the data supports, with no error raised. Every scientific consumer (fit, bin coverage, site coverage, campaign totals, the rug plot) routes through that one helper so the displayed numbers cannot drift from the fitted ones.
+- **Agreement** (`src/lib/birdnet-validation/agreement.ts`) is pure TypeScript computed on read, never persisted: percent agreement + Cohen's kappa for each reviewer against the primary, with `uncertain` kept as a third category. Undefined kappa (`pe = 1`, both used one category) returns a Spanish reason, never `NaN`. `/audio/validacion/[slug]/desacuerdos` lists the disagreeing clips with playback — diagnostic only, since the primary's answer is already authoritative, so no adjudication step exists.
+- **Fitting**: `scripts/birdnet-threshold-runner.R` in worker-loop mode (same protocol as `occupancy-runner.R`, but ONE worker — a 2-parameter logistic on ~200 rows is microseconds). Threshold SE comes from the delta method inline, equivalent to `MASS::dose.p` and verified against it, so no extra R package is needed. **Unusable is the common outcome**, not an edge case: most species BirdNET reports have no true positives at any score, so complete separation / non-monotonic / out-of-range each persist an explicit Spanish reason rather than a number.
+- **Applying a threshold is separate, explicit, and audited.** Fitting alone changes nothing; `applyThreshold` flips `is_active`, records a system event, and is revertible. Applying rewrites every species count, chart, export, and occupancy input for that species.
+- **"Needs no filter" is a recordable outcome, and NOT applying one is never neutral.** When every fit-eligible review comes back correct the fit hits complete separation and refuses — correctly, there is no error to model. But a species with no *applied* threshold falls back to the **global 0.70**, so the portal goes on discarding exactly the low-scoring detections the reviewer just confirmed: measured on *Ortalis erythroptera* (50/50 correct, confidence 0.104–0.996), 13,854 of 24,913 detections. `markSpeciesNoFilter` records the decision as a threshold at `SCORE_FLOOR` (0.1) — verified to keep everything, since min confidence in `audio_identifications` is exactly 0.1 with zero rows below — so it travels through the ordinary `applySpeciesConfidenceFilter` path instead of adding a second mechanism to nine consumers. The row carries `source = 'no_filter'`, no coefficients and its own event type, because the audit trail must never let a person's decision read back as a model's output; `revertThreshold` returns such a campaign to `unusable`, not `fitted`. It REFUSES unless every fit-eligible review is correct (server-side, not a hidden button) — on a species BirdNET never gets right, "keep everything" is the worst available action.
+- **`birdnet_species_thresholds.model_version` lists EVERY distinct version in the sample, comma-joined.** It used to take `limit(1)` with no `ORDER BY`, which is only correct if a sample never spans versions — 63 of 69 sampled species do, roughly half `birdnet-analyzer` (predictions from before version tracking) and half `birdnet-analyzer@2.4.0; model=V2.4`. Those two are the SAME analyzer; `scripts/backfill-birdnet-model-version.mjs` restamps the bare label and has not been run. The species page warns when a fit spans versions, since a genuine mid-sample upgrade would make the scores incomparable.
+- **`applySpeciesConfidenceFilter` builds a `CASE` from a JS-loaded map — never a correlated subquery.** That subquery shape is what broke the audio batch in prod on 2026-06-18 (`${audioIdentifications.species}` renders unqualified and binds to the inner table). `applyConfidenceFilter` still exists and delegates with an empty map, so a portal with no applied thresholds behaves exactly as before.
+- Occupancy now routes through the shared filter too, which additionally stopped human-**rejected** detections from re-entering occupancy whenever their score cleared the threshold. Runs record the applied thresholds in `occupancy_runs.species_thresholds_json` so a fit stays reconstructible.
+- Clips are pre-cut (detection ±3s) to AAC with a server-rendered spectrogram, cached under `data/cache/birdnet-clips` with single-flight + atomic write + LRU (`BIRDNET_CLIP_CACHE_MAX_GB`, default 5). Reusing `/api/audio/stream` would stream a whole 60s FLAC per clip (~160 GB across a full campaign set) and relies on a FLAC seek that silently fails in Chrome.
+- **Queue order is deliberately NOT confidence order, and the permutation must NOT reuse the draw's hash.** `drawStratifiedSample` emits bin-ascending; assigning `order_index` from that emission order made reviewers walk the sample worst-to-best, which is the same anchoring the blinding exists to prevent, leaked more slowly. `presentationOrder(candidates, seed)` permutes it — but permuting with the draw's own `(id + seed) * M mod P` only half-worked, because the draw SELECTS by that hash (smallest per deployment/bin cell). How small a drawn clip's hash is therefore encodes how crowded its cell was, abundance falls steeply with confidence, and re-sorting by the same hash sorted by abundance. Measured across 62 drawn species on 2026-08-10: mean position/confidence Spearman **+0.387** (max +0.920), first-20 clips averaging confidence 0.326 against 0.627 for the last 20 — where unshuffled emission order scores ~0.98. `mix32` (an independent xor-shift-multiply finalizer, `Math.imul` so nothing exceeds int32) brought it to mean +0.012, max 0.133. `scripts/reorder-validation-samples.mjs` backfills `order_index` for already-drawn species; it rewrites only that column, so reviews and fits are untouched. This is what makes the "clip N de M" readout safe to display; `binIndex` still travels to the client and must stay unrendered.
+- **BirdNET does not record frequency bounds.** `audio_detections.min_freq`/`max_freq` are `0`/`15000` on 2,491,918 of 2,491,919 rows — a placeholder, not a measurement (and 15 kHz exceeds the spectrogram's 12 kHz display ceiling anyway). The review overlay marks the detection on the TIME axis only. Do not "fix" this into a frequency box.
+- **Spectrogram overlay geometry is per-sample, never assumed.** `clipWindow` clamps at both file ends, so the detection is NOT always at 33–67%; `detectionBand` (`clip-geometry.ts`) computes it from the actual window. `clip-cache.ts` re-exports `clipWindow` from there — the audio cut and the overlay must not have two copies of that clamp. The overlay maps percentages linearly because the image is `object-fit: fill` at both render and display; switching either to `contain` silently breaks alignment.
+- **Recording timestamps are Ecuador local wall-clock with no offset** (same convention as the iButton parser). `recordingInstant` composes through `Date.UTC` and reads back with UTC getters — building a local-timezone `Date` looks right on a laptop and is five hours wrong in a UTC container.
+- Species selection is a picker over `listValidatableSpecies` (species that actually have detections, scoped to the caller's projects), plus a paste/upload importer (`species-import.ts` pure core → `import-actions.ts` preview/commit). Bulk commit is fault-isolated per species: one failing draw leaves that species created and reported, and the batch continues. Safe to loop because `loadSiteHabitatMap` is `React.cache`d, so all iterations in one server action share one ODK round-trip.
+- The UI says **species and stages, never "campaña"** (`labels.ts` holds the vocabulary; a unit test fails on the word). Internal identifiers still use `campaign`. Common names follow a per-reader Spanish/English cookie (`name-language.ts`), scoped to this module.
 
 ## Gotchas
 

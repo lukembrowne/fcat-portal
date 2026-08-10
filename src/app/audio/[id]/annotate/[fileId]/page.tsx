@@ -16,9 +16,10 @@ import { AudioAnnotationClient } from "./annotation-client";
 import { parseRecordingTimestamp } from "@/lib/audio-filename";
 import { getFrequentAudioSpecies } from "@/app/audio/annotation-actions";
 import {
-  applyConfidenceFilter,
+  applySpeciesConfidenceFilter,
   parseThresholdParam,
 } from "@/lib/audio-confidence";
+import { loadActiveSpeciesThresholds } from "@/lib/birdnet-validation/threshold-map";
 
 interface PageProps {
   params: Promise<{ id: string; fileId: string }>;
@@ -78,7 +79,10 @@ export default async function AudioAnnotatePage({ params, searchParams }: PagePr
   // When showAllMode is on, fetch every detection box (including rejected and
   // sub-threshold) so the annotator can validate borderline cases. Otherwise
   // restrict to detections whose identification passes the shared filter.
-  const visible = applyConfidenceFilter(threshold);
+  const visible = applySpeciesConfidenceFilter(
+    threshold,
+    await loadActiveSpeciesThresholds()
+  );
   const detectionsRaw = showAllMode
     ? await db
         .select()

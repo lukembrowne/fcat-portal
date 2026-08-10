@@ -57,7 +57,67 @@ export function parseThresholdParam(
  *   sql`... WHERE deployment_id = ${id} AND ${applyConfidenceFilter(t)}`
  */
 export function applyConfidenceFilter(threshold: number): SQL {
-  const t = canonicalThreshold(threshold);
+  return applySpeciesConfidenceFilter(threshold, EMPTY_THRESHOLD_MAP);
+}
+
+const EMPTY_THRESHOLD_MAP: ReadonlyMap<string, number> = new Map();
+
+/**
+ * Clamp a fitted species threshold into the valid score range.
+ *
+ * Unlike `canonicalThreshold` this does NOT round to 2 decimals: a fitted value
+ * is a statistical estimate, and rounding 0.9511 to 0.95 would change which
+ * detections survive. Non-finite values are dropped by the caller rather than
+ * silently becoming the global default.
+ */
+function clampSpeciesThreshold(value: number): number {
+  return Math.min(CONFIDENCE_MAX, Math.max(CONFIDENCE_MIN, value));
+}
+
+/**
+ * Same filter, but each species may carry its own validated threshold.
+ *
+ * BirdNET's score means different things per species — a threshold of 0.2 can
+ * be right for one and 0.95 for another (Wood & Kahl 2024). Species with an
+ * applied threshold from `/audio/validacion` use it; everything else falls back
+ * to `globalThreshold`, so a portal with no applied thresholds behaves exactly
+ * as it did before this existed.
+ *
+ * WHY A GENERATED CASE AND NOT A CORRELATED SUBQUERY: the obvious alternative —
+ *
+ *   COALESCE((SELECT t.threshold_conf_95 FROM birdnet_species_thresholds t
+ *             WHERE t.species = ${audioIdentifications.species} ...), 0.7)
+ *
+ * — is the exact shape that broke the audio batch in production on 2026-06-18.
+ * Inside a raw Drizzle `sql` template, `${audioIdentifications.species}` renders
+ * as a bare `"species"`, which SQLite resolves against the INNER table, so every
+ * row matches itself and the subquery returns NULL. Building the CASE from an
+ * already-loaded map sidesteps the failure mode entirely and drops a per-row
+ * subquery. Species names are interpolated as bound parameters, so quoting is
+ * handled by the driver.
+ */
+export function applySpeciesConfidenceFilter(
+  globalThreshold: number,
+  speciesThresholds: ReadonlyMap<string, number>
+): SQL {
+  const fallback = canonicalThreshold(globalThreshold);
+
+  // Filter BEFORE testing emptiness: a map whose every entry is non-finite would
+  // otherwise generate `CASE  ELSE 0.7 END`, which is a syntax error.
+  const branches = [...speciesThresholds.entries()]
+    .filter(([, threshold]) => Number.isFinite(threshold))
+    .map(
+      ([species, threshold]) =>
+        sql`WHEN audio_identifications.species = ${species} THEN ${clampSpeciesThreshold(
+          threshold
+        )}`
+    );
+
+  const effectiveThreshold =
+    branches.length === 0
+      ? sql`${fallback}`
+      : sql`CASE ${sql.join(branches, sql` `)} ELSE ${fallback} END`;
+
   return sql`(
     audio_identifications.verification_status IN ('verified', 'corrected')
     OR (
@@ -66,7 +126,7 @@ export function applyConfidenceFilter(threshold: number): SQL {
     )
     OR (
       audio_identifications.verification_status = 'unverified'
-      AND audio_identifications.confidence >= ${t}
+      AND audio_identifications.confidence >= ${effectiveThreshold}
     )
   )`;
 }

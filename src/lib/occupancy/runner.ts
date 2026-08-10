@@ -16,9 +16,12 @@ import { log } from "@/lib/log";
 
 export const R_SCRIPT = path.join(process.cwd(), "scripts", "occupancy-runner.R");
 
-export function resolveRscript(): string {
-  return process.env.OCCUPANCY_RSCRIPT_PATH || process.env.RSCRIPT_PATH || "Rscript";
-}
+// Imported (not re-exported directly) so the name is also in local scope for
+// the spawn call below. The implementation moved to src/lib/r-runtime.ts when
+// the BirdNET threshold fitter became a second R consumer; existing importers
+// of this module keep working via the re-export.
+import { resolveRscript } from "@/lib/r-runtime";
+export { resolveRscript };
 
 /** Config contract — must match the shape occupancy-runner.R parses. */
 export interface OccupancyRunConfig {

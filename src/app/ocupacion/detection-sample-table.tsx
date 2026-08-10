@@ -120,6 +120,18 @@ export function DetectionSampleTable({ sample }: { sample: ModelInputSample }) {
         muestreo (inicio → fin) de cada sitio se muestra a la izquierda; un sitio con una ventana
         muy larga (⚠) ensancha la matriz y deja el resto de filas con NA. Haga clic en un encabezado
         para ordenar.
+        {/* Reconstructed with the RUN's confidence filter, not today's — otherwise
+            this matrix and the model above it describe different data sets. */}
+        {sample.confidenceUsed ? (
+          <>
+            {" "}
+            Reconstruida con el filtro de confianza que usó este modelo:{" "}
+            {sample.confidenceUsed.species != null
+              ? `umbral propio de la especie ${sample.confidenceUsed.species.toFixed(2)}`
+              : `umbral global ${sample.confidenceUsed.global.toFixed(2)}`}
+            .
+          </>
+        ) : null}
       </p>
       <div className="overflow-x-auto">
         <table className="text-[11px] border-collapse">

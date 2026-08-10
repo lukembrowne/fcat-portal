@@ -46,6 +46,13 @@ import {
 import { naiveOccupancyByHabitat, type HabitatNaiveRow } from "@/lib/occupancy/habitat-summary";
 import fs from "node:fs";
 import nodePath from "node:path";
+import {
+  loadOccupancyThresholdDrift,
+  loadRunThresholdContext,
+  loadSpeciesThresholdProvenance,
+  type SpeciesThresholdProvenance,
+} from "@/lib/occupancy/threshold-status";
+import type { ThresholdChange } from "@/lib/occupancy/threshold-drift";
 
 /** What the page needs to render the readiness snapshot + its freshness. */
 export interface OccupancyReadinessSnapshotView {
@@ -200,6 +207,12 @@ export interface LatestOccupancyRunInfo {
     processedImages: number | null;
     totalImages: number | null;
   } | null;
+  /**
+   * Species whose applied BirdNET threshold changed since this run read its
+   * detections. Non-empty means the fitted audio models answer a question about
+   * a filter the portal no longer applies, and the batch needs re-running.
+   */
+  thresholdChanges: ThresholdChange[];
 }
 
 export async function getLatestOccupancyRun(): Promise<ActionResult<LatestOccupancyRunInfo>> {
@@ -236,6 +249,8 @@ export async function getLatestOccupancyRun(): Promise<ActionResult<LatestOccupa
       )
       .limit(1);
 
+    const drift = await loadOccupancyThresholdDrift();
+
     return {
       success: true,
       data: {
@@ -249,6 +264,7 @@ export async function getLatestOccupancyRun(): Promise<ActionResult<LatestOccupa
             }
           : null,
         activeJob: active ?? null,
+        thresholdChanges: drift?.changes ?? [],
       },
     };
   } catch (error) {
@@ -346,6 +362,12 @@ export interface SpeciesModelDetail {
   fitSeconds: number | null;
   /** When the batch that produced this model completed (ISO); null if unknown. */
   fittedAt: string | null;
+  /**
+   * Which BirdNET confidence filter this model's detections came through, and
+   * whether it is still the one in force. Audio only — camera detections carry
+   * no confidence score. Null when the run's provenance can't be read.
+   */
+  confidenceFilter: SpeciesThresholdProvenance | null;
   /** Which variant the headline numbers come from ('gradient'|'habitat'|'null'|'combined'); null if none identifiable. */
   preferredVariant: string | null;
   /** One row per fitted variant — powers the AIC comparison + non-identifiable notices. */
@@ -640,6 +662,10 @@ export async function getSpeciesModel(
         detFormula: preferred?.detFormula ?? null,
         fitSeconds: preferred?.fitSeconds ?? null,
         fittedAt,
+        // Only audio detections pass through a confidence filter, so only an
+        // audio model can be out of date with respect to one.
+        confidenceFilter:
+          stream === "audio" ? await loadSpeciesThresholdProvenance(species) : null,
         preferredVariant: preferred?.variant ?? null,
         variants,
         effects: tableEffects,
@@ -962,6 +988,9 @@ export interface ModelInputSample {
   rows: DetectionSampleRow[];
   /** Naïve occupancy by habitat (descriptive; sites with a resolved habitat). */
   habitatSummary: HabitatNaiveRow[];
+  /** The audio confidence cut-off these rows were rebuilt through (audio only):
+   *  the run's own, so the table describes the model on the page. */
+  confidenceUsed: { global: number; species: number | null } | null;
 }
 
 /**
@@ -970,6 +999,13 @@ export interface ModelInputSample {
  * correctly. Rebuilt on demand from current detections (structure is
  * authoritative even if counts drift slightly from fit time) using the same
  * cohort isolation + bin width as the run.
+ *
+ * THE CONFIDENCE FILTER COMES FROM THE RUN, NOT FROM TODAY. Reading it live made
+ * this table describe a model that does not exist: for `Ortalis erythroptera` the
+ * header showed 48 sites and 4,478 detections (fitted at the global 0.70) above a
+ * matrix of 66 sites rebuilt at the newly-applied floor of 0.10. Same page, two
+ * filters, no way to tell. The drift warning above the table is what tells you
+ * the run is behind; the table itself must stay faithful to the run.
  */
 export async function getModelInputSample(
   species: string,
@@ -977,18 +1013,14 @@ export async function getModelInputSample(
 ): Promise<ActionResult<ModelInputSample | null>> {
   await requirePermission("camera-trap", "viewer");
   try {
-    const runId = await latestCompletedRunId();
-    let binWidth = DEFAULT_BIN_WIDTH_DAYS;
-    if (runId) {
-      const [run] = await db
-        .select({ bw: occupancyRuns.binWidthDays })
-        .from(occupancyRuns)
-        .where(eq(occupancyRuns.id, runId))
-        .limit(1);
-      if (run?.bw) binWidth = run.bw;
-    }
+    const ctx = await loadRunThresholdContext();
+    const runId = ctx?.runId ?? null;
+    const binWidth = ctx?.binWidthDays ?? DEFAULT_BIN_WIDTH_DAYS;
+    const globalThreshold = ctx?.globalThreshold ?? DEFAULT_CONFIDENCE_THRESHOLD;
+    const speciesThresholds = ctx?.atRun ?? new Map<string, number>();
     const inputs = fetchOccupancyInputs(stream, {
-      confidenceThreshold: DEFAULT_CONFIDENCE_THRESHOLD,
+      confidenceThreshold: globalThreshold,
+      speciesThresholds,
     });
     const events = inputs.detections.filter((d) => d.species === species);
     if (events.length === 0) return { success: true, data: null };
@@ -1080,6 +1112,13 @@ export async function getModelInputSample(
         medianTotalDays,
         rows,
         habitatSummary,
+        confidenceUsed:
+          stream === "audio"
+            ? {
+                global: globalThreshold,
+                species: speciesThresholds.get(species) ?? null,
+              }
+            : null,
       },
     };
   } catch (error) {

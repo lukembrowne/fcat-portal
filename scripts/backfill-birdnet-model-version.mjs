@@ -73,6 +73,40 @@ function main() {
       console.log(`[backfill] ${table}: updated ${res.changes} row(s)`);
       total += res.changes;
     }
+
+    // Fitted thresholds carry their OWN copy of the label — the distinct set of
+    // versions across that campaign's sampled clips, comma-joined, exactly as
+    // `resolveModelVersion` in src/lib/birdnet-validation/fit-job.ts builds it.
+    // Rewriting only the two audio tables would leave every existing fit
+    // claiming a version that no longer appears anywhere in the data, and the
+    // species page would go on warning that the sample mixes versions after the
+    // mixing was resolved. Recomputed from the samples rather than string-
+    // replaced, so the join order and separator cannot drift from the code.
+    const thresholds = db
+      .prepare(`SELECT id, campaign_id, model_version FROM birdnet_species_thresholds`)
+      .all();
+    const distinct = db.prepare(`
+      SELECT DISTINCT ai.model_version v
+        FROM birdnet_validation_samples s
+        JOIN audio_identifications ai ON ai.id = s.audio_identification_id
+       WHERE s.campaign_id = ? AND ai.model_version IS NOT NULL
+       ORDER BY v`);
+    const updateThreshold = db.prepare(
+      `UPDATE birdnet_species_thresholds SET model_version = ? WHERE id = ?`
+    );
+
+    let fixed = 0;
+    for (const row of thresholds) {
+      const versions = distinct.all(row.campaign_id).map((r) => r.v);
+      if (versions.length === 0) continue;
+      const joined = versions.join(", ");
+      if (joined !== row.model_version) {
+        updateThreshold.run(joined, row.id);
+        fixed++;
+      }
+    }
+    console.log(`[backfill] birdnet_species_thresholds: updated ${fixed} row(s)`);
+    total += fixed;
   });
   tx();
 

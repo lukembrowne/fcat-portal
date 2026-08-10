@@ -17,6 +17,7 @@ import {
   parseStatuses,
 } from "@/lib/species-search-params";
 import { speciesSlug } from "@/lib/species-slug";
+import { xenoCantoUrl } from "@/lib/xeno-canto";
 
 interface PageProps {
   params: Promise<{ slug: string }>;
@@ -115,8 +116,6 @@ export default async function AudioSpeciesDetailPage({
     return qs ? `${pathname}?${qs}` : pathname;
   };
 
-  const xenoCantoSlug = species.scientificName.trim().replace(/\s+/g, "-");
-  const xenoCantoUrl = `https://xeno-canto.org/species/${xenoCantoSlug}`;
   const wikipediaUrl = `https://en.wikipedia.org/wiki/Special:Search?search=${encodeURIComponent(
     species.scientificName
   )}`;
@@ -131,7 +130,7 @@ export default async function AudioSpeciesDetailPage({
         inlineLinks={
           <>
             <a
-              href={xenoCantoUrl}
+              href={xenoCantoUrl(species.scientificName)}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1 text-primary hover:underline"

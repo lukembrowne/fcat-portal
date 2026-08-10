@@ -10,11 +10,17 @@ import {
 import type { OccupancySite } from "./detection-history";
 import type { ReadinessDetection, OccupancyStream } from "./readiness";
 import type { SiteCovariateInput } from "./covariates";
-import { DEFAULT_CONFIDENCE_THRESHOLD } from "@/lib/audio-confidence";
+import {
+  DEFAULT_CONFIDENCE_THRESHOLD,
+  applySpeciesConfidenceFilter,
+} from "@/lib/audio-confidence";
 import {
   selectCanonicalAudioFiles,
   type AudioSubsampleSummary,
 } from "./audio-subsample";
+
+/** No per-species thresholds — the global value everywhere. */
+const EMPTY_SPECIES_THRESHOLDS: ReadonlyMap<string, number> = new Map();
 
 /**
  * Shared data fetch for occupancy: resolves the surveyed-site pool (with windows
@@ -312,9 +318,19 @@ export function buildSites(
 
 export function fetchOccupancyInputs(
   stream: OccupancyStream,
-  opts: { confidenceThreshold?: number } = {},
+  opts: {
+    confidenceThreshold?: number;
+    /**
+     * Applied per-species BirdNET thresholds. Passed in rather than loaded here
+     * because this function is synchronous (better-sqlite3 `db.all`) and the
+     * lookup is async. Omitting it means the global threshold everywhere, i.e.
+     * the pre-validation behaviour.
+     */
+    speciesThresholds?: ReadonlyMap<string, number>;
+  } = {},
 ): OccupancyStreamInputs {
   const confidenceThreshold = opts.confidenceThreshold ?? DEFAULT_CONFIDENCE_THRESHOLD;
+  const speciesThresholds = opts.speciesThresholds ?? EMPTY_SPECIES_THRESHOLDS;
 
   // Occupancy site pool = BioChoco deployments confirmed as surveyed for THIS
   // stream (see occupancySiteGate: camera imagery verified, or audio has ≥1
@@ -426,17 +442,35 @@ export function fetchOccupancyInputs(
   // the filter keys on comes from audio_detections, surfaced via the join.
   const { keptIds, summary: audioSubsample } = selectCanonicalAudioFiles(audioFilesRows);
 
+  // Routed through the shared read-time filter rather than a local predicate.
+  // Two consequences, both deliberate:
+  //
+  //  - Per-species validated thresholds now apply here, so occupancy uses the
+  //    same score cut-off as every other audio surface.
+  //  - Human-REJECTED detections are now excluded. The previous local predicate
+  //    was `confidence >= T OR status IN ('verified','corrected')`, which let a
+  //    rejected row back in whenever its score cleared the threshold. That was
+  //    harmless while nothing was being rejected; the validation review this
+  //    filter serves exists to produce rejections, so it would have started
+  //    quietly inflating occupancy detections.
+  //
+  // The table is NOT aliased: the shared filter refers to
+  // `audio_identifications.*` by name, and SQLite hides the real name once an
+  // alias is introduced.
+  const visible = applySpeciesConfidenceFilter(confidenceThreshold, speciesThresholds);
   const rows = db.all(sql`
-    SELECT COALESCE(NULLIF(ai.corrected_species, ''), ai.species) AS species,
+    SELECT COALESCE(
+             NULLIF(audio_identifications.corrected_species, ''),
+             audio_identifications.species
+           ) AS species,
            af.deployment_id AS deployment_id,
            af.filename AS filename,
            af.id AS audio_file_id
-    FROM audio_identifications ai
-    JOIN audio_detections ad ON ad.id = ai.audio_detection_id
+    FROM audio_identifications
+    JOIN audio_detections ad ON ad.id = audio_identifications.audio_detection_id
     JOIN audio_files af ON af.id = ad.audio_file_id
     WHERE af.deployment_id IN (${biochocoDeploymentPool()})
-      AND (ai.confidence >= ${confidenceThreshold}
-           OR ai.verification_status IN ('verified', 'corrected'))
+      AND ${visible}
   `) as { species: string; deployment_id: number; filename: string | null; audio_file_id: number }[];
 
   const poolIds = new Set(sites.map((s) => s.siteId));

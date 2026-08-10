@@ -72,7 +72,8 @@ const DDL = `
   );
   CREATE TABLE occupancy_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL DEFAULT 'pending', trigger TEXT DEFAULT 'manual',
-    bin_width_days INTEGER, audio_confidence_threshold REAL, thresholds_json TEXT, n_models INTEGER DEFAULT 0,
+    bin_width_days INTEGER, audio_confidence_threshold REAL, thresholds_json TEXT,
+    species_thresholds_json TEXT, n_models INTEGER DEFAULT 0,
     n_eligible INTEGER DEFAULT 0, duration_ms INTEGER, notes TEXT, created_by TEXT, started_at INTEGER,
     completed_at INTEGER, created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );

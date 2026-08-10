@@ -41,6 +41,7 @@ import {
   UNKNOWN_HABITAT_KEY,
 } from "@/lib/habitat-lookup";
 import { getHabitatName } from "@/app/biochoco/overview/types";
+import { loadActiveSpeciesThresholds } from "@/lib/birdnet-validation/threshold-map";
 
 /**
  * Orchestrates one occupancy run: for each stream and each eligible species,
@@ -167,8 +168,15 @@ export async function runOccupancyBuild(opts: BuildRunOptions = {}): Promise<Bui
   // Fetch inputs + precount species up front. Doing this before the run row is
   // created lets the infrastructure guard fail cleanly with no orphaned
   // 'running' row.
+  // Loaded once, outside the synchronous map below. Recorded on the run row so
+  // a fitted model's inputs stay reconstructible after a threshold changes.
+  const speciesThresholds = await loadActiveSpeciesThresholds();
+
   const perStream = STREAMS.map((stream) => {
-    const inputs = fetchOccupancyInputs(stream, { confidenceThreshold });
+    const inputs = fetchOccupancyInputs(stream, {
+      confidenceThreshold,
+      speciesThresholds,
+    });
     const species = new Set(inputs.detections.map((d) => d.species));
     return { stream, inputs, species: [...species] };
   });
@@ -186,14 +194,20 @@ export async function runOccupancyBuild(opts: BuildRunOptions = {}): Promise<Bui
     raw
       .prepare(
         `INSERT INTO occupancy_runs
-           (status, trigger, bin_width_days, audio_confidence_threshold, thresholds_json, created_by, started_at)
-         VALUES ('running', ?, ?, ?, ?, ?, ?)`,
+           (status, trigger, bin_width_days, audio_confidence_threshold, thresholds_json,
+            species_thresholds_json, created_by, started_at)
+         VALUES ('running', ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         opts.trigger ?? "manual",
         binWidth,
         confidenceThreshold,
         JSON.stringify(thresholds),
+        // null rather than "{}" when nothing is applied, so a run predating any
+        // validation is distinguishable from one where every threshold was reverted.
+        speciesThresholds.size > 0
+          ? JSON.stringify(Object.fromEntries(speciesThresholds))
+          : null,
         opts.createdBy ?? null,
         startedAtSec,
       ).lastInsertRowid,

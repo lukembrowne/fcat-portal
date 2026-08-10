@@ -17,9 +17,10 @@ import { notFound } from "next/navigation";
 import { fetchAudioFiles } from "../actions";
 import { RecordingsShell } from "./recordings-shell";
 import {
-  applyConfidenceFilter,
+  applySpeciesConfidenceFilter,
   parseThresholdParam,
 } from "@/lib/audio-confidence";
+import { loadActiveSpeciesThresholds } from "@/lib/birdnet-validation/threshold-map";
 
 export default async function AudioDetailPage({
   params,
@@ -193,7 +194,10 @@ export default async function AudioDetailPage({
   } | null = null;
 
   if (lastBirdnetJob) {
-    const visible = applyConfidenceFilter(threshold);
+    const visible = applySpeciesConfidenceFilter(
+      threshold,
+      await loadActiveSpeciesThresholds()
+    );
     const [detStats] = await db
       .select({
         totalDetections: sql<number>`COUNT(DISTINCT ${audioDetections.id})`,
@@ -251,6 +255,7 @@ export default async function AudioDetailPage({
     const aggregates = await aggregateAudioSpeciesForDeployment(
       deploymentId,
       threshold,
+      await loadActiveSpeciesThresholds(),
     );
     const names = aggregates.map((a) => a.scientificName);
     const speciesRows = names.length

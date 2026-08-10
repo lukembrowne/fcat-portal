@@ -276,7 +276,7 @@ export { audioDetections, audioFiles };
 // Audio aggregation
 // ---------------------------------------------------------------------------
 
-import { applyConfidenceFilter } from "@/lib/audio-confidence";
+import { applySpeciesConfidenceFilter } from "@/lib/audio-confidence";
 
 export interface AudioSiteAggregate {
   deploymentId: number;
@@ -294,9 +294,13 @@ export interface AudioSiteAggregate {
  * The audio_files.modified_at column stands in for "last detection date"
  * since audio_files has no recording_start column.
  */
+/** Default: no per-species thresholds, i.e. the global value everywhere. */
+const EMPTY_SPECIES_THRESHOLDS: ReadonlyMap<string, number> = new Map();
+
 export async function aggregateAudioBySpecies(
   ctProjects: number[] | "all",
-  threshold: number
+  threshold: number,
+  speciesThresholds: ReadonlyMap<string, number> = EMPTY_SPECIES_THRESHOLDS
 ): Promise<Map<string, SpeciesAggregate>> {
   const projectWhere =
     ctProjects === "all"
@@ -305,7 +309,7 @@ export async function aggregateAudioBySpecies(
         ? inArray(deployments.cameraTrapProjectId, [-1])
         : inArray(deployments.cameraTrapProjectId, ctProjects);
 
-  const conf = applyConfidenceFilter(threshold);
+  const conf = applySpeciesConfidenceFilter(threshold, speciesThresholds);
 
   const activeRows = await db
     .select({
@@ -359,7 +363,8 @@ export async function aggregateAudioSpeciesSites(
   scientificName: string,
   ctProjects: number[] | "all",
   threshold: number,
-  statuses: readonly ("unverified" | "verified" | "corrected" | "rejected")[]
+  statuses: readonly ("unverified" | "verified" | "corrected" | "rejected")[],
+  speciesThresholds: ReadonlyMap<string, number> = EMPTY_SPECIES_THRESHOLDS
 ): Promise<AudioSiteAggregate[]> {
   const projectWhere =
     ctProjects === "all"
@@ -372,7 +377,7 @@ export async function aggregateAudioSpeciesSites(
   const acceptsActive =
     statusSet.has("verified") || statusSet.has("unverified");
   const acceptsCorrected = statusSet.has("corrected");
-  const conf = applyConfidenceFilter(threshold);
+  const conf = applySpeciesConfidenceFilter(threshold, speciesThresholds);
 
   const merged = new Map<number, AudioSiteAggregate>();
 
@@ -597,9 +602,10 @@ export function mergeDeploymentSpeciesRows(
  */
 export async function aggregateAudioSpeciesForDeployment(
   deploymentId: number,
-  threshold: number
+  threshold: number,
+  speciesThresholds: ReadonlyMap<string, number> = EMPTY_SPECIES_THRESHOLDS
 ): Promise<DeploymentSpeciesAggregate[]> {
-  const conf = applyConfidenceFilter(threshold);
+  const conf = applySpeciesConfidenceFilter(threshold, speciesThresholds);
   const confCols = {
     sumConf: sql<number | null>`SUM(${audioIdentifications.confidence})`,
     confCount: sql<number>`SUM(CASE WHEN ${audioIdentifications.confidence} IS NOT NULL THEN 1 ELSE 0 END)`,

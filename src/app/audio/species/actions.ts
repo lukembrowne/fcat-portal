@@ -36,9 +36,10 @@ import {
 } from "@/lib/species-search-params";
 import { resolveSpeciesFromSlug } from "@/lib/species-slug-server";
 import {
-  applyConfidenceFilter,
+  applySpeciesConfidenceFilter,
   parseThresholdParam,
 } from "@/lib/audio-confidence";
+import { loadActiveSpeciesThresholds } from "@/lib/birdnet-validation/threshold-map";
 import type { ActionResult } from "@/lib/types";
 import type { Species } from "@/db/schema";
 import type {
@@ -92,7 +93,11 @@ export async function getAudioSpeciesIndex(
   const ctProjects = await getUserCameraTrapProjects(user);
   const threshold = parseThresholdParam(searchParams.conf);
 
-  const aggregates = await aggregateAudioBySpecies(ctProjects, threshold);
+  const aggregates = await aggregateAudioBySpecies(
+    ctProjects,
+    threshold,
+    await loadActiveSpeciesThresholds()
+  );
   const names = [...aggregates.keys()];
   const speciesRows = names.length
     ? await db.select().from(species).where(inArray(species.scientificName, names))
@@ -160,7 +165,8 @@ export async function getAudioSpeciesDetail(
     target.scientificName,
     filteredProjects,
     filters.threshold,
-    filters.statuses
+    filters.statuses,
+    await loadActiveSpeciesThresholds()
   );
 
   const toSummary = (s: AudioSiteAggregate): SiteSummary => ({
@@ -241,7 +247,10 @@ export async function getAudioSpeciesSitePage(
   const acceptsActive =
     statusSet.has("verified") || statusSet.has("unverified");
   const acceptsCorrected = statusSet.has("corrected");
-  const conf = applyConfidenceFilter(filters.threshold);
+  const conf = applySpeciesConfidenceFilter(
+    filters.threshold,
+    await loadActiveSpeciesThresholds()
+  );
 
   const orConditions: Array<ReturnType<typeof and>> = [];
   if (acceptsActive) {

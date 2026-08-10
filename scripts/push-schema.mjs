@@ -583,6 +583,109 @@ const statements = [
   )`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_audio_file ON acoustic_indices(audio_file_id)`,
 
+  // BirdNET threshold validation (Wood & Kahl 2024). Score-bin-stratified
+  // expert review of a species' detections -> glm(outcome ~ logit) in R ->
+  // the confidence value at which 95% of retained detections are true.
+  // See src/db/schema.ts + docs/plans/2026-08-04-002-feat-birdnet-validation-thresholds-plan.md
+  `CREATE TABLE IF NOT EXISTS birdnet_validation_campaigns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    species TEXT NOT NULL,
+    ct_project_id INTEGER REFERENCES ct_projects(id) ON DELETE SET NULL,
+    status TEXT NOT NULL DEFAULT 'draft'
+      CHECK(status IN ('draft','sampled','reviewing','fitted','unusable','applied','abandoned')),
+    target_sample_size INTEGER NOT NULL DEFAULT 200,
+    bin_count INTEGER NOT NULL DEFAULT 9,
+    seed INTEGER NOT NULL,
+    sampled_at INTEGER,
+    abandoned_reason TEXT,
+    primary_reviewer_email TEXT,
+    created_by TEXT NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+  // Partial: abandoned campaigns drop out so a species can be retried.
+  // COALESCE keeps the NULL project scope (all projects) from bypassing the
+  // constraint — in SQLite every NULL is distinct, so two NULL-scoped campaigns
+  // for the same species would otherwise both be allowed.
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_birdnet_campaigns_species_scope
+     ON birdnet_validation_campaigns(species, COALESCE(ct_project_id, -1))
+     WHERE status != 'abandoned'`,
+  `CREATE INDEX IF NOT EXISTS idx_birdnet_campaigns_status ON birdnet_validation_campaigns(status)`,
+
+  `CREATE TABLE IF NOT EXISTS birdnet_validation_samples (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id INTEGER NOT NULL REFERENCES birdnet_validation_campaigns(id) ON DELETE CASCADE,
+    audio_identification_id INTEGER NOT NULL REFERENCES audio_identifications(id) ON DELETE CASCADE,
+    confidence REAL NOT NULL,
+    bin_index INTEGER NOT NULL,
+    deployment_id INTEGER,
+    site_name TEXT,
+    habitat TEXT,
+    order_index INTEGER NOT NULL
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_birdnet_samples_campaign_ident ON birdnet_validation_samples(campaign_id, audio_identification_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_birdnet_samples_queue ON birdnet_validation_samples(campaign_id, order_index)`,
+
+  // One row per (clip, reviewer). Every rostered reviewer answers every clip,
+  // so the uniqueness constraint below is what makes "reviewer B overwrites
+  // reviewer A" unrepresentable instead of merely discouraged. The outcome
+  // CHECK must live here: Drizzle's text({ enum }) is TypeScript-only and a
+  // mismatch surfaces as a runtime SQLITE_CONSTRAINT_CHECK.
+  `CREATE TABLE IF NOT EXISTS birdnet_validation_reviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sample_id INTEGER NOT NULL REFERENCES birdnet_validation_samples(id) ON DELETE CASCADE,
+    reviewer_email TEXT NOT NULL,
+    outcome TEXT NOT NULL CHECK(outcome IN ('correct','incorrect','uncertain')),
+    notes TEXT,
+    reviewed_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_birdnet_reviews_sample_reviewer ON birdnet_validation_reviews(sample_id, reviewer_email)`,
+  `CREATE INDEX IF NOT EXISTS idx_birdnet_reviews_reviewer ON birdnet_validation_reviews(reviewer_email, sample_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_birdnet_reviews_sample ON birdnet_validation_reviews(sample_id)`,
+
+  // Roster: a denominator for progress, not an access gate.
+  `CREATE TABLE IF NOT EXISTS birdnet_validation_campaign_reviewers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id INTEGER NOT NULL REFERENCES birdnet_validation_campaigns(id) ON DELETE CASCADE,
+    reviewer_email TEXT NOT NULL,
+    added_by TEXT NOT NULL,
+    added_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_birdnet_campaign_reviewers_unique ON birdnet_validation_campaign_reviewers(campaign_id, reviewer_email)`,
+
+  `CREATE TABLE IF NOT EXISTS birdnet_species_thresholds (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id INTEGER NOT NULL REFERENCES birdnet_validation_campaigns(id) ON DELETE CASCADE,
+    species TEXT NOT NULL,
+    n_reviewed INTEGER NOT NULL,
+    n_correct INTEGER NOT NULL,
+    n_uncertain INTEGER NOT NULL DEFAULT 0,
+    intercept REAL,
+    slope REAL,
+    converged INTEGER NOT NULL DEFAULT 0,
+    threshold_conf_90 REAL,
+    threshold_conf_95 REAL,
+    threshold_conf_99 REAL,
+    threshold_se_95 REAL,
+    ci_lower_95 REAL,
+    ci_upper_95 REAL,
+    unusable_reason TEXT,
+    -- 'fit' = the logistic regression; 'no_filter' = a person recording that
+    -- the species needs no threshold (every review correct, so the fit has
+    -- nothing to estimate). See src/db/schema.ts for why this is stored rather
+    -- than inferred from threshold_conf_95 = 0.1.
+    source TEXT NOT NULL DEFAULT 'fit' CHECK(source IN ('fit', 'no_filter')),
+    model_version TEXT,
+    primary_reviewer_email TEXT,
+    is_active INTEGER NOT NULL DEFAULT 0,
+    fitted_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    applied_at INTEGER,
+    applied_by TEXT
+  )`,
+  // At most one applied threshold per species portal-wide.
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_birdnet_thresholds_active_species
+     ON birdnet_species_thresholds(species) WHERE is_active = 1`,
+  `CREATE INDEX IF NOT EXISTS idx_birdnet_thresholds_campaign ON birdnet_species_thresholds(campaign_id)`,
+
   // Occupancy modeling (single-season single-species via unmarked::occu).
   // See src/db/schema.ts + docs/brainstorms/2026-07-03-occupancy-modeling-requirements.md
   `CREATE TABLE IF NOT EXISTS occupancy_runs (
@@ -592,6 +695,7 @@ const statements = [
     bin_width_days INTEGER NOT NULL DEFAULT 5,
     audio_confidence_threshold REAL NOT NULL DEFAULT 0.7,
     thresholds_json TEXT,
+    species_thresholds_json TEXT,
     n_models INTEGER NOT NULL DEFAULT 0,
     n_eligible INTEGER NOT NULL DEFAULT 0,
     duration_ms INTEGER,
@@ -1128,6 +1232,19 @@ const migrations = [
   // management_tip columns (added 2026-07-23) are superseded; they may linger
   // unused in dev DBs but are never read/written.
   `ALTER TABLE biochoco_species ADD COLUMN public_content TEXT`,
+
+  // Applied per-species BirdNET confidence thresholds in force when this run
+  // read its audio detections (species -> value JSON). Keeps a fitted model's
+  // inputs reconstructible after a threshold is applied or reverted, which the
+  // existing thresholds_json (eligibility cut-offs) does not cover (2026-08-04).
+  `ALTER TABLE occupancy_runs ADD COLUMN species_thresholds_json TEXT`,
+
+  // How a threshold row got its value: the logistic fit, or a person recording
+  // that the species needs no filter at all (2026-08-10). Existing rows are all
+  // fits, which is what the DEFAULT gives them. No CHECK on the added column —
+  // SQLite cannot attach one via ALTER; databases created fresh get it from the
+  // CREATE TABLE above, and the enum is enforced in TypeScript either way.
+  `ALTER TABLE birdnet_species_thresholds ADD COLUMN source TEXT NOT NULL DEFAULT 'fit'`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }

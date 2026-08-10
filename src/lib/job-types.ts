@@ -25,6 +25,7 @@ export const JOB_TYPES = {
   TRAINING_EXPORT_UPLOAD: "training_export_upload",
   EXTERNAL_IMPORT: "external_import",
   OCCUPANCY_MODEL: "occupancy_model",
+  BIRDNET_THRESHOLD_FIT: "birdnet_threshold_fit",
 } as const;
 
 export type JobType = (typeof JOB_TYPES)[keyof typeof JOB_TYPES];

@@ -61,6 +61,32 @@ export function buildBiochocoPublicNav({
   return publicChildren;
 }
 
+/**
+ * Ordered children of the "Grabaciones" analysis group.
+ *
+ * Pure + exported for unit testing (no DB, no React), same as
+ * `buildBiochocoPublicNav` above.
+ */
+export function buildAudioNav({
+  isGrabacionesEditor,
+}: {
+  isGrabacionesEditor: boolean;
+}): NavItem[] {
+  const children: NavItem[] = [
+    { label: "Instalaciones", href: "/audio" },
+    { label: "Explorar por especie", href: "/audio/species" },
+  ];
+  // Editor-gated: viewers cannot run campaigns, draw samples, or review, so the
+  // page would be read-only scaffolding for them.
+  if (isGrabacionesEditor) {
+    children.push({
+      label: "Validación de umbrales",
+      href: "/audio/validacion",
+    });
+  }
+  return children;
+}
+
 export function SidebarNav({ user }: SidebarNavProps) {
   const isBiochocoAdmin =
     user.globalRole === "super_admin" ||
@@ -180,6 +206,14 @@ export function SidebarNav({ user }: SidebarNavProps) {
   // Análisis section — reusable analysis modules
   const analysisItems: NavItem[] = [];
 
+  const isGrabacionesEditor =
+    user.globalRole === "super_admin" ||
+    user.permissions.some(
+      (p) =>
+        p.projectId === "grabaciones" &&
+        (p.role === "editor" || p.role === "admin")
+    );
+
   const isCameraTrapEditor =
     user.globalRole === "super_admin" ||
     user.permissions.some(
@@ -220,10 +254,7 @@ export function SidebarNav({ user }: SidebarNavProps) {
     analysisItems.push({
       label: "Grabaciones",
       icon: "audio-lines",
-      children: [
-        { label: "Instalaciones", href: "/audio" },
-        { label: "Explorar por especie", href: "/audio/species" },
-      ],
+      children: buildAudioNav({ isGrabacionesEditor }),
     });
   }
 

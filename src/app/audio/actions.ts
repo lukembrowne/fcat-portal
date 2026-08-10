@@ -56,9 +56,10 @@ import { DIEL_PERIODS, type DielPeriod } from "@/lib/acoustic-indices";
 import { parseRecordingTimestamp } from "@/lib/audio-filename";
 import {
   DEFAULT_CONFIDENCE_THRESHOLD,
-  applyConfidenceFilter,
+  applySpeciesConfidenceFilter,
   canonicalThreshold,
 } from "@/lib/audio-confidence";
+import { loadActiveSpeciesThresholds } from "@/lib/birdnet-validation/threshold-map";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -134,7 +135,10 @@ export async function fetchAudioDeployments(
   const threshold = canonicalThreshold(
     opts?.threshold ?? DEFAULT_CONFIDENCE_THRESHOLD
   );
-  const visible = applyConfidenceFilter(threshold);
+  const visible = applySpeciesConfidenceFilter(
+    threshold,
+    await loadActiveSpeciesThresholds()
+  );
 
   // Load the deployment rows once. Per-deployment stats are then computed with
   // a small fixed set of batched GROUP BY queries (see below) instead of one
@@ -284,7 +288,10 @@ export async function fetchAudioFiles(
   const threshold = canonicalThreshold(
     opts?.threshold ?? DEFAULT_CONFIDENCE_THRESHOLD
   );
-  const visible = applyConfidenceFilter(threshold);
+  const visible = applySpeciesConfidenceFilter(
+    threshold,
+    await loadActiveSpeciesThresholds()
+  );
 
   // LEFT JOIN acoustic_indices (1:1 via uniqueIndex on audio_file_id) so files
   // without computed indices still return — index fields will be null.

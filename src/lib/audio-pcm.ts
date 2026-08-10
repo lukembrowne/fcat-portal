@@ -48,15 +48,28 @@ export async function decodeAudioToPcmMono(driveFileId: string): Promise<PcmResu
 
   try {
     await downloadFile(driveFileId, srcTmp);
-    const raw = await runFfmpegPcm(srcTmp);
-    // f32le little-endian → Float32Array. Copy out of the pooled Buffer so the
-    // result owns its memory. Guard against a non-4-aligned byte length.
-    const usable = raw.byteLength - (raw.byteLength % 4);
-    const view = new Float32Array(raw.buffer, raw.byteOffset, usable / 4);
-    return { samples: Float32Array.from(view), sampleRate: PCM_SAMPLE_RATE };
+    return await decodeLocalAudioToPcmMono(srcTmp);
   } finally {
     await fs.unlink(srcTmp).catch(() => {});
   }
+}
+
+/**
+ * Decode an audio file already on disk to mono float32 PCM.
+ *
+ * Split out of the Drive path so callers that have produced a local file — the
+ * BirdNET validation clip cache cuts one with ffmpeg — can render its
+ * spectrogram without a redundant download.
+ */
+export async function decodeLocalAudioToPcmMono(
+  localPath: string
+): Promise<PcmResult> {
+  const raw = await runFfmpegPcm(localPath);
+  // f32le little-endian → Float32Array. Copy out of the pooled Buffer so the
+  // result owns its memory. Guard against a non-4-aligned byte length.
+  const usable = raw.byteLength - (raw.byteLength % 4);
+  const view = new Float32Array(raw.buffer, raw.byteOffset, usable / 4);
+  return { samples: Float32Array.from(view), sampleRate: PCM_SAMPLE_RATE };
 }
 
 /** Spawn ffmpeg to decode `srcPath` → mono f32le PCM on stdout. */

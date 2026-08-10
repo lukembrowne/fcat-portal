@@ -235,7 +235,11 @@ export default async function OccupancyPage() {
       <div className="rounded-lg border px-4 py-2">
         <RunControl
           isAdmin={isAdmin}
-          info={runInfo.success ? runInfo.data : { run: null, activeJob: null }}
+          info={
+            runInfo.success
+              ? runInfo.data
+              : { run: null, activeJob: null, thresholdChanges: [] }
+          }
         />
       </div>
 

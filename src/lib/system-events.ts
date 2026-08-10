@@ -78,6 +78,7 @@ const AUDIO_JOB_TYPES = new Set<JobType>([
   JOB_TYPES.AUDIO_SYNC,
   JOB_TYPES.AUDIO_COMPRESSION,
   JOB_TYPES.REVERT_AUDIO_COMPRESSION,
+  JOB_TYPES.BIRDNET_THRESHOLD_FIT,
 ]);
 
 export const JOB_LABELS: Record<JobType, string> = {
@@ -98,6 +99,7 @@ export const JOB_LABELS: Record<JobType, string> = {
   training_export_upload: "Subida de exporte",
   external_import: "Importación de imágenes externas",
   occupancy_model: "Modelos de ocupación",
+  birdnet_threshold_fit: "Umbrales de BirdNET",
 };
 
 const OUTCOME_VERBS: Record<TerminalOutcome, string> = {

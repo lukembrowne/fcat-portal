@@ -28,10 +28,11 @@ import {
 import { requirePermission } from "@/lib/auth";
 import { requireDeploymentAccess } from "@/lib/camera-trap-auth";
 import {
-  applyConfidenceFilter,
+  applySpeciesConfidenceFilter,
   formatThreshold,
   parseThresholdParam,
 } from "@/lib/audio-confidence";
+import { loadActiveSpeciesThresholds } from "@/lib/birdnet-validation/threshold-map";
 
 export const dynamic = "force-dynamic";
 
@@ -63,7 +64,8 @@ export async function GET(request: NextRequest) {
   await requireDeploymentAccess(user, deploymentId);
 
   const threshold = parseThresholdParam(url.searchParams.get("conf"));
-  const visible = applyConfidenceFilter(threshold);
+  const speciesThresholds = await loadActiveSpeciesThresholds();
+  const visible = applySpeciesConfidenceFilter(threshold, speciesThresholds);
 
   const [deployment] = await db
     .select({ name: deployments.name })
@@ -118,8 +120,27 @@ export async function GET(request: NextRequest) {
     "created_at",
   ];
 
+  // Provenance for the per-species thresholds actually in force. Without this a
+  // reader cannot tell which score cut-off produced any given row: the global
+  // value in the line above applies only to species with no validated
+  // threshold. Only species appearing in this export are listed, so the header
+  // stays proportionate to the file.
+  const exportedSpecies = new Set(rows.map((r) => r.species));
+  const appliedHere = [...speciesThresholds.entries()]
+    .filter(([species]) => exportedSpecies.has(species))
+    .sort(([a], [b]) => a.localeCompare(b));
+
+  const speciesThresholdLines =
+    appliedHere.length > 0
+      ? `# species_specific_thresholds=${appliedHere.length}\n` +
+        appliedHere
+          .map(([species, value]) => `#   ${species}=${value.toFixed(4)}\n`)
+          .join("")
+      : "# species_specific_thresholds=0\n";
+
   const body =
     `# confidence_threshold=${thresholdStr}\n` +
+    speciesThresholdLines +
     `# generated=${new Date().toISOString()}\n` +
     `# deployment_id=${deploymentId}\n` +
     `# deployment_name=${deployment.name}\n` +

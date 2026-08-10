@@ -129,6 +129,8 @@ describe("camera-trap action permission guards", () => {
       ["deleteDeployments", actions.deleteDeployments, [[1]]],
       ["markVerifiedEmpty", actions.markVerifiedEmpty, [[1]]],
       ["undoVerifiedEmpty", actions.undoVerifiedEmpty, [[1]]],
+      ["markNoData", actions.markNoData, [1]],
+      ["undoNoData", actions.undoNoData, [1]],
       ["queueProcessing", actions.queueProcessing, [[1]]],
       ["cancelQueue", actions.cancelQueue, []],
       ["verifyIdentification", actions.verifyIdentification, [1]],

@@ -65,7 +65,7 @@ const statements = [
     date_start TEXT,
     date_end TEXT,
     total_images INTEGER DEFAULT 0,
-    status TEXT NOT NULL DEFAULT 'unscanned' CHECK(status IN ('unscanned', 'scanned', 'processing', 'processed', 'verified', 'verified_empty')),
+    status TEXT NOT NULL DEFAULT 'unscanned' CHECK(status IN ('unscanned', 'scanned', 'processing', 'processed', 'verified', 'verified_empty', 'no_data')),
     created_at INTEGER NOT NULL DEFAULT (unixepoch()),
     updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
     created_by TEXT
@@ -1351,6 +1351,44 @@ try {
 } catch (err) {
   try { db.exec(`ROLLBACK`); } catch { /* no active tx */ }
   console.error("Failed to migrate biochoco_deployments status constraint:", err.message);
+}
+
+// --- Table recreation: add no_data to deployment status CHECK constraint (2026-08) ---
+// Unlike the verified_empty block above, this rewrites the LIVE DDL from
+// sqlite_master instead of hardcoding columns: the real table has ~50 columns
+// (all the ALTER TABLEs above, plus a legacy `excluded` column that exists on
+// old DBs but is never created on fresh ones), so no static column list is
+// correct for every database this script runs against.
+try {
+  const tableInfo = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='biochoco_deployments'")
+    .get();
+  if (tableInfo && !tableInfo.sql.includes("no_data")) {
+    console.log("Migrating biochoco_deployments table: adding no_data status...");
+    const newSql = tableInfo.sql
+      .replace(/^CREATE TABLE "?biochoco_deployments"?/, "CREATE TABLE biochoco_deployments_new")
+      .replace("'verified_empty')", "'verified_empty', 'no_data')");
+    if (!newSql.startsWith("CREATE TABLE biochoco_deployments_new") || !newSql.includes("'no_data'")) {
+      throw new Error("Could not rewrite biochoco_deployments DDL for the no_data migration");
+    }
+    db.exec(`BEGIN TRANSACTION`);
+    const before = db.prepare("SELECT COUNT(*) AS c FROM biochoco_deployments").get().c;
+    db.exec(newSql);
+    // Identical DDL => identical column order, so SELECT * is a faithful full copy.
+    db.exec(`INSERT INTO biochoco_deployments_new SELECT * FROM biochoco_deployments`);
+    const after = db.prepare("SELECT COUNT(*) AS c FROM biochoco_deployments_new").get().c;
+    if (after !== before) throw new Error(`Row count mismatch after copy (${before} -> ${after})`);
+    db.exec(`DROP TABLE biochoco_deployments`);
+    db.exec(`ALTER TABLE biochoco_deployments_new RENAME TO biochoco_deployments`);
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_biochoco_deployments_project_path ON biochoco_deployments(project_id, path)`);
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_biochoco_deployments_project_drive_folder ON biochoco_deployments(project_id, drive_folder_id)`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_biochoco_deployments_shared_drive_id ON biochoco_deployments(shared_drive_id)`);
+    db.exec(`COMMIT`);
+    console.log("  biochoco_deployments status CHECK now includes no_data");
+  }
+} catch (err) {
+  try { db.exec(`ROLLBACK`); } catch { /* no active tx */ }
+  console.error("Failed to migrate biochoco_deployments status constraint (no_data):", err.message);
 }
 
 // --- Table recreation: make biochoco_processing_jobs.deployment_id nullable (2026-05-06) ---

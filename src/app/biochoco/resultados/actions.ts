@@ -253,13 +253,16 @@ export async function fetchResultadosData(): Promise<ActionResult<ResultadosData
       const deps = siteDeployments.get(site.siteId) ?? [];
       const depIds = deps.map((d) => d.id);
 
-      // Cameras
+      // Cameras. Deployments marked "sin datos" (camera recorded nothing)
+      // don't count as camera work in progress — a site with only those
+      // honestly has no camera data.
+      const cameraDeps = deps.filter((d) => d.status !== "no_data");
       let cameras: SiteReadiness["cameras"] = "none";
-      if (deps.some((d) => depsWithVerifiedIds.has(d.id))) {
+      if (cameraDeps.some((d) => depsWithVerifiedIds.has(d.id))) {
         cameras = "complete";
-      } else if (deps.some((d) => processedStatuses.has(d.status))) {
+      } else if (cameraDeps.some((d) => processedStatuses.has(d.status))) {
         cameras = "in_progress";
-      } else if (deps.length > 0) {
+      } else if (cameraDeps.length > 0) {
         cameras = "in_progress";
       }
 

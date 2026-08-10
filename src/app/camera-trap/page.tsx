@@ -44,6 +44,8 @@ export interface StatusCounts {
   verificadas: number;
   /** Subset of porProcesar: deployments that still have no files/images. */
   sinArchivos: number;
+  /** Terminal: camera confirmed to have recorded nothing ("Sin datos"). */
+  sinDatos: number;
 }
 
 function computeStatusCounts(deployments: DeploymentRow[]): StatusCounts {
@@ -52,6 +54,7 @@ function computeStatusCounts(deployments: DeploymentRow[]): StatusCounts {
   let porRevisar = 0;
   let verificadas = 0;
   let sinArchivos = 0;
+  let sinDatos = 0;
 
   for (const d of deployments) {
     // "Procesando" is derived from active jobs, not the stored status.
@@ -72,10 +75,13 @@ function computeStatusCounts(deployments: DeploymentRow[]): StatusCounts {
       case "verified_empty":
         verificadas++;
         break;
+      case "no_data":
+        sinDatos++;
+        break;
     }
   }
 
-  return { porProcesar, procesando, porRevisar, verificadas, sinArchivos };
+  return { porProcesar, procesando, porRevisar, verificadas, sinArchivos, sinDatos };
 }
 
 export default async function CameraTrapPage() {
@@ -124,6 +130,12 @@ export default async function CameraTrapPage() {
           <SummaryStat label="Por Revisar" value={counts.porRevisar} dotClass="bg-orange-500" valueClass="text-orange-600" />
           <span className="h-4 w-px bg-border" aria-hidden />
           <SummaryStat label="Verificadas" value={counts.verificadas} dotClass="bg-emerald-600" valueClass="text-emerald-700" />
+          {counts.sinDatos > 0 && (
+            <>
+              <span className="h-4 w-px bg-border" aria-hidden />
+              <SummaryStat label="Sin datos" value={counts.sinDatos} dotClass="bg-slate-400" valueClass="text-slate-600" />
+            </>
+          )}
           <span className="ml-auto text-xs text-muted-foreground">
             {allDeployments.length} instalaciones en total
           </span>

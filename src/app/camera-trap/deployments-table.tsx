@@ -439,6 +439,7 @@ export function DeploymentsTable({
                   <span className="inline-flex items-center gap-1.5"><StatusBadge status="processed_empty" type="deployment" /> Procesada, sin detecciones</span>
                   <span className="inline-flex items-center gap-1.5"><StatusBadge status="verified" type="deployment" /> Revisada por investigador</span>
                   <span className="inline-flex items-center gap-1.5"><StatusBadge status="verified_empty" type="deployment" /> Sin detecciones, confirmada</span>
+                  <span className="inline-flex items-center gap-1.5"><StatusBadge status="no_data" type="deployment" /> Cámara sin archivos (confirmado)</span>
                 </div>
               </TooltipContent>
             </Tooltip>
@@ -875,6 +876,7 @@ export function DeploymentsTable({
             <option value="processed">Por Revisar</option>
             <option value="verified">Verificada</option>
             <option value="verified_empty">Vacía (verificada)</option>
+            <option value="no_data">Sin datos</option>
           </select>
 
           <div className="relative w-[260px]">
@@ -1137,6 +1139,7 @@ function GroupStatusChips({ counts }: { counts: StatusCounts }) {
     { label: "Procesando", value: counts.procesando, dotClass: "bg-yellow-500", valueClass: "text-yellow-600" },
     { label: "Por Revisar", value: counts.porRevisar, dotClass: "bg-orange-500", valueClass: "text-orange-600" },
     { label: "Verificadas", value: counts.verificadas, dotClass: "bg-emerald-600", valueClass: "text-emerald-700" },
+    { label: "Sin datos", value: counts.sinDatos, dotClass: "bg-slate-400", valueClass: "text-slate-600" },
   ];
 
   const visible = chips.filter((c) => c.value > 0);

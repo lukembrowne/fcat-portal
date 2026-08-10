@@ -13,6 +13,7 @@ import {
 } from "@/lib/odk-constants";
 import type { OdkSiteEntity } from "@/lib/odk-types";
 import type { Deployment } from "@/db/schema";
+import { recordEvent } from "@/lib/system-events";
 import { log } from "@/lib/log";
 
 interface OdkMatch {
@@ -108,15 +109,44 @@ export async function scanDeploymentImagesInternal(
     .from(videos)
     .where(eq(videos.deploymentId, deployment.id));
 
+  // A terminal "sin datos" deployment is revived if a scan finds files —
+  // that safety net is what makes the manual mark low-risk.
+  const revivedFromNoData =
+    deployment.status === "no_data" &&
+    totalImageRows.length + totalVideoRows.length > 0;
+
   await db
     .update(deployments)
     .set({
       totalImages: totalImageRows.length,
       totalVideos: totalVideoRows.length,
-      ...(deployment.status === "unscanned" ? { status: "scanned" as const } : {}),
+      ...(deployment.status === "unscanned" || revivedFromNoData
+        ? { status: "scanned" as const }
+        : {}),
       updatedAt: new Date(),
     })
     .where(eq(deployments.id, deployment.id));
+
+  if (revivedFromNoData) {
+    await recordEvent({
+      source: "camera-trap",
+      eventType: "unmark_deployment_no_data",
+      severity: "warn",
+      summary: `Instalación ${deployment.name} reabierta para procesar (archivos encontrados en Drive)`,
+      actorEmail: null,
+      projectId: "camera-trap",
+      targetType: "deployment",
+      targetId: deployment.id,
+      details: {
+        name: deployment.name,
+        from: "no_data",
+        to: "scanned",
+        trigger: "auto",
+        imageCount: totalImageRows.length,
+        videoCount: totalVideoRows.length,
+      },
+    });
+  }
 
   return { imageCount: totalImageRows.length, videoCount: totalVideoRows.length };
 }

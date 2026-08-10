@@ -34,8 +34,11 @@ import {
   undoVerifiedEmpty,
   markVerified,
   undoVerified,
+  markNoData,
+  undoNoData,
   getUnverifiedCount,
 } from "./actions";
+import { canMarkNoData, canUndoNoData } from "@/lib/camera-trap-status";
 import { scanDeploymentImages, cacheDeploymentImages } from "./drive-actions";
 import { matchOdkDeployments } from "./odk-actions";
 import { CompressConfirmDialog } from "./compress-confirm-dialog";
@@ -210,6 +213,30 @@ export function DeploymentActionsMenu({
       const result = await undoVerified(deploymentId);
       if (result.success) {
         toast.success("Revisión reabierta");
+        router.refresh();
+      } else {
+        toast.error(result.error);
+      }
+    });
+  };
+
+  const handleMarkNoData = () => {
+    startVerifying(async () => {
+      const result = await markNoData(deploymentId);
+      if (result.success) {
+        toast.success("Instalación marcada sin datos");
+        router.refresh();
+      } else {
+        toast.error(result.error);
+      }
+    });
+  };
+
+  const handleUndoNoData = () => {
+    startVerifying(async () => {
+      const result = await undoNoData(deploymentId);
+      if (result.success) {
+        toast.success("Instalación reabierta para procesar");
         router.refresh();
       } else {
         toast.error(result.error);
@@ -418,6 +445,40 @@ export function DeploymentActionsMenu({
                   <div>{verifyingAction ? "Reabriendo..." : "Re-abrir Revisión"}</div>
                   <p className="text-xs text-muted-foreground font-normal">
                     Volver al estado de procesada para continuar la revisión
+                  </p>
+                </div>
+              </DropdownMenuItem>
+            </>
+          )}
+          {canMarkNoData(status, totalImages, hasVideos ? 1 : 0, isProcessing) && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={handleMarkNoData}
+                disabled={verifyingAction || anyPending}
+              >
+                <ImageOff className="h-4 w-4 mr-2 shrink-0" />
+                <div>
+                  <div>{verifyingAction ? "Marcando..." : "Marcar sin datos"}</div>
+                  <p className="text-xs text-muted-foreground font-normal">
+                    Confirmar que la cámara no registró archivos
+                  </p>
+                </div>
+              </DropdownMenuItem>
+            </>
+          )}
+          {canUndoNoData(status) && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={handleUndoNoData}
+                disabled={verifyingAction || anyPending}
+              >
+                <Undo2 className="h-4 w-4 mr-2 shrink-0" />
+                <div>
+                  <div>{verifyingAction ? "Deshaciendo..." : "Deshacer Sin Datos"}</div>
+                  <p className="text-xs text-muted-foreground font-normal">
+                    Volver al estado por procesar
                   </p>
                 </div>
               </DropdownMenuItem>

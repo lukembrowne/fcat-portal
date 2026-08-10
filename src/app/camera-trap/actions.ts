@@ -2809,22 +2809,36 @@ export async function getDeploymentsCascadeStats(
 async function recordDeploymentVerificationEvent(opts: {
   deploymentId: number;
   deploymentName: string;
-  eventType: "verify_deployment" | "verify_deployment_empty" | "unverify_deployment";
+  eventType:
+    | "verify_deployment"
+    | "verify_deployment_empty"
+    | "unverify_deployment"
+    | "mark_deployment_no_data"
+    | "unmark_deployment_no_data";
   fromStatus: string;
   toStatus: string;
   actorEmail: string | null;
   trigger: "manual" | "auto";
 }): Promise<void> {
-  const verb =
-    opts.eventType === "verify_deployment"
-      ? "verificada"
-      : opts.eventType === "verify_deployment_empty"
-        ? "marcada como vacía"
-        : "reabierta para revisión";
+  const VERBS: Record<typeof opts.eventType, string> = {
+    verify_deployment: "verificada",
+    verify_deployment_empty: "marcada como vacía",
+    unverify_deployment: "reabierta para revisión",
+    mark_deployment_no_data: "marcada sin datos",
+    unmark_deployment_no_data: "reabierta para procesar",
+  };
+  const SEVERITIES: Record<typeof opts.eventType, "success" | "warn" | "info"> = {
+    verify_deployment: "success",
+    verify_deployment_empty: "success",
+    unverify_deployment: "warn",
+    mark_deployment_no_data: "info",
+    unmark_deployment_no_data: "warn",
+  };
+  const verb = VERBS[opts.eventType];
   await recordEvent({
     source: "camera-trap",
     eventType: opts.eventType,
-    severity: opts.eventType === "unverify_deployment" ? "warn" : "success",
+    severity: SEVERITIES[opts.eventType],
     summary: `Instalación ${opts.deploymentName} ${verb}`,
     actorEmail: opts.actorEmail,
     projectId: "camera-trap",
@@ -3169,6 +3183,137 @@ export async function undoVerifiedEmpty(
   }
 }
 
+/**
+ * Mark a pre-processing deployment whose camera recorded nothing as "no_data"
+ * (terminal — "Sin datos"). Distinct from verified_empty: no ML ever ran, so
+ * the deployment must NOT enter occupancy/exports as a surveyed-zero site.
+ * A later Drive scan that finds files auto-reverts it to "scanned"
+ * (see scanDeploymentImagesInternal).
+ */
+export async function markNoData(deploymentId: number): Promise<ActionResult> {
+  const user = await requirePermission("camera-trap", "editor");
+
+  try {
+    const [deployment] = await db
+      .select()
+      .from(deployments)
+      .where(eq(deployments.id, deploymentId));
+
+    if (!deployment) {
+      return { success: false, error: "Instalación no encontrada" };
+    }
+
+    await requireDeploymentAccess(user, deploymentId);
+
+    if (deployment.status !== "unscanned" && deployment.status !== "scanned") {
+      return {
+        success: false,
+        error: "Solo se puede marcar sin datos una instalación por procesar",
+      };
+    }
+
+    // DB-truth guard: the denormalized totals can be stale, so also count the
+    // actual media rows before declaring the camera empty.
+    const [imageStats] = await db
+      .select({ cnt: count() })
+      .from(images)
+      .where(eq(images.deploymentId, deploymentId));
+    const [videoStats] = await db
+      .select({ cnt: count() })
+      .from(videos)
+      .where(eq(videos.deploymentId, deploymentId));
+
+    if (
+      (deployment.totalImages ?? 0) > 0 ||
+      (deployment.totalVideos ?? 0) > 0 ||
+      (imageStats?.cnt ?? 0) > 0 ||
+      (videoStats?.cnt ?? 0) > 0
+    ) {
+      return {
+        success: false,
+        error: "Esta instalación tiene archivos registrados — no se puede marcar sin datos",
+      };
+    }
+
+    if (await findActiveCameraTrapJob(deploymentId)) {
+      return {
+        success: false,
+        error: "Esta instalación tiene un trabajo activo",
+      };
+    }
+
+    await db
+      .update(deployments)
+      .set({ status: "no_data", updatedAt: new Date() })
+      .where(eq(deployments.id, deploymentId));
+
+    await recordDeploymentVerificationEvent({
+      deploymentId,
+      deploymentName: deployment.name,
+      eventType: "mark_deployment_no_data",
+      fromStatus: deployment.status,
+      toStatus: "no_data",
+      actorEmail: user.email,
+      trigger: "manual",
+    });
+
+    revalidatePath(CAMERA_TRAP_PATH);
+    return { success: true, data: undefined };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Error al marcar sin datos",
+    };
+  }
+}
+
+export async function undoNoData(deploymentId: number): Promise<ActionResult> {
+  const user = await requirePermission("camera-trap", "editor");
+
+  try {
+    await requireDeploymentAccess(user, deploymentId);
+
+    const [deployment] = await db
+      .select()
+      .from(deployments)
+      .where(eq(deployments.id, deploymentId));
+
+    if (!deployment) {
+      return { success: false, error: "Instalación no encontrada" };
+    }
+
+    if (deployment.status !== "no_data") {
+      return {
+        success: false,
+        error: "Solo se puede deshacer en instalaciones marcadas sin datos",
+      };
+    }
+
+    await db
+      .update(deployments)
+      .set({ status: "scanned", updatedAt: new Date() })
+      .where(eq(deployments.id, deploymentId));
+
+    await recordDeploymentVerificationEvent({
+      deploymentId,
+      deploymentName: deployment.name,
+      eventType: "unmark_deployment_no_data",
+      fromStatus: "no_data",
+      toStatus: "scanned",
+      actorEmail: user.email,
+      trigger: "manual",
+    });
+
+    revalidatePath(CAMERA_TRAP_PATH);
+    return { success: true, data: undefined };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Error al deshacer la marca de sin datos",
+    };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Processing Queue
 // ---------------------------------------------------------------------------
@@ -3198,6 +3343,9 @@ export async function queueProcessing(
         .where(eq(deployments.id, depId));
 
       if (!deployment) continue;
+
+      // Terminal "sin datos" deployments have nothing to process.
+      if (deployment.status === "no_data") continue;
 
       // Skip if a job is already active (derived from the live active-job query)
       if (await findActiveCameraTrapJob(depId)) continue;

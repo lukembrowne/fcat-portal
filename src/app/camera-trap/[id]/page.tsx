@@ -1,10 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Sparkles, Loader2 } from "lucide-react";
+import { Sparkles, Loader2, ImageOff } from "lucide-react";
 import { StatusBadge } from "@/components/status-badge";
 import { requirePermission } from "@/lib/auth";
+import { canMarkNoData } from "@/lib/camera-trap-status";
 import { getDeployment, getDeploymentShareLinks, getDistinctProjects, getDeploymentResultsData } from "../actions";
 import { ProcessButton } from "./process-button";
+import { MarkNoDataButton, UndoNoDataButton } from "./no-data-actions";
 import { ShareLinksSection } from "./share-links-section";
 import { CollapsibleSection } from "@/components/collapsible-section";
 import { MetadataSection } from "./metadata-section";
@@ -234,6 +236,24 @@ export default async function DeploymentDetailPage({ params }: PageProps) {
                 </Link>
               )}
             </div>
+          ) : deployment.status === "no_data" ? (
+            <div className="flex flex-col items-center gap-3 text-center">
+              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-slate-200 text-slate-600">
+                <ImageOff className="h-6 w-6" />
+              </div>
+              <h3 className="text-base font-semibold">Sin datos</h3>
+              <p className="text-sm text-muted-foreground max-w-md">
+                Esta cámara no registró imágenes ni videos. La instalación está
+                marcada como sin datos y no se incluye en los análisis. Si una
+                sincronización con Drive encuentra archivos, volverá
+                automáticamente a &ldquo;Por Procesar&rdquo;.
+              </p>
+              {isEditor && (
+                <div className="pt-1">
+                  <UndoNoDataButton deploymentId={deployment.id} />
+                </div>
+              )}
+            </div>
           ) : (
             <div className="flex flex-col items-center gap-3 text-center">
               <div className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
@@ -254,6 +274,20 @@ export default async function DeploymentDetailPage({ params }: PageProps) {
                   />
                 </div>
               )}
+              {isEditor &&
+                canMarkNoData(
+                  deployment.status,
+                  deployment.totalImages ?? 0,
+                  deployment.totalVideos ?? 0,
+                  isProcessing
+                ) && (
+                  <div className="flex flex-col items-center gap-2 pt-1">
+                    <p className="text-sm text-muted-foreground">
+                      ¿La cámara no registró nada?
+                    </p>
+                    <MarkNoDataButton deploymentId={deployment.id} />
+                  </div>
+                )}
             </div>
           )}
         </div>

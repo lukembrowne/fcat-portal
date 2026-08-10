@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 
-// Extract the CTA logic to test it. This mirrors the getCta function in
-// src/app/camera-trap/[id]/page.tsx — keep them in sync.
+// Extract the CTA logic to test it. This mirrors the per-status empty-state /
+// action branches of src/app/camera-trap/[id]/page.tsx (the page no longer has
+// a literal getCta function) — keep them in sync.
 function getCta(
   status: string,
   totalDetections: number,
@@ -43,6 +44,9 @@ function getCta(
       }
       return null;
     case "verified_empty":
+      return null;
+    case "no_data":
+      // Terminal: nothing to process, no results to view.
       return null;
     default:
       return null;
@@ -114,6 +118,14 @@ describe("getCta (deployment detail CTA state machine)", () => {
 
     it("returns null for verified_empty", () => {
       expect(getCta("verified_empty", 0, null, null, true)).toBeNull();
+    });
+
+    it("returns null for no_data", () => {
+      expect(getCta("no_data", 0, null, null, true)).toBeNull();
+    });
+
+    it("returns null for no_data as viewer with no job", () => {
+      expect(getCta("no_data", 0, null, null, false)).toBeNull();
     });
 
     it("returns null for unknown status", () => {

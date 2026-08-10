@@ -24,6 +24,7 @@ const DEPLOYMENT_STATUS_CONFIG: Record<
   processed_empty: { variant: "secondary", label: "Sin Detecciones", className: "bg-gray-100 text-gray-600" },
   verified: { variant: "default", label: "Verificada", className: "bg-emerald-700" },
   verified_empty: { variant: "default", label: "Vacía (verificada)", className: "bg-slate-500" },
+  no_data: { variant: "secondary", label: "Sin datos", className: "bg-slate-200 text-slate-700" },
 };
 
 const AUDIO_DEPLOYMENT_STATUS_CONFIG: Record<

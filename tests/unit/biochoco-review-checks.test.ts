@@ -183,6 +183,19 @@ describe("retrieved but no data (check 3)", () => {
     expect(ids).not.toContain("retrieved_no_data");
     expect(ids).toContain("recount_failed");
   });
+
+  it("downgrades to info when the camera was marked 'Sin datos' in the portal", () => {
+    const d = makeDeployment({
+      counts: { camera: 0, audio: 0, ibutton: 0 },
+      processingStatus: "no_data",
+    });
+    const findings = runChecks([d], opts).filter(
+      (x) => x.check === "retrieved_no_data"
+    );
+    expect(findings).toHaveLength(1);
+    expect(findings[0].severity).toBe("info");
+    expect(findings[0].subtype).toBe("camera_marked_no_data");
+  });
 });
 
 describe("partial upload (check 4)", () => {

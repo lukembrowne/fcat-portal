@@ -57,6 +57,7 @@ export interface ReviewDeployment {
     | "processed"
     | "verified"
     | "verified_empty"
+    | "no_data"
     | null;
   failedJobs: number;
   failedImages: number;
@@ -204,13 +205,33 @@ export function runChecks(
         const daysSince = d.actualRetrieveDate
           ? daysBetween(today, d.actualRetrieveDate)
           : null;
+        // A camera explicitly marked "sin datos" in the portal is the
+        // acknowledgment of this situation, not a pending problem — downgrade
+        // to info so audio/iButton absence stays visible without alarming.
+        const cameraMarkedNoData = d.processingStatus === "no_data";
         // Guard against false positives from stale cached counts: if the
         // camera pipeline already discovered images (status beyond unscanned),
         // data demonstrably exists — the zero is a count/cache mismatch, not
         // missing data. Surface it as a warning instead of a hard error.
         const hasCameraEvidence =
-          d.processingStatus != null && d.processingStatus !== "unscanned";
-        if (hasCameraEvidence) {
+          d.processingStatus != null &&
+          d.processingStatus !== "unscanned" &&
+          !cameraMarkedNoData;
+        if (cameraMarkedNoData) {
+          findings.push({
+            check: "retrieved_no_data",
+            subtype: "camera_marked_no_data",
+            severity: "info",
+            ...base(d),
+            summary:
+              "Recuperada sin datos — cámara marcada 'Sin datos' en el portal",
+            evidence: {
+              actualRetrieveDate: d.actualRetrieveDate,
+              processingStatus: d.processingStatus,
+              counts: d.counts,
+            },
+          });
+        } else if (hasCameraEvidence) {
           findings.push({
             check: "retrieved_no_data",
             subtype: "count_db_mismatch",

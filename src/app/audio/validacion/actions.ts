@@ -35,6 +35,7 @@ import {
   resolveModelVersion,
 } from "@/lib/birdnet-validation/fit-job";
 import { drawSampleCore } from "@/lib/birdnet-validation/sample-core";
+import { speciesSlug } from "@/lib/species-slug";
 import {
   clipWindow,
   detectionBand,
@@ -102,6 +103,8 @@ export interface CampaignSummary {
   targetSampleSize: number;
   binCount: number;
   abandonedReason: string | null;
+  /** Free-text field notes, or null. */
+  notes: string | null;
   sampled: number;
   /** Counts over the fit-eligible review set, not summed across reviewers. */
   reviewed: number;
@@ -178,6 +181,8 @@ export async function createCampaign(input: {
   ctProjectId?: number | null;
   targetSampleSize?: number;
   binCount?: number;
+  /** Free-text field notes; blank and whitespace-only collapse to null. */
+  notes?: string | null;
 }): Promise<
   ActionResult<{ campaignId: number; drawn: number; drawError: string | null }>
 > {
@@ -218,6 +223,7 @@ export async function createCampaign(input: {
       .values({
         species,
         ctProjectId,
+        notes: input.notes?.trim() || null,
         targetSampleSize: input.targetSampleSize ?? DEFAULT_TARGET_SAMPLE_SIZE,
         binCount: input.binCount ?? DEFAULT_BIN_COUNT,
         seed: Math.floor(Math.random() * HASH_MODULUS),
@@ -285,6 +291,41 @@ export async function drawSample(
     return { success: true, data: result };
   } catch (error) {
     return errorResult(error, "Error al extraer la muestra");
+  }
+}
+
+/**
+ * Replace a species' free-text notes.
+ *
+ * Notes are a working annotation, not a creation-time fact: "CHECK" becomes
+ * "confirmed with JF" once someone has checked, and a species whose note can
+ * only be fixed by deleting and re-adding it would cost its whole drawn sample
+ * to correct a typo. Editable at any stage, including abandoned — a discarded
+ * species is exactly the one whose reason someone comes back to read.
+ *
+ * Blank clears rather than refusing: removing a note that no longer applies is
+ * as legitimate as writing one.
+ */
+export async function updateCampaignNotes(
+  campaignId: number,
+  notes: string
+): Promise<ActionResult> {
+  await requirePermission("grabaciones", "editor");
+
+  try {
+    const campaign = await loadCampaign(campaignId);
+    if (!campaign) return { success: false, error: "Especie no encontrada" };
+
+    await db
+      .update(birdnetValidationCampaigns)
+      .set({ notes: notes.trim() || null })
+      .where(eq(birdnetValidationCampaigns.id, campaignId));
+
+    revalidatePath("/audio/validacion");
+    revalidatePath(`/audio/validacion/${speciesSlug(campaign.species)}`);
+    return { success: true, data: undefined };
+  } catch (error) {
+    return errorResult(error, "Error al guardar las notas");
   }
 }
 
@@ -795,6 +836,7 @@ export async function getCampaignProgress(
         targetSampleSize: campaign.targetSampleSize,
         binCount: campaign.binCount,
         abandonedReason: campaign.abandonedReason,
+        notes: campaign.notes,
         createdBy: campaign.createdBy,
         primaryReviewerEmail: campaign.primaryReviewerEmail,
         reviewerCount: Number(reviewerCountRow?.n ?? 0),
@@ -834,6 +876,7 @@ export async function listCampaigns(): Promise<ActionResult<CampaignSummary[]>> 
         targetSampleSize: birdnetValidationCampaigns.targetSampleSize,
         binCount: birdnetValidationCampaigns.binCount,
         abandonedReason: birdnetValidationCampaigns.abandonedReason,
+        notes: birdnetValidationCampaigns.notes,
         createdBy: birdnetValidationCampaigns.createdBy,
         primaryReviewerEmail: birdnetValidationCampaigns.primaryReviewerEmail,
         sampled: sql<number>`(
@@ -1659,6 +1702,8 @@ export interface SpeciesOccupancyThresholdView {
   atRun: number | null;
   /** Threshold applied now; null = none, so the global one governs. */
   now: number | null;
+  /** 'fit' or 'no_filter' — a decision must never read back as a model's output. */
+  nowSource: string | null;
   globalThreshold: number;
   stale: boolean;
   runInProgress: boolean;
@@ -1688,6 +1733,7 @@ export async function getSpeciesOccupancyThresholdStatus(
         hasAudioModel: status.hasAudioModel,
         atRun: status.atRun,
         now: status.now,
+        nowSource: status.nowSource,
         globalThreshold: status.globalThreshold,
         stale: status.stale,
         runInProgress: status.runInProgress,

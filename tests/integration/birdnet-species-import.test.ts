@@ -68,9 +68,10 @@ function seedDetections(species: string, count: number) {
   }
 }
 
+/** Commit plain names, for the cases that predate the notes column. */
 async function commit(names: string[]) {
   const { commitSpeciesImport } = await import("@/app/audio/validacion/import-actions");
-  return commitSpeciesImport(names);
+  return commitSpeciesImport(names.map((scientificName) => ({ scientificName, notes: null })));
 }
 
 beforeEach(() => {
@@ -120,6 +121,27 @@ describe("commitSpeciesImport", () => {
 
     const samples = db.select().from(schema.birdnetValidationSamples).all();
     expect(samples.length).toBeGreaterThan(0);
+  });
+
+  it("stores each species' note on its row", async () => {
+    seedDetections("Ramphastos ambiguus", 30);
+    seedDetections("Cebus aequatorialis", 30);
+
+    const { commitSpeciesImport } = await import(
+      "@/app/audio/validacion/import-actions"
+    );
+    const result = await commitSpeciesImport([
+      { scientificName: "Ramphastos ambiguus", notes: "Not on JF list. CHECK" },
+      // Whitespace-only is not a note; it collapses to null so the table shows
+      // a dash rather than a blank cell that looks like a rendering bug.
+      { scientificName: "Cebus aequatorialis", notes: "   " },
+    ]);
+
+    expect(result.success).toBe(true);
+    const campaigns = db.select().from(schema.birdnetValidationCampaigns).all();
+    const byName = new Map(campaigns.map((c) => [c.species, c.notes]));
+    expect(byName.get("Ramphastos ambiguus")).toBe("Not on JF list. CHECK");
+    expect(byName.get("Cebus aequatorialis")).toBeNull();
   });
 
   it("skips a species that is already being validated", async () => {
@@ -192,8 +214,8 @@ describe("commitSpeciesImport", () => {
       }));
 
     const result = await commitSpeciesImport([
-      "Ramphastos ambiguus",
-      "Cebus aequatorialis",
+      { scientificName: "Ramphastos ambiguus", notes: null },
+      { scientificName: "Cebus aequatorialis", notes: null },
     ]);
     spy.mockRestore();
 
@@ -269,7 +291,9 @@ describe("commitSpeciesImport", () => {
     const { commitSpeciesImport } = await import(
       "@/app/audio/validacion/import-actions"
     );
-    const result = await commitSpeciesImport(names);
+    const result = await commitSpeciesImport(
+      names.map((scientificName) => ({ scientificName, notes: null }))
+    );
     spy.mockRestore();
 
     expect(result.success).toBe(true);

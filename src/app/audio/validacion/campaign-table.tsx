@@ -4,6 +4,7 @@ import { Headphones, Settings2 } from "lucide-react";
 import { SortIcon } from "@/components/sort-icon";
 import { speciesSlug } from "@/lib/species-slug";
 import { rowAction, stageLabel } from "./labels";
+import { NotesCell } from "./notes-cell";
 import { normalizeSpeciesName } from "./species-import";
 import { SpeciesRowActions } from "./species-row-actions";
 import { StageTag } from "./stage-tag";
@@ -25,6 +26,7 @@ export const SORTABLE_COLUMNS = [
   "reviewers",
   "precision",
   "threshold",
+  "notes",
 ] as const;
 
 export type SortColumn = (typeof SORTABLE_COLUMNS)[number];
@@ -66,6 +68,10 @@ export interface CampaignFilter {
  * Search reuses `normalizeSpeciesName`, so what the table finds and what the
  * picker and bulk importer consider "the same name" cannot diverge — searching
  * "buho" finds "Búho" in all three.
+ *
+ * Notes are searched too, which is the point of importing them: the field
+ * lists mark the doubtful species with a literal "CHECK", so typing it pulls
+ * up exactly the ones somebody flagged.
  */
 export function filterCampaignRows(
   rows: CampaignRow[],
@@ -84,7 +90,8 @@ export function filterCampaignRows(
     if (!q) return true;
     return (
       normalizeSpeciesName(row.displayName).includes(q) ||
-      normalizeSpeciesName(row.species).includes(q)
+      normalizeSpeciesName(row.species).includes(q) ||
+      normalizeSpeciesName(row.notes ?? "").includes(q)
     );
   });
 }
@@ -122,6 +129,11 @@ export function sortCampaignRows(
         return precisionOf(row);
       case "threshold":
         return row.appliedThreshold ?? row.latestThreshold;
+      case "notes":
+        // Null, not "", so a species with no note sorts last in BOTH
+        // directions rather than heading the ascending list — the reader
+        // sorting by this column is looking for the ones that have notes.
+        return row.notes?.toLowerCase() || null;
     }
   };
 
@@ -161,8 +173,17 @@ function SortableHeader({
   if (filter.search) query.set("search", filter.search);
   if (filter.status && filter.status !== "activas") query.set("status", filter.status);
 
+  // Every header but the first is indented, and none of them wrap. With eight
+  // columns the table sits at its natural width, so the browser has no slack
+  // left to distribute: without the padding "Revisadas" and "Revisores" touch,
+  // and without the nowrap "Umbral 95%" breaks across two lines and runs into
+  // the header beside it.
   return (
-    <th className={`py-1.5 ${align === "right" ? "text-right" : "text-left"}`}>
+    <th
+      className={`whitespace-nowrap py-1.5 ${column === "species" ? "" : "pl-2"} ${
+        align === "right" ? "text-right" : "text-left"
+      }`}
+    >
       <Link
         href={`/audio/validacion?${query.toString()}`}
         className={`inline-flex items-center gap-1 transition-colors hover:text-foreground ${
@@ -182,6 +203,7 @@ export function CampaignTable({
   sortDir,
   filter,
   totalRows,
+  canEdit,
 }: {
   rows: CampaignRow[];
   sortBy: SortColumn;
@@ -189,6 +211,11 @@ export function CampaignTable({
   filter: CampaignFilter;
   /** Rows before filtering, so an empty table can say why it is empty. */
   totalRows: number;
+  /**
+   * Editor or above on `grabaciones`. Only gates the notes cell's edit
+   * affordance — `updateCampaignNotes` enforces the same permission itself.
+   */
+  canEdit: boolean;
 }) {
   if (rows.length === 0) {
     return (
@@ -200,10 +227,8 @@ export function CampaignTable({
     );
   }
 
-  // One column narrower than before, and the Estado cell no longer holds a
-  // sentence — between them that is what stopped the table overflowing.
   return (
-    <table className="w-full min-w-[46rem] text-sm">
+    <table className="w-full min-w-[54rem] text-sm">
       <thead>
         <tr className="border-b text-xs text-muted-foreground">
           <SortableHeader column="species" label="Especie" currentSort={sortBy} currentDir={sortDir} filter={filter} />
@@ -212,8 +237,12 @@ export function CampaignTable({
           <SortableHeader column="reviewers" label="Revisores" currentSort={sortBy} currentDir={sortDir} align="right" filter={filter} />
           <SortableHeader column="precision" label="Correctas" currentSort={sortBy} currentDir={sortDir} align="right" filter={filter} />
           <SortableHeader column="threshold" label="Umbral 95%" currentSort={sortBy} currentDir={sortDir} align="right" filter={filter} />
+          {/* Last before the actions, so the numeric block stays contiguous:
+              a free-text column between the counts pushes them apart and
+              costs more to read than the notes gain. */}
+          <SortableHeader column="notes" label="Notas" currentSort={sortBy} currentDir={sortDir} filter={filter} />
           {/* Not sortable — it holds an action, not an orderable value. */}
-          <th className="py-1.5 text-right">Acción</th>
+          <th className="whitespace-nowrap py-1.5 pl-2 text-right">Acción</th>
         </tr>
       </thead>
       <tbody>
@@ -238,13 +267,13 @@ export function CampaignTable({
                   either one inline is what made this column wider than the
                   species names — they live on the pill's tooltip and, at
                   length, on the species page. */}
-              <td className="py-1.5">
+              <td className="py-1.5 pl-2">
                 <StageTag
                   status={row.status}
                   title={row.abandonedReason ?? row.unusableReason ?? undefined}
                 />
               </td>
-              <td className="py-1.5 text-right tabular-nums">
+              <td className="py-1.5 pl-2 text-right tabular-nums">
                 {row.sampled > 0 ? (
                   <>
                     {row.reviewed}
@@ -260,7 +289,7 @@ export function CampaignTable({
                   "—"
                 )}
               </td>
-              <td className="py-1.5 text-right tabular-nums">
+              <td className="py-1.5 pl-2 text-right tabular-nums">
                 {row.reviewerCount > 0 ? row.reviewerCount : "—"}
                 {row.reviewerCount > 1 && !row.primaryReviewerEmail ? (
                   <span
@@ -271,10 +300,10 @@ export function CampaignTable({
                   </span>
                 ) : null}
               </td>
-              <td className="py-1.5 text-right tabular-nums">
+              <td className="py-1.5 pl-2 text-right tabular-nums">
                 {precision != null ? `${Math.round(precision * 100)}%` : "—"}
               </td>
-              <td className="py-1.5 text-right tabular-nums">
+              <td className="py-1.5 pl-2 text-right tabular-nums">
                 {row.latestIsNoFilter ? (
                   <span
                     className={
@@ -296,6 +325,18 @@ export function CampaignTable({
                 ) : (
                   "—"
                 )}
+              </td>
+              {/* One line, capped, full text on hover, editable in place —
+                  notes-cell.tsx carries the reasoning for each of those. The
+                  width cap is what keeps it to one line; the filter box
+                  searches the note, and the species page shows it in full. */}
+              <td className="max-w-[10rem] py-1.5 pl-2">
+                <NotesCell
+                  campaignId={row.id}
+                  displayName={row.displayName}
+                  notes={row.notes}
+                  canEdit={canEdit}
+                />
               </td>
               <td className="py-1.5 text-right">
                 <span className="inline-flex items-center justify-end gap-1">

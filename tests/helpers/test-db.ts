@@ -512,6 +512,7 @@ const CAMERA_TRAP_DDL =
     seed INTEGER NOT NULL,
     sampled_at INTEGER,
     abandoned_reason TEXT,
+    notes TEXT,
     primary_reviewer_email TEXT,
     created_by TEXT NOT NULL,
     created_at INTEGER NOT NULL DEFAULT (unixepoch())

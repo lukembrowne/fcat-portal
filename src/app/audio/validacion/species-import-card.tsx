@@ -92,7 +92,7 @@ export function SpeciesImportCard() {
     if (!preview) return;
     const ready = preview.rows
       .filter((r) => r.outcome === "ready" && r.scientificName)
-      .map((r) => r.scientificName!);
+      .map((r) => ({ scientificName: r.scientificName!, notes: r.notes }));
     if (ready.length === 0) return;
 
     setBusy(true);
@@ -109,7 +109,7 @@ export function SpeciesImportCard() {
         // continues. Stopping would strand the remaining names with no record
         // of which ones were already created.
         const failAll = (message: string) =>
-          chunk.map((scientificName) => ({
+          chunk.map(({ scientificName }) => ({
             scientificName,
             created: false,
             drawn: null,
@@ -169,8 +169,15 @@ export function SpeciesImportCard() {
             columna copiada de Excel o Google Sheets.
           </li>
           <li>
-            Se aceptan nombres científicos, en español o en inglés. Si hay más
-            columnas, sólo se lee la primera.
+            Se aceptan nombres científicos, en español o en inglés. La especie
+            se lee siempre de la primera columna.
+          </li>
+          <li>
+            Para importar notas, la hoja debe tener una columna titulada{" "}
+            <span className="font-medium text-foreground">Notas</span> o{" "}
+            <span className="font-medium text-foreground">Notes</span> (en
+            cualquier posición). Sin encabezado sólo se leen notas si la lista
+            tiene exactamente dos columnas: especie y nota.
           </li>
           <li>
             Las especies que ya se están validando se omiten; no se duplican ni
@@ -236,6 +243,15 @@ export function SpeciesImportCard() {
 
       {preview ? (
         <div className="space-y-2">
+          {/* Stated either way. "No notes column found" is the failure this
+              line exists for: without it, a sheet whose column is headed
+              "Comments" imports silently and looks like it worked. */}
+          <p className="text-[11px] text-muted-foreground">
+            {preview.notesColumn != null
+              ? `Notas leídas de la columna ${preview.notesColumn} · ${preview.withNotes} de ${preview.rows.length} filas tienen nota.`
+              : "No se encontró una columna de notas; se importarán sin notas."}
+          </p>
+
           <div className="max-h-56 overflow-y-auto rounded border">
             <table className="w-full text-xs">
               <thead className="border-b bg-muted/50 text-[11px] text-muted-foreground">
@@ -244,6 +260,7 @@ export function SpeciesImportCard() {
                   <th className="px-2 py-1 text-left">Especie</th>
                   <th className="px-2 py-1 text-right">Detecciones</th>
                   <th className="px-2 py-1 text-left">Resultado</th>
+                  <th className="px-2 py-1 text-left">Notas</th>
                 </tr>
               </thead>
               <tbody>
@@ -263,6 +280,12 @@ export function SpeciesImportCard() {
                     </td>
                     <td className={`px-2 py-1 ${OUTCOME_CLASS[row.outcome]}`}>
                       {OUTCOME_LABEL[row.outcome]}
+                    </td>
+                    <td
+                      className="max-w-[14rem] truncate px-2 py-1 text-muted-foreground"
+                      title={row.notes ?? undefined}
+                    >
+                      {row.notes ?? "—"}
                     </td>
                   </tr>
                 ))}

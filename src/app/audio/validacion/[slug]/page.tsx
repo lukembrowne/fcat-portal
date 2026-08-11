@@ -38,6 +38,7 @@ import {
 } from "@/app/audio/validacion/name-language";
 import { FitChart } from "./fit-chart";
 import { CampaignControls } from "./campaign-controls";
+import { SpeciesNotes } from "./species-notes";
 import { NoFilterButton } from "./no-filter-button";
 import { OccupancyStatusCard } from "./occupancy-status-card";
 import { ReviewerRoster } from "./reviewer-roster";
@@ -318,6 +319,15 @@ export default async function SpeciesValidationPage({
           hint={latest?.isActive ? "aplicado" : "sin aplicar"}
         />
       </div>
+
+      {/* Under the numbers, above the diagnostics: the notes say why this
+          species is being validated at all, which is context for everything
+          below and for nothing above. */}
+      <SpeciesNotes
+        campaignId={campaign.id}
+        notes={campaign.notes}
+        canEdit={canEdit}
+      />
 
       {progress?.fitEligibilityReason ? (
         <p className="rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">

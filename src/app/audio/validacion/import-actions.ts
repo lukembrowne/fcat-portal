@@ -24,10 +24,12 @@ import { log } from "@/lib/log";
 import type { ActionResult } from "@/lib/types";
 import { listValidatableSpecies, type ValidatableSpecies } from "./actions";
 import {
+  parseSpeciesGrid,
   parseSpeciesList,
   resolveSpeciesRows,
   COMMIT_CHUNK_SIZE,
   type ImportOutcome,
+  type ParsedSpeciesList,
   type ResolvedImportRow,
 } from "./species-import";
 
@@ -35,6 +37,14 @@ export interface SpeciesImportPreview {
   rows: ResolvedImportRow[];
   totalFound: number;
   counts: Record<ImportOutcome, number>;
+  /**
+   * 1-based column the notes were read from, or null when none was found.
+   * Shown in the preview so "the notes column was not picked up" is visible
+   * before the commit rather than after it.
+   */
+  notesColumn: number | null;
+  /** How many rows carry a note. */
+  withNotes: number;
 }
 
 export interface SpeciesImportCommitRow {
@@ -44,6 +54,12 @@ export interface SpeciesImportCommitRow {
   drawn: number | null;
   /** Spanish reason when the species was created but its draw did not run. */
   error: string | null;
+}
+
+/** One species to create, as the client sends it back from the preview. */
+export interface SpeciesImportCommitInput {
+  scientificName: string;
+  notes: string | null;
 }
 
 /**
@@ -92,14 +108,19 @@ function tally(rows: ResolvedImportRow[]): Record<ImportOutcome, number> {
   return counts;
 }
 
-async function buildPreview(text: string): Promise<SpeciesImportPreview> {
-  const parsed = parseSpeciesList(text);
+async function buildPreview(parsed: ParsedSpeciesList): Promise<SpeciesImportPreview> {
   // Surfaced as a refusal rather than a trimmed preview: a shortened list that
   // looks fine is how someone imports the wrong 2000 rows without noticing.
   if (parsed.tooLarge) throw new Error(parsed.tooLarge);
 
-  const rows = resolveSpeciesRows(parsed.names, await extendedCatalog());
-  return { rows, totalFound: parsed.totalFound, counts: tally(rows) };
+  const rows = resolveSpeciesRows(parsed.rows, await extendedCatalog());
+  return {
+    rows,
+    totalFound: parsed.totalFound,
+    counts: tally(rows),
+    notesColumn: parsed.notesColumn == null ? null : parsed.notesColumn + 1,
+    withNotes: rows.filter((r) => r.notes).length,
+  };
 }
 
 /** Resolve pasted text without creating anything. */
@@ -108,7 +129,7 @@ export async function previewSpeciesImport(
 ): Promise<ActionResult<SpeciesImportPreview>> {
   await requirePermission("grabaciones", "editor");
   try {
-    return { success: true, data: await buildPreview(text) };
+    return { success: true, data: await buildPreview(parseSpeciesList(text)) };
   } catch (error) {
     return {
       success: false,
@@ -120,9 +141,14 @@ export async function previewSpeciesImport(
 /**
  * Same preview, from an uploaded file.
  *
- * Only the first column of the first sheet is read. A spreadsheet of species
- * names has no other meaningful shape, and guessing at column semantics is how
- * importers become unpredictable.
+ * The first sheet's whole grid is read, not just its first column: species come
+ * from column 1 and notes from whichever column is headed Notas/Notes. Every
+ * other column is still ignored — the importer locates two named things rather
+ * than interpreting the sheet.
+ *
+ * The .xlsx path hands `parseSpeciesGrid` the cells directly. Flattening the
+ * sheet back into delimited text (what this did before notes existed) would
+ * split a note like "Not on JF list, range checks out" at its comma.
  */
 export async function previewSpeciesImportFile(
   formData: FormData
@@ -136,21 +162,26 @@ export async function previewSpeciesImportFile(
 
   try {
     const name = file.name.toLowerCase();
-    let text: string;
+    let parsed: ParsedSpeciesList;
 
     if (name.endsWith(".xlsx") || name.endsWith(".xls")) {
       const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
       const sheet = workbook.Sheets[workbook.SheetNames[0]];
       if (!sheet) return { success: false, error: "El archivo no tiene hojas" };
-      const grid = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, blankrows: false });
-      text = grid
-        .map((row) => (Array.isArray(row) ? String(row[0] ?? "") : ""))
-        .join("\n");
+      const grid = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
+        header: 1,
+        blankrows: false,
+      });
+      parsed = parseSpeciesGrid(
+        grid.map((row) =>
+          Array.isArray(row) ? row.map((cell) => String(cell ?? "").trim()) : []
+        )
+      );
     } else {
-      text = await file.text();
+      parsed = parseSpeciesList(await file.text());
     }
 
-    return { success: true, data: await buildPreview(text) };
+    return { success: true, data: await buildPreview(parsed) };
   } catch (error) {
     log.warn({ err: error }, "[birdnet-validation] species import file unreadable");
     return { success: false, error: "No se pudo leer el archivo" };
@@ -170,22 +201,24 @@ export async function previewSpeciesImportFile(
  *
  * Re-resolves server-side rather than trusting the preview the client is
  * holding: a species can be created by someone else between preview and
- * commit, and the client's classification is not authoritative anyway.
+ * commit, and the client's classification is not authoritative anyway. Notes
+ * are the exception and travel from the client verbatim — they are free text
+ * the reader just saw in the preview, with nothing to re-derive them from.
  *
  * Fault-isolated per species — a failing draw leaves that species created and
  * reported, and the loop continues. Rolling the batch back on one ODK hiccup
  * would waste the whole import.
  */
 export async function commitSpeciesImport(
-  scientificNames: string[]
+  inputs: SpeciesImportCommitInput[]
 ): Promise<ActionResult<SpeciesImportCommitRow[]>> {
   const user = await requirePermission("grabaciones", "editor");
 
   try {
-    if (scientificNames.length === 0) {
+    if (inputs.length === 0) {
       return { success: false, error: "No hay especies para añadir" };
     }
-    if (scientificNames.length > COMMIT_CHUNK_SIZE) {
+    if (inputs.length > COMMIT_CHUNK_SIZE) {
       return {
         success: false,
         error: `Máximo ${COMMIT_CHUNK_SIZE} especies por solicitud`,
@@ -197,7 +230,7 @@ export async function commitSpeciesImport(
     const ctProjects = await getUserCameraTrapProjects(user);
     const results: SpeciesImportCommitRow[] = [];
 
-    for (const scientificName of scientificNames) {
+    for (const { scientificName, notes } of inputs) {
       const sp = bySpecies.get(scientificName);
 
       if (!sp || sp.detectionCount <= 0) {
@@ -228,6 +261,7 @@ export async function commitSpeciesImport(
           .values({
             species: scientificName,
             ctProjectId: null,
+            notes: notes?.trim() || null,
             seed: Math.floor(Math.random() * 2147483647),
             createdBy: user.email,
           })

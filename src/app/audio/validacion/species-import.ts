@@ -40,16 +40,39 @@ export const COMMIT_CHUNK_SIZE = 5;
  */
 export const MAX_PASTE_ROWS = 2000;
 
+export interface ParsedSpeciesRow {
+  name: string;
+  /** The row's notes cell, or null when the input carries no notes column. */
+  notes: string | null;
+}
+
 export interface ParsedSpeciesList {
-  names: string[];
+  rows: ParsedSpeciesRow[];
   /** How many rows the input held. */
   totalFound: number;
-  /** Spanish refusal when the paste exceeded MAX_PASTE_ROWS; names is empty. */
+  /** Spanish refusal when the paste exceeded MAX_PASTE_ROWS; rows is empty. */
   tooLarge: string | null;
+  /**
+   * Which column the notes were read from, or null when none was found.
+   *
+   * Surfaced so the preview can say "notes came from column 5" rather than
+   * leaving the reader to infer it from a column that silently stayed empty.
+   */
+  notesColumn: number | null;
 }
 
 const HEADER_PATTERN =
   /^(especies?|species|scientific[\s_-]*name|nombre([\s_-]*(cient[ií]fico|com[uú]n))?|taxon|name)$/i;
+
+/**
+ * Header cells that mark the notes column.
+ *
+ * A header is the ONLY way a wide sheet's notes column is located — see
+ * `findNotesColumn`. Both languages, because the source spreadsheets are
+ * written in English by the taxonomists and in Spanish by the field team.
+ */
+const NOTES_HEADER_PATTERN =
+  /^(notas?|notes?|observaci[oó]n(es)?|comentarios?|remarks?)$/i;
 
 function stripQuotes(value: string): string {
   const trimmed = value.trim();
@@ -66,16 +89,123 @@ function stripQuotes(value: string): string {
 const isNumeric = (value: string) => value !== "" && !Number.isNaN(Number(value));
 
 /**
- * Split pasted text into candidate species names.
+ * Split one pasted line into fields.
+ *
+ * Tab wins outright when the line has one: that is a block copied out of Excel
+ * or Sheets, and its cells routinely contain commas ("Not on JF list, range
+ * checks out"). Splitting such a line on every delimiter at once — which is
+ * what this did before notes existed — cuts a note in half at its first comma.
+ * Only a line with no tab at all is treated as comma/semicolon CSV.
+ */
+function splitFields(line: string): string[] {
+  const parts = line.includes("\t") ? line.split("\t") : line.split(/[,;]/);
+  return parts.map(stripQuotes);
+}
+
+/**
+ * Is this the sheet's header row?
+ *
+ * A notes header anywhere counts, not just a species header in column 1: sheets
+ * label their first column all sorts of ways, and a row containing a cell that
+ * literally reads "Notas" is a header rather than a species.
+ */
+function isHeaderRow(fields: string[]): boolean {
+  return (
+    HEADER_PATTERN.test(fields[0] ?? "") ||
+    fields.some((f) => NOTES_HEADER_PATTERN.test(f))
+  );
+}
+
+/**
+ * Locate the notes column.
+ *
+ * Two rules, and deliberately no third:
+ *
+ *  - WITH A HEADER — the column headed Notas/Notes/Observaciones, wherever it
+ *    sits. The taxonomists' sheet is `Species | Common Name | Detections |
+ *    Sites | Notes`, so "the second column" would import common names.
+ *  - WITHOUT A HEADER — column 2, and only when the input is exactly two
+ *    columns wide. Any wider and there is nothing to distinguish notes from
+ *    counts, common names or whatever else was selected, so nothing is read.
+ *    Guessing at column semantics is how importers become unpredictable.
+ *
+ * A numeric cell never becomes a note (see `parseSpeciesGrid`), which is what
+ * keeps the common two-column `Name<TAB>500` paste from importing its counts.
+ */
+function findNotesColumn(header: string[] | null, body: string[][]): number | null {
+  if (header) {
+    const index = header.findIndex((cell) => NOTES_HEADER_PATTERN.test(cell));
+    return index === -1 ? null : index;
+  }
+  const width = body.reduce((max, fields) => Math.max(max, fields.length), 0);
+  return width === 2 ? 1 : null;
+}
+
+function capped(
+  rows: ParsedSpeciesRow[],
+  notesColumn: number | null
+): ParsedSpeciesList {
+  const totalFound = rows.length;
+  if (totalFound > MAX_PASTE_ROWS) {
+    return {
+      rows: [],
+      totalFound,
+      notesColumn: null,
+      tooLarge: `La lista tiene ${totalFound} filas. Pega como máximo ${MAX_PASTE_ROWS}: seguramente se copió una hoja entera en vez de la columna de especies.`,
+    };
+  }
+  return { rows, totalFound, notesColumn, tooLarge: null };
+}
+
+/**
+ * Read a grid of cells as species records.
+ *
+ * Each row is a record whose FIRST field is the species name — that is what a
+ * copied spreadsheet block looks like, and it is why trailing count columns do
+ * not become species. Notes come from whichever column `findNotesColumn`
+ * identifies, or from nowhere.
+ *
+ * Takes a grid rather than text so the spreadsheet path never round-trips
+ * through a delimiter: an .xlsx cell already knows where it ends, and
+ * flattening it to a line only to split it again is what would truncate a note
+ * at its first comma.
+ */
+export function parseSpeciesGrid(grid: string[][]): ParsedSpeciesList {
+  const cleaned = grid
+    .map((fields) => fields.map((f) => stripQuotes(String(f ?? ""))))
+    .filter((fields) => fields.some((f) => f.length > 0));
+
+  const hasHeader = cleaned.length > 1 && isHeaderRow(cleaned[0]);
+  const header = hasHeader ? cleaned[0] : null;
+  const body = hasHeader ? cleaned.slice(1) : cleaned;
+
+  const notesColumn = findNotesColumn(header, body);
+
+  const rows = body
+    .map((fields) => {
+      const note = notesColumn == null ? "" : (fields[notesColumn] ?? "");
+      return {
+        name: fields[0] ?? "",
+        // A number is a count, a year or a site tally that happened to land in
+        // the notes position — never a note.
+        notes: note && !isNumeric(note) ? note : null,
+      };
+    })
+    .filter((row) => row.name.length > 0);
+
+  return capped(rows, notesColumn);
+}
+
+/**
+ * Split pasted text into species records.
  *
  * Two shapes, distinguished by row count:
  *
- *  - MULTIPLE ROWS — each row is a record and only its FIRST field can be a
- *    species name. This is what a copied spreadsheet column looks like once
- *    Excel adds a tab per column and a CRLF per row, and it is why trailing
- *    count columns do not become species.
- *  - ONE ROW — the fields are a list of names. Purely numeric fields are
- *    dropped, so a single CSV record (`Name,500`) does not import its count.
+ *  - MULTIPLE ROWS — a grid; see `parseSpeciesGrid`.
+ *  - ONE ROW — the fields are a list of names, with no notes. Purely numeric
+ *    fields are dropped, so a single CSV record (`Name,500`) does not import
+ *    its count. A lone line cannot carry a notes column: there is no header to
+ *    read and no second row to establish that the fields are columns.
  */
 export function parseSpeciesList(text: string): ParsedSpeciesList {
   const lines = text
@@ -83,35 +213,16 @@ export function parseSpeciesList(text: string): ParsedSpeciesList {
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
 
-  let fields: string[];
-  if (lines.length > 1) {
-    fields = lines.map((line) => stripQuotes(line.split(/[\t,;]/)[0] ?? ""));
-  } else if (lines.length === 1) {
-    fields = lines[0]
-      .split(/[\t,;]/)
-      .map(stripQuotes)
-      .filter((value) => !isNumeric(value));
-  } else {
-    fields = [];
+  if (lines.length === 0) return capped([], null);
+
+  if (lines.length === 1) {
+    const rows = splitFields(lines[0])
+      .filter((value) => value.length > 0 && !isNumeric(value))
+      .map((name) => ({ name, notes: null }));
+    return capped(rows, null);
   }
 
-  let names = fields.filter((value) => value.length > 0);
-
-  // A header only makes sense as the first row of a multi-row paste.
-  if (names.length > 1 && HEADER_PATTERN.test(names[0])) {
-    names = names.slice(1);
-  }
-
-  const totalFound = names.length;
-  if (totalFound > MAX_PASTE_ROWS) {
-    return {
-      names: [],
-      totalFound,
-      tooLarge: `La lista tiene ${totalFound} filas. Pega como máximo ${MAX_PASTE_ROWS}: seguramente se copió una hoja entera en vez de la columna de especies.`,
-    };
-  }
-
-  return { names, totalFound, tooLarge: null };
+  return parseSpeciesGrid(lines.map(splitFields));
 }
 
 export type ImportOutcome =
@@ -127,6 +238,8 @@ export interface ResolvedImportRow {
   outcome: ImportOutcome;
   scientificName: string | null;
   detectionCount: number;
+  /** The row's notes cell, carried through to the created species unchanged. */
+  notes: string | null;
   /** Populated when the text matched more than one species. */
   candidates?: string[];
 }
@@ -160,7 +273,7 @@ export function normalizeSpeciesName(value: string): string {
  * step exists to prevent.
  */
 export function resolveSpeciesRows(
-  rawNames: string[],
+  parsed: ParsedSpeciesRow[],
   catalog: ValidatableSpecies[]
 ): ResolvedImportRow[] {
   const byName = new Map<string, ValidatableSpecies[]>();
@@ -182,18 +295,25 @@ export function resolveSpeciesRows(
   // different names still counts as a repeat.
   const seen = new Set<string>();
 
-  return rawNames.map((input) => {
+  return parsed.map(({ name: input, notes }) => {
     const matches = byName.get(normalizeSpeciesName(input)) ?? [];
 
     if (matches.length === 0) {
-      return { input, outcome: "unknown", scientificName: null, detectionCount: 0 };
+      return {
+        input,
+        outcome: "unknown" as const,
+        scientificName: null,
+        detectionCount: 0,
+        notes,
+      };
     }
     if (matches.length > 1) {
       return {
         input,
-        outcome: "unknown",
+        outcome: "unknown" as const,
         scientificName: null,
         detectionCount: 0,
+        notes,
         candidates: matches.map((m) => m.scientificName),
       };
     }
@@ -203,6 +323,7 @@ export function resolveSpeciesRows(
       input,
       scientificName: sp.scientificName,
       detectionCount: sp.detectionCount,
+      notes,
     };
 
     if (seen.has(sp.scientificName)) {

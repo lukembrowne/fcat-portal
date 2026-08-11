@@ -1374,6 +1374,12 @@ export const birdnetValidationCampaigns = sqliteTable(
     seed: integer("seed").notNull(),
     sampledAt: integer("sampled_at", { mode: "timestamp" }),
     abandonedReason: text("abandoned_reason"),
+    // Free-text field notes carried over from the taxonomist's own list —
+    // "not on the JF list", "range shows more Andean", "CHECK". They are the
+    // reason a species is worth validating at all, so they travel with the row
+    // from the moment it is added (single add, or the bulk importer's notes
+    // column) rather than living in a spreadsheet nobody opens again.
+    notes: text("notes"),
     // Whose reviews the logistic fit consumes. Under full overlap every
     // reviewer answers every clip, so the fit MUST pick exactly one review per
     // sample — pooling all of them is pseudo-replication and reports a

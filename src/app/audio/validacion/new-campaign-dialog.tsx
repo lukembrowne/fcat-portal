@@ -12,6 +12,7 @@ export function AddSpeciesPanel() {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [species, setSpecies] = useState<string | null>(null);
+  const [notes, setNotes] = useState("");
   const [target, setTarget] = useState(DEFAULT_TARGET_SAMPLE_SIZE);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -26,7 +27,7 @@ export function AddSpeciesPanel() {
     }
     setSubmitting(true);
     setError(null);
-    void createCampaign({ species, targetSampleSize: target })
+    void createCampaign({ species, targetSampleSize: target, notes })
       .then((result) => {
         if (!result.success) {
           setError(result.error);
@@ -44,6 +45,7 @@ export function AddSpeciesPanel() {
         }
         setOpen(false);
         setSpecies(null);
+        setNotes("");
         startTransition(() => router.refresh());
       })
       .finally(() => setSubmitting(false));
@@ -83,6 +85,24 @@ export function AddSpeciesPanel() {
           Seleccionada: <span className="italic">{species}</span>
         </p>
       ) : null}
+
+      {/* Above the sample size on purpose: it is the field that gets filled in
+          most often, and the sample size is left at 200 almost every time. */}
+      <label className="block text-sm">
+        Notas (opcional)
+        <textarea
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          rows={2}
+          placeholder="Fuera de rango; no está en la lista de JF. REVISAR"
+          className="mt-1 w-full rounded border px-2 py-1 text-sm"
+        />
+      </label>
+      <p className="text-[11px] text-muted-foreground">
+        Por qué esta especie merece revisarse: dudas de rango, confusión con
+        otra especie, lo que haga falta. Se ve en la lista y se puede editar
+        después.
+      </p>
 
       <label className="block max-w-[12rem] text-sm">
         Tamaño de muestra

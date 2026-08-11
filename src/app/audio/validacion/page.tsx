@@ -123,7 +123,9 @@ export default async function ValidacionIndexPage({
   const inValidation = rows.filter((r) => r.status !== "abandoned").length;
 
   return (
-    <div className="mx-auto max-w-5xl space-y-4 p-4">
+    // Wider than the rest of the module: the species table gained a notes
+    // column and at max-w-5xl it no longer fit a laptop without scrolling.
+    <div className="mx-auto max-w-6xl space-y-4 p-4">
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">Validación de umbrales</h1>
@@ -169,7 +171,7 @@ export default async function ValidacionIndexPage({
           <SpeciesFilterBar shown={sorted.length} total={rows.length} />
         </CardHeader>
         <CardContent>
-          {/* Seven columns do not fit a phone; scroll the table, not the page. */}
+          {/* Eight columns do not fit a phone; scroll the table, not the page. */}
           <div className="overflow-x-auto">
             <CampaignTable
               rows={sorted}
@@ -177,6 +179,7 @@ export default async function ValidacionIndexPage({
               sortDir={sortDir}
               filter={filter}
               totalRows={rows.length}
+              canEdit={canEdit}
             />
           </div>
         </CardContent>

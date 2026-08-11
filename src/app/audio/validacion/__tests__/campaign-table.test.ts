@@ -18,6 +18,7 @@ const row = (over: Partial<CampaignRow>): CampaignRow =>
     triageSize: 10,
     triageTruePositives: null,
     abandonedReason: null,
+    notes: null,
     sampled: 200,
     reviewed: 100,
     correct: 50,
@@ -150,7 +151,25 @@ describe("sortCampaignRows", () => {
       "reviewers",
       "precision",
       "threshold",
+      "notes",
     ]);
+  });
+
+  it("sorts by notes and keeps the ones without a note last in both directions", () => {
+    // Sorting by this column is how a reader pulls the annotated species to
+    // the top; an empty note is absent, not "smallest".
+    const rows = [
+      row({ id: 1, notes: null }),
+      row({ id: 2, notes: "Zona equivocada" }),
+      row({ id: 3, notes: "Ave rara. REVISAR" }),
+    ];
+    expect(sortCampaignRows(rows, "notes", "asc").map((r) => r.id)).toEqual([3, 2, 1]);
+    expect(sortCampaignRows(rows, "notes", "desc").map((r) => r.id)).toEqual([2, 3, 1]);
+  });
+
+  it("treats an empty note as absent, not as a value that sorts first", () => {
+    const rows = [row({ id: 1, notes: "" }), row({ id: 2, notes: "algo" })];
+    expect(sortCampaignRows(rows, "notes", "asc").map((r) => r.id)).toEqual([2, 1]);
   });
 
   it("drops the sample-size column, which was the same number every row", () => {
@@ -193,6 +212,15 @@ describe("filterCampaignRows", () => {
 
   it("matches a display name", () => {
     expect(ids(filterCampaignRows(rows, { search: "Chachalaca", status: "todas" }))).toEqual([3]);
+  });
+
+  it("matches the notes, which is how the imported CHECK flag is found", () => {
+    const annotated = [
+      row({ id: 1, species: "Aaa aaa", displayName: "Aaa", notes: "Not on JF list. CHECK" }),
+      row({ id: 2, species: "Bbb bbb", displayName: "Bbb", notes: "confirmada" }),
+      row({ id: 3, species: "Ccc ccc", displayName: "Ccc", notes: null }),
+    ];
+    expect(ids(filterCampaignRows(annotated, { search: "check", status: "todas" }))).toEqual([1]);
   });
 
   it("matches case- and diacritic-insensitively", () => {

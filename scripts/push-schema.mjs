@@ -598,6 +598,7 @@ const statements = [
     seed INTEGER NOT NULL,
     sampled_at INTEGER,
     abandoned_reason TEXT,
+    notes TEXT,
     primary_reviewer_email TEXT,
     created_by TEXT NOT NULL,
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
@@ -1249,6 +1250,12 @@ const migrations = [
   // SQLite cannot attach one via ALTER; databases created fresh get it from the
   // CREATE TABLE above, and the enum is enforced in TypeScript either way.
   `ALTER TABLE birdnet_species_thresholds ADD COLUMN source TEXT NOT NULL DEFAULT 'fit'`,
+
+  // Free-text notes on a species under validation — the taxonomist's own
+  // "not on the JF list", "range shows more Andean", "CHECK" (2026-08-10).
+  // Set when the species is added (single add or the bulk importer's notes
+  // column) and editable afterwards; nullable, no default.
+  `ALTER TABLE birdnet_validation_campaigns ADD COLUMN notes TEXT`,
 
   // Grants: what a funded grant actually pays for (2026-08-11). `name` is the
   // opportunity ("NSF DEB"); project_title is the project. Period dates are

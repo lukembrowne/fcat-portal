@@ -492,6 +492,21 @@ export default async function SpeciesOccupancyPage({
               {inputSample && inputSample.rows.length > 0 ? (
                 <div className="border-t pt-4">
                   <div className="text-sm font-medium mb-2">Datos de entrada (sitio × ocasión)</div>
+                  {/* The matrix is rebuilt over the sites that qualify TODAY, while
+                      the model above was fitted over the pool the run saw. Sites
+                      that joined since show up here with no forest cover and no
+                      elevation (their covariates come from the run's snapshot),
+                      which looks like missing data rather than a newer site. */}
+                  {inputSample.nSites !== model.nSites ? (
+                    <p className="text-xs text-amber-700 dark:text-amber-400 mb-2">
+                      El modelo se ajustó sobre {model.nSites} sitios; esta matriz se
+                      reconstruye sobre los {inputSample.nSites} que cumplen los criterios
+                      hoy. Los {Math.abs(inputSample.nSites - model.nSites)} de diferencia
+                      entraron o salieron después del cálculo — aparecen sin cobertura
+                      boscosa ni elevación, porque esas covariables vienen de la corrida.
+                      Vuelva a correr los modelos para que coincidan.
+                    </p>
+                  ) : null}
                   <DetectionSampleTable sample={inputSample} />
                 </div>
               ) : null}

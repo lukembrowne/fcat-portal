@@ -77,6 +77,16 @@ const DDL = `
     n_eligible INTEGER DEFAULT 0, duration_ms INTEGER, notes TEXT, created_by TEXT, started_at INTEGER,
     completed_at INTEGER, created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
+  CREATE TABLE birdnet_species_thresholds (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id INTEGER NOT NULL, species TEXT NOT NULL,
+    n_reviewed INTEGER NOT NULL DEFAULT 0, n_correct INTEGER NOT NULL DEFAULT 0,
+    n_uncertain INTEGER NOT NULL DEFAULT 0, intercept REAL, slope REAL,
+    converged INTEGER NOT NULL DEFAULT 0, threshold_conf_90 REAL, threshold_conf_95 REAL,
+    threshold_conf_99 REAL, threshold_se_95 REAL, ci_lower_95 REAL, ci_upper_95 REAL,
+    unusable_reason TEXT, model_version TEXT, primary_reviewer_email TEXT,
+    is_active INTEGER NOT NULL DEFAULT 0, source TEXT NOT NULL DEFAULT 'fit',
+    fitted_at INTEGER NOT NULL DEFAULT (unixepoch()), applied_at INTEGER, applied_by TEXT
+  );
   CREATE TABLE occupancy_models (
     id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER NOT NULL, species TEXT NOT NULL, stream TEXT NOT NULL,
     variant TEXT NOT NULL DEFAULT 'combined',
@@ -200,6 +210,45 @@ describe.skipIf(!rReady())("runOccupancyBuild (integration, real R)", () => {
       .prepare("SELECT DISTINCT stream FROM occupancy_site_covariates WHERE run_id = ?")
       .all(res.runId) as { stream: string }[];
     expect(snap.map((s) => s.stream).sort()).toEqual(["audio", "camera"]);
+  }, 120_000);
+
+  /**
+   * The snapshot is what makes a re-run able to CLEAR the "this model does not
+   * use the current threshold" warning: the warning is `run snapshot != applied
+   * now`, so a run that recorded nothing would keep reporting drift forever.
+   * `diffSpeciesThresholds` is what the pages compare with.
+   */
+  it("records the applied per-species thresholds, so drift against them resolves", async () => {
+    const { runOccupancyBuild } = await import("@/lib/occupancy/build-run");
+    const { diffSpeciesThresholds, parseRunSpeciesThresholds } = await import(
+      "@/lib/occupancy/threshold-drift"
+    );
+    const species = (
+      sqlite.prepare("SELECT species FROM audio_identifications LIMIT 1").get() as
+        | { species: string }
+        | undefined
+    )?.species;
+    expect(species).toBeTruthy();
+    sqlite
+      .prepare(
+        `INSERT INTO birdnet_species_thresholds
+           (campaign_id, species, n_reviewed, n_correct, threshold_conf_95, is_active, source)
+         VALUES (1, ?, 50, 50, 0.1, 1, 'no_filter')`,
+      )
+      .run(species);
+
+    const res = await runOccupancyBuild({ trigger: "manual" });
+    const run = sqlite
+      .prepare("SELECT species_thresholds_json FROM occupancy_runs WHERE id = ?")
+      .get(res.runId) as { species_thresholds_json: string | null };
+
+    const atRun = parseRunSpeciesThresholds(run.species_thresholds_json);
+    expect(atRun.get(species!)).toBeCloseTo(0.1);
+    // Nothing changed after the run, so nothing is stale — this is the state the
+    // warning must reach once the batch has been re-run.
+    expect(diffSpeciesThresholds(atRun, new Map([[species!, 0.1]]))).toEqual([]);
+    // And a later revert shows up as drift again.
+    expect(diffSpeciesThresholds(atRun, new Map()).map((c) => c.kind)).toEqual(["removed"]);
   }, 120_000);
 
   it("persists ineligible species with sufficient_data = 0 and reasons", async () => {

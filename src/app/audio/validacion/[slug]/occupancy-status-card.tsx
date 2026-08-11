@@ -60,7 +60,8 @@ export function OccupancyStatusCard({
           ? new Date(status.runCompletedAt).toLocaleDateString("es-EC")
           : "sin fecha"}
         ) ya usan{" "}
-        {describeThresholdEs(status.atRun, status.globalThreshold)} para esta especie.
+        {describeThresholdEs(status.atRun, status.globalThreshold, status.nowSource)} para
+        esta especie.
       </p>
     );
   }
@@ -80,7 +81,11 @@ export function OccupancyStatusCard({
             : "sin fecha"}
           ) leyó las detecciones de esta especie con{" "}
           <strong>{describeThresholdEs(status.atRun, status.globalThreshold)}</strong>, y hoy
-          rige <strong>{describeThresholdEs(status.now, status.globalThreshold)}</strong>.
+          rige{" "}
+          <strong>
+            {describeThresholdEs(status.now, status.globalThreshold, status.nowSource)}
+          </strong>
+          .
           {status.hasAudioModel
             ? " Su modelo de audio sigue mostrando el resultado anterior."
             : " Con el umbral nuevo puede que ahora haya datos suficientes para modelarla."}

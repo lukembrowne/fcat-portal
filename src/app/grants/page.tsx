@@ -17,16 +17,24 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { SortIcon } from "@/components/sort-icon";
-import { EditableField, EditableStatus } from "./editable-cell";
+import { EditableField, EditableStatus, EditableSelect } from "./editable-cell";
 import { EditableLinks } from "./editable-links";
 import { EditableFunder } from "./editable-funder";
 import { GrantsFilterBar } from "./grants-filter-bar";
 import {
   GRANT_STATUS_LABELS,
   GRANT_STATUS_ORDER,
+  GRANT_FUNDING_ENTITY_LABELS,
+  GRANT_FUNDING_ENTITY_COLORS,
+  GRANT_FUNDING_ENTITY_ORDER,
   toDateInput,
   daysUntil,
 } from "@/lib/grants/constants";
+
+const FUNDING_ENTITY_OPTIONS = GRANT_FUNDING_ENTITY_ORDER.map((e) => ({
+  value: e,
+  label: GRANT_FUNDING_ENTITY_LABELS[e],
+}));
 import { GrantsSummary } from "./grants-summary";
 
 function buildQuery(
@@ -146,9 +154,14 @@ export default async function GrantsPage({
             <TableHeader>
               <TableRow>
                 <SortableHeader column="name" label="Grant" currentSort={sortBy} currentDir={sortDir} params={params} />
+                <SortableHeader column="projectTitle" label="Project" currentSort={sortBy} currentDir={sortDir} params={params} />
                 <SortableHeader column="status" label="Status" currentSort={sortBy} currentDir={sortDir} params={params} />
+                <SortableHeader column="entity" label="Entity" currentSort={sortBy} currentDir={sortDir} params={params} />
                 <SortableHeader column="amount" label="Requested" currentSort={sortBy} currentDir={sortDir} params={params} className="text-right" />
+                <SortableHeader column="awarded" label="Awarded" currentSort={sortBy} currentDir={sortDir} params={params} className="text-right" />
                 <SortableHeader column="due" label="Due date" currentSort={sortBy} currentDir={sortDir} params={params} />
+                <SortableHeader column="start" label="Start" currentSort={sortBy} currentDir={sortDir} params={params} />
+                <SortableHeader column="end" label="End" currentSort={sortBy} currentDir={sortDir} params={params} />
                 <TableHead>Links</TableHead>
                 <TableHead>Notes</TableHead>
               </TableRow>
@@ -189,14 +202,44 @@ export default async function GrantsPage({
                         </Link>
                       </div>
                     </TableCell>
+                    <TableCell className="max-w-[220px]">
+                      <EditableField
+                        id={g.id}
+                        field="projectTitle"
+                        value={g.projectTitle}
+                        kind="text"
+                        canEdit={canEdit}
+                        placeholder="Project title"
+                      />
+                    </TableCell>
                     <TableCell>
                       <EditableStatus grantId={g.id} value={g.status} canEdit={canEdit} />
+                    </TableCell>
+                    <TableCell>
+                      <EditableSelect
+                        id={g.id}
+                        field="fundingEntity"
+                        value={g.fundingEntity}
+                        options={FUNDING_ENTITY_OPTIONS}
+                        canEdit={canEdit}
+                        colors={GRANT_FUNDING_ENTITY_COLORS}
+                      />
                     </TableCell>
                     <TableCell className="text-right text-sm whitespace-nowrap">
                       <EditableField
                         id={g.id}
                         field="amountRequested"
                         value={g.amountRequested}
+                        kind="amount"
+                        canEdit={canEdit}
+                        align="right"
+                      />
+                    </TableCell>
+                    <TableCell className="text-right text-sm whitespace-nowrap">
+                      <EditableField
+                        id={g.id}
+                        field="amountAwarded"
+                        value={g.amountAwarded}
                         kind="amount"
                         canEdit={canEdit}
                         align="right"
@@ -217,6 +260,26 @@ export default async function GrantsPage({
                           </Badge>
                         )}
                       </div>
+                    </TableCell>
+                    {/* Project period. No urgency badge — that badge is about a
+                        submission deadline and means nothing on a project period. */}
+                    <TableCell className="text-sm whitespace-nowrap">
+                      <EditableField
+                        id={g.id}
+                        field="startDate"
+                        value={toDateInput(g.startDate)}
+                        kind="date"
+                        canEdit={canEdit}
+                      />
+                    </TableCell>
+                    <TableCell className="text-sm whitespace-nowrap">
+                      <EditableField
+                        id={g.id}
+                        field="endDate"
+                        value={toDateInput(g.endDate)}
+                        kind="date"
+                        canEdit={canEdit}
+                      />
                     </TableCell>
                     <TableCell>
                       <EditableLinks

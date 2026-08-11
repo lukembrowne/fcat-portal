@@ -6,7 +6,11 @@
  * to the portal's Spanish-UI convention) so it can be shared with English-speaking
  * collaborators. Do not "fix" these strings back to Spanish.
  */
-import type { GrantStatus, FunderPriority } from "@/db/schema";
+import type {
+  GrantStatus,
+  FunderPriority,
+  GrantFundingEntity,
+} from "@/db/schema";
 
 export const GRANT_STATUS_LABELS: Record<GrantStatus, string> = {
   to_research: "To Research",
@@ -58,6 +62,28 @@ export const GRANT_SUCCESS_DENOMINATOR_STATUSES: GrantStatus[] = [
   "completed",
 ];
 
+/**
+ * Which FCAT entity received the money. Unset is a legitimate state — a grant
+ * that isn't funded yet has no entity, so the cell and the form both keep an
+ * empty choice.
+ */
+export const GRANT_FUNDING_ENTITY_LABELS: Record<GrantFundingEntity, string> = {
+  fcat_ecuador: "FCAT-Ecuador",
+  fcat_usa: "FCAT-USA",
+};
+
+/** Badge colors per entity — distinct hues, not a severity ramp. */
+export const GRANT_FUNDING_ENTITY_COLORS: Record<GrantFundingEntity, string> = {
+  fcat_ecuador: "bg-sky-100 text-sky-800",
+  fcat_usa: "bg-violet-100 text-violet-800",
+};
+
+/** Display order for selects. */
+export const GRANT_FUNDING_ENTITY_ORDER: GrantFundingEntity[] = [
+  "fcat_ecuador",
+  "fcat_usa",
+];
+
 export const FUNDER_PRIORITY_LABELS: Record<FunderPriority, string> = {
   highest: "Highest",
   high: "High",
@@ -98,10 +124,14 @@ export function reminderLevel(days: number | null): number {
  */
 export const EDITABLE_GRANT_FIELDS = [
   "name",
+  "projectTitle",
   "status",
   "amountRequested",
   "amountAwarded",
+  "fundingEntity",
   "dueDate",
+  "startDate",
+  "endDate",
   "notes",
   "website",
   "folderLink",

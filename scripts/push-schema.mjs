@@ -1011,11 +1011,15 @@ const statements = [
     funder_id INTEGER REFERENCES funders(id) ON DELETE SET NULL,
     funder_name_raw TEXT,
     name TEXT NOT NULL,
+    project_title TEXT,
     website TEXT,
     status TEXT NOT NULL DEFAULT 'to_research' CHECK(status IN ('to_research','in_prep','pending_decision','funded','rejected','passed','completed')),
     amount_requested REAL,
     amount_awarded REAL,
+    funding_entity TEXT CHECK(funding_entity IN ('fcat_ecuador','fcat_usa')),
     due_date INTEGER,
+    start_date INTEGER,
+    end_date INTEGER,
     last_notified_at INTEGER,
     reminders_sent INTEGER NOT NULL DEFAULT 0,
     notes TEXT,
@@ -1245,6 +1249,24 @@ const migrations = [
   // SQLite cannot attach one via ALTER; databases created fresh get it from the
   // CREATE TABLE above, and the enum is enforced in TypeScript either way.
   `ALTER TABLE birdnet_species_thresholds ADD COLUMN source TEXT NOT NULL DEFAULT 'fit'`,
+
+  // Grants: what a funded grant actually pays for (2026-08-11). `name` is the
+  // opportunity ("NSF DEB"); project_title is the project. Period dates are
+  // UTC-midnight timestamps like due_date. funding_entity records which legal
+  // entity received the money.
+  //
+  // The CHECK rides along on ADD COLUMN — verified against better-sqlite3
+  // (SQLite 3.51) on a populated table: the constraint attaches, NULL satisfies
+  // it so all ~118 legacy rows migrate untouched, and both INSERT and UPDATE of
+  // an out-of-enum value raise SQLITE_CONSTRAINT_CHECK. SQLite's documented
+  // ADD COLUMN restrictions are PRIMARY KEY / UNIQUE, a non-NULL default for a
+  // NOT NULL column, and non-constant defaults — CHECK is not among them.
+  // Adding a THIRD entity value later is the expensive direction: changing an
+  // existing column's CHECK requires a full table recreation.
+  `ALTER TABLE grants ADD COLUMN project_title TEXT`,
+  `ALTER TABLE grants ADD COLUMN funding_entity TEXT CHECK(funding_entity IN ('fcat_ecuador','fcat_usa'))`,
+  `ALTER TABLE grants ADD COLUMN start_date INTEGER`,
+  `ALTER TABLE grants ADD COLUMN end_date INTEGER`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }

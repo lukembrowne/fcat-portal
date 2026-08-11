@@ -8,7 +8,9 @@ import {
   funders,
   systemEvents,
   grantStatusEnum,
+  grantFundingEntityEnum,
   type GrantStatus,
+  type GrantFundingEntity,
 } from "@/db/schema";
 import { requirePermission } from "@/lib/auth";
 import { recordEvent } from "@/lib/system-events";
@@ -24,13 +26,17 @@ const PROJECT = "grants";
 export interface GrantListItem {
   id: number;
   name: string;
+  projectTitle: string | null;
   funderId: number | null;
   funderName: string | null; // resolved funder record name, or null
   funderNameRaw: string | null; // typed fallback when unlinked
   status: GrantStatus;
   amountRequested: number | null;
   amountAwarded: number | null;
+  fundingEntity: GrantFundingEntity | null;
   dueDate: Date | null;
+  startDate: Date | null;
+  endDate: Date | null;
   website: string | null;
   folderLink: string | null;
   budgetLink: string | null;
@@ -40,12 +46,32 @@ export interface GrantListItem {
 
 const SORTABLE_COLUMNS = {
   name: grants.name,
+  projectTitle: grants.projectTitle,
   funder: funders.name,
   status: grants.status,
   amount: grants.amountRequested,
   awarded: grants.amountAwarded,
+  entity: grants.fundingEntity,
   due: grants.dueDate,
+  start: grants.startDate,
+  end: grants.endDate,
 } as const;
+
+/**
+ * Columns that are empty for most rows, where SQLite's default NULL ordering
+ * would bury the data. NULLs sort before every value in ASC, and a header's
+ * first click is always ASC (SortableHeader sends asc for a non-active column) —
+ * so without this, one click on Start puts every unfunded grant above every
+ * funded one and the sort reads as broken. `due` is deliberately absent: it is
+ * populated on nearly every grant, and its ordering is long-established.
+ */
+const NULLS_LAST_COLUMNS = new Set<SortColumn>([
+  "projectTitle",
+  "awarded",
+  "entity",
+  "start",
+  "end",
+]);
 
 export type SortColumn = keyof typeof SORTABLE_COLUMNS;
 export type SortDirection = "asc" | "desc";
@@ -64,13 +90,17 @@ export async function getGrants(filters?: {
     .select({
       id: grants.id,
       name: grants.name,
+      projectTitle: grants.projectTitle,
       funderId: grants.funderId,
       funderName: funders.name,
       funderNameRaw: grants.funderNameRaw,
       status: grants.status,
       amountRequested: grants.amountRequested,
       amountAwarded: grants.amountAwarded,
+      fundingEntity: grants.fundingEntity,
       dueDate: grants.dueDate,
+      startDate: grants.startDate,
+      endDate: grants.endDate,
       website: grants.website,
       folderLink: grants.folderLink,
       budgetLink: grants.budgetLink,
@@ -102,14 +132,18 @@ export async function getGrants(filters?: {
 
   const sortCol = filters?.sortBy as SortColumn | undefined;
   const sortDir = filters?.sortDir === "asc" ? "asc" : "desc";
-  const column =
-    sortCol && sortCol in SORTABLE_COLUMNS
-      ? SORTABLE_COLUMNS[sortCol]
-      : grants.dueDate;
+  const resolved: SortColumn =
+    sortCol && sortCol in SORTABLE_COLUMNS ? sortCol : "due";
+  const column = SORTABLE_COLUMNS[resolved];
   const orderFn = sortDir === "asc" ? asc : desc;
 
-  // Stable id tiebreaker so pagination/sorting is deterministic.
-  return query.orderBy(orderFn(column), asc(grants.id)).all();
+  // Empty-heavy columns push their blanks to the bottom in both directions;
+  // see NULLS_LAST_COLUMNS. Stable id tiebreaker keeps ordering deterministic.
+  const order = NULLS_LAST_COLUMNS.has(resolved)
+    ? [sql`${column} IS NULL`, orderFn(column), asc(grants.id)]
+    : [orderFn(column), asc(grants.id)];
+
+  return query.orderBy(...order).all();
 }
 
 export async function getGrant(id: number) {
@@ -251,15 +285,24 @@ export async function saveGrant(
   // Keep the typed name only when no funder record is linked.
   const funderNameRaw = funderId ? null : text(formData.get("funderNameRaw"));
 
+  const entityRaw = text(formData.get("fundingEntity"));
+  if (entityRaw && !grantFundingEntityEnum.includes(entityRaw as GrantFundingEntity)) {
+    return { success: false, error: "Invalid funding entity." };
+  }
+
   const values = {
     funderId: funderId && !isNaN(funderId) ? funderId : null,
     funderNameRaw,
     name,
+    projectTitle: text(formData.get("projectTitle")),
     website: text(formData.get("website")),
     status,
     amountRequested: parseAmount(formData.get("amountRequested")),
     amountAwarded: parseAmount(formData.get("amountAwarded")),
+    fundingEntity: (entityRaw as GrantFundingEntity | null) ?? null,
     dueDate: parseDate(formData.get("dueDate")),
+    startDate: parseDate(formData.get("startDate")),
+    endDate: parseDate(formData.get("endDate")),
     notes: text(formData.get("notes")),
     folderLink: text(formData.get("folderLink")),
     budgetLink: text(formData.get("budgetLink")),
@@ -373,6 +416,12 @@ export async function updateGrantField(
       canonical = v;
       break;
     }
+    case "projectTitle": {
+      const v = text(raw);
+      set.projectTitle = v;
+      canonical = v;
+      break;
+    }
     case "status": {
       if (!grantStatusEnum.includes(raw as GrantStatus)) {
         return { success: false, error: "Invalid status." };
@@ -393,9 +442,36 @@ export async function updateGrantField(
       canonical = v;
       break;
     }
+    case "fundingEntity": {
+      // Unset is valid — an unfunded grant has no entity. Anything else must be
+      // in the enum, or the SQLite CHECK would reject the write anyway.
+      if (raw === null || raw === "") {
+        set.fundingEntity = null;
+        canonical = null;
+        break;
+      }
+      if (!grantFundingEntityEnum.includes(raw as GrantFundingEntity)) {
+        return { success: false, error: "Invalid funding entity." };
+      }
+      set.fundingEntity = raw as GrantFundingEntity;
+      canonical = raw;
+      break;
+    }
     case "dueDate": {
       const d = parseDate(raw);
       set.dueDate = d;
+      canonical = dateToInput(d);
+      break;
+    }
+    case "startDate": {
+      const d = parseDate(raw);
+      set.startDate = d;
+      canonical = dateToInput(d);
+      break;
+    }
+    case "endDate": {
+      const d = parseDate(raw);
+      set.endDate = d;
       canonical = dateToInput(d);
       break;
     }

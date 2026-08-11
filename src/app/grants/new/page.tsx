@@ -19,13 +19,17 @@ export default async function NewGrantPage() {
         funderOptions={funderOptions}
         initial={{
           name: "",
+          projectTitle: null,
           funderId: null,
           funderNameRaw: null,
           website: null,
           status: "to_research",
           amountRequested: null,
           amountAwarded: null,
+          fundingEntity: null,
           dueDate: null,
+          startDate: null,
+          endDate: null,
           notes: null,
           folderLink: null,
           budgetLink: null,

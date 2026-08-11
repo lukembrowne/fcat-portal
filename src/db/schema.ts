@@ -2268,6 +2268,17 @@ export type GrantStatus = (typeof grantStatusEnum)[number];
 export const funderPriorityEnum = ["highest", "high", "medium", "low"] as const;
 export type FunderPriority = (typeof funderPriorityEnum)[number];
 
+/**
+ * Which legal entity received the money. Nullable on `grants` — the ~118 imported
+ * rows and every grant that isn't funded yet are legitimately "not applicable",
+ * not "missing". Enforced in SQLite by a CHECK carried on the ADD COLUMN (see
+ * scripts/push-schema.mjs); adding a value here without updating that CHECK
+ * throws SQLITE_CONSTRAINT_CHECK at runtime, and unlike this column's own
+ * creation, changing an existing CHECK needs a full table recreation.
+ */
+export const grantFundingEntityEnum = ["fcat_ecuador", "fcat_usa"] as const;
+export type GrantFundingEntity = (typeof grantFundingEntityEnum)[number];
+
 export const funders = sqliteTable(
   "funders",
   {
@@ -2314,13 +2325,22 @@ export const grants = sqliteTable(
     // Original typed funder name; fallback display + manual-link target when funderId is null.
     funderNameRaw: text("funder_name_raw"),
     name: text("name").notNull(),
+    // The project the money funds, distinct from `name` (the opportunity, e.g. "NSF DEB").
+    // Kept separate because funder matching and search both read `name`.
+    projectTitle: text("project_title"),
     website: text("website"),
     status: text("status", { enum: grantStatusEnum })
       .notNull()
       .default("to_research"),
     amountRequested: real("amount_requested"),
     amountAwarded: real("amount_awarded"),
+    fundingEntity: text("funding_entity", { enum: grantFundingEntityEnum }),
     dueDate: integer("due_date", { mode: "timestamp" }),
+    // Funded project period. UTC-midnight timestamps like `due_date` in this same
+    // table — NOT the TEXT "YYYY-MM-DD" that finance_salary_allocations uses — so
+    // formatDate/toDateInput and the date EditableField work unchanged.
+    startDate: integer("start_date", { mode: "timestamp" }),
+    endDate: integer("end_date", { mode: "timestamp" }),
     lastNotifiedAt: integer("last_notified_at", { mode: "timestamp" }),
     // Count of reminder thresholds (GRANT_REMINDER_DAYS) already emailed for this
     // grant. Each threshold fires once; the cron sends iff reminderLevel exceeds it.

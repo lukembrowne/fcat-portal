@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { grantStatusEnum } from "@/db/schema";
+import { grantStatusEnum, grantFundingEntityEnum } from "@/db/schema";
 import {
   GRANT_STATUS_LABELS,
   GRANT_STATUS_COLORS,
@@ -13,6 +13,9 @@ import {
   formatDate,
   toDateInput,
   daysUntil,
+  GRANT_FUNDING_ENTITY_LABELS,
+  GRANT_FUNDING_ENTITY_COLORS,
+  GRANT_FUNDING_ENTITY_ORDER,
 } from "@/lib/grants/constants";
 
 describe("grant status maps are exhaustive", () => {
@@ -20,6 +23,37 @@ describe("grant status maps are exhaustive", () => {
     for (const s of grantStatusEnum) {
       expect(GRANT_STATUS_LABELS[s]).toBeTruthy();
       expect(GRANT_STATUS_COLORS[s]).toBeTruthy();
+    }
+  });
+});
+
+describe("funding entity maps are exhaustive", () => {
+  it("labels + colors cover every entity", () => {
+    for (const e of grantFundingEntityEnum) {
+      expect(GRANT_FUNDING_ENTITY_LABELS[e]).toBeTruthy();
+      expect(GRANT_FUNDING_ENTITY_COLORS[e]).toBeTruthy();
+    }
+  });
+  it("order lists every entity exactly once", () => {
+    expect([...GRANT_FUNDING_ENTITY_ORDER].sort()).toEqual(
+      [...grantFundingEntityEnum].sort()
+    );
+  });
+});
+
+describe("EDITABLE_GRANT_FIELDS covers the project/period/entity columns", () => {
+  // The whitelist is a server-side guard in updateGrantField: a cell rendered
+  // for a field missing here looks editable and fails every save with
+  // "Unknown field." — a silent half-failure no type check catches.
+  it("whitelists every field the grants table edits inline", () => {
+    for (const f of [
+      "projectTitle",
+      "startDate",
+      "endDate",
+      "fundingEntity",
+      "amountAwarded",
+    ]) {
+      expect(EDITABLE_GRANT_FIELDS).toContain(f);
     }
   });
 });

@@ -4,22 +4,28 @@ import { useActionState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { saveGrant } from "./actions";
 import { FunderPicker } from "./funder-picker";
-import type { GrantStatus } from "@/db/schema";
+import type { GrantStatus, GrantFundingEntity } from "@/db/schema";
 import {
   GRANT_STATUS_LABELS,
   GRANT_STATUS_ORDER,
+  GRANT_FUNDING_ENTITY_LABELS,
+  GRANT_FUNDING_ENTITY_ORDER,
 } from "@/lib/grants/constants";
 
 export interface GrantFormInitial {
   id?: number;
   name: string;
+  projectTitle: string | null;
   funderId: number | null;
   funderNameRaw: string | null;
   website: string | null;
   status: GrantStatus;
   amountRequested: number | null;
   amountAwarded: number | null;
+  fundingEntity: GrantFundingEntity | null;
   dueDate: string | null; // YYYY-MM-DD
+  startDate: string | null; // YYYY-MM-DD
+  endDate: string | null; // YYYY-MM-DD
   notes: string | null;
   folderLink: string | null;
   budgetLink: string | null;
@@ -99,6 +105,36 @@ export function GrantForm({
         </Field>
 
         <Field
+          label="Project title"
+          desc="The project this grant funds — often different from the grant name."
+        >
+          <input
+            name="projectTitle"
+            defaultValue={initial.projectTitle ?? ""}
+            className={inputCls}
+          />
+        </Field>
+
+        <div className="grid grid-cols-2 gap-4">
+          <Field label="Start date" desc="When the funded project period begins.">
+            <input
+              type="date"
+              name="startDate"
+              defaultValue={initial.startDate ?? ""}
+              className={inputCls}
+            />
+          </Field>
+          <Field label="End date" desc="When the funded project period ends.">
+            <input
+              type="date"
+              name="endDate"
+              defaultValue={initial.endDate ?? ""}
+              className={inputCls}
+            />
+          </Field>
+        </div>
+
+        <Field
           label="Funder"
           desc="Search the directory, or use 'Add funder' if it isn't listed yet."
         >
@@ -162,6 +198,24 @@ export function GrantForm({
             />
           </Field>
         </div>
+
+        <Field
+          label="Funded through"
+          desc="Which FCAT entity received the money. Leave blank until the grant is funded."
+        >
+          <select
+            name="fundingEntity"
+            defaultValue={initial.fundingEntity ?? ""}
+            className={inputCls}
+          >
+            <option value="">— not set —</option>
+            {GRANT_FUNDING_ENTITY_ORDER.map((e) => (
+              <option key={e} value={e}>
+                {GRANT_FUNDING_ENTITY_LABELS[e]}
+              </option>
+            ))}
+          </select>
+        </Field>
       </Section>
 
       <Section title="Links">

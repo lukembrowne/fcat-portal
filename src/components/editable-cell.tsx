@@ -16,10 +16,16 @@
  * Spanish (`$50,000.00`, "1 ago 2026").
  */
 
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Check, Loader2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import type { ActionResult } from "@/lib/types";
 
 export type Kind = "text" | "amount" | "number" | "date" | "textarea";
@@ -109,6 +115,86 @@ function defaultDisplay(
   return String(value);
 }
 
+/**
+ * Reveals a truncated cell's full text on hover — and ONLY when it is actually
+ * truncated. A tooltip that repeats text the reader can already read is noise,
+ * and in a table it fires on every row.
+ *
+ * Truncation is measured on the text span (`scrollWidth > clientWidth`) at the
+ * moment the pointer arrives, so it stays correct across column resizes and
+ * optimistic value changes without an observer. That means the tooltip is
+ * controlled, and Radix's own `delayDuration` does not apply to a controlled
+ * tooltip — the grace period before it opens is kept here instead.
+ */
+function useOverflowTooltip(ref: React.RefObject<HTMLElement | null>, delay = 200) {
+  const [open, setOpen] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function cancel() {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = null;
+  }
+
+  function hide() {
+    cancel();
+    setOpen(false);
+  }
+
+  function show() {
+    cancel();
+    timer.current = setTimeout(() => {
+      // Both axes: a one-line cell overflows horizontally, a `line-clamp`ed one
+      // (the textarea kind) vertically.
+      const el = ref.current;
+      if (el && (el.scrollWidth > el.clientWidth || el.scrollHeight > el.clientHeight)) {
+        setOpen(true);
+      }
+    }, delay);
+  }
+
+  // A pending timer must not fire after the cell swaps to its input (or the row
+  // re-renders away), or the tooltip opens over a trigger that no longer exists.
+  useEffect(() => cancel, []);
+
+  return { open, show, hide };
+}
+
+/**
+ * `whitespace-pre-wrap` because a pasted value can carry its own line breaks,
+ * and re-flowing them into a paragraph loses whatever somebody laid out.
+ */
+function FullTextTooltip({
+  text,
+  hint,
+  open,
+  onClose,
+  children,
+}: {
+  text: string;
+  /** Editors lose the button's native `title` to this tooltip; this returns it. */
+  hint?: string;
+  open: boolean;
+  onClose: () => void;
+  children: React.ReactElement;
+}) {
+  return (
+    <TooltipProvider delayDuration={0}>
+      <Tooltip
+        open={open}
+        onOpenChange={(next) => {
+          if (!next) onClose();
+        }}
+      >
+        <TooltipTrigger asChild>{children}</TooltipTrigger>
+        <TooltipContent side="top" align="start" className="max-w-sm">
+          <p className="whitespace-pre-wrap text-xs">{text}</p>
+          {hint && <p className="mt-1 text-[10px] opacity-70">{hint}</p>}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
 export function EditableField({
   id,
   field,
@@ -121,6 +207,7 @@ export function EditableField({
   max,
   placeholder,
   align = "left",
+  fullValueOnHover = false,
 }: {
   id: number;
   field: string;
@@ -133,6 +220,12 @@ export function EditableField({
   max?: number;
   placeholder?: string;
   align?: "left" | "right";
+  /**
+   * For long free-text columns that have to stay on one line: hovering the cell
+   * shows the full value in a tooltip when it does not fit. Off by default —
+   * a value that fits needs no tooltip.
+   */
+  fullValueOnHover?: boolean;
 }) {
   const { shown, save, pending, error, saved, clearSaved } = useFieldSave(
     id,
@@ -142,11 +235,14 @@ export function EditableField({
   );
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
+  const textRef = useRef<HTMLSpanElement>(null);
+  const tip = useOverflowTooltip(textRef);
 
   const alignCls = align === "right" ? "text-right tabular-nums" : "";
 
   function beginEdit() {
     if (!canEdit) return;
+    tip.hide();
     clearSaved();
     setDraft(toEditString(shown));
     setEditing(true);
@@ -207,16 +303,28 @@ export function EditableField({
     return <input {...common} type={type} inputMode={inputMode} min={min} max={max} />;
   }
 
-  return (
+  const fullText = shown == null || shown === "" ? "" : String(shown);
+  const hoverable = fullValueOnHover && fullText !== "";
+
+  const display = (
     <button
       type="button"
       onClick={beginEdit}
-      title="Click to edit"
+      // The native title is dropped where the hover tooltip is on: the two fire
+      // together over the same element, which reads as a rendering glitch.
+      title={hoverable ? undefined : "Click to edit"}
+      onPointerEnter={hoverable ? tip.show : undefined}
+      onPointerLeave={hoverable ? tip.hide : undefined}
+      onFocus={hoverable ? tip.show : undefined}
+      onBlur={hoverable ? tip.hide : undefined}
       className={`group/edit -mx-1 inline-flex w-[calc(100%+0.5rem)] items-center gap-1 rounded px-1 py-0.5 text-left hover:bg-muted/60 ${alignCls} ${
         align === "right" ? "justify-end" : ""
       }`}
     >
-      <span className={kind === "textarea" ? "line-clamp-2 whitespace-pre-wrap text-sm" : "truncate"}>
+      <span
+        ref={textRef}
+        className={kind === "textarea" ? "line-clamp-2 whitespace-pre-wrap text-sm" : "truncate"}
+      >
         {defaultDisplay(shown, kind, formatters)}
       </span>
       {pending && <Loader2 className="h-3 w-3 shrink-0 animate-spin text-muted-foreground" />}
@@ -227,6 +335,14 @@ export function EditableField({
         </span>
       )}
     </button>
+  );
+
+  if (!hoverable) return display;
+
+  return (
+    <FullTextTooltip text={fullText} hint="Click to edit" open={tip.open} onClose={tip.hide}>
+      {display}
+    </FullTextTooltip>
   );
 }
 

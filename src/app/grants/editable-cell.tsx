@@ -48,6 +48,7 @@ export function EditableField({
   max,
   placeholder,
   align = "left",
+  fullValueOnHover,
 }: {
   id: number;
   field: string;
@@ -59,6 +60,7 @@ export function EditableField({
   max?: number;
   placeholder?: string;
   align?: "left" | "right";
+  fullValueOnHover?: boolean;
 }) {
   return (
     <BaseEditableField
@@ -73,6 +75,7 @@ export function EditableField({
       max={max}
       placeholder={placeholder}
       align={align}
+      fullValueOnHover={fullValueOnHover}
     />
   );
 }

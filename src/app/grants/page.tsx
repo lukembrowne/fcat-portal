@@ -202,6 +202,9 @@ export default async function GrantsPage({
                         </Link>
                       </div>
                     </TableCell>
+                    {/* Project titles are full sentences and the column stays on
+                        one line, so the truncated ones carry the rest on a hover
+                        tooltip (same reveal as the species notes cell). */}
                     <TableCell className="max-w-[220px]">
                       <EditableField
                         id={g.id}
@@ -210,6 +213,7 @@ export default async function GrantsPage({
                         kind="text"
                         canEdit={canEdit}
                         placeholder="Project title"
+                        fullValueOnHover
                       />
                     </TableCell>
                     <TableCell>

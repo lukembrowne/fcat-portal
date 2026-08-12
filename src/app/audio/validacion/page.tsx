@@ -14,6 +14,7 @@ import {
   CampaignTable,
   filterCampaignRows,
   sortCampaignRows,
+  DEFAULT_SORT_COLUMN,
   SORTABLE_COLUMNS,
   type CampaignFilter,
   type CampaignRow,
@@ -36,6 +37,7 @@ export default async function ValidacionIndexPage({
     sortDir?: string;
     search?: string;
     status?: string;
+    priority?: string;
   }>;
 }) {
   const user = await requirePermission("grabaciones", "viewer");
@@ -43,12 +45,17 @@ export default async function ValidacionIndexPage({
   const nameLang = parseNameLang((await cookies()).get(NAME_LANG_COOKIE)?.value);
 
   const sortBy = (
-    SORTABLE_COLUMNS.includes(params.sortBy as SortColumn) ? params.sortBy : "species"
+    SORTABLE_COLUMNS.includes(params.sortBy as SortColumn)
+      ? params.sortBy
+      : DEFAULT_SORT_COLUMN
   ) as SortColumn;
+  // Ascending is most-urgent-first: priority sorts on a rank where high is 0,
+  // so the default view opens on the species somebody marked as next.
   const sortDir: SortDirection = params.sortDir === "desc" ? "desc" : "asc";
   const filter: CampaignFilter = {
     search: params.search ?? "",
     status: params.status ?? "activas",
+    priority: params.priority ?? "todas",
   };
 
   const canEdit =
@@ -120,12 +127,18 @@ export default async function ValidacionIndexPage({
   const reviewedTotal = rows.reduce((sum, r) => sum + r.reviewed, 0);
   // Discarded species are not "in validation" — counting them made the headline
   // number drift further from reality with every round.
-  const inValidation = rows.filter((r) => r.status !== "abandoned").length;
+  const live = rows.filter((r) => r.status !== "abandoned");
+  const inValidation = live.length;
+  // Same population as the count beside it, so the two are comparable: "12 of
+  // the 57 species still in play are marked to do first".
+  const highPriority = live.filter((r) => r.priority === "high").length;
 
   return (
-    // Wider than the rest of the module: the species table gained a notes
-    // column and at max-w-5xl it no longer fit a laptop without scrolling.
-    <div className="mx-auto max-w-6xl space-y-4 p-4">
+    // Wider than the rest of the module, and now wider again: the species table
+    // carries nine columns and at max-w-6xl it scrolled horizontally on a
+    // laptop, which hides the actions on the right. Still capped rather than
+    // full-bleed — a table row spanning a 27" display is hard to track across.
+    <div className="mx-auto max-w-[104rem] space-y-4 p-4">
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">Validación de umbrales</h1>
@@ -150,10 +163,24 @@ export default async function ValidacionIndexPage({
         </div>
       ) : null}
 
-      <div className="grid grid-cols-3 gap-2">
+      {/* Capped well under the table's width: four two-line tiles stretched
+          across 104rem read as empty boxes rather than as a summary. */}
+      <div className="grid max-w-4xl grid-cols-2 gap-2 sm:grid-cols-4">
         <div className="rounded-lg border p-2">
           <div className="text-lg font-semibold tabular-nums">{inValidation}</div>
           <div className="text-[11px] text-muted-foreground">Especies en validación</div>
+        </div>
+        <div className="rounded-lg border p-2">
+          {/* Coloured only when there is something to point at: a zero in
+              alarm orange reads as a problem rather than as an empty queue. */}
+          <div
+            className={`text-lg font-semibold tabular-nums ${
+              highPriority > 0 ? "text-orange-700" : ""
+            }`}
+          >
+            {highPriority}
+          </div>
+          <div className="text-[11px] text-muted-foreground">Prioridad alta</div>
         </div>
         <div className="rounded-lg border p-2">
           <div className="text-lg font-semibold tabular-nums">{reviewedTotal}</div>
@@ -171,7 +198,7 @@ export default async function ValidacionIndexPage({
           <SpeciesFilterBar shown={sorted.length} total={rows.length} />
         </CardHeader>
         <CardContent>
-          {/* Eight columns do not fit a phone; scroll the table, not the page. */}
+          {/* Nine columns do not fit a phone; scroll the table, not the page. */}
           <div className="overflow-x-auto">
             <CampaignTable
               rows={sorted}

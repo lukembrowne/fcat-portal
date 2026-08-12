@@ -3,6 +3,7 @@ import { describe, it, expect } from "vitest";
 import {
   filterCampaignRows,
   sortCampaignRows,
+  DEFAULT_SORT_COLUMN,
   SORTABLE_COLUMNS,
   type CampaignRow,
 } from "../campaign-table";
@@ -13,6 +14,7 @@ const row = (over: Partial<CampaignRow>): CampaignRow =>
     species: "Aaa aaa",
     displayName: "Aaa",
     status: "fitted",
+    priority: "medium",
     targetSampleSize: 200,
     binCount: 9,
     triageSize: 10,
@@ -145,6 +147,7 @@ describe("sortCampaignRows", () => {
     // The column holds a link, not an orderable value.
     expect(SORTABLE_COLUMNS).not.toContain("action" as never);
     expect(SORTABLE_COLUMNS).toEqual([
+      "priority",
       "species",
       "status",
       "progress",
@@ -153,6 +156,55 @@ describe("sortCampaignRows", () => {
       "threshold",
       "notes",
     ]);
+  });
+
+  it("orders priority by urgency, not by the label's spelling", () => {
+    // "Alta" < "Baja" < "Media" as strings, which would put the middle level
+    // at the bottom. The rank is the meaning; the label is how it is spelled.
+    const rows = [
+      row({ id: 1, priority: "low", displayName: "a" }),
+      row({ id: 2, priority: "high", displayName: "b" }),
+      row({ id: 3, priority: "medium", displayName: "c" }),
+    ];
+    expect(sortCampaignRows(rows, "priority", "asc").map((r) => r.id)).toEqual([2, 3, 1]);
+    expect(sortCampaignRows(rows, "priority", "desc").map((r) => r.id)).toEqual([1, 3, 2]);
+  });
+
+  it("breaks priority ties alphabetically, in BOTH directions", () => {
+    // Three levels over dozens of species means the tiebreaker does most of
+    // the visible ordering. Names read A-Z inside each band whichever way the
+    // bands run — reversing them too would make an alphabetical scan of a
+    // band depend on the sort direction of a different column's worth of data.
+    const rows = [
+      row({ id: 1, priority: "high", displayName: "Tucán" }),
+      row({ id: 2, priority: "high", displayName: "Búho" }),
+      row({ id: 3, priority: "high", displayName: "Manakín" }),
+    ];
+    const names = (dir: "asc" | "desc") =>
+      sortCampaignRows(rows, "priority", dir).map((r) => r.displayName);
+    expect(names("asc")).toEqual(["Búho", "Manakín", "Tucán"]);
+    expect(names("desc")).toEqual(["Búho", "Manakín", "Tucán"]);
+  });
+
+  it("sorts an unrecognised priority after every known level", () => {
+    // A level the schema gained but labels.ts has not must not tie with `high`
+    // at rank 0 and jump the queue.
+    // Cast because the union is the point of the test: the value comes from a
+    // database column whose CHECK constraint TypeScript cannot see, so a row
+    // outside the union is exactly what the fallback exists to order.
+    const rows = [
+      row({ id: 1, priority: "urgentísima" as CampaignRow["priority"] }),
+      row({ id: 2, priority: "low" }),
+      row({ id: 3, priority: "high" }),
+    ];
+    expect(sortCampaignRows(rows, "priority", "asc").map((r) => r.id)).toEqual([3, 2, 1]);
+  });
+
+  it("defaults the table to priority order", () => {
+    // The question a reader arrives with is "which species next"; "where is
+    // Ramphastos" is the search box's job.
+    expect(DEFAULT_SORT_COLUMN).toBe("priority");
+    expect(SORTABLE_COLUMNS).toContain(DEFAULT_SORT_COLUMN);
   });
 
   it("sorts by notes and keeps the ones without a note last in both directions", () => {
@@ -190,28 +242,28 @@ describe("filterCampaignRows", () => {
   const ids = (out: CampaignRow[]) => out.map((r) => r.id);
 
   it("hides discarded species by default", () => {
-    expect(ids(filterCampaignRows(rows, { search: "", status: "activas" }))).toEqual([
+    expect(ids(filterCampaignRows(rows, { search: "", status: "activas", priority: "todas" }))).toEqual([
       1, 2, 4,
     ]);
   });
 
   it("shows everything on 'todas'", () => {
-    expect(ids(filterCampaignRows(rows, { search: "", status: "todas" }))).toEqual([
+    expect(ids(filterCampaignRows(rows, { search: "", status: "todas", priority: "todas" }))).toEqual([
       1, 2, 3, 4,
     ]);
   });
 
   it("narrows to a single stage", () => {
-    expect(ids(filterCampaignRows(rows, { search: "", status: "draft" }))).toEqual([2]);
-    expect(ids(filterCampaignRows(rows, { search: "", status: "abandoned" }))).toEqual([3]);
+    expect(ids(filterCampaignRows(rows, { search: "", status: "draft", priority: "todas" }))).toEqual([2]);
+    expect(ids(filterCampaignRows(rows, { search: "", status: "abandoned", priority: "todas" }))).toEqual([3]);
   });
 
   it("matches a scientific name", () => {
-    expect(ids(filterCampaignRows(rows, { search: "Ramphastos", status: "todas" }))).toEqual([1]);
+    expect(ids(filterCampaignRows(rows, { search: "Ramphastos", status: "todas", priority: "todas" }))).toEqual([1]);
   });
 
   it("matches a display name", () => {
-    expect(ids(filterCampaignRows(rows, { search: "Chachalaca", status: "todas" }))).toEqual([3]);
+    expect(ids(filterCampaignRows(rows, { search: "Chachalaca", status: "todas", priority: "todas" }))).toEqual([3]);
   });
 
   it("matches the notes, which is how the imported CHECK flag is found", () => {
@@ -220,45 +272,74 @@ describe("filterCampaignRows", () => {
       row({ id: 2, species: "Bbb bbb", displayName: "Bbb", notes: "confirmada" }),
       row({ id: 3, species: "Ccc ccc", displayName: "Ccc", notes: null }),
     ];
-    expect(ids(filterCampaignRows(annotated, { search: "check", status: "todas" }))).toEqual([1]);
+    expect(ids(filterCampaignRows(annotated, { search: "check", status: "todas", priority: "todas" }))).toEqual([1]);
   });
 
   it("matches case- and diacritic-insensitively", () => {
     // Same normalisation the picker and the bulk importer use, so all three
     // agree on what counts as the same name.
-    expect(ids(filterCampaignRows(rows, { search: "buho", status: "todas" }))).toEqual([2]);
-    expect(ids(filterCampaignRows(rows, { search: "TUCAN", status: "todas" }))).toEqual([1]);
-    expect(ids(filterCampaignRows(rows, { search: "ocraceo", status: "todas" }))).toEqual([4]);
+    expect(ids(filterCampaignRows(rows, { search: "buho", status: "todas", priority: "todas" }))).toEqual([2]);
+    expect(ids(filterCampaignRows(rows, { search: "TUCAN", status: "todas", priority: "todas" }))).toEqual([1]);
+    expect(ids(filterCampaignRows(rows, { search: "ocraceo", status: "todas", priority: "todas" }))).toEqual([4]);
   });
 
   it("matches on a substring, not just a prefix", () => {
-    expect(ids(filterCampaignRows(rows, { search: "ambiguus", status: "todas" }))).toEqual([1]);
+    expect(ids(filterCampaignRows(rows, { search: "ambiguus", status: "todas", priority: "todas" }))).toEqual([1]);
   });
 
   it("returns every row for an empty search", () => {
-    expect(filterCampaignRows(rows, { search: "", status: "todas" })).toHaveLength(4);
-    expect(filterCampaignRows(rows, { search: "   ", status: "todas" })).toHaveLength(4);
+    expect(filterCampaignRows(rows, { search: "", status: "todas", priority: "todas" })).toHaveLength(4);
+    expect(filterCampaignRows(rows, { search: "   ", status: "todas", priority: "todas" })).toHaveLength(4);
   });
 
   it("applies stage and search together", () => {
     // A name that matches but whose stage is excluded must not appear.
-    expect(ids(filterCampaignRows(rows, { search: "Chachalaca", status: "activas" }))).toEqual([]);
+    expect(ids(filterCampaignRows(rows, { search: "Chachalaca", status: "activas", priority: "todas" }))).toEqual([]);
+  });
+
+  it("narrows to a single priority level", () => {
+    const ranked = [
+      row({ id: 1, priority: "high" }),
+      row({ id: 2, priority: "medium" }),
+      row({ id: 3, priority: "low" }),
+    ];
+    expect(ids(filterCampaignRows(ranked, { search: "", status: "todas", priority: "high" }))).toEqual([1]);
+    expect(ids(filterCampaignRows(ranked, { search: "", status: "todas", priority: "low" }))).toEqual([3]);
+  });
+
+  it("shows every level on 'todas'", () => {
+    // No "activas" equivalent for priority: every species has exactly one of
+    // three levels and none of them means "not being worked on".
+    const ranked = [row({ id: 1, priority: "high" }), row({ id: 2, priority: "low" })];
+    expect(ids(filterCampaignRows(ranked, { search: "", status: "todas", priority: "todas" }))).toEqual([1, 2]);
+  });
+
+  it("applies priority, stage and search together", () => {
+    const ranked = [
+      row({ id: 1, displayName: "Tucán", status: "reviewing", priority: "high" }),
+      row({ id: 2, displayName: "Tucán menor", status: "abandoned", priority: "high" }),
+      row({ id: 3, displayName: "Búho", status: "reviewing", priority: "high" }),
+      row({ id: 4, displayName: "Tucán andino", status: "reviewing", priority: "low" }),
+    ];
+    expect(
+      ids(filterCampaignRows(ranked, { search: "tucan", status: "activas", priority: "high" }))
+    ).toEqual([1]);
   });
 
   it("returns nothing when nothing matches", () => {
-    expect(filterCampaignRows(rows, { search: "zzz", status: "todas" })).toEqual([]);
+    expect(filterCampaignRows(rows, { search: "zzz", status: "todas", priority: "todas" })).toEqual([]);
   });
 
   it("does not mutate the input array", () => {
     const input = [...rows];
-    filterCampaignRows(input, { search: "buho", status: "activas" });
+    filterCampaignRows(input, { search: "buho", status: "activas", priority: "todas" });
     expect(input).toHaveLength(4);
   });
 
   it("composes with sorting without either reordering the other", () => {
     // Filter-then-sort must give the same order as sorting the pre-filtered
     // set, or the table's order would depend on which ran first.
-    const filter = { search: "", status: "activas" as const };
+    const filter = { search: "", status: "activas" as const, priority: "todas" };
     const filterThenSort = sortCampaignRows(
       filterCampaignRows(rows, filter),
       "species",

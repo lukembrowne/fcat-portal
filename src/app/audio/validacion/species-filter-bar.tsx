@@ -17,9 +17,10 @@ import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useTransition } from "react";
 import { Loader2, Search } from "lucide-react";
 
-import { STAGE_FILTERS } from "./labels";
+import { PRIORITY_FILTERS, STAGE_FILTERS } from "./labels";
 
 const DEFAULT_STAGE = "activas";
+const DEFAULT_PRIORITY = "todas";
 
 export function SpeciesFilterBar({ shown, total }: { shown: number; total: number }) {
   const router = useRouter();
@@ -53,6 +54,7 @@ export function SpeciesFilterBar({ shown, total }: { shown: number; total: numbe
   }
 
   const stage = params.get("status") ?? DEFAULT_STAGE;
+  const priority = params.get("priority") ?? DEFAULT_PRIORITY;
 
   return (
     <form
@@ -80,6 +82,29 @@ export function SpeciesFilterBar({ shown, total }: { shown: number; total: numbe
         className="rounded-md border px-2 py-1.5 text-sm"
       >
         {STAGE_FILTERS.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+
+      {/* Beside the stage filter rather than replacing it: the two answer
+          different questions ("what is left to do on this species" vs. "which
+          species is worth doing"), and narrowing to Alta + En curso is exactly
+          how a reviewer's next batch gets chosen. */}
+      <select
+        name="priority"
+        value={priority}
+        onChange={(e) => {
+          const next = e.target.value;
+          commit((sp) => {
+            if (next && next !== DEFAULT_PRIORITY) sp.set("priority", next);
+            else sp.delete("priority");
+          });
+        }}
+        className="rounded-md border px-2 py-1.5 text-sm"
+      >
+        {PRIORITY_FILTERS.map((o) => (
           <option key={o.value} value={o.value}>
             {o.label}
           </option>

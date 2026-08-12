@@ -67,6 +67,31 @@ export type CampaignStatus =
   | "abandoned";
 
 /**
+ * How urgently a species wants reviewing, set by hand.
+ *
+ * Orthogonal to `CampaignStatus`, which says where a species IS. This says
+ * which one a reviewer should pick up next — the scarce resource in this module
+ * is expert listening time, ~200 clips per species, and with dozens of species
+ * in the list nothing else in the row answers that question. The notes field
+ * carries the *reason* a species is worth validating, but it is free text: the
+ * taxonomist's "CHECK" only surfaces for a reader who already knows to type it.
+ *
+ * `medium` is the default, and it means "not singled out" rather than "middling
+ * importance". Every species added before this field existed is medium, so the
+ * column reads as a deviation from the baseline in either direction rather than
+ * as an assessment nobody actually made.
+ *
+ * Keep in sync with the CHECK constraint in scripts/push-schema.mjs — Drizzle's
+ * enum is TypeScript-only and will not reject a bad value.
+ */
+export type CampaignPriority = "high" | "medium" | "low";
+
+/** In descending urgency, which is the order the species table defaults to. */
+export const CAMPAIGN_PRIORITIES = ["high", "medium", "low"] as const;
+
+export const DEFAULT_CAMPAIGN_PRIORITY: CampaignPriority = "medium";
+
+/**
  * Why a fit produced no usable threshold. These are the common case, not edge
  * cases: most species BirdNET reports have no true positives at any score.
  */

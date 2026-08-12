@@ -51,11 +51,14 @@ import {
   summarizeEligible,
 } from "@/lib/birdnet-validation/fit-eligibility";
 import {
+  CAMPAIGN_PRIORITIES,
   DEFAULT_BIN_COUNT,
+  DEFAULT_CAMPAIGN_PRIORITY,
   DEFAULT_TARGET_SAMPLE_SIZE,
   FIT_ELIGIBILITY_REASON_ES,
   MIN_REVIEWS_FOR_FIT,
   SCORE_FLOOR,
+  type CampaignPriority,
   type CampaignStatus,
   type FitEligibilityReason,
   type ReviewOutcome,
@@ -100,6 +103,8 @@ export interface CampaignSummary {
   id: number;
   species: string;
   status: CampaignStatus;
+  /** Which species to review next; `medium` for everything not singled out. */
+  priority: CampaignPriority;
   targetSampleSize: number;
   binCount: number;
   abandonedReason: string | null;
@@ -152,6 +157,17 @@ function errorResult(error: unknown, fallback: string): ActionResult<never> {
   };
 }
 
+/**
+ * Is this one of the three levels the column's CHECK constraint accepts?
+ *
+ * Guards every write path. The alternative is letting SQLite reject it, which
+ * surfaces as `SQLITE_CONSTRAINT_CHECK` — accurate, unreadable, and in Spanish
+ * nowhere.
+ */
+function isCampaignPriority(value: unknown): value is CampaignPriority {
+  return CAMPAIGN_PRIORITIES.includes(value as CampaignPriority);
+}
+
 async function loadCampaign(campaignId: number) {
   const [campaign] = await db
     .select()
@@ -183,6 +199,8 @@ export async function createCampaign(input: {
   binCount?: number;
   /** Free-text field notes; blank and whitespace-only collapse to null. */
   notes?: string | null;
+  /** Review urgency; omitted means the unmarked default. */
+  priority?: CampaignPriority;
 }): Promise<
   ActionResult<{ campaignId: number; drawn: number; drawError: string | null }>
 > {
@@ -224,6 +242,13 @@ export async function createCampaign(input: {
         species,
         ctProjectId,
         notes: input.notes?.trim() || null,
+        // Validated rather than passed through, and written explicitly rather
+        // than left to the column default: the CHECK constraint would raise
+        // SQLITE_CONSTRAINT_CHECK on a bad value, reaching the caller as an
+        // opaque failure after every readable pre-check above had passed.
+        priority: isCampaignPriority(input.priority)
+          ? input.priority
+          : DEFAULT_CAMPAIGN_PRIORITY,
         targetSampleSize: input.targetSampleSize ?? DEFAULT_TARGET_SAMPLE_SIZE,
         binCount: input.binCount ?? DEFAULT_BIN_COUNT,
         seed: Math.floor(Math.random() * HASH_MODULUS),
@@ -326,6 +351,47 @@ export async function updateCampaignNotes(
     return { success: true, data: undefined };
   } catch (error) {
     return errorResult(error, "Error al guardar las notas");
+  }
+}
+
+/**
+ * Set which species a reviewer should pick up next.
+ *
+ * Editable at every stage, including `applied` and `abandoned`: priority is a
+ * statement about the queue, not about the species, and a discarded species
+ * that gets restored should come back with the urgency it was given rather
+ * than reset to the baseline.
+ *
+ * Deliberately NOT audited through `recordEvent`. It is a scheduling
+ * annotation somebody will flip several times in one sitting while triaging a
+ * list, which is exactly the high-frequency case the instrumentation
+ * convention says to keep out of the event log. Applying a threshold — the
+ * action that changes what the portal reports — is audited.
+ */
+export async function updateCampaignPriority(
+  campaignId: number,
+  priority: string
+): Promise<ActionResult> {
+  await requirePermission("grabaciones", "editor");
+
+  try {
+    if (!isCampaignPriority(priority)) {
+      return { success: false, error: "Prioridad no válida" };
+    }
+
+    const campaign = await loadCampaign(campaignId);
+    if (!campaign) return { success: false, error: "Especie no encontrada" };
+
+    await db
+      .update(birdnetValidationCampaigns)
+      .set({ priority })
+      .where(eq(birdnetValidationCampaigns.id, campaignId));
+
+    revalidatePath("/audio/validacion");
+    revalidatePath(`/audio/validacion/${speciesSlug(campaign.species)}`);
+    return { success: true, data: undefined };
+  } catch (error) {
+    return errorResult(error, "Error al guardar la prioridad");
   }
 }
 
@@ -833,6 +899,7 @@ export async function getCampaignProgress(
         id: campaign.id,
         species: campaign.species,
         status: campaign.status as CampaignStatus,
+        priority: campaign.priority as CampaignPriority,
         targetSampleSize: campaign.targetSampleSize,
         binCount: campaign.binCount,
         abandonedReason: campaign.abandonedReason,
@@ -873,6 +940,7 @@ export async function listCampaigns(): Promise<ActionResult<CampaignSummary[]>> 
         id: birdnetValidationCampaigns.id,
         species: birdnetValidationCampaigns.species,
         status: birdnetValidationCampaigns.status,
+        priority: birdnetValidationCampaigns.priority,
         targetSampleSize: birdnetValidationCampaigns.targetSampleSize,
         binCount: birdnetValidationCampaigns.binCount,
         abandonedReason: birdnetValidationCampaigns.abandonedReason,
@@ -902,6 +970,7 @@ export async function listCampaigns(): Promise<ActionResult<CampaignSummary[]>> 
       data: rows.map((r) => ({
         ...r,
         status: r.status as CampaignStatus,
+        priority: r.priority as CampaignPriority,
         sampled: Number(r.sampled),
         reviewerCount: Number(r.reviewerCount),
         reviewed: Number(r.reviewed),

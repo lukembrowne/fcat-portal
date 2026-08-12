@@ -1364,6 +1364,15 @@ export const birdnetValidationCampaigns = sqliteTable(
     })
       .notNull()
       .default("draft"),
+    // Which species a reviewer should pick up next. Orthogonal to `status`,
+    // which says where a species is rather than whether it is worth the next
+    // 200 clips of somebody's listening. `medium` is the unmarked baseline —
+    // every row predating this column has it — so the field reads as a
+    // deliberate deviation in either direction. Keep in sync with the CHECK
+    // constraint in scripts/push-schema.mjs.
+    priority: text("priority", { enum: ["high", "medium", "low"] })
+      .notNull()
+      .default("medium"),
     targetSampleSize: integer("target_sample_size").notNull().default(200),
     // 9 gives clean 0.1-wide deciles over [0.1, 1.0]. Keep in sync with
     // DEFAULT_BIN_COUNT in src/lib/birdnet-validation/types.ts (not imported:

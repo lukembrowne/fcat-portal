@@ -3,8 +3,9 @@ import { Headphones, Settings2 } from "lucide-react";
 
 import { SortIcon } from "@/components/sort-icon";
 import { speciesSlug } from "@/lib/species-slug";
-import { rowAction, stageLabel } from "./labels";
+import { priorityRank, rowAction, stageLabel } from "./labels";
 import { NotesCell } from "./notes-cell";
+import { PriorityCell } from "./priority-cell";
 import { normalizeSpeciesName } from "./species-import";
 import { SpeciesRowActions } from "./species-row-actions";
 import { StageTag } from "./stage-tag";
@@ -20,6 +21,7 @@ import type { CampaignSummary } from "./actions";
  * the `SORTABLE_COLUMNS.includes(...)` guard on the page.
  */
 export const SORTABLE_COLUMNS = [
+  "priority",
   "species",
   "status",
   "progress",
@@ -31,6 +33,16 @@ export const SORTABLE_COLUMNS = [
 
 export type SortColumn = (typeof SORTABLE_COLUMNS)[number];
 export type SortDirection = "asc" | "desc";
+
+/**
+ * The column the table sorts by when the URL says nothing.
+ *
+ * Priority, not species name. The list runs to dozens of species and the
+ * question a reader arrives with is "which one next", not "where is
+ * Ramphastos" — that one is answered by the search box. Alphabetical order is
+ * still one click away, and a bookmark carrying `?sortBy=species` is unaffected.
+ */
+export const DEFAULT_SORT_COLUMN: SortColumn = "priority";
 
 export interface CampaignRow extends CampaignSummary {
   displayName: string;
@@ -57,6 +69,8 @@ export interface CampaignFilter {
   search: string;
   /** A CampaignStatus, "todas", or "activas" (everything but abandoned). */
   status: string;
+  /** A CampaignPriority, or "todas". */
+  priority: string;
 }
 
 /**
@@ -79,6 +93,7 @@ export function filterCampaignRows(
 ): CampaignRow[] {
   const q = normalizeSpeciesName(filter.search ?? "");
   const status = filter.status || "activas";
+  const priority = filter.priority || "todas";
 
   return rows.filter((row) => {
     if (status === "activas") {
@@ -86,6 +101,11 @@ export function filterCampaignRows(
     } else if (status !== "todas" && row.status !== status) {
       return false;
     }
+
+    // No "activas" equivalent: every species has exactly one of three levels
+    // and none of them means "not being worked on", so there is nothing for a
+    // default narrowing to hide.
+    if (priority !== "todas" && row.priority !== priority) return false;
 
     if (!q) return true;
     return (
@@ -113,6 +133,10 @@ export function sortCampaignRows(
 
   const value = (row: CampaignRow): string | number | null => {
     switch (column) {
+      case "priority":
+        // The RANK, never the label: "Alta" < "Baja" < "Media" as strings puts
+        // the middle level at the bottom of the list.
+        return priorityRank(row.priority);
       case "species":
         return row.displayName.toLowerCase();
       case "status":
@@ -137,16 +161,34 @@ export function sortCampaignRows(
     }
   };
 
+  /**
+   * Stable tiebreaker, so equal values cannot interleave between renders.
+   *
+   * Alphabetical BEFORE id when sorting by priority, because that column has
+   * only three distinct values across the whole list: the tiebreaker is what a
+   * reader actually sees doing the ordering, and creation order inside a band
+   * of twenty species looks like no order at all. Deliberately not inverted by
+   * `sign` — names read A-Z inside each band whichever way the bands run.
+   */
+  const tiebreak = (a: CampaignRow, b: CampaignRow): number => {
+    if (column === "priority") {
+      const na = a.displayName.toLowerCase();
+      const nb = b.displayName.toLowerCase();
+      if (na < nb) return -1;
+      if (na > nb) return 1;
+    }
+    return a.id - b.id;
+  };
+
   return [...rows].sort((a, b) => {
     const va = value(a);
     const vb = value(b);
-    if (va === null && vb === null) return a.id - b.id;
+    if (va === null && vb === null) return tiebreak(a, b);
     if (va === null) return 1;
     if (vb === null) return -1;
     if (va < vb) return -sign;
     if (va > vb) return sign;
-    // Stable tiebreaker so pagination cannot interleave rows.
-    return a.id - b.id;
+    return tiebreak(a, b);
   });
 }
 
@@ -157,6 +199,8 @@ function SortableHeader({
   currentDir,
   align,
   filter,
+  first,
+  gutter,
 }: {
   column: SortColumn;
   label: string;
@@ -164,6 +208,10 @@ function SortableHeader({
   currentDir: SortDirection;
   align?: "right";
   filter: CampaignFilter;
+  /** Leftmost column: no indent, since there is nothing to its left to clear. */
+  first?: boolean;
+  /** Wider indent, where a right-aligned neighbour would otherwise touch. */
+  gutter?: boolean;
 }) {
   const isActive = currentSort === column;
   const nextDir = isActive && currentDir === "asc" ? "desc" : "asc";
@@ -172,15 +220,18 @@ function SortableHeader({
   // reader is looking at.
   if (filter.search) query.set("search", filter.search);
   if (filter.status && filter.status !== "activas") query.set("status", filter.status);
+  if (filter.priority && filter.priority !== "todas") {
+    query.set("priority", filter.priority);
+  }
 
-  // Every header but the first is indented, and none of them wrap. With eight
+  // Every header but the first is indented, and none of them wrap. With nine
   // columns the table sits at its natural width, so the browser has no slack
   // left to distribute: without the padding "Revisadas" and "Revisores" touch,
   // and without the nowrap "Umbral 95%" breaks across two lines and runs into
   // the header beside it.
   return (
     <th
-      className={`whitespace-nowrap py-1.5 ${column === "species" ? "" : "pl-2"} ${
+      className={`whitespace-nowrap py-1.5 ${first ? "" : gutter ? "pl-6" : "pl-2"} ${
         align === "right" ? "text-right" : "text-left"
       }`}
     >
@@ -212,8 +263,9 @@ export function CampaignTable({
   /** Rows before filtering, so an empty table can say why it is empty. */
   totalRows: number;
   /**
-   * Editor or above on `grabaciones`. Only gates the notes cell's edit
-   * affordance — `updateCampaignNotes` enforces the same permission itself.
+   * Editor or above on `grabaciones`. Only gates the edit affordances on the
+   * notes and priority cells — `updateCampaignNotes` and
+   * `updateCampaignPriority` each enforce the same permission themselves.
    */
   canEdit: boolean;
 }) {
@@ -228,9 +280,14 @@ export function CampaignTable({
   }
 
   return (
-    <table className="w-full min-w-[54rem] text-sm">
+    <table className="w-full min-w-[58rem] text-sm">
       <thead>
         <tr className="border-b text-xs text-muted-foreground">
+          {/* First column, and the default sort. It answers "which species
+              next", which is the question a reader arrives with; the species
+              name answers "where is this one", which the search box does
+              better. */}
+          <SortableHeader column="priority" label="Prioridad" currentSort={sortBy} currentDir={sortDir} filter={filter} first />
           <SortableHeader column="species" label="Especie" currentSort={sortBy} currentDir={sortDir} filter={filter} />
           <SortableHeader column="status" label="Estado" currentSort={sortBy} currentDir={sortDir} filter={filter} />
           <SortableHeader column="progress" label="Revisadas" currentSort={sortBy} currentDir={sortDir} align="right" filter={filter} />
@@ -239,8 +296,13 @@ export function CampaignTable({
           <SortableHeader column="threshold" label="Umbral 95%" currentSort={sortBy} currentDir={sortDir} align="right" filter={filter} />
           {/* Last before the actions, so the numeric block stays contiguous:
               a free-text column between the counts pushes them apart and
-              costs more to read than the notes gain. */}
-          <SortableHeader column="notes" label="Notas" currentSort={sortBy} currentDir={sortDir} filter={filter} />
+              costs more to read than the notes gain.
+
+              A wider gutter than every other column, because it is the one
+              boundary between a right-aligned number and left-aligned prose:
+              at pl-2 an em-dash in Umbral 95% sits flush against the first
+              word of the note and the two read as one cell. */}
+          <SortableHeader column="notes" label="Notas" currentSort={sortBy} currentDir={sortDir} filter={filter} gutter />
           {/* Not sortable — it holds an action, not an orderable value. */}
           <th className="whitespace-nowrap py-1.5 pl-2 text-right">Acción</th>
         </tr>
@@ -251,7 +313,18 @@ export function CampaignTable({
           const action = rowAction(row.sampled);
           return (
             <tr key={row.id} className="border-b last:border-0 hover:bg-muted/50">
+              {/* Editable in place, for the same reason the notes are: the
+                  reader who decides a species should jump the queue is looking
+                  at the list, not at that species' page. */}
               <td className="py-1.5">
+                <PriorityCell
+                  campaignId={row.id}
+                  displayName={row.displayName}
+                  priority={row.priority}
+                  canEdit={canEdit}
+                />
+              </td>
+              <td className="py-1.5 pl-2">
                 <Link
                   href={`/audio/validacion/${speciesSlug(row.species)}`}
                   title="Progreso, umbral y ajustes de esta especie"
@@ -330,7 +403,7 @@ export function CampaignTable({
                   notes-cell.tsx carries the reasoning for each of those. The
                   width cap is what keeps it to one line; the filter box
                   searches the note, and the species page shows it in full. */}
-              <td className="max-w-[10rem] py-1.5 pl-2">
+              <td className="max-w-[16rem] py-1.5 pl-6">
                 <NotesCell
                   campaignId={row.id}
                   displayName={row.displayName}

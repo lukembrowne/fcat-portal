@@ -593,6 +593,8 @@ const statements = [
     ct_project_id INTEGER REFERENCES ct_projects(id) ON DELETE SET NULL,
     status TEXT NOT NULL DEFAULT 'draft'
       CHECK(status IN ('draft','sampled','reviewing','fitted','unusable','applied','abandoned')),
+    priority TEXT NOT NULL DEFAULT 'medium'
+      CHECK(priority IN ('high','medium','low')),
     target_sample_size INTEGER NOT NULL DEFAULT 200,
     bin_count INTEGER NOT NULL DEFAULT 9,
     seed INTEGER NOT NULL,
@@ -1274,6 +1276,17 @@ const migrations = [
   `ALTER TABLE grants ADD COLUMN funding_entity TEXT CHECK(funding_entity IN ('fcat_ecuador','fcat_usa'))`,
   `ALTER TABLE grants ADD COLUMN start_date INTEGER`,
   `ALTER TABLE grants ADD COLUMN end_date INTEGER`,
+
+  // Which species under BirdNET threshold validation a reviewer should pick up
+  // next (2026-08-12). Orthogonal to `status`: expert listening is the scarce
+  // resource, ~200 clips per species, and nothing else in the row said which
+  // species is worth the next batch of it.
+  //
+  // NOT NULL with a constant default is legal on ADD COLUMN (the SQLite
+  // restrictions are PRIMARY KEY / UNIQUE and non-constant defaults) — see
+  // site_share_tokens.view_count above. Every existing row therefore migrates
+  // to 'medium', which is the intended reading: unmarked, not middling.
+  `ALTER TABLE birdnet_validation_campaigns ADD COLUMN priority TEXT NOT NULL DEFAULT 'medium' CHECK(priority IN ('high','medium','low'))`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }

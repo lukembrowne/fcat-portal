@@ -13,7 +13,11 @@
  * reintroduces the retired word.
  */
 
-import type { CampaignStatus } from "@/lib/birdnet-validation/types";
+import {
+  CAMPAIGN_PRIORITIES,
+  type CampaignPriority,
+  type CampaignStatus,
+} from "@/lib/birdnet-validation/types";
 
 /** Short stage name, for table cells and headers. */
 export const STAGE_LABEL: Record<CampaignStatus, string> = {
@@ -111,6 +115,89 @@ export const STAGE_FILTERS = [
 export function stageHint(status: string): string | null {
   return STAGE_HINT[status as CampaignStatus] ?? null;
 }
+
+// ---------------------------------------------------------------------------
+// Priority
+// ---------------------------------------------------------------------------
+
+/** Short priority name, for the table cell and its editor. */
+export const PRIORITY_LABEL: Record<CampaignPriority, string> = {
+  high: "Alta",
+  medium: "Media",
+  low: "Baja",
+};
+
+/**
+ * One line saying what the level means, so "Media" is not read as a judgement
+ * nobody made. Shown on the cell's tooltip and beside the editor.
+ */
+export const PRIORITY_HINT: Record<CampaignPriority, string> = {
+  high: "Revisar antes que las demás.",
+  medium: "Sin marcar: el nivel por defecto de toda especie añadida.",
+  low: "Puede esperar; se revisará cuando no quede nada por encima.",
+};
+
+/**
+ * Tailwind tone per priority.
+ *
+ * A single ramp of ATTENTION, not three categorical colours, because that is
+ * what the levels are — and deliberately in hues the stage pill beside it does
+ * not use, so two coloured pills in adjacent columns cannot be read as one
+ * scale. Stage owns amber, sky, blue, violet, stone, emerald and rose.
+ *
+ * `low` is the faded one rather than a second alarm: a deprioritised species
+ * should recede from the list, which is the whole point of marking it.
+ */
+export const PRIORITY_TONE: Record<CampaignPriority, string> = {
+  high: "border-orange-300 bg-orange-100 text-orange-900",
+  medium: "border-slate-200 bg-slate-50 text-slate-600",
+  low: "border-dashed border-slate-200 bg-transparent text-slate-400",
+};
+
+/**
+ * Sort rank, ascending = most urgent first.
+ *
+ * Numeric rather than alphabetical on the label: "Alta" < "Baja" < "Media" as
+ * strings, which orders the list high, low, medium — the middle level at the
+ * bottom. The rank is the meaning; the label is just how it is spelled.
+ */
+export const PRIORITY_RANK: Record<CampaignPriority, number> = {
+  high: 0,
+  medium: 1,
+  low: 2,
+};
+
+export function priorityLabel(priority: string): string {
+  return PRIORITY_LABEL[priority as CampaignPriority] ?? priority;
+}
+
+/**
+ * Fallback tone for a priority level the schema gained but this file has not.
+ * Its own constant, not a reuse of `PRIORITY_TONE.high` — an unrecognised level
+ * is not known to be urgent and must not shout.
+ */
+const UNKNOWN_PRIORITY_TONE = "border-zinc-200 bg-zinc-50 text-zinc-600";
+
+export function priorityTone(priority: string): string {
+  return PRIORITY_TONE[priority as CampaignPriority] ?? UNKNOWN_PRIORITY_TONE;
+}
+
+/**
+ * Unknown levels sort AFTER every known one rather than tying with `high` at 0,
+ * which is what a missing map entry would otherwise do.
+ */
+export function priorityRank(priority: string): number {
+  return PRIORITY_RANK[priority as CampaignPriority] ?? CAMPAIGN_PRIORITIES.length;
+}
+
+/** Options for the priority filter, most urgent first after the escape hatch. */
+export const PRIORITY_FILTERS = [
+  { value: "todas", label: "Toda prioridad" },
+  ...CAMPAIGN_PRIORITIES.map((p) => ({
+    value: p,
+    label: `Prioridad ${PRIORITY_LABEL[p].toLowerCase()}`,
+  })),
+] as const;
 
 /** Icon identifiers the table resolves to components on the client. */
 export type RowActionIcon = "headphones" | "settings";

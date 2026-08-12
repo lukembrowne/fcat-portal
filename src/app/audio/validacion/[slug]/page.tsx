@@ -29,6 +29,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { xenoCantoUrl } from "@/lib/xeno-canto";
 import { stageHint } from "@/app/audio/validacion/labels";
 import { StageTag } from "@/app/audio/validacion/stage-tag";
+import { PriorityCell } from "@/app/audio/validacion/priority-cell";
 import { NameLanguageToggle } from "@/app/audio/validacion/name-language-toggle";
 import {
   NAME_LANG_COOKIE,
@@ -227,8 +228,17 @@ export default async function SpeciesValidationPage({
           </a>
         </p>
         {/* Stage, its reason and its hint share one line: three stacked
-            one-line paragraphs pushed the actions below the fold. */}
+            one-line paragraphs pushed the actions below the fold.
+            Priority leads, and is editable here as well as in the table: this
+            is the page somebody lands on after reviewing a batch, which is
+            when they learn whether the species was worth prioritising. */}
         <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+          <PriorityCell
+            campaignId={campaign.id}
+            displayName={display.name}
+            priority={campaign.priority}
+            canEdit={canEdit}
+          />
           <StageTag status={campaign.status} />
           {campaign.abandonedReason ? (
             <span className="text-muted-foreground">{campaign.abandonedReason}</span>

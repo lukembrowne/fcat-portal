@@ -5,7 +5,13 @@ import { useRouter } from "next/navigation";
 import { Loader2, Plus } from "lucide-react";
 
 import { createCampaign } from "./actions";
-import { DEFAULT_TARGET_SAMPLE_SIZE } from "@/lib/birdnet-validation/types";
+import {
+  CAMPAIGN_PRIORITIES,
+  DEFAULT_CAMPAIGN_PRIORITY,
+  DEFAULT_TARGET_SAMPLE_SIZE,
+  type CampaignPriority,
+} from "@/lib/birdnet-validation/types";
+import { PRIORITY_LABEL } from "./labels";
 import { SpeciesPicker, useSpeciesCatalog } from "./species-picker";
 
 export function AddSpeciesPanel() {
@@ -13,6 +19,7 @@ export function AddSpeciesPanel() {
   const [open, setOpen] = useState(false);
   const [species, setSpecies] = useState<string | null>(null);
   const [notes, setNotes] = useState("");
+  const [priority, setPriority] = useState<CampaignPriority>(DEFAULT_CAMPAIGN_PRIORITY);
   const [target, setTarget] = useState(DEFAULT_TARGET_SAMPLE_SIZE);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -27,7 +34,7 @@ export function AddSpeciesPanel() {
     }
     setSubmitting(true);
     setError(null);
-    void createCampaign({ species, targetSampleSize: target, notes })
+    void createCampaign({ species, targetSampleSize: target, notes, priority })
       .then((result) => {
         if (!result.success) {
           setError(result.error);
@@ -46,6 +53,7 @@ export function AddSpeciesPanel() {
         setOpen(false);
         setSpecies(null);
         setNotes("");
+        setPriority(DEFAULT_CAMPAIGN_PRIORITY);
         startTransition(() => router.refresh());
       })
       .finally(() => setSubmitting(false));
@@ -103,6 +111,25 @@ export function AddSpeciesPanel() {
         otra especie, lo que haga falta. Se ve en la lista y se puede editar
         después.
       </p>
+
+      {/* Settable here as well as in the table, because the moment somebody
+          adds a species is the moment they know whether it jumps the queue —
+          coming back to the row afterwards to say so is a step that gets
+          skipped. Defaults to Media, which is what every unmarked species is. */}
+      <label className="block max-w-[12rem] text-sm">
+        Prioridad de revisión
+        <select
+          value={priority}
+          onChange={(e) => setPriority(e.target.value as CampaignPriority)}
+          className="mt-1 w-full rounded border bg-background px-2 py-1 text-sm"
+        >
+          {CAMPAIGN_PRIORITIES.map((p) => (
+            <option key={p} value={p}>
+              {PRIORITY_LABEL[p]}
+            </option>
+          ))}
+        </select>
+      </label>
 
       <label className="block max-w-[12rem] text-sm">
         Tamaño de muestra

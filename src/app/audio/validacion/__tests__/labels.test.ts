@@ -5,6 +5,14 @@ import {
   STAGE_HINT,
   STAGE_TONE,
   STAGE_FILTERS,
+  PRIORITY_LABEL,
+  PRIORITY_HINT,
+  PRIORITY_TONE,
+  PRIORITY_RANK,
+  PRIORITY_FILTERS,
+  priorityLabel,
+  priorityRank,
+  priorityTone,
   stageLabel,
   stageHint,
   stageTone,
@@ -123,6 +131,94 @@ describe("STAGE_FILTERS", () => {
       if (option.value === "activas" || option.value === "todas") continue;
       expect(option.label).toBe(stageLabel(option.value));
     }
+  });
+});
+
+/** Mirrors `CampaignPriority`, restated as data for the same reason as above. */
+const ALL_PRIORITIES = ["high", "medium", "low"] as const;
+
+describe("priority vocabulary", () => {
+  it("labels, explains and tones every level the schema can produce", () => {
+    for (const map of [PRIORITY_LABEL, PRIORITY_HINT, PRIORITY_TONE]) {
+      for (const priority of ALL_PRIORITIES) {
+        expect(map[priority], `missing entry for ${priority}`).toBeTruthy();
+      }
+      expect(Object.keys(map).sort()).toEqual([...ALL_PRIORITIES].sort());
+    }
+  });
+
+  it("ranks the levels in descending urgency", () => {
+    expect(PRIORITY_RANK.high).toBeLessThan(PRIORITY_RANK.medium);
+    expect(PRIORITY_RANK.medium).toBeLessThan(PRIORITY_RANK.low);
+  });
+
+  it("sorts an unknown level after every known one", () => {
+    // A level added to the schema but not here must not tie with `high` at 0
+    // and silently jump the queue.
+    expect(priorityRank("urgentísima")).toBeGreaterThan(PRIORITY_RANK.low);
+  });
+
+  it("falls back to the raw value for an unknown level, without alarming", () => {
+    expect(priorityLabel("urgentísima")).toBe("urgentísima");
+    const fallback = priorityTone("urgentísima");
+    expect(fallback).toContain("border-");
+    expect(fallback).not.toBe(PRIORITY_TONE.high);
+  });
+
+  it("says explicitly that 'media' means unmarked", () => {
+    // Load-bearing: every species predating the column is medium, so reading
+    // it as an assessment somebody made would be reading a default as a
+    // decision.
+    expect(PRIORITY_HINT.medium.toLowerCase()).toContain("defecto");
+  });
+
+  it("uses no colour the stage pill beside it uses", () => {
+    // Two coloured pills in adjacent columns must not read as one scale.
+    const stageHues = ["amber", "sky", "blue", "violet", "stone", "emerald", "rose"];
+    for (const tone of Object.values(PRIORITY_TONE)) {
+      for (const hue of stageHues) {
+        expect(tone, `${tone} collides with a stage hue`).not.toContain(`${hue}-`);
+      }
+    }
+  });
+
+  it("marks only the top level for attention", () => {
+    // Low is the faded one, not a second alarm: a deprioritised species should
+    // recede from the list, which is the point of marking it.
+    expect(PRIORITY_TONE.high).toContain("orange-");
+    expect(PRIORITY_TONE.low).not.toContain("orange-");
+    expect(PRIORITY_TONE.medium).not.toContain("orange-");
+  });
+
+  it("never says 'campaña' or 'campaign'", () => {
+    for (const text of [
+      ...Object.values(PRIORITY_LABEL),
+      ...Object.values(PRIORITY_HINT),
+      ...PRIORITY_FILTERS.map((o) => o.label),
+    ]) {
+      expect(text.toLowerCase()).not.toContain("campañ");
+      expect(text.toLowerCase()).not.toContain("campaign");
+    }
+  });
+});
+
+describe("PRIORITY_FILTERS", () => {
+  it("defaults to showing every level", () => {
+    expect(PRIORITY_FILTERS[0].value).toBe("todas");
+  });
+
+  it("offers every individual level", () => {
+    const values = PRIORITY_FILTERS.map((o) => o.value);
+    for (const priority of ALL_PRIORITIES) {
+      expect(values, `missing filter for ${priority}`).toContain(priority);
+    }
+  });
+
+  it("lists the levels most urgent first", () => {
+    const ranks = PRIORITY_FILTERS.filter((o) => o.value !== "todas").map((o) =>
+      priorityRank(o.value)
+    );
+    expect(ranks).toEqual([...ranks].sort((a, b) => a - b));
   });
 });
 

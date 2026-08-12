@@ -507,6 +507,8 @@ const CAMERA_TRAP_DDL =
     ct_project_id INTEGER REFERENCES ct_projects(id) ON DELETE SET NULL,
     status TEXT NOT NULL DEFAULT 'draft'
       CHECK(status IN ('draft','sampled','reviewing','fitted','unusable','applied','abandoned')),
+    priority TEXT NOT NULL DEFAULT 'medium'
+      CHECK(priority IN ('high','medium','low')),
     target_sample_size INTEGER NOT NULL DEFAULT 200,
     bin_count INTEGER NOT NULL DEFAULT 9,
     seed INTEGER NOT NULL,

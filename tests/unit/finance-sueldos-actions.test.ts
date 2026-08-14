@@ -146,7 +146,7 @@ describe("createPerson", () => {
   it("creates the person and their salary for the given year", async () => {
     const { createPerson } = await actions();
     const res = await createPerson({
-      name: "Luis Carrasco",
+      name: "Mario Cevallos",
       role: "Director reserva",
       groupId: null,
       year: 2026,
@@ -166,7 +166,7 @@ describe("createPerson", () => {
   it("accepts a formatted currency string", async () => {
     const { createPerson } = await actions();
     await createPerson({
-      name: "Gregory Paladines",
+      name: "Esteban Palma",
       role: "FCATero",
       groupId: groupId("FCATeros"),
       year: 2026,
@@ -194,7 +194,7 @@ describe("createPerson", () => {
   it("reports a duplicate name as a sentence, not a constraint error", async () => {
     const { createPerson } = await actions();
     const input = {
-      name: "Karla Zambrano",
+      name: "Karla Vergara",
       role: null,
       groupId: null,
       year: 2026,
@@ -205,7 +205,7 @@ describe("createPerson", () => {
 
     expect(res.success).toBe(false);
     if (!res.success) {
-      expect(res.error).toContain("Karla Zambrano");
+      expect(res.error).toContain("Karla Vergara");
       expect(res.error).not.toContain("UNIQUE");
     }
   });
@@ -373,7 +373,7 @@ describe("allocations", () => {
       role: null,
       groupId: null,
       year: 2026,
-      annualCost: "35972.5",
+      annualCost: "35972.50",
     });
     await createFundingSource({
       name: "GIZ",
@@ -717,13 +717,13 @@ describe("system events", () => {
   it("records create and delete without ever naming a salary figure", async () => {
     const { createPerson, deletePerson } = await actions();
     await createPerson({
-      name: "Luis Carrasco",
+      name: "Mario Cevallos",
       role: null,
       groupId: null,
       year: 2026,
       annualCost: "66569.82",
     });
-    await deletePerson(personId("Luis Carrasco"));
+    await deletePerson(personId("Mario Cevallos"));
 
     expect(recordEventMock).toHaveBeenCalledTimes(2);
     for (const call of recordEventMock.mock.calls) {

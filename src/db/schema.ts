@@ -885,7 +885,7 @@ export const financeSueldosTotals = sqliteTable("finance_sueldos_totals", {
 // once, during import, where it is surfaced for a human to resolve.
 //
 // The old tables are intentionally left in place, unread, for one release as a
-// rollback path. See docs/plans/2026-08-03-002-feat-sueldos-in-portal-planning-plan.md.
+// rollback path (sueldos-in-portal planning migration).
 // ---------------------------------------------------------------------------
 
 /**

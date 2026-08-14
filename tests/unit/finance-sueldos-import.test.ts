@@ -169,7 +169,7 @@ const SALARIES = [
   {
     Person: "Pedro Almeida",
     "Figura en rol pagos": "Administrador restauracion",
-    "COSTO AL PROYECTO ANUAL": 35972.5,
+    "COSTO AL PROYECTO ANUAL": 35972.50,
   },
   {
     Person: "Lucia Mendez",
@@ -177,7 +177,7 @@ const SALARIES = [
     "COSTO AL PROYECTO ANUAL": 35397.08,
   },
   { Person: "Ramiro Nuñez", "Figura en rol pagos": "FCATero", "COSTO AL PROYECTO ANUAL": 16546.2 },
-  { Person: "Gregory Paladines", "Figura en rol pagos": "FCATero", "COSTO AL PROYECTO ANUAL": 17132.32 },
+  { Person: "Esteban Palma", "Figura en rol pagos": "FCATero", "COSTO AL PROYECTO ANUAL": 17132.32 },
   { Person: "FCATeros", "Figura en rol pagos": "", "COSTO AL PROYECTO ANUAL": 33678.52 },
 ];
 
@@ -411,7 +411,7 @@ describe("commitSueldosImport", () => {
     const change = pre.data.salaryChanges.find((c) => c.name === "Pedro Almeida");
     expect(change).toBeDefined();
     expect(change?.from).toBeCloseTo(99999, 2);
-    expect(change?.to).toBeCloseTo(35972.5, 2);
+    expect(change?.to).toBeCloseTo(35972.50, 2);
 
     await commitSueldosImport(fd(workbook(), RESOLVE));
     const after = raw
@@ -420,7 +420,7 @@ describe("commitSueldosImport", () => {
          WHERE person_id = (SELECT id FROM finance_people WHERE name = 'Pedro Almeida') AND year = 2025`
       )
       .get() as { annual_cost: number };
-    expect(after.annual_cost).toBeCloseTo(35972.5, 2);
+    expect(after.annual_cost).toBeCloseTo(35972.50, 2);
   });
 
   it("adds a second year without disturbing the first", async () => {
@@ -445,7 +445,7 @@ describe("commitSueldosImport", () => {
       .all() as { year: number; annual_cost: number }[];
 
     expect(rows).toHaveLength(2);
-    expect(rows[0]).toEqual({ year: 2025, annual_cost: 35972.5 });
+    expect(rows[0]).toEqual({ year: 2025, annual_cost: 35972.50 });
     expect(rows[1].annual_cost).toBeCloseTo(19000, 2);
   });
 

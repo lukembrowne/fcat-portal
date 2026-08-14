@@ -76,9 +76,9 @@ export interface SueldosParseResult {
 
 /**
  * Accent- and case-insensitive key. Resolves "Ramiro Nunez" ↔ "Ramiro
- * Nuñez" deterministically. Deliberately NOT fuzzy: Karla, Luis and Darwin
- * Zambrano are three different people, and edit-distance matching would merge
- * them.
+ * Nuñez" deterministically. Deliberately NOT fuzzy: the payroll has three
+ * different people sharing one surname, and edit-distance matching would
+ * merge them.
  */
 export function normalizeName(v: string): string {
   return v

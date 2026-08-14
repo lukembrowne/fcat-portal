@@ -95,7 +95,7 @@ describe("fundedInYear", () => {
   it("sums across every year it touches back to the full amount", () => {
     const a = alloc({ amount: 36200, startDate: "2024-07-01", endDate: "2026-06-30" });
     const total = [2024, 2025, 2026].reduce((s, y) => s + fundedInYear(a, y), 0);
-    expect(total).toBeCloseTo(18100, 6);
+    expect(total).toBeCloseTo(36200, 6);
   });
 
   it("contributes nothing to a year it does not touch", () => {
@@ -118,10 +118,10 @@ describe("fundedInYear", () => {
 
 describe("shareOfSalary", () => {
   it("reproduces the percentages the spreadsheet keeps by hand", () => {
-    // Pedro Almeida on NMBCA VII: $36,200 over 24 months against $17,986.25/yr,
+    // Pedro Almeida on NMBCA VII: $36,200 over 24 months against $35,972.50/yr,
     // noted as "50%" in the sheet.
     const a = alloc({ amount: 36200, startDate: "2024-07-01", endDate: "2026-06-30" });
-    expect(shareOfSalary(a, 35972.5)).toBeCloseTo(0.503, 2);
+    expect(shareOfSalary(a, 35972.50)).toBeCloseTo(0.503, 2);
 
     // Fernando Castillo on the same grant, noted as "25%".
     const b = alloc({ amount: 21750, startDate: "2024-07-01", endDate: "2026-06-30" });
@@ -329,7 +329,7 @@ describe("grandTotal", () => {
   it("reconciles with the real 2025 figures from the Sueldos sheet", () => {
     // The eight named staff plus the thirteen FCATeros, which is what the
     // spreadsheet's own $562,100.72 total is made of.
-    const named = [35972.5, 59261.58, 18398.0, 66569.82, 43014.2, 35397.08, 36404.26, 38849.34];
+    const named = [35972.50, 59261.58, 18398.0, 66569.82, 43014.2, 35397.08, 36404.26, 38849.34];
     const fcateros = [
       16546.2, 18865.38, 17570.38, 18865.38, 15235.6, 16546.2, 19452.88, 16546.2, 17132.32, 16546.2,
       17570.38, 16546.2, 20810.62,

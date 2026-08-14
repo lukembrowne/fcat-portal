@@ -10,7 +10,6 @@ import {
   Sheet,
   Presentation,
   ClipboardList,
-  Map,
   ExternalLink,
 } from "lucide-react";
 
@@ -34,13 +33,6 @@ const resources = [
     name: "Protocolos de Sensores",
     description: "Protocolos de preparación e instalación de sensores",
     url: "https://docs.google.com/document/d/15rsETlhLb5i39OsSTY_blrl3D7Q4bZK_TXhlIlo9Yt8/edit",
-    requiresEnv: false,
-  },
-  {
-    icon: Map,
-    name: "Mapa de Sitios",
-    description: "Mapa interactivo de sitios en ArcGIS Online",
-    url: "enlace-eliminado",
     requiresEnv: false,
   },
 ];

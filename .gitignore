@@ -41,6 +41,11 @@ yarn-error.log*
 # data directory (DB, thumbnails, allowed emails)
 /data/
 
+# Screenshots must never be committed — portal UI captures can contain
+# landowner names, site coordinates, and other personal data.
+screenshots/
+*.screenshot.png
+
 # vercel
 .vercel
 

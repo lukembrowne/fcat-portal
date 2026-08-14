@@ -28,7 +28,6 @@ Algunas especies con buen desempeño en esta primera versión:
 
 Curiosamente, la especie con mayor acierto resultó ser **la gallina doméstica** *Gallus gallus domesticus*, con 0.87 — al parecer es la más fotogénica (o al menos la más predecible) de los patios de las fincas.
 
-![Vista de modelos del clasificador personalizado, con el modelo biochoco_v3 y sus puntajes por especie](screenshots/01-camera-trap-models.png)
 
 **Otras mejoras en cámaras trampa:**
 
@@ -36,7 +35,6 @@ Curiosamente, la especie con mayor acierto resultó ser **la gallina doméstica*
 - Anotación más cómoda: selector de especies rediseñado, atajos de teclado, control de brillo para fotos oscuras, y cajas de detección que cambian de color según su estado de verificación. Las imágenes se precargan para que avanzar entre fotos sea casi instantáneo.
 - Vista comparativa por especie y matriz de confusión, para inspeccionar dónde el modelo se confunde.
 
-![Vista de anotación: selector contextual de especies, cajas de detección y controles de brillo](screenshots/02-annotation.png)
 
 ## 🔊 Audio y bioacústica
 
@@ -50,9 +48,7 @@ Esta fue el área con más avances. El portal ya analiza las grabaciones de los 
 - **Vista de calendario de grabaciones.** Reemplazó la lista anterior por una cuadrícula tipo calendario que muestra de un vistazo qué días se grabó y cuáles faltan.
 - **Enlaces a xeno-canto y Wikipedia** desde cada especie, para verificar e investigar con más contexto.
 
-![Espectrograma interactivo con detecciones BirdNET y umbral de confianza ajustable](screenshots/03-audio-spectrogram.png)
 
-![Vista calendario de grabaciones, con las detecciones por día y hora](screenshots/04-audio-raster.png)
 
 ## 🗺️ Datos de campo BioChoco
 
@@ -60,7 +56,6 @@ Esta fue el área con más avances. El portal ya analiza las grabaciones de los 
 - **Cronograma editable.** Fechas, datos del propietario y notas se ajustan en la misma tabla del cronograma.
 - **Notas de campo.** Un espacio en el cronograma para registrar el contexto operativo: problemas de equipo, datos faltantes, etc.
 
-![Cronograma BioChoco con edición en línea de sitios y notas de campo](screenshots/05-biochoco-cronograma.png)
 
 ## 🔍 Otras novedades
 
@@ -69,7 +64,6 @@ Esta fue el área con más avances. El portal ya analiza las grabaciones de los 
 - **Almacenamiento que escala con el proyecto.** Se sumó un sistema de distribución de archivos entre varios Google Shared Drives para no chocar contra el límite de 500 000 archivos por unidad — un techo que el proyecto BioChoco ya estaba cerca de tocar.
 - **Resumen diario por correo.** Un correo automático con la actividad del portal del día (nuevas grabaciones, despliegues sincronizados, procesamientos completados). Quienes quieran recibirlo pueden escribirle a Luke y serán agregados a la lista.
 
-![Explorador de especies de audio, con detecciones BirdNET agregadas por especie](screenshots/06-species-browser.png)
 
 ## 🌳 Próximamente: páginas públicas para propietarios de fincas
 

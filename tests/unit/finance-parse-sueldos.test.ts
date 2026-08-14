@@ -46,21 +46,21 @@ function fcatero(name: string, cost: number): SalaryRow {
   return { Person: name, "Figura en rol pagos": "FCATero", "COSTO AL PROYECTO ANUAL": cost };
 }
 
-/** The thirteen FCATeros and their aggregate, straight from the real sheet. */
+/** A synthetic thirteen-FCATero roster (same shape as the real sheet, fictional names and amounts). */
 const FCATERO_ROWS: SalaryRow[] = [
   fcatero("Carla Barreto", 16546.2),
   fcatero("Hugo Castro", 18865.38),
   fcatero("Diego Campos", 17570.38),
   fcatero("Damian Campos", 18865.38),
   fcatero("Alex Guerra", 15235.6),
-  fcatero("Gloria Loor", 16546.2),
+  fcatero("Gilda Vera", 16546.2),
   fcatero("Jorge Viteri", 19452.88),
   fcatero("Cesar Molina", 16546.2),
-  fcatero("Gregory Paladines", 17132.32),
+  fcatero("Esteban Palma", 17132.32),
   fcatero("Ramiro Nuñez", 16546.2),
   fcatero("Irene Robles", 17570.38),
-  fcatero("Darwin Zambrano", 16546.2),
-  fcatero("Luis Zambrano", 20810.62),
+  fcatero("Darwin Vergara", 16546.2),
+  fcatero("Luis Vergara", 20810.62),
 ];
 const FCATEROS_AGGREGATE: SalaryRow = {
   Person: "FCATeros",
@@ -71,11 +71,11 @@ const FCATEROS_AGGREGATE: SalaryRow = {
 describe("normalizeName", () => {
   it("matches across accents and case", () => {
     expect(normalizeName("Ramiro Nunez")).toBe(normalizeName("Ramiro Nuñez"));
-    expect(normalizeName("  MELISA   LOAYZA ")).toBe("melisa loayza");
+    expect(normalizeName("  LUCIA   MENDEZ ")).toBe("lucia mendez");
   });
 
   it("keeps genuinely different people apart", () => {
-    const zambranos = ["Karla Zambrano", "Luis Zambrano", "Darwin Zambrano"].map(normalizeName);
+    const zambranos = ["Karla Vergara", "Luis Vergara", "Darwin Vergara"].map(normalizeName);
     expect(new Set(zambranos).size).toBe(3);
   });
 
@@ -104,7 +104,7 @@ describe("parseSueldosExcel — roster", () => {
 
     const fcateros = r.people.filter((p) => p.group === "FCATeros");
     expect(fcateros).toHaveLength(13);
-    expect(fcateros.map((p) => p.name)).toContain("Gregory Paladines");
+    expect(fcateros.map((p) => p.name)).toContain("Esteban Palma");
   });
 
   it("treats the aggregate row as the group, not a 22nd person", () => {
@@ -132,7 +132,7 @@ describe("parseSueldosExcel — roster", () => {
   it("leaves individually-named staff ungrouped", () => {
     const buf = build([], [
       {
-        Person: "Luis Carrasco",
+        Person: "Mario Cevallos",
         "Figura en rol pagos": "Director reserva",
         "COSTO AL PROYECTO ANUAL": 66569.82,
       },
@@ -141,7 +141,7 @@ describe("parseSueldosExcel — roster", () => {
     ]);
     const r = parseSueldosExcel(buf);
 
-    expect(r.people.find((p) => p.name === "Luis Carrasco")?.group).toBeNull();
+    expect(r.people.find((p) => p.name === "Mario Cevallos")?.group).toBeNull();
   });
 
   it("reads the year from the salary sheet name", () => {
@@ -161,7 +161,7 @@ describe("parseSueldosExcel — sources and lines", () => {
       status: "funded",
     },
     {
-      person: "Luis Carrasco",
+      person: "Mario Cevallos",
       source: "GIZ (funded)",
       "start date": "11/1/24",
       "end date": "6/30/26",
@@ -183,10 +183,10 @@ describe("parseSueldosExcel — sources and lines", () => {
     {
       Person: "Pedro Almeida",
       "Figura en rol pagos": "Administrador restauracion",
-      "COSTO AL PROYECTO ANUAL": 35972.5,
+      "COSTO AL PROYECTO ANUAL": 35972.50,
     },
     {
-      Person: "Luis Carrasco",
+      Person: "Mario Cevallos",
       "Figura en rol pagos": "Director reserva",
       "COSTO AL PROYECTO ANUAL": 66569.82,
     },

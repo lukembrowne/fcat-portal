@@ -61,6 +61,8 @@ When fixing database queries, always check for edge cases where records have NUL
 ## Git Workflow
 
 - When committing changes, always check `git diff --cached` for unrelated modifications before finalizing. Use `git add -p` (patch staging) when the working tree contains changes from multiple features.
+- **Never commit screenshots or other captures of the portal UI** (`.gitignore` blocks `screenshots/` dirs). The UI displays landowner names, precise site coordinates, and staff data — a screenshot leaks them into git history permanently. Docs stay text-only; if an image is truly needed, it must show synthetic/dev-seed data only.
+- **Never commit real personal data**: landowner or staff names paired with coordinates, salaries, or other private attributes. Test fixtures use fictional names and synthetic amounts (see `tests/unit/finance-parse-sueldos.test.ts`). The public team roster in `src/app/public/biochoco-overview/content.ts` is the only place real names belong.
 
 ## Audio module
 

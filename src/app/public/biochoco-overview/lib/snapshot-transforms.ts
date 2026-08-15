@@ -5,6 +5,8 @@
  * directly. The SQL that feeds these lives in build-snapshot.ts.
  */
 
+import { isRealSpecies } from "@/lib/species-filters";
+
 import type {
   CameraSpeciesRow,
   CuratedAudioClip,
@@ -47,17 +49,11 @@ export function exactCoord(value: number | null): number | null {
 }
 
 /**
- * A row counts as a real species only if it maps to a non-system entry at
- * species rank. This drops "Unknown"/"Homo sapiens" (system) and higher-taxa
- * labels like "Aves" (class), "Rodentia" (order), "Leptotila sp." (genus).
+ * Re-exported so existing importers keep working. The rule itself lives in
+ * `@/lib/species-filters`, shared with the public download route and the
+ * Choconexión bundle export.
  */
-export function isRealSpecies(meta: SpeciesMeta | undefined): meta is SpeciesMeta {
-  return (
-    !!meta &&
-    meta.type !== "system" &&
-    (!meta.taxonomicRank || meta.taxonomicRank === "species")
-  );
-}
+export { isRealSpecies };
 
 /**
  * From effective-label tallies + species metadata, produce the real-species

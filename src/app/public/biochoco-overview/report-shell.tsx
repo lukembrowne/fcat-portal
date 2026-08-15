@@ -3,6 +3,8 @@
 import { Fragment, useState } from "react";
 import dynamic from "next/dynamic";
 import type { Lang, ReportSnapshot } from "./lib/snapshot-types";
+// Pure predicate module — safe to import into a Client Component.
+import { DOMESTIC } from "@/lib/species-filters";
 import { CONTENT, DEFAULT_LANG } from "./content";
 import { HABITAT, HAB_ORDER } from "./lib/habitat";
 import { fmt, spanLabel, tpl } from "./lib/format";
@@ -18,16 +20,6 @@ const OverviewMap = dynamic(() => import("./overview-map").then((m) => m.Overvie
   ),
 });
 
-// Domestic animals excluded from the "wild species" camera list (matches the Desktop isWild).
-const DOMESTIC = new Set([
-  "Gallus gallus domesticus",
-  "Canis lupus familiaris",
-  "Bos taurus",
-  "Anas platyrhynchos domesticus",
-  "Equus caballus",
-  "Felis catus",
-  "Sus scrofa domesticus",
-]);
 
 // Scientific → English common name for the top acoustic species (ported from the
 // Desktop BIRD map). Display-only; falls back to the scientific name.

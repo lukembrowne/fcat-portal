@@ -22,6 +22,7 @@ import { downloadFileToBuffer } from "@/lib/drive-client";
 import { getActiveReportSnapshot } from "@/lib/public-report-snapshot";
 import { log } from "@/lib/log";
 import { TOLERANT_DECODE } from "@/lib/image-decode";
+import { DOMESTIC } from "@/lib/species-filters";
 import { CONTENT, DEFAULT_LANG, type AckGroup } from "../content";
 import { HABITAT, HAB_ORDER } from "../lib/habitat";
 import { fmt, spanLabel, tpl } from "../lib/format";
@@ -31,17 +32,6 @@ export const dynamic = "force-dynamic";
 
 const PUBLIC_BASE_URL =
   process.env.NEXT_PUBLIC_BASE_URL || "https://portal.fcat-ecuador.org";
-
-// Domestic animals excluded from the wild-species camera list (matches the page).
-const DOMESTIC = new Set([
-  "Gallus gallus domesticus",
-  "Canis lupus familiaris",
-  "Bos taurus",
-  "Anas platyrhynchos domesticus",
-  "Equus caballus",
-  "Felis catus",
-  "Sus scrofa domesticus",
-]);
 
 function esc(s: string): string {
   return s

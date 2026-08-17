@@ -23,7 +23,10 @@ services:
       # ~2.5 GB checkpoint here; without a persistent path it re-downloads every
       # restart (HOME is /tmp/ml-home, wiped each boot).
       - HF_HOME=/app/data/ml-cache/huggingface
-      - SUPER_ADMIN_EMAILS=lukebrowne@fcat-ecuador.org
+      # Comma-separated super admins. Set it in .env (prod) or the dev override;
+      # the fallback keeps the historical value so a server whose .env doesn't
+      # define it behaves exactly as before rather than losing super admin access.
+      - SUPER_ADMIN_EMAILS=${SUPER_ADMIN_EMAILS:-lukebrowne@fcat-ecuador.org}
       - ALLOWED_EMAILS_PATH=data/allowed_external_emails.txt
       - RESEND_API_KEY=${RESEND_API_KEY:-}
       - NIGHTLY_REPORT_EMAILS=${NIGHTLY_REPORT_EMAILS:-}
@@ -89,9 +92,15 @@ services:
       - "127.0.0.1:4181:4180"
     environment:
       - OAUTH2_PROXY_PROVIDER=google
-      - OAUTH2_PROXY_CLIENT_ID=${GOOGLE_CLIENT_ID}
-      - OAUTH2_PROXY_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
-      - OAUTH2_PROXY_COOKIE_SECRET=${PORTAL_OAUTH_COOKIE_SECRET}
+      # Empty defaults so a developer running `docker compose` WITHOUT a .env
+      # doesn't get "variable is not set" warnings on every single command.
+      # (In dev this service never starts anyway — the override file puts it
+      # behind a `production` profile.) Production supplies all three via
+      # /root/opt/fcat-portal/.env; behavior there is unchanged, since an unset
+      # variable already interpolated to a blank string.
+      - OAUTH2_PROXY_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - OAUTH2_PROXY_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+      - OAUTH2_PROXY_COOKIE_SECRET=${PORTAL_OAUTH_COOKIE_SECRET:-}
       - OAUTH2_PROXY_COOKIE_DOMAIN=portal.fcat-ecuador.org
       - OAUTH2_PROXY_COOKIE_NAME=_fcat_portal_oauth2
       - OAUTH2_PROXY_EMAIL_DOMAINS=fcat-ecuador.org

@@ -1,0 +1,51 @@
+# Local development overrides.
+#
+#   cp docker-compose.override.yml.example docker-compose.override.yml
+#
+# Compose loads docker-compose.override.yml automatically, so once this file
+# exists a plain `docker compose up` runs the dev image: hot reload, source
+# mounted from the host, no oauth2-proxy. The real override is gitignored, so
+# this is YOUR file — change anything in it without affecting anyone else.
+
+services:
+  portal:
+    build:
+      target: dev
+    # Install the ML Python venv in the background so the app starts right away.
+    command: sh -c "sh scripts/ensure-ml-venv.sh & exec npx next dev"
+    volumes:
+      - .:/app # hot reload
+      - /app/node_modules # keep the image's node_modules, not the host's
+      - /app/.next
+      - ml-venv:/app/data/ml-venv
+    env_file:
+      - path: .env.local
+        required: false
+    environment:
+      - NODE_ENV=development
+      # Dev auth. There is no login screen locally: src/proxy.ts trusts this
+      # email instead of the oauth2-proxy header, and getCurrentUser() looks it
+      # up in the `users` table.
+      #
+      # PUT YOUR OWN EMAIL HERE, in both lines. They must match: seed-dev.ts
+      # creates its super admin from the first SUPER_ADMIN_EMAILS entry, and
+      # DEV_USER_EMAIL is who you are. If they differ, every page 403s because
+      # you're logged in as a user that doesn't exist.
+      - DEV_USER_EMAIL=you@example.com
+      - SUPER_ADMIN_EMAILS=you@example.com
+      - DB_PATH=data/portal.db
+
+    # The base file caps memory at 11 GB, sized for the production droplet where
+    # the portal shares a host with ~24 other containers. Locally the real limit
+    # is whatever you gave Docker Desktop (Settings → Resources), which defaults
+    # to well under that. UI and API work is fine on the default; camera-trap ML
+    # jobs want ~8 GB or they get OOM-killed mid-run. Raise Docker Desktop's
+    # allocation for those, and uncomment below to cap this container lower than
+    # the VM if you want to protect the rest of your machine.
+    # mem_limit: 6g
+    # memswap_limit: 6g
+
+  # oauth2-proxy is production-only; the profile keeps it out of `docker compose up`.
+  oauth2-proxy:
+    profiles:
+      - production

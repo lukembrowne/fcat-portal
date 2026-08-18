@@ -229,6 +229,11 @@ async function applyThresholdTransitions(
     return;
   }
 
+  // Below the stop threshold, a read-only drive is frozen — it cannot take new
+  // items, so a soft/hard re-nag has no action behind it. Same reasoning as the
+  // read-only exclusion in getSharedDriveCapacityAlerts.
+  if (drive.status === "read-only") return;
+
   if (ratio >= getHardPct()) {
     if (!hadRecentEvent("drive_threshold_hard", drive.id)) {
       await recordEvent({

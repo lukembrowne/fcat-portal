@@ -374,7 +374,8 @@ export type SharedDriveCapacityAlerts = {
 /**
  * Single source of truth for "is a Shared Drive approaching its cap?" — used by
  * the daily alert-email cron and the admin banner so both agree. Returns only
- * drives/projects that have actually crossed a threshold (empty when healthy).
+ * drives/projects that have actually crossed a threshold (empty when healthy),
+ * and only drives that can still GROW — read-only drives are never listed.
  */
 export function getSharedDriveCapacityAlerts(): SharedDriveCapacityAlerts {
   const soft = getSoftPct();
@@ -389,12 +390,16 @@ export function getSharedDriveCapacityAlerts(): SharedDriveCapacityAlerts {
     projectNames.set(p.id, p.name);
   }
 
+  // Read-only drives are excluded on purpose: a retired drive can no longer
+  // receive items, so its fill is a frozen fact and there is no action behind
+  // the alert. FCAT-BIOCHOCO sat at 84.4% read-only and re-nagged daily forever.
+  // Its number is still visible in the /admin/shared-drives table.
   const driveRows = db.all(sql`
     SELECT id, name, camera_trap_project_id AS pid, status, item_cap,
            reconciled_count + pending_reservations_count AS effective,
            trashed_count
     FROM shared_drives
-    WHERE archived_at IS NULL AND status != 'registering'
+    WHERE archived_at IS NULL AND status NOT IN ('registering', 'read-only')
   `) as Array<{
     id: string;
     name: string;

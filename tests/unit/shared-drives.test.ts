@@ -19,6 +19,7 @@ const {
   DEPLOYMENT_QUOTA,
   DRIVE_ID_REGEX,
   sanitizeDriveError,
+  getSharedDriveCapacityAlerts,
 } = mod;
 
 // Default project for seeded drives (one-project-per-drive). Tests that need
@@ -205,6 +206,54 @@ describe("getDriveStatus / getDriveRootIdsForProject", () => {
     const roots = getDriveRootIdsForProject(PROJECT).sort();
     expect(roots).toEqual(["root-a", "root-b"]);
     expect(getDriveRootIdsForProject(2)).toEqual(["root-d"]);
+  });
+});
+
+describe("getSharedDriveCapacityAlerts", () => {
+  // The alert roll-up joins project names; the shared-drives fixture DDL stops
+  // at the registry tables, so add the one table it reads.
+  beforeEach(() => {
+    testDbRef.current.run(
+      sql`CREATE TABLE ct_projects (id INTEGER PRIMARY KEY, name TEXT NOT NULL)`,
+    );
+    testDbRef.current.run(
+      sql`INSERT INTO ct_projects (id, name) VALUES (${PROJECT}, 'BioChoco')`,
+    );
+  });
+
+  it("lists an active drive over the soft threshold", () => {
+    seedDrive({ id: "d-active", reconciledCount: 400_000 }); // 80%
+    const alerts = getSharedDriveCapacityAlerts();
+    expect(alerts.drives.map((d) => d.id)).toEqual(["d-active"]);
+    expect(alerts.drives[0].level).toBe("soft");
+  });
+
+  it("never lists a read-only drive, however full", () => {
+    // A retired drive cannot take new items, so its fill is frozen and there is
+    // no action behind the alert — otherwise it re-nags by email every night
+    // forever (FCAT-BIOCHOCO at 84.4%).
+    seedDrive({ id: "d-frozen", status: "read-only", reconciledCount: 422_173 });
+    const alerts = getSharedDriveCapacityAlerts();
+    expect(alerts.drives).toEqual([]);
+  });
+
+  it("still flags the project when its only ACTIVE drive has no headroom", () => {
+    seedDrive({ id: "d-frozen", status: "read-only", reconciledCount: 470_000 });
+    seedDrive({ id: "d-full", reconciledCount: 440_000 }); // 88% > hard
+    const alerts = getSharedDriveCapacityAlerts();
+    expect(alerts.drives.map((d) => d.id)).toEqual(["d-full"]);
+    expect(alerts.provisionProjects.map((p) => p.projectId)).toEqual([PROJECT]);
+    expect(alerts.hasCritical).toBe(true);
+  });
+
+  it("is silent when the project's active drive has plenty of room", () => {
+    // The real prod shape after the fan-out: the old drive frozen at 84.4%, new
+    // deployments routing to a fresh drive at 23.6%.
+    seedDrive({ id: "d-frozen", status: "read-only", reconciledCount: 422_173 });
+    seedDrive({ id: "d-new", reconciledCount: 118_114 });
+    const alerts = getSharedDriveCapacityAlerts();
+    expect(alerts.drives).toEqual([]);
+    expect(alerts.provisionProjects).toEqual([]);
   });
 });
 

@@ -84,8 +84,24 @@ export function ReviewClient({
   const [error, setError] = useState<string | null>(null);
 
   const audioRef = useRef<HTMLAudioElement>(null);
-  // Single-flight: a held key must not fire overlapping mutations.
-  const submittingRef = useRef(false);
+  /*
+    Single-flight PER CLIP, not per reviewer.
+
+    A held key must not fire overlapping mutations for the same detection —
+    that is what this guards. It was a single boolean, released only when
+    `recordReview` resolved, and that made it a lock over the whole queue: the
+    UI advances 320 ms after an answer, so any save slower than that silently
+    swallowed the NEXT clip's answer. The keystroke did nothing, the reviewer
+    pressed again, and it worked the second time. Reported from a full
+    200-clip run as "every ~25 clips it freezes after pressing Correcta",
+    worst on the easy species where answers come fastest — exactly when the
+    gap between two answers is shortest.
+
+    Saves are slow enough for this to bite in the field: each answer is a
+    server-action round trip behind five DB queries, racing the four clip and
+    spectrogram prefetches this component fires on every advance.
+  */
+  const inFlightRef = useRef<Set<number>>(new Set());
 
   const current = items[index];
   const done = index >= items.length;
@@ -143,10 +159,10 @@ export function ReviewClient({
 
   const answer = useCallback(
     (outcome: Outcome) => {
-      if (!current || submittingRef.current) return;
-      submittingRef.current = true;
-
+      if (!current) return;
       const sampleId = current.sampleId;
+      if (inFlightRef.current.has(sampleId)) return;
+      inFlightRef.current.add(sampleId);
       // Optimistic: mark the answer, advance, and persist in the background.
       // Blocking the queue on a round-trip is what makes review feel slow, and
       // this loop runs 40,000 times.
@@ -167,7 +183,7 @@ export function ReviewClient({
         })
         .catch(() => setError("No se pudo guardar la revisión"))
         .finally(() => {
-          submittingRef.current = false;
+          inFlightRef.current.delete(sampleId);
         });
 
       // Brief pause so the pressed button lights up before the clip changes —

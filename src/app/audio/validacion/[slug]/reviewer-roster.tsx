@@ -11,20 +11,7 @@ import {
 } from "@/app/audio/validacion/actions";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
-/**
- * Display label for a reviewer: their portal name when we have one, else the
- * email. Reviewers may be external accounts with no `users` row.
- */
-export function reviewerLabel(reviewer: { email: string; name: string | null }): string {
-  return reviewer.name?.trim() || reviewer.email;
-}
-
-/** "45 / 200" plus a percentage, or a Spanish placeholder before any sample. */
-export function formatReviewerProgress(reviewed: number, sampled: number): string {
-  if (sampled === 0) return "sin muestra";
-  const pct = Math.round((reviewed / sampled) * 100);
-  return `${reviewed} / ${sampled} (${pct}%)`;
-}
+import { formatReviewerProgress, reviewerLabel } from "./reviewer-label";
 
 interface ReviewerRosterProps {
   campaignId: number;

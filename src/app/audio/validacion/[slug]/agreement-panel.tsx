@@ -5,7 +5,7 @@ import { describeKappa } from "@/lib/birdnet-validation/agreement";
 import { KAPPA_REASON_ES } from "@/lib/birdnet-validation/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
-import { reviewerLabel } from "./reviewer-roster";
+import { reviewerLabel } from "./reviewer-label";
 
 interface AgreementPanelProps {
   slug: string;

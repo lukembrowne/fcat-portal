@@ -5,6 +5,8 @@ import { useMemo, useState } from "react";
 import type { Disagreement } from "@/app/audio/validacion/actions";
 import { SortIcon } from "@/components/sort-icon";
 
+import { reviewerLabel } from "../reviewer-label";
+
 type SortKey = "confidence" | "site" | "habitat" | "answers";
 type SortDir = "asc" | "desc";
 
@@ -19,10 +21,6 @@ const OUTCOME_CLASS: Record<string, string> = {
   incorrect: "bg-red-100 text-red-900",
   uncertain: "bg-amber-100 text-amber-900",
 };
-
-function reviewerLabel(a: { email: string; name: string | null }): string {
-  return a.name?.trim() || a.email;
-}
 
 /**
  * Pure sort so the ordering is testable without rendering.

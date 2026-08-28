@@ -408,6 +408,7 @@ export function ReviewClient({
           open={controlsOpen}
           onToggle={() => setControlsOpen((v) => !v)}
           nyquistHz={nyquistHz}
+          unsupported={liveUnsupported}
         />
 
         <audio ref={audioRef} src={clipSrc ?? undefined} preload="auto" controls className="w-full" />

@@ -99,6 +99,30 @@ export function playheadPercent(
  * component positions in percentages of its own container, so it must be
  * mounted INSIDE the scrolled element, not around it.
  */
+/**
+ * Where to scroll so a point at `pct` across the clip sits mid-viewport.
+ *
+ * Pure, exported and tested because it is used from two places that must agree:
+ * playback tracking in `ClipMarks`, and landing on the detection when the clip
+ * or the zoom changes in `LiveSpectrogram`. Two copies of this clamp is exactly
+ * the failure `clip-geometry.ts` documents for the band arithmetic.
+ *
+ * Returns `null` when there is nothing to scroll, so callers can tell "already
+ * fully visible" apart from "scroll to 0".
+ */
+export function centeredScrollLeft(
+  pct: number,
+  scrollWidth: number,
+  clientWidth: number
+): number | null {
+  const overflow = scrollWidth - clientWidth;
+  if (!(overflow > 0)) return null; // unzoomed: the whole clip is already visible
+  const x = (pct / 100) * scrollWidth;
+  // Clamping is what makes both ends feel right: the view sits still through
+  // the first and last half-screen instead of jumping to meet the playhead.
+  return Math.max(0, Math.min(overflow, x - clientWidth / 2));
+}
+
 export function ClipMarks({
   bandLeftPct,
   bandRightPct,
@@ -132,22 +156,11 @@ export function ClipMarks({
 
     let frame = 0;
 
-    /*
-      Keep the playhead centred in the viewport, once it has travelled far
-      enough that centring would mean scrolling at all.
-
-      Clamping to `[0, overflow]` is what produces the behaviour a reviewer
-      expects at both ends: the view sits still through the first half-screen,
-      tracks continuously through the middle, and sits still again through the
-      last half-screen, rather than jumping.
-    */
     const centerOn = (pct: number) => {
       const box = scrollRef?.current;
       if (!box) return;
-      const overflow = box.scrollWidth - box.clientWidth;
-      if (overflow <= 0) return; // unzoomed: the whole clip is already visible
-      const x = (pct / 100) * box.scrollWidth;
-      box.scrollLeft = Math.max(0, Math.min(overflow, x - box.clientWidth / 2));
+      const next = centeredScrollLeft(pct, box.scrollWidth, box.clientWidth);
+      if (next != null) box.scrollLeft = next;
     };
 
     // Written straight to the node rather than through state: playback would

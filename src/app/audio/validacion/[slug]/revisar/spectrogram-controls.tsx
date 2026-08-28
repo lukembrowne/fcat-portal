@@ -34,6 +34,7 @@ export function SpectrogramControls({
   open,
   onToggle,
   nyquistHz,
+  unsupported = false,
 }: {
   settings: ReviewSpectrogramSettings;
   onChange: (next: ReviewSpectrogramSettings) => void;
@@ -41,6 +42,16 @@ export function SpectrogramControls({
   onToggle: () => void;
   /** Half the clip's sample rate, once decoded. Offered as a ceiling preset. */
   nyquistHz: number | null;
+  /**
+   * This browser could not decode the clip, so the spectrogram on screen is the
+   * pre-rendered image and NOTHING here would change it.
+   *
+   * Says so instead of rendering controls. While the canvas was opted into by
+   * opening this panel the state was nearly unreachable; making the panel
+   * default-open made it the thing such a browser shows on every clip, and five
+   * live-looking sliders that move and do nothing are worse than no sliders.
+   */
+  unsupported?: boolean;
 }) {
   const set = <K extends keyof ReviewSpectrogramSettings>(
     key: K,
@@ -50,6 +61,17 @@ export function SpectrogramControls({
   const presets = nyquistHz
     ? [...MAX_HZ_PRESETS.filter((hz) => hz < nyquistHz), nyquistHz]
     : [...MAX_HZ_PRESETS];
+
+  if (unsupported) {
+    return (
+      <p className="rounded border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] text-amber-900">
+        Este navegador no puede decodificar el audio para generar el
+        espectrograma ajustable, así que se muestra la imagen pre-generada. La
+        revisión funciona igual; sólo no se puede cambiar la ganancia, la ventana
+        FFT ni el zoom.
+      </p>
+    );
+  }
 
   return (
     <div className="rounded border bg-muted/30">

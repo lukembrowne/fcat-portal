@@ -1,0 +1,337 @@
+"use client";
+
+/**
+ * The clip's spectrogram, computed in the browser so the reviewer can adjust it.
+ *
+ * WHY THIS EXISTS. The review queue has always shown a pre-rendered WebP from
+ * `/api/audio/validation-spectrogram`, with the render knobs frozen as constants
+ * in `spectrogram-image.ts`. That is right for the common case — it is cached,
+ * prefetched two clips ahead, and appears instantly — but a reviewer working a
+ * hard species cannot do the one thing that resolves a marginal call: turn the
+ * gain up on a faint call, narrow the FFT to separate two fast notes, or stretch
+ * the time axis to see a trill's structure. Reported by a collaborator after her
+ * first full 200-clip run.
+ *
+ * The three stages are split across three effects on purpose, because that split
+ * IS the performance story:
+ *
+ *   decode        depends on the clip           ~one per clip
+ *   FFT           depends on the clip, fftSize   re-runs only on FFT changes
+ *   paint         depends on everything else     re-runs on gain/contrast/kHz/zoom
+ *
+ * Gain, contrast and the frequency ceiling are pure colour-mapping over
+ * magnitudes that are already computed, so dragging those sliders costs one
+ * `renderImageData` pass and no FFT at all. Only the FFT-size control pays for a
+ * recompute. Getting this wrong — recomputing magnitudes on every slider tick —
+ * is what would make the controls feel broken.
+ *
+ * COST: the clip is downloaded TWICE on this path. `<audio>` fetches it to
+ * play, and `decodeAudio` fetches it again to get at the samples, because a
+ * media element exposes no decoded buffer. `Cache-Control: immutable` does not
+ * save us — Chrome keeps media-element responses in a separate cache from
+ * `fetch()`, and the server log shows two hits for the clip on screen and one
+ * each for the two prefetched ahead of it. Measured at ~146 KB per clip, so a
+ * full 200-clip run spent entirely on this path costs ~29 MB extra. Acceptable
+ * for a path a reviewer opts into, and the fix if it ever matters is to decode
+ * first and hand the `<audio>` element a blob URL of the same bytes.
+ *
+ * Marks (scrims, detection edges, playhead) come from `ClipMarks`, shared with
+ * the pre-rendered path, so the two surfaces cannot drift apart geometrically.
+ */
+
+import { useEffect, useRef, useState, type RefObject } from "react";
+
+import {
+  decodeAudio,
+  computeMagnitudes,
+  binFromHz,
+  type DecodedAudio,
+  type Magnitudes,
+} from "@/lib/audio-fft";
+import { renderImageData } from "@/lib/spectrogram-render";
+import { COLORMAPS } from "@/lib/spectrogram-colormaps";
+
+import { ClipMarks } from "./spectrogram-overlay";
+import type { ReviewSpectrogramSettings } from "./spectrogram-settings";
+
+/*
+  Stage timings are also emitted as User Timing measures, so the three costs
+  are visible in a DevTools performance profile without wiring up a debug prop.
+  This is the instrumentation the "is it fast enough for a 200-clip run?"
+  question gets answered with, and the answer changes with the reviewer's
+  machine — so it needs to be readable on theirs, not only in a benchmark.
+*/
+const MEASURE = {
+  decode: "validacion:spectrogram:decode",
+  fft: "validacion:spectrogram:fft",
+  paint: "validacion:spectrogram:paint",
+} as const;
+
+function measure(name: string, startedAt: number): number {
+  const elapsed = performance.now() - startedAt;
+  try {
+    performance.measure(name, { start: startedAt, duration: elapsed });
+  } catch {
+    // Older Safari rejects the options form; the timing still returns.
+  }
+  return elapsed;
+}
+
+/**
+ * Unzoomed canvas bitmap width, matching `OUT_WIDTH` in `spectrogram-image.ts`
+ * so the live canvas carries the same horizontal detail as the pre-rendered
+ * WebP it stands in for.
+ */
+const BASE_BITMAP_WIDTH = 1600;
+/** Matches `OUT_HEIGHT` in `spectrogram-image.ts`, for the same reason. */
+const BITMAP_HEIGHT = 264;
+
+export interface RenderStats {
+  decodeMs: number;
+  fftMs: number;
+  paintMs: number;
+  numFrames: number;
+  sampleRate: number;
+  durationSec: number;
+}
+
+/*
+  Both cached stages carry the inputs they were produced from, and the render
+  derives "is this current?" by comparing. The alternative — clearing the cache
+  at the top of each effect — means writing state during an effect for the sole
+  purpose of describing that same effect, and it opens a frame where the
+  previous clip's spectrogram is shown as if it were the new one's.
+*/
+interface DecodedFor {
+  src: string;
+  audio: DecodedAudio;
+}
+
+interface MagnitudesFor {
+  src: string;
+  fftSize: number;
+  mags: Magnitudes;
+}
+
+export function LiveSpectrogram({
+  src,
+  bandLeftPct,
+  bandRightPct,
+  audioRef,
+  settings,
+  height = 180,
+  onStats,
+  onUnsupported,
+}: {
+  /** The clip AUDIO url — not the pre-rendered image. */
+  src: string;
+  bandLeftPct: number;
+  bandRightPct: number;
+  audioRef: RefObject<HTMLAudioElement | null>;
+  settings: ReviewSpectrogramSettings;
+  height?: number;
+  onStats?: (stats: RenderStats) => void;
+  /** Called when this browser cannot decode the clip, so the caller can fall
+   *  back to the server-rendered image rather than showing a reviewer an
+   *  empty box. */
+  onUnsupported?: () => void;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [decodedFor, setDecodedFor] = useState<DecodedFor | null>(null);
+  const [magnitudesFor, setMagnitudesFor] = useState<MagnitudesFor | null>(null);
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const statsRef = useRef<Partial<RenderStats>>({});
+
+  const decoded = decodedFor?.src === src ? decodedFor.audio : null;
+  const magnitudes =
+    magnitudesFor?.src === src && magnitudesFor.fftSize === settings.fftSize
+      ? magnitudesFor.mags
+      : null;
+  const stage: "loading" | "ready" | "error" =
+    failedSrc === src ? "error" : magnitudes ? "ready" : "loading";
+
+  // Latest-callback refs: `onStats` / `onUnsupported` are usually inline
+  // closures, and putting them in effect deps would re-decode the clip on every
+  // parent render.
+  const onStatsRef = useRef(onStats);
+  const onUnsupportedRef = useRef(onUnsupported);
+  useEffect(() => {
+    onStatsRef.current = onStats;
+    onUnsupportedRef.current = onUnsupported;
+  });
+
+  // ---- 1. Decode ----------------------------------------------------------
+  useEffect(() => {
+    if (decodedFor?.src === src) return;
+    let cancelled = false;
+    statsRef.current = {};
+
+    const t0 = performance.now();
+    decodeAudio(src)
+      .then((audio) => {
+        if (cancelled) return;
+        statsRef.current.decodeMs = measure(MEASURE.decode, t0);
+        statsRef.current.sampleRate = audio.sampleRate;
+        statsRef.current.durationSec = audio.duration;
+        setDecodedFor({ src, audio });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setFailedSrc(src);
+        onUnsupportedRef.current?.();
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [src, decodedFor?.src]);
+
+  // ---- 2. FFT -------------------------------------------------------------
+  // Re-runs ONLY when the clip or the FFT size changes. Deferred a tick so the
+  // new clip's marks paint before the main thread goes into the transform.
+  useEffect(() => {
+    if (!decoded || magnitudes) return;
+    let cancelled = false;
+
+    const id = window.setTimeout(() => {
+      if (cancelled) return;
+      try {
+        const t0 = performance.now();
+        const mags = computeMagnitudes({
+          samples: decoded.samples,
+          sampleRate: decoded.sampleRate,
+          fftSize: settings.fftSize,
+          hopSize: settings.fftSize / 2,
+        });
+        if (cancelled) return;
+        statsRef.current.fftMs = measure(MEASURE.fft, t0);
+        statsRef.current.numFrames = mags.numFrames;
+        setMagnitudesFor({ src, fftSize: settings.fftSize, mags });
+      } catch {
+        if (!cancelled) setFailedSrc(src);
+      }
+    }, 0);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(id);
+    };
+  }, [decoded, magnitudes, src, settings.fftSize]);
+
+  // Canvas bitmap width scales with zoom; CSS width follows it, and the parent
+  // scrolls. 1600 matches the pre-rendered path's OUT_WIDTH so an unzoomed
+  // canvas carries the same horizontal detail as the WebP it replaces.
+  const bitmapWidth = BASE_BITMAP_WIDTH * settings.zoom;
+
+  // ---- 3. Paint -----------------------------------------------------------
+  // Colour mapping only. No FFT here — that is what keeps the sliders live.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!magnitudes || !canvas) return;
+
+    const t0 = performance.now();
+    const displayMaxBin = Math.min(
+      magnitudes.binCount,
+      binFromHz(settings.displayMaxHz, magnitudes.fftSize, magnitudes.sampleRate) + 1
+    );
+
+    const img = renderImageData({
+      magnitudes: magnitudes.magnitudes,
+      numFrames: magnitudes.numFrames,
+      binCount: magnitudes.binCount,
+      displayMaxBin,
+      gainDB: settings.gainDB,
+      rangeDB: settings.rangeDB,
+      lut: COLORMAPS[settings.colormap],
+    });
+
+    // The FFT bitmap is one pixel per frame and per bin; the canvas is the box
+    // it is displayed in. Blit through an offscreen canvas so the browser does
+    // the scaling, exactly as the pre-rendered path lets sharp do it.
+    const off = document.createElement("canvas");
+    off.width = img.width;
+    off.height = img.height;
+    const offCtx = off.getContext("2d");
+    if (!offCtx) return;
+    const imageData = offCtx.createImageData(img.width, img.height);
+    imageData.data.set(img.data);
+    offCtx.putImageData(imageData, 0, 0);
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "medium";
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    // Stretched to fill, NOT letterboxed — the percentage geometry in
+    // `ClipMarks` assumes the clip spans the box edge to edge.
+    ctx.drawImage(off, 0, 0, canvas.width, canvas.height);
+
+    statsRef.current.paintMs = measure(MEASURE.paint, t0);
+    const s = statsRef.current;
+    if (s.decodeMs != null && s.fftMs != null) {
+      onStatsRef.current?.({
+        decodeMs: s.decodeMs,
+        fftMs: s.fftMs,
+        paintMs: s.paintMs ?? 0,
+        numFrames: s.numFrames ?? 0,
+        sampleRate: s.sampleRate ?? 0,
+        durationSec: s.durationSec ?? 0,
+      });
+    }
+    // `bitmapWidth` is a dependency because assigning `canvas.width` RESETS the
+    // bitmap to transparent black. Without it, changing the zoom resized the
+    // canvas and then nothing repainted it — a blank box, reproducibly, at
+    // every zoom level but 1x.
+  }, [
+    magnitudes,
+    bitmapWidth,
+    settings.gainDB,
+    settings.rangeDB,
+    settings.displayMaxHz,
+    settings.colormap,
+  ]);
+
+  // A new clip should start at the left edge even if the reviewer had scrolled.
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollLeft = 0;
+  }, [src]);
+
+  return (
+    <div
+      ref={scrollRef}
+      className="relative w-full overflow-x-auto overflow-y-hidden rounded bg-[rgb(20,20,28)]"
+      style={{ height }}
+    >
+      {/* Inner element carries the zoomed width, and the marks live inside it
+          so their percentages stay percentages OF THE CLIP, not of the
+          viewport. */}
+      <div className="relative h-full" style={{ width: `${settings.zoom * 100}%` }}>
+        <ClipMarks
+          bandLeftPct={bandLeftPct}
+          bandRightPct={bandRightPct}
+          audioRef={audioRef}
+          resetKey={src}
+          surface={
+            <canvas
+              ref={canvasRef}
+              width={bitmapWidth}
+              height={BITMAP_HEIGHT}
+              className="block h-full w-full"
+            />
+          }
+        />
+
+        {stage !== "ready" ? (
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+            <span className="rounded bg-black/60 px-2 py-1 text-[11px] text-white/80">
+              {stage === "error"
+                ? "No se pudo generar el espectrograma"
+                : "Generando espectrograma…"}
+            </span>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}

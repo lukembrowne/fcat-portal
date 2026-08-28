@@ -17,6 +17,10 @@ import { abandonCampaign, recordReview } from "@/app/audio/validacion/actions";
 import { xenoCantoUrl } from "@/lib/xeno-canto";
 import { useReviewShortcuts } from "./use-review-shortcuts";
 import { SpectrogramOverlay } from "./spectrogram-overlay";
+import { LiveSpectrogram, type RenderStats } from "./live-spectrogram";
+import { SpectrogramControls } from "./spectrogram-controls";
+import { isDefault } from "./spectrogram-settings";
+import { useReviewSpectrogramSettings } from "./use-spectrogram-settings";
 import { batchState, canFit, queuePosition, remainingForReviewer } from "./review-progress";
 
 export interface ReviewItem {
@@ -82,6 +86,34 @@ export function ReviewClient({
   // checkbox into a control over nothing but the first glance.
   const [showScores, setShowScores] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Spectrogram display settings, shared across clips and sessions.
+  const [specSettings, updateSpecSettings] = useReviewSpectrogramSettings();
+  const [controlsOpen, setControlsOpen] = useState(false);
+  const [nyquistHz, setNyquistHz] = useState<number | null>(null);
+  // Set when this browser cannot decode the clip. Sticky for the batch: a
+  // browser that failed once will fail on every clip, and retrying the decode
+  // 200 times to re-learn that would cost the reviewer real time.
+  const [liveUnsupported, setLiveUnsupported] = useState(false);
+
+  const onSpecStats = useCallback((stats: RenderStats) => {
+    setNyquistHz((prev) => {
+      const next = Math.round(stats.sampleRate / 2);
+      return prev === next ? prev : next;
+    });
+  }, []);
+
+  /*
+    The pre-rendered WebP stays the default surface.
+
+    It is cached, prefetched two clips ahead, and appears with no main-thread
+    work at all — which is the right trade for the great majority of clips,
+    where the reviewer answers without adjusting anything. The browser only
+    pays for decode + FFT once the reviewer has actually asked for control,
+    either by opening the panel or by carrying non-default settings in from a
+    previous session.
+  */
+  const useLive = (controlsOpen || !isDefault(specSettings)) && !liveUnsupported;
 
   const audioRef = useRef<HTMLAudioElement>(null);
   /*
@@ -341,7 +373,17 @@ export function ReviewClient({
       </div>
 
       <div className="rounded-lg border bg-card p-4 space-y-3">
-        {specSrc ? (
+        {useLive && clipSrc ? (
+          <LiveSpectrogram
+            src={clipSrc}
+            bandLeftPct={current.bandLeftPct}
+            bandRightPct={current.bandRightPct}
+            audioRef={audioRef}
+            settings={specSettings}
+            onStats={onSpecStats}
+            onUnsupported={() => setLiveUnsupported(true)}
+          />
+        ) : specSrc ? (
           <SpectrogramOverlay
             src={specSrc}
             bandLeftPct={current.bandLeftPct}
@@ -349,6 +391,14 @@ export function ReviewClient({
             audioRef={audioRef}
           />
         ) : null}
+
+        <SpectrogramControls
+          settings={specSettings}
+          onChange={updateSpecSettings}
+          open={controlsOpen}
+          onToggle={() => setControlsOpen((v) => !v)}
+          nyquistHz={nyquistHz}
+        />
 
         <audio ref={audioRef} src={clipSrc ?? undefined} preload="auto" controls className="w-full" />
 

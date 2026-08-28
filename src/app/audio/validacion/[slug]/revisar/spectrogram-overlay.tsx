@@ -85,18 +85,33 @@ export function playheadPercent(
   return Math.min(100, (currentTime / duration) * 100);
 }
 
-export function SpectrogramOverlay({
-  src,
+/**
+ * The marks that sit on top of a clip surface: scrims, detection edges,
+ * playhead, caption.
+ *
+ * Split out from `SpectrogramOverlay` so the pre-rendered `<img>` and the live
+ * `<canvas>` (see `live-spectrogram.tsx`) can share one copy. Both paint the
+ * clip edge-to-edge into the same box, so the percentage geometry is identical
+ * and must not be allowed to fork into two implementations that drift.
+ *
+ * `surface` is rendered underneath and is expected to fill the box. When the
+ * caller zooms, IT sizes the surface wider than the viewport and scrolls; this
+ * component positions in percentages of its own container, so it must be
+ * mounted INSIDE the scrolled element, not around it.
+ */
+export function ClipMarks({
   bandLeftPct,
   bandRightPct,
   audioRef,
-  height = 180,
+  resetKey,
+  surface,
 }: {
-  src: string;
   bandLeftPct: number;
   bandRightPct: number;
   audioRef: RefObject<HTMLAudioElement | null>;
-  height?: number;
+  /** Changing this resets the playhead — the clip changed underneath it. */
+  resetKey: string;
+  surface: React.ReactNode;
 }) {
   const playheadRef = useRef<HTMLDivElement>(null);
 
@@ -148,21 +163,12 @@ export function SpectrogramOverlay({
       audio.removeEventListener("seeked", paint);
       audio.removeEventListener("loadedmetadata", paint);
     };
-    // `src` is in the deps so the playhead resets when the clip changes.
-  }, [audioRef, src]);
+    // `resetKey` is in the deps so the playhead resets when the clip changes.
+  }, [audioRef, resetKey]);
 
   return (
-    <div
-      className="relative w-full overflow-hidden rounded bg-[rgb(20,20,28)]"
-      style={{ height }}
-    >
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={src}
-        alt="Espectrograma de la detección"
-        className="block w-full"
-        style={{ height, objectFit: "fill" }}
-      />
+    <>
+      {surface}
 
       {/* Everything OUTSIDE the detection is dimmed; the detection keeps the
           image's full brightness. See the module comment for why this beats
@@ -197,6 +203,44 @@ export function SpectrogramOverlay({
       <span className="pointer-events-none absolute bottom-1 right-1 rounded bg-black/50 px-1 text-[10px] text-white/80">
         detección
       </span>
+    </>
+  );
+}
+
+/** The pre-rendered server WebP with the detection marked over it. */
+export function SpectrogramOverlay({
+  src,
+  bandLeftPct,
+  bandRightPct,
+  audioRef,
+  height = 180,
+}: {
+  src: string;
+  bandLeftPct: number;
+  bandRightPct: number;
+  audioRef: RefObject<HTMLAudioElement | null>;
+  height?: number;
+}) {
+  return (
+    <div
+      className="relative w-full overflow-hidden rounded bg-[rgb(20,20,28)]"
+      style={{ height }}
+    >
+      <ClipMarks
+        bandLeftPct={bandLeftPct}
+        bandRightPct={bandRightPct}
+        audioRef={audioRef}
+        resetKey={src}
+        surface={
+          /* eslint-disable-next-line @next/next/no-img-element */
+          <img
+            src={src}
+            alt="Espectrograma de la detección"
+            className="block w-full"
+            style={{ height, objectFit: "fill" }}
+          />
+        }
+      />
     </div>
   );
 }

@@ -102,7 +102,14 @@ export default async function ReviewPage({
     );
 
   return (
-    <div className="mx-auto max-w-2xl p-4">
+    /*
+      Wider than the rest of the module (which is max-w-4xl) because this page
+      is one big picture and three buttons. Every extra pixel of width is extra
+      TIME RESOLUTION in the spectrogram — the axis a reviewer is actually
+      reading to tell one call from another — so the usual comfortable reading
+      measure is the wrong constraint here.
+    */
+    <div className="mx-auto max-w-7xl p-4">
       {/*
         Keyed on the batch, so a new batch REMOUNTS the client rather than
         layering fresh server props over stale client state. That is what makes

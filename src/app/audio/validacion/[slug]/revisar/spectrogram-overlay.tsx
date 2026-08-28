@@ -105,6 +105,7 @@ export function ClipMarks({
   audioRef,
   resetKey,
   surface,
+  scrollRef,
 }: {
   bandLeftPct: number;
   bandRightPct: number;
@@ -112,6 +113,15 @@ export function ClipMarks({
   /** Changing this resets the playhead — the clip changed underneath it. */
   resetKey: string;
   surface: React.ReactNode;
+  /**
+   * The scrolling viewport, when the surface is wider than the box.
+   *
+   * Given one, playback DRAGS THE VIEW ALONG so the playhead stays in sight.
+   * Without it a zoomed clip plays straight off the right-hand edge within a
+   * second or two and the reviewer is watching a still image of the part
+   * that already went past — which is what made time zoom close to useless.
+   */
+  scrollRef?: RefObject<HTMLDivElement | null>;
 }) {
   const playheadRef = useRef<HTMLDivElement>(null);
 
@@ -122,14 +132,34 @@ export function ClipMarks({
 
     let frame = 0;
 
+    /*
+      Keep the playhead centred in the viewport, once it has travelled far
+      enough that centring would mean scrolling at all.
+
+      Clamping to `[0, overflow]` is what produces the behaviour a reviewer
+      expects at both ends: the view sits still through the first half-screen,
+      tracks continuously through the middle, and sits still again through the
+      last half-screen, rather than jumping.
+    */
+    const centerOn = (pct: number) => {
+      const box = scrollRef?.current;
+      if (!box) return;
+      const overflow = box.scrollWidth - box.clientWidth;
+      if (overflow <= 0) return; // unzoomed: the whole clip is already visible
+      const x = (pct / 100) * box.scrollWidth;
+      box.scrollLeft = Math.max(0, Math.min(overflow, x - box.clientWidth / 2));
+    };
+
     // Written straight to the node rather than through state: playback would
     // otherwise re-render this component ~60 times a second.
-    const paint = () => {
-      playhead.style.left = `${playheadPercent(audio.currentTime, audio.duration)}%`;
+    const paint = (follow: boolean) => {
+      const pct = playheadPercent(audio.currentTime, audio.duration);
+      playhead.style.left = `${pct}%`;
+      if (follow) centerOn(pct);
     };
 
     const loop = () => {
-      paint();
+      paint(true);
       frame = requestAnimationFrame(loop);
     };
 
@@ -139,19 +169,24 @@ export function ClipMarks({
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(loop);
     };
+    // Repaints WITHOUT following, so pausing does not yank a view the reviewer
+    // may have just scrolled somewhere deliberately.
     const stop = () => {
       cancelAnimationFrame(frame);
-      paint();
+      paint(false);
     };
+    // A seek is the reviewer asking to be somewhere, so the view goes there.
+    const onSeek = () => paint(true);
+    const onMetadata = () => paint(false);
 
     audio.addEventListener("play", start);
     audio.addEventListener("playing", start);
     audio.addEventListener("pause", stop);
     audio.addEventListener("ended", stop);
-    audio.addEventListener("seeked", paint);
-    audio.addEventListener("loadedmetadata", paint);
+    audio.addEventListener("seeked", onSeek);
+    audio.addEventListener("loadedmetadata", onMetadata);
 
-    paint();
+    paint(false);
     if (!audio.paused) start();
 
     return () => {
@@ -160,11 +195,11 @@ export function ClipMarks({
       audio.removeEventListener("playing", start);
       audio.removeEventListener("pause", stop);
       audio.removeEventListener("ended", stop);
-      audio.removeEventListener("seeked", paint);
-      audio.removeEventListener("loadedmetadata", paint);
+      audio.removeEventListener("seeked", onSeek);
+      audio.removeEventListener("loadedmetadata", onMetadata);
     };
     // `resetKey` is in the deps so the playhead resets when the clip changes.
-  }, [audioRef, resetKey]);
+  }, [audioRef, resetKey, scrollRef]);
 
   return (
     <>
@@ -213,7 +248,7 @@ export function SpectrogramOverlay({
   bandLeftPct,
   bandRightPct,
   audioRef,
-  height = 180,
+  height = 300,
 }: {
   src: string;
   bandLeftPct: number;

@@ -19,7 +19,6 @@ import { useReviewShortcuts } from "./use-review-shortcuts";
 import { SpectrogramOverlay } from "./spectrogram-overlay";
 import { LiveSpectrogram, type RenderStats } from "./live-spectrogram";
 import { SpectrogramControls } from "./spectrogram-controls";
-import { isDefault } from "./spectrogram-settings";
 import { useReviewSpectrogramSettings } from "./use-spectrogram-settings";
 import { batchState, canFit, queuePosition, remainingForReviewer } from "./review-progress";
 
@@ -89,7 +88,11 @@ export function ReviewClient({
 
   // Spectrogram display settings, shared across clips and sessions.
   const [specSettings, updateSpecSettings] = useReviewSpectrogramSettings();
-  const [controlsOpen, setControlsOpen] = useState(false);
+  // Open by default. The controls were behind a disclosure while the live
+  // canvas was the opt-in path; now that it is the only surface, hiding them
+  // just means a reviewer has to discover that the picture is adjustable at
+  // all — and the ones who need it most are mid-run on a hard species.
+  const [controlsOpen, setControlsOpen] = useState(true);
   const [nyquistHz, setNyquistHz] = useState<number | null>(null);
   // Set when this browser cannot decode the clip. Sticky for the batch: a
   // browser that failed once will fail on every clip, and retrying the decode
@@ -104,16 +107,16 @@ export function ReviewClient({
   }, []);
 
   /*
-    The pre-rendered WebP stays the default surface.
+    The live canvas is THE surface; the pre-rendered WebP is now only a
+    fallback for a browser that cannot decode the clip.
 
-    It is cached, prefetched two clips ahead, and appears with no main-thread
-    work at all — which is the right trade for the great majority of clips,
-    where the reviewer answers without adjusting anything. The browser only
-    pays for decode + FFT once the reviewer has actually asked for control,
-    either by opening the panel or by carrying non-default settings in from a
-    previous session.
+    It used to be the other way round, with the canvas opted into by opening
+    the controls — a hidden performance lever that also meant collapsing the
+    panel silently swapped what you were looking at. Measured cost of making it
+    unconditional: 27 ms per clip on a current laptop, 183 ms at 6x CPU
+    throttle, against a decision that takes a reviewer several seconds.
   */
-  const useLive = (controlsOpen || !isDefault(specSettings)) && !liveUnsupported;
+  const useLive = !liveUnsupported;
 
   const audioRef = useRef<HTMLAudioElement>(null);
   /*
@@ -156,14 +159,21 @@ export function ReviewClient({
   useEffect(() => {
     for (let i = index + 1; i <= index + PREFETCH_AHEAD && i < items.length; i++) {
       const id = items[i].sampleId;
+      // Warms the audio for BOTH playback and the FFT: `decodeAudio` fetches
+      // the same URL, so this prefetch is what turns its download into a
+      // cache hit.
       void fetch(`/api/audio/validation-clip?sample=${id}`, { method: "GET" }).catch(
         () => {}
       );
-      void fetch(`/api/audio/validation-spectrogram?sample=${id}`, {
-        method: "GET",
-      }).catch(() => {});
+      // Only worth warming when it is what gets drawn. On the live canvas this
+      // was ~165 KB per clip fetched, decoded and thrown away.
+      if (!useLive) {
+        void fetch(`/api/audio/validation-spectrogram?sample=${id}`, {
+          method: "GET",
+        }).catch(() => {});
+      }
     }
-  }, [index, items]);
+  }, [index, items, useLive]);
 
   // Autoplay on advance. Blocked autoplay is not an error — the reviewer can
   // press space.

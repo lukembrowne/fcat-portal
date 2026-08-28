@@ -83,8 +83,6 @@ function measure(name: string, startedAt: number): number {
  * WebP it stands in for.
  */
 const BASE_BITMAP_WIDTH = 1600;
-/** Matches `OUT_HEIGHT` in `spectrogram-image.ts`, for the same reason. */
-const BITMAP_HEIGHT = 264;
 
 export interface RenderStats {
   decodeMs: number;
@@ -119,7 +117,7 @@ export function LiveSpectrogram({
   bandRightPct,
   audioRef,
   settings,
-  height = 180,
+  height = 300,
   onStats,
   onUnsupported,
 }: {
@@ -286,16 +284,34 @@ export function LiveSpectrogram({
   }, [
     magnitudes,
     bitmapWidth,
+    height,
     settings.gainDB,
     settings.rangeDB,
     settings.displayMaxHz,
     settings.colormap,
   ]);
 
-  // A new clip should start at the left edge even if the reviewer had scrolled.
+  /*
+    Land on the DETECTION when the clip or the zoom changes.
+
+    Resetting to the left edge (what this did first) puts a 4x-zoomed reviewer
+    at second 0 of 9, looking at context, with the thing they are judging three
+    screens to the right. The detection is the only part of the clip anyone
+    opened zoom for, so that is where the view starts; the flanking context is
+    a scroll away, and playback tracks from wherever it begins.
+  */
   useEffect(() => {
-    if (scrollRef.current) scrollRef.current.scrollLeft = 0;
-  }, [src]);
+    const box = scrollRef.current;
+    if (!box) return;
+    const overflow = box.scrollWidth - box.clientWidth;
+    if (overflow <= 0) {
+      box.scrollLeft = 0;
+      return;
+    }
+    const centerPct = (bandLeftPct + bandRightPct) / 2;
+    const x = (centerPct / 100) * box.scrollWidth;
+    box.scrollLeft = Math.max(0, Math.min(overflow, x - box.clientWidth / 2));
+  }, [src, settings.zoom, bandLeftPct, bandRightPct]);
 
   return (
     <div
@@ -312,11 +328,16 @@ export function LiveSpectrogram({
           bandRightPct={bandRightPct}
           audioRef={audioRef}
           resetKey={src}
+          scrollRef={scrollRef}
           surface={
             <canvas
               ref={canvasRef}
               width={bitmapWidth}
-              height={BITMAP_HEIGHT}
+              /* Bitmap height == display height, so the FFT rows are scaled
+                 ONCE. Pinning it to the server renderer's 264 and then letting
+                 CSS stretch that to the box was two resamples of a picture
+                 only ~257 rows tall to begin with. */
+              height={height}
               className="block h-full w-full"
             />
           }

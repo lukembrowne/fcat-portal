@@ -272,6 +272,92 @@ export function selectIncludedClasses(input: {
   return { classList, droppedSpecies };
 }
 
+// ---------------------------------------------------------------------------
+// Corpus scope — which camera-trap projects contribute to an export
+// ---------------------------------------------------------------------------
+
+/**
+ * A "source" is one bucket of deployments an export can draw from. Almost all
+ * of them are camera-trap projects (`ct_projects.id`, stringified), but two
+ * buckets have no project of their own and still hold exportable crops, so
+ * they get reserved keys:
+ *
+ * - `external` — the synthetic LILA deployments (`is_external = 1`). They are
+ *   train-pinned augmentation and belong to no FCAT project, so a project
+ *   filter would otherwise let them through silently. Making them a selectable
+ *   source keeps "what is in this export" answerable from the selection alone.
+ * - `none` — real FCAT deployments whose `ct_project_id` was never assigned.
+ *
+ * Keys (not ids) because the three kinds have to travel through one FormData
+ * field and one JSON column.
+ */
+export const EXTERNAL_SOURCE_KEY = "external";
+export const UNASSIGNED_SOURCE_KEY = "none";
+
+/** A source selection resolved into the three shapes the query needs. */
+export interface ParsedSourceSelection {
+  /** Camera-trap project ids explicitly selected. */
+  projectIds: number[];
+  /** Whether LILA/external deployments are in scope. */
+  includeExternal: boolean;
+  /** Whether project-less FCAT deployments are in scope. */
+  includeUnassigned: boolean;
+}
+
+/**
+ * Turn raw source keys (FormData strings, or a persisted JSON array) into the
+ * selection the candidate query filters on.
+ *
+ * Unknown and malformed keys are dropped rather than rejected: the selection
+ * arrives from a client that may be a version behind, and a stale key must
+ * narrow the corpus, never widen it or throw. Duplicates collapse and the ids
+ * come back sorted so a selection has one canonical form.
+ */
+export function parseSourceKeys(keys: string[]): ParsedSourceSelection {
+  const projectIds = new Set<number>();
+  let includeExternal = false;
+  let includeUnassigned = false;
+  for (const raw of keys) {
+    const key = typeof raw === "string" ? raw.trim() : "";
+    if (key === EXTERNAL_SOURCE_KEY) {
+      includeExternal = true;
+    } else if (key === UNASSIGNED_SOURCE_KEY) {
+      includeUnassigned = true;
+    } else if (/^\d+$/.test(key)) {
+      const id = Number.parseInt(key, 10);
+      if (Number.isSafeInteger(id) && id > 0) projectIds.add(id);
+    }
+  }
+  return {
+    projectIds: Array.from(projectIds).sort((a, b) => a - b),
+    includeExternal,
+    includeUnassigned,
+  };
+}
+
+/** True when a parsed selection matches no deployment at all. */
+export function isEmptySourceSelection(sel: ParsedSourceSelection): boolean {
+  return (
+    sel.projectIds.length === 0 && !sel.includeExternal && !sel.includeUnassigned
+  );
+}
+
+/**
+ * Canonical, order-independent form of a source selection — used to persist it
+ * and to compare a stored selection against a new one. `null` in, `null` out:
+ * an absent selection means "every source", which is NOT the same as a
+ * selection that happens to list every source today (a project added later
+ * joins the first and not the second).
+ */
+export function canonicalSourceKeys(keys: string[] | null): string[] | null {
+  if (keys === null) return null;
+  const sel = parseSourceKeys(keys);
+  const out = sel.projectIds.map((id) => String(id));
+  if (sel.includeUnassigned) out.push(UNASSIGNED_SOURCE_KEY);
+  if (sel.includeExternal) out.push(EXTERNAL_SOURCE_KEY);
+  return out;
+}
+
 /**
  * Post-stratify safety check: given the final per-label per-split counts,
  * return the set of labels that still have zero examples in train, val, or
@@ -636,6 +722,12 @@ export function buildManifest(input: {
     imageCount: number;
     license: string | null;
   }>;
+  /** Corpus scope: which sources the admin selected and what each contributed.
+   * `selected: null` means no filter was applied (every source). */
+  sources?: {
+    selected: string[] | null;
+    perSource: Array<{ key: string; name: string; imageCount: number }>;
+  };
 }): Record<string, unknown> {
   return {
     version: input.version,
@@ -647,6 +739,10 @@ export function buildManifest(input: {
     classList: input.classList,
     droppedSpecies: input.droppedSpecies,
     counts: input.counts,
+    // Corpus scope. Always emitted (even for an unfiltered export) so a reader
+    // never has to infer from the absence of a key whether the exporter
+    // supported filtering at the time — `selected: null` says it outright.
+    sources: input.sources ?? { selected: null, perSource: [] },
     deployments: input.deployments,
     warnings: input.warnings,
     // Provenance: which detector, threshold, and crop knobs produced these

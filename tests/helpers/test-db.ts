@@ -594,6 +594,31 @@ const CAMERA_TRAP_DDL =
     ON birdnet_species_thresholds(species) WHERE is_active = 1;
   CREATE INDEX idx_birdnet_thresholds_campaign
     ON birdnet_species_thresholds(campaign_id);
+
+  CREATE TABLE camera_trap_training_datasets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    version TEXT NOT NULL UNIQUE,
+    content_hash TEXT NOT NULL UNIQUE,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    created_by TEXT NOT NULL,
+    image_count INTEGER NOT NULL,
+    fcat_image_count INTEGER,
+    external_image_count INTEGER,
+    class_count INTEGER NOT NULL,
+    min_examples_threshold INTEGER NOT NULL,
+    class_list_json TEXT NOT NULL,
+    dropped_species_json TEXT NOT NULL,
+    deployments_json TEXT NOT NULL,
+    source_keys_json TEXT,
+    manifest_path TEXT NOT NULL,
+    detection_confidence_floor REAL,
+    crop_padding REAL,
+    crop_long_edge INTEGER,
+    jpeg_quality INTEGER,
+    drive_archive_file_id TEXT,
+    drive_archive_web_view_link TEXT,
+    archive_uploaded_at INTEGER
+  );
 `;
 
 export function createTestDb() {

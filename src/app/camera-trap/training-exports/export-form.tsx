@@ -4,6 +4,7 @@ import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -17,6 +18,7 @@ import {
   getExportPreview,
   type ExportPreview,
   type ExportDispatchResult,
+  type ExportSourceOption,
 } from "./actions";
 // Type-only import (erased at build → no node:crypto in the client bundle).
 import type { PreviewDeltaRow } from "@/lib/training-export-helpers";
@@ -28,7 +30,7 @@ const DEFAULT_CROP_LONG_EDGE = 512;
 const DEFAULT_JPEG_QUALITY = 90;
 const PREVIEW_DEBOUNCE_MS = 300;
 
-export function ExportForm() {
+export function ExportForm({ sources }: { sources: ExportSourceOption[] }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [result, setResult] = useState<ExportDispatchResult | null>(null);
@@ -47,17 +49,45 @@ export function ExportForm() {
   const [previewLoading, setPreviewLoading] = useState(true);
   const [previewError, setPreviewError] = useState<string | null>(null);
 
+  // Corpus scope. Every source starts selected, so the form's default is the
+  // pre-filter behaviour and an admin who ignores this control gets exactly
+  // what they got before.
+  const [selectedSources, setSelectedSources] = useState<string[]>(() =>
+    sources.map((s) => s.key),
+  );
+  const selectedSet = new Set(selectedSources);
+  // "All ticked" is sent as no filter at all rather than as a list of every
+  // source. The two are not the same thing: a project added next month joins
+  // the first and is silently missing from the second.
+  const allSourcesSelected = sources.every((s) => selectedSet.has(s.key));
+  const noSourcesSelected = sources.length > 0 && selectedSources.length === 0;
+  // Stable, order-independent effect dependency — selecting A then B must not
+  // re-fetch the preview that selecting B then A already fetched.
+  const sourceFilterKey = allSourcesSelected
+    ? ""
+    : [...selectedSources].sort().join(",");
+
   // Debounced preview fetch — re-runs whenever minExamples or the confidence
   // floor changes. Loading flag flips inside the timeout (not synchronously in
   // the effect body) to avoid cascading renders per the React lint rule.
   useEffect(() => {
     if (!Number.isFinite(minExamples) || minExamples < 1) return;
+    // Nothing ticked: there is no corpus to preview, and the server would only
+    // hand back the same sentence. Bail without touching state — the render
+    // branch already replaces the card, and leaving the last preview in place
+    // means re-ticking a source shows the old table (dimmed) instead of a gap
+    // while the new one loads.
+    if (noSourcesSelected) return;
     let cancelled = false;
     const handle = setTimeout(async () => {
       if (cancelled) return;
       setPreviewLoading(true);
       setPreviewError(null);
-      const res = await getExportPreview(minExamples, confidenceFloor);
+      const res = await getExportPreview(
+        minExamples,
+        confidenceFloor,
+        sourceFilterKey === "" ? null : sourceFilterKey.split(","),
+      );
       if (cancelled) return;
       if (res.success) {
         setPreview(res.data);
@@ -71,7 +101,7 @@ export function ExportForm() {
       cancelled = true;
       clearTimeout(handle);
     };
-  }, [minExamples, confidenceFloor]);
+  }, [minExamples, confidenceFloor, sourceFilterKey, noSourcesSelected]);
 
   function handleSubmit(formData: FormData) {
     setError(null);
@@ -94,13 +124,47 @@ export function ExportForm() {
 
   return (
     <div>
-      <PreviewCard
-        preview={preview}
-        loading={previewLoading}
-        error={previewError}
+      <SourcePicker
+        sources={sources}
+        selected={selectedSources}
+        onChange={setSelectedSources}
+        disabled={isPending}
       />
 
+      <div className="mt-3">
+        {noSourcesSelected ? (
+          <div className="rounded border border-amber-500/40 bg-amber-50 p-3 text-sm text-amber-800">
+            Seleccioná al menos un proyecto para ver la vista previa.
+          </div>
+        ) : (
+          <PreviewCard
+            preview={preview}
+            loading={previewLoading}
+            error={previewError}
+          />
+        )}
+      </div>
+
       <form action={handleSubmit} className="mt-4">
+        {/* The selection rides along as hidden inputs — the picker's state is
+            already the source of truth for the preview, and a Radix checkbox
+            submits "on", not its value. Omitted entirely when everything is
+            ticked, which the action reads as "no filter".
+
+            With nothing ticked the field still has to be PRESENT, or an empty
+            selection would arrive at the server indistinguishable from no
+            filter and quietly export the whole corpus. The empty value parses
+            to no sources, which the action refuses. The submit button is
+            disabled in that state too; this is the half that does not depend
+            on the button. */}
+        {!allSourcesSelected &&
+          (selectedSources.length === 0 ? (
+            <input type="hidden" name="sourceKeys" value="" />
+          ) : (
+            selectedSources.map((key) => (
+              <input key={key} type="hidden" name="sourceKeys" value={key} />
+            ))
+          ))}
         <div className="flex items-end gap-3">
           <div className="flex-1 max-w-xs">
             <Label htmlFor="minExamples" className="text-xs">
@@ -121,7 +185,10 @@ export function ExportForm() {
               disabled={isPending}
             />
           </div>
-          <Button type="submit" disabled={isPending || previewLoading}>
+          <Button
+            type="submit"
+            disabled={isPending || previewLoading || noSourcesSelected}
+          >
             {isPending ? "Exportando…" : "Exportar"}
           </Button>
         </div>
@@ -248,6 +315,104 @@ export function ExportForm() {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Which corpus sources feed the export. Almost always camera-trap projects;
+ * LILA imports and project-less deployments appear as their own rows so the
+ * selection answers "what is in this export" on its own.
+ *
+ * Unticking a source is how a half-verified project (Historical, mid-review)
+ * is kept out of a dataset without excluding its cameras globally.
+ */
+function SourcePicker({
+  sources,
+  selected,
+  onChange,
+  disabled,
+}: {
+  sources: ExportSourceOption[];
+  selected: string[];
+  onChange: (next: string[]) => void;
+  disabled: boolean;
+}) {
+  if (sources.length === 0) return null;
+  const selectedSet = new Set(selected);
+  const allOn = sources.every((s) => selectedSet.has(s.key));
+
+  const toggle = (key: string) => {
+    onChange(
+      selectedSet.has(key)
+        ? selected.filter((k) => k !== key)
+        : [...selected, key],
+    );
+  };
+
+  return (
+    <div className="rounded border p-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <span className="text-sm font-semibold">Proyectos incluidos</span>
+        <div className="flex items-center gap-2 text-xs">
+          {!allOn && (
+            <span className="text-amber-700">
+              {selected.length} de {sources.length} fuentes
+            </span>
+          )}
+          <button
+            type="button"
+            className="text-muted-foreground hover:text-foreground hover:underline disabled:opacity-50"
+            onClick={() => onChange(sources.map((s) => s.key))}
+            disabled={disabled || allOn}
+          >
+            Todos
+          </button>
+          <span className="text-muted-foreground/40">|</span>
+          <button
+            type="button"
+            className="text-muted-foreground hover:text-foreground hover:underline disabled:opacity-50"
+            onClick={() => onChange([])}
+            disabled={disabled || selected.length === 0}
+          >
+            Ninguno
+          </button>
+        </div>
+      </div>
+
+      <div className="mt-2 flex flex-wrap gap-2">
+        {sources.map((s) => {
+          const on = selectedSet.has(s.key);
+          return (
+            <label
+              key={s.key}
+              className={`flex cursor-pointer items-center gap-2 rounded border px-2.5 py-1.5 text-sm transition-colors ${
+                on
+                  ? "border-primary/40 bg-primary/5"
+                  : "border-dashed text-muted-foreground"
+              } ${disabled ? "cursor-not-allowed opacity-60" : "hover:bg-muted/50"}`}
+            >
+              <Checkbox
+                checked={on}
+                onCheckedChange={() => toggle(s.key)}
+                disabled={disabled}
+              />
+              <span className="font-medium">{s.name}</span>
+              <span className="text-xs text-muted-foreground tabular-nums">
+                {s.detections.toLocaleString("es-EC")} det. ·{" "}
+                {s.deployments.toLocaleString("es-EC")} inst.
+              </span>
+            </label>
+          );
+        })}
+      </div>
+
+      <p className="mt-2 text-[11px] leading-tight text-muted-foreground">
+        Conteos previos al umbral: son todas las detecciones verificadas
+        disponibles, antes de aplicar el mínimo por especie. Desmarcá un
+        proyecto para dejarlo fuera del dataset — por ejemplo, uno cuya
+        verificación todavía está a medias.
+      </p>
     </div>
   );
 }
@@ -463,6 +628,18 @@ function PreviewCard({
           {preview.deploymentCount} instalaciones
         </span>
       </div>
+
+      {preview.perSource.length > 0 && (
+        <p className="mt-1 text-xs text-muted-foreground">
+          Por proyecto:{" "}
+          {preview.perSource
+            .map(
+              (src) =>
+                `${src.name} ${src.imageCount.toLocaleString("es-EC")}`,
+            )
+            .join(" · ")}
+        </p>
+      )}
 
       {preview.migrationApplied && (
         <div className="mt-2 rounded border border-amber-500/40 bg-amber-50 p-2 text-xs text-amber-800">

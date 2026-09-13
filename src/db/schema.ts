@@ -485,6 +485,11 @@ export const cameraTrapTrainingDatasets = sqliteTable(
     classListJson: text("class_list_json").notNull(),
     droppedSpeciesJson: text("dropped_species_json").notNull(),
     deploymentsJson: text("deployments_json").notNull(),
+    // Corpus scope: JSON array of source keys (ct_project ids as strings, plus
+    // the reserved "external" / "none" keys). NULL means no filter was applied
+    // — which is deliberately distinct from an array listing every source that
+    // existed at the time. See parseSourceKeys in training-export-helpers.ts.
+    sourceKeysJson: text("source_keys_json"),
     manifestPath: text("manifest_path").notNull(),
     // Crop-quality knobs used for this export (nullable for pre-2026-05 rows).
     detectionConfidenceFloor: real("detection_confidence_floor"),

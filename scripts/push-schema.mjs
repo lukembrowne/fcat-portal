@@ -863,6 +863,7 @@ const statements = [
     class_list_json TEXT NOT NULL,
     dropped_species_json TEXT NOT NULL,
     deployments_json TEXT NOT NULL,
+    source_keys_json TEXT,
     manifest_path TEXT NOT NULL,
     detection_confidence_floor REAL,
     crop_padding REAL,
@@ -1287,6 +1288,12 @@ const migrations = [
   // site_share_tokens.view_count above. Every existing row therefore migrates
   // to 'medium', which is the intended reading: unmarked, not middling.
   `ALTER TABLE birdnet_validation_campaigns ADD COLUMN priority TEXT NOT NULL DEFAULT 'medium' CHECK(priority IN ('high','medium','low'))`,
+
+  // Training exports can be scoped to a subset of camera-trap projects
+  // (2026-09-13), e.g. BioChoco only while Historical is still being verified.
+  // JSON array of source keys; NULL on every pre-existing row, which reads as
+  // "no filter" — correct, since those exports drew from everything.
+  `ALTER TABLE camera_trap_training_datasets ADD COLUMN source_keys_json TEXT`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }

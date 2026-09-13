@@ -27,7 +27,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import sharp from "sharp";
 import pLimit from "p-limit";
-import { eq, and, or, inArray, gte, sql, isNotNull } from "drizzle-orm";
+import { eq, and, or, inArray, gte, sql, isNotNull, isNull, type SQL } from "drizzle-orm";
 
 import { db } from "@/db";
 import {
@@ -36,6 +36,7 @@ import {
   identifications,
   deployments,
   externalImages,
+  cameraTrapProjects,
   cameraTrapTrainingDatasets,
   processingJobs,
   type CameraTrapTrainingDataset,
@@ -67,6 +68,11 @@ import {
   stratifyDeploymentSplits,
   selectIncludedClasses,
   findUncoveredLabels,
+  parseSourceKeys,
+  canonicalSourceKeys,
+  isEmptySourceSelection,
+  EXTERNAL_SOURCE_KEY,
+  UNASSIGNED_SOURCE_KEY,
   SPLIT_STRATEGY_VERSION,
   STRATIFY_MIN_DEPLOYMENTS,
   type HashRow,
@@ -216,6 +222,149 @@ export interface ExportPreview {
   deltaRows: PreviewDeltaRow[];
   /** Footer totals delta (current − baseline). Null when `baseline` is null. */
   deltaFooter: SplitTotals | null;
+  /** What each selected source contributes to this preview, largest first. A
+   * selected source missing from this list contributed nothing. */
+  perSource: Array<{ key: string; name: string; imageCount: number }>;
+}
+
+/** Display name for the two reserved, project-less source buckets. */
+const EXTERNAL_SOURCE_NAME = "Externas (LILA)";
+const UNASSIGNED_SOURCE_NAME = "Sin proyecto";
+
+/** One selectable corpus source, with the verified material behind it. */
+export interface ExportSourceOption {
+  /** `ct_projects.id` as a string, or a reserved key. */
+  key: string;
+  name: string;
+  /** Verified animal detections available before any threshold is applied. */
+  detections: number;
+  /** Distinct deployments contributing those detections. */
+  deployments: number;
+  isExternal: boolean;
+}
+
+/**
+ * The corpus sources an export can be scoped to, each with the amount of
+ * verified material behind it, so the admin picks by size rather than by name.
+ *
+ * Derived from the detections themselves, not from `ct_projects`: a project
+ * with nothing verified is not a meaningful choice, and a bucket that exists
+ * only in the data (external, or deployments never assigned a project) has no
+ * `ct_projects` row to be listed from. Counts here are pre-threshold — the
+ * preview applies `minExamples` and the deployment-coverage rule afterwards.
+ */
+export async function listExportSources(): Promise<
+  ActionResult<ExportSourceOption[]>
+> {
+  await requireAdmin();
+  try {
+    const rows = await db
+      .select({
+        projectId: deployments.cameraTrapProjectId,
+        projectName: cameraTrapProjects.name,
+        isExternal: deployments.isExternal,
+        detections: sql<number>`count(*)`,
+        deployments: sql<number>`count(distinct ${deployments.id})`,
+      })
+      .from(detections)
+      .innerJoin(images, eq(images.id, detections.imageId))
+      .innerJoin(identifications, eq(identifications.detectionId, detections.id))
+      .innerJoin(deployments, eq(deployments.id, images.deploymentId))
+      .leftJoin(
+        cameraTrapProjects,
+        eq(cameraTrapProjects.id, deployments.cameraTrapProjectId),
+      )
+      .where(
+        and(
+          inArray(identifications.verificationStatus, ["verified", "corrected"]),
+          eq(detections.detectionClass, 0),
+          eq(deployments.excludedCamera, false),
+        ),
+      )
+      .groupBy(
+        deployments.cameraTrapProjectId,
+        deployments.isExternal,
+      );
+
+    // An external deployment also has a NULL ct_project_id, so collapse on the
+    // derived key rather than trusting the GROUP BY tuple to be one bucket.
+    const byKey = new Map<string, ExportSourceOption>();
+    for (const r of rows) {
+      const isExternal = Boolean(r.isExternal);
+      const key = isExternal
+        ? EXTERNAL_SOURCE_KEY
+        : r.projectId != null
+          ? String(r.projectId)
+          : UNASSIGNED_SOURCE_KEY;
+      const name = isExternal
+        ? EXTERNAL_SOURCE_NAME
+        : (r.projectName ?? UNASSIGNED_SOURCE_NAME);
+      const existing = byKey.get(key);
+      if (existing) {
+        existing.detections += Number(r.detections);
+        existing.deployments += Number(r.deployments);
+      } else {
+        byKey.set(key, {
+          key,
+          name,
+          detections: Number(r.detections),
+          deployments: Number(r.deployments),
+          isExternal,
+        });
+      }
+    }
+
+    // Biggest first: the choice being made is "how much material do I pull in".
+    return {
+      success: true,
+      data: Array.from(byKey.values()).sort(
+        (a, b) => b.detections - a.detections || a.name.localeCompare(b.name, "es"),
+      ),
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.error({ err }, "[training-export] listExportSources failed");
+    return { success: false, error: msg };
+  }
+}
+
+/**
+ * SQL predicate restricting candidates to the selected sources. `null` (no
+ * selection) returns undefined — every source, the pre-filter behaviour.
+ *
+ * The external branch is guarded on both sides: external deployments carry a
+ * NULL `ct_project_id`, so selecting "Sin proyecto" without "Externas" must not
+ * sweep LILA rows in, and vice versa.
+ */
+function buildSourceFilter(sourceKeys: string[] | null): SQL | undefined {
+  if (sourceKeys === null) return undefined;
+  const sel = parseSourceKeys(sourceKeys);
+  const clauses: SQL[] = [];
+  if (sel.projectIds.length > 0) {
+    clauses.push(
+      and(
+        inArray(deployments.cameraTrapProjectId, sel.projectIds),
+        eq(deployments.isExternal, false),
+      )!,
+    );
+  }
+  if (sel.includeUnassigned) {
+    clauses.push(
+      and(
+        isNull(deployments.cameraTrapProjectId),
+        eq(deployments.isExternal, false),
+      )!,
+    );
+  }
+  if (sel.includeExternal) {
+    clauses.push(eq(deployments.isExternal, true));
+  }
+  if (clauses.length === 0) {
+    // Caller validates for this before querying; belt-and-braces so an empty
+    // selection can never silently mean "everything".
+    return sql`0 = 1`;
+  }
+  return clauses.length === 1 ? clauses[0] : or(...clauses)!;
 }
 
 interface CandidateRow {
@@ -246,6 +395,11 @@ interface CandidateRow {
   /** Original LILA frame URL — used to lazily re-download a cleared external
    *  cache entry at export time; null for FCAT or pre-provenance rows. */
   sourceUrl: string | null;
+  /** Corpus source this crop came from — a ct_project id as a string, or one
+   * of the reserved keys. Carried per row so the manifest can report what each
+   * selected source actually contributed. */
+  sourceKey: string;
+  sourceName: string;
 }
 
 interface CollectedCandidates {
@@ -274,15 +428,25 @@ interface CollectedCandidates {
   migrationApplied: boolean;
   forcedReassignments: ForcedReassignment[];
   deploymentNameById: Map<number, string>;
+  /** Per-source contribution over the surviving candidate set, largest first.
+   * Reports what each selected source ACTUALLY gave the export, which is not
+   * the same as what was selected — a source can survive selection and still
+   * contribute nothing once the class thresholds run. */
+  perSource: Array<{ key: string; name: string; imageCount: number }>;
 }
 
 /**
  * Pure-read collection of export candidates. Shared by the preview and the
  * export server actions. Does NOT persist anything.
+ *
+ * `sourceKeys` scopes the corpus to a subset of camera-trap projects (plus the
+ * reserved external / unassigned buckets); `null` means every source, which is
+ * the pre-2026-09 behaviour and stays the default.
  */
 async function collectExportCandidates(
   minExamples: number,
   detectionConfidenceFloor: number = MIN_CONFIDENCE_FLOOR,
+  sourceKeys: string[] | null = null,
 ): Promise<CollectedCandidates> {
   // 1. Pull every verified animal detection joined with its identification
   //    and the parent image+deployment. The confidence floor filters up from
@@ -309,6 +473,9 @@ async function collectExportCandidates(
       detectorModelVersion: detections.modelVersion,
       excluded: deployments.excludedCamera,
       isExternal: images.isExternal,
+      deploymentIsExternal: deployments.isExternal,
+      ctProjectId: deployments.cameraTrapProjectId,
+      ctProjectName: cameraTrapProjects.name,
       sourceDataset: externalImages.sourceDataset,
       sourceUrl: externalImages.sourceUrl,
     })
@@ -320,6 +487,10 @@ async function collectExportCandidates(
     )
     .innerJoin(deployments, eq(deployments.id, images.deploymentId))
     .leftJoin(externalImages, eq(externalImages.imageId, images.id))
+    .leftJoin(
+      cameraTrapProjects,
+      eq(cameraTrapProjects.id, deployments.cameraTrapProjectId),
+    )
     .where(
       and(
         inArray(identifications.verificationStatus, ["verified", "corrected"]),
@@ -349,6 +520,8 @@ async function collectExportCandidates(
           isNotNull(images.driveFileId),
           and(eq(images.isExternal, true), isNotNull(images.path)),
         ),
+        // Corpus scope. Undefined when unfiltered; drizzle's `and` drops it.
+        buildSourceFilter(sourceKeys),
       ),
     );
 
@@ -375,6 +548,14 @@ async function collectExportCandidates(
     isExternal: Boolean(r.isExternal),
     sourceDataset: r.sourceDataset ?? null,
     sourceUrl: r.sourceUrl ?? null,
+    sourceKey: r.deploymentIsExternal
+      ? EXTERNAL_SOURCE_KEY
+      : r.ctProjectId != null
+        ? String(r.ctProjectId)
+        : UNASSIGNED_SOURCE_KEY,
+    sourceName: r.deploymentIsExternal
+      ? EXTERNAL_SOURCE_NAME
+      : (r.ctProjectName ?? UNASSIGNED_SOURCE_NAME),
   }));
 
   // 2. Group by label, drop labels that fail either pre-filter:
@@ -424,6 +605,20 @@ async function collectExportCandidates(
   //    - Otherwise we treat persisted splits as anchors and only stratify
   //      newly-verified deployments around them.
   const migrationApplied = await needsSplitStrategyMigration();
+
+  // A migration clears EVERY deployment's persisted split and re-stratifies
+  // from scratch. Run under a source filter it would clear the splits of
+  // deployments it then never reassigns, stranding the excluded projects with
+  // no split at all — and the next full export would read the bumped manifest
+  // version, decide no migration is pending, and anchor to that damage. So the
+  // whole-corpus operation has to run on the whole corpus.
+  if (migrationApplied && sourceKeys !== null) {
+    throw new Error(
+      `El próximo exporte debe recalcular los splits de todas las instalaciones ` +
+        `(algoritmo de estratificación v${SPLIT_STRATEGY_VERSION}). Ejecutá primero ` +
+        `un exporte con todos los proyectos seleccionados; después podés filtrar.`,
+    );
+  }
 
   const deploymentIds = Array.from(
     new Set(filtered.map((c) => c.deploymentId)),
@@ -539,6 +734,19 @@ async function collectExportCandidates(
     );
   }
 
+  // What each source actually contributes, over the surviving set.
+  const perSourceCounts = new Map<string, { name: string; imageCount: number }>();
+  for (const c of survivingFiltered) {
+    const entry = perSourceCounts.get(c.sourceKey);
+    if (entry) entry.imageCount += 1;
+    else perSourceCounts.set(c.sourceKey, { name: c.sourceName, imageCount: 1 });
+  }
+  const perSource = Array.from(perSourceCounts.entries())
+    .map(([key, v]) => ({ key, name: v.name, imageCount: v.imageCount }))
+    .sort(
+      (a, b) => b.imageCount - a.imageCount || a.name.localeCompare(b.name, "es"),
+    );
+
   return {
     filtered: survivingFiltered,
     classList: survivingClassList,
@@ -550,6 +758,7 @@ async function collectExportCandidates(
     migrationApplied,
     forcedReassignments: survivingForcedReassignments,
     deploymentNameById,
+    perSource,
   };
 }
 
@@ -675,11 +884,18 @@ async function loadBaselineExport(): Promise<{
 export async function getExportPreview(
   minExamples: number,
   detectionConfidenceFloor: number = MIN_CONFIDENCE_FLOOR,
+  sourceKeys: string[] | null = null,
 ): Promise<ActionResult<ExportPreview>> {
   await requireAdmin();
 
   if (!Number.isFinite(minExamples) || minExamples < 1) {
     return { success: false, error: "minExamples must be a positive integer" };
+  }
+  if (sourceKeys !== null && isEmptySourceSelection(parseSourceKeys(sourceKeys))) {
+    return {
+      success: false,
+      error: "Seleccioná al menos un proyecto para incluir en el exporte.",
+    };
   }
   if (
     !Number.isFinite(detectionConfidenceFloor) ||
@@ -696,6 +912,7 @@ export async function getExportPreview(
     const collected = await collectExportCandidates(
       minExamples,
       detectionConfidenceFloor,
+      sourceKeys,
     );
 
     // Aggregate per-label-per-split counts AND per-label-per-split distinct
@@ -817,6 +1034,7 @@ export async function getExportPreview(
         baseline: baseline?.meta ?? null,
         deltaRows,
         deltaFooter,
+        perSource: collected.perSource,
       },
     };
   } catch (err) {
@@ -848,6 +1066,9 @@ function parseNumberField(
  *   - `cropPadding` (float ≥ 0, default 0.05)
  *   - `cropLongEdge` (integer ≥ 32, default 512)
  *   - `jpegQuality` (integer 1–100, default 90)
+ *   - `sourceKeys` (repeated; ct_project ids plus the reserved `external` /
+ *     `none` keys). Absent means every source — a caller that predates the
+ *     filter therefore keeps its old behaviour.
  */
 export async function exportTrainingDataset(
   formData: FormData,
@@ -863,6 +1084,22 @@ export async function exportTrainingDataset(
     return { success: false, error: "minExamples must be a positive integer" };
   }
   const minExamples = parsed;
+
+  // Corpus scope. An absent field is "no filter"; a present-but-empty one is a
+  // client that cleared every box, which is a mistake worth naming rather than
+  // quietly reading as "everything".
+  const rawSourceKeys = formData
+    .getAll("sourceKeys")
+    .filter((v): v is string => typeof v === "string");
+  const sourceKeys = formData.has("sourceKeys")
+    ? canonicalSourceKeys(rawSourceKeys)
+    : null;
+  if (sourceKeys !== null && isEmptySourceSelection(parseSourceKeys(sourceKeys))) {
+    return {
+      success: false,
+      error: "Seleccioná al menos un proyecto para incluir en el exporte.",
+    };
+  }
 
   // Crop-quality knobs (Phase 2). Validate ranges; confidence floor cannot go
   // below the 0.1 capture threshold because lower detections were never stored.
@@ -922,13 +1159,16 @@ export async function exportTrainingDataset(
     const collected = await collectExportCandidates(
       minExamples,
       quality.detectionConfidenceFloor,
+      sourceKeys,
     );
 
     if (collected.totalCandidatesBeforeFilter === 0) {
       return {
         success: false,
         error:
-          "No hay detecciones verificadas (verified/corrected) para exportar.",
+          sourceKeys === null
+            ? "No hay detecciones verificadas (verified/corrected) para exportar."
+            : "Los proyectos seleccionados no tienen detecciones verificadas (verified/corrected).",
       };
     }
 
@@ -990,6 +1230,13 @@ export async function exportTrainingDataset(
     });
 
     // Short-circuit if an identical export already exists.
+    //
+    // The source selection is deliberately NOT part of the hash: it changes
+    // which rows are in `rows`, and that is already hashed. The only case the
+    // two disagree on is a selection that happens to match the whole corpus —
+    // ticking every box produces the same crops as no filter at all, and
+    // deduping them to one dataset is the right answer. (The manifest of the
+    // surviving version then records whichever selection ran first.)
     const existing = await db
       .select()
       .from(cameraTrapTrainingDatasets)
@@ -1072,6 +1319,7 @@ export async function exportTrainingDataset(
       splitByDeployment,
       quality,
       minExamples,
+      sourceKeys,
       contentHash,
       version,
       versionDir,
@@ -1102,6 +1350,8 @@ interface ProcessExportArgs {
   splitByDeployment: Map<number, Split>;
   quality: ExportQuality;
   minExamples: number;
+  /** Selected corpus sources; null when unfiltered. */
+  sourceKeys: string[] | null;
   contentHash: string;
   version: string;
   versionDir: string;
@@ -1128,6 +1378,7 @@ async function processTrainingExportJobInternal(
     splitByDeployment,
     quality,
     minExamples,
+    sourceKeys,
     contentHash,
     version,
     versionDir,
@@ -1413,6 +1664,35 @@ async function processTrainingExportJobInternal(
     const externalCount = writtenRows.filter((r) => r.sourceDataset != null).length;
     const fcatCount = writtenCount - externalCount;
 
+    // Per-source contribution, over the WRITTEN set for the same reason
+    // `counts` is: a detection whose source image was unreachable never became
+    // a crop and must not be credited to its project. `filtered` is the only
+    // place the source travels, so index it by detection id.
+    const sourceByDetection = new Map<number, { key: string; name: string }>();
+    for (const c of filtered) {
+      sourceByDetection.set(c.detectionId, {
+        key: c.sourceKey,
+        name: c.sourceName,
+      });
+    }
+    const perSourceCounts = new Map<
+      string,
+      { name: string; imageCount: number }
+    >();
+    for (const r of writtenRows) {
+      const src = sourceByDetection.get(r.detectionId);
+      if (!src) continue;
+      const entry = perSourceCounts.get(src.key);
+      if (entry) entry.imageCount += 1;
+      else perSourceCounts.set(src.key, { name: src.name, imageCount: 1 });
+    }
+    const perSource = Array.from(perSourceCounts.entries())
+      .map(([key, v]) => ({ key, name: v.name, imageCount: v.imageCount }))
+      .sort(
+        (a, b) =>
+          b.imageCount - a.imageCount || a.name.localeCompare(b.name, "es"),
+      );
+
     let externalSources: Array<{
       dataset: string;
       imageCount: number;
@@ -1465,6 +1745,7 @@ async function processTrainingExportJobInternal(
       counts,
       deployments: deploymentSummaries,
       warnings,
+      sources: { selected: sourceKeys, perSource },
       pipeline: {
         detectorModel: ML_DEFAULTS.detectorModel,
         detectionConfidenceFloor: quality.detectionConfidenceFloor,
@@ -1517,6 +1798,7 @@ async function processTrainingExportJobInternal(
           ),
           droppedSpeciesJson: JSON.stringify(droppedSpecies),
           deploymentsJson: JSON.stringify(deploymentSummaries),
+          sourceKeysJson: sourceKeys === null ? null : JSON.stringify(sourceKeys),
           manifestPath,
           detectionConfidenceFloor: quality.detectionConfidenceFloor,
           cropPadding: quality.cropPadding,

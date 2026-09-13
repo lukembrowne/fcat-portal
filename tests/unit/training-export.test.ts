@@ -12,6 +12,12 @@ import {
   stratifyDeploymentSplits,
   selectIncludedClasses,
   findUncoveredLabels,
+  buildManifest,
+  parseSourceKeys,
+  canonicalSourceKeys,
+  isEmptySourceSelection,
+  EXTERNAL_SOURCE_KEY,
+  UNASSIGNED_SOURCE_KEY,
   SPLIT_STRATEGY_VERSION,
   STRATIFY_MIN_DEPLOYMENTS,
   type HashRow,
@@ -1018,5 +1024,119 @@ describe("buildPreviewDeltas", () => {
       { train: 0, val: 0, test: 0, total: 0 },
     );
     expect(footer).toEqual(sum);
+  });
+});
+
+describe("parseSourceKeys", () => {
+  it("splits project ids from the two reserved keys", () => {
+    const sel = parseSourceKeys(["1", "97", EXTERNAL_SOURCE_KEY]);
+    expect(sel.projectIds).toEqual([1, 97]);
+    expect(sel.includeExternal).toBe(true);
+    expect(sel.includeUnassigned).toBe(false);
+  });
+
+  it("recognizes the unassigned bucket independently of external", () => {
+    const sel = parseSourceKeys([UNASSIGNED_SOURCE_KEY]);
+    expect(sel.projectIds).toEqual([]);
+    expect(sel.includeExternal).toBe(false);
+    expect(sel.includeUnassigned).toBe(true);
+  });
+
+  it("drops unknown keys instead of throwing — a stale client must narrow, never widen", () => {
+    const sel = parseSourceKeys(["1", "banana", "", "-3", "0", "1.5"]);
+    expect(sel.projectIds).toEqual([1]);
+    expect(sel.includeExternal).toBe(false);
+    expect(sel.includeUnassigned).toBe(false);
+  });
+
+  it("collapses duplicates and sorts ids", () => {
+    expect(parseSourceKeys(["97", "1", "97"]).projectIds).toEqual([1, 97]);
+  });
+
+  it("tolerates surrounding whitespace", () => {
+    const sel = parseSourceKeys([" 1 ", `  ${EXTERNAL_SOURCE_KEY}`]);
+    expect(sel.projectIds).toEqual([1]);
+    expect(sel.includeExternal).toBe(true);
+  });
+});
+
+describe("isEmptySourceSelection", () => {
+  it("is true only when nothing at all is selected", () => {
+    expect(isEmptySourceSelection(parseSourceKeys([]))).toBe(true);
+    expect(isEmptySourceSelection(parseSourceKeys(["nonsense"]))).toBe(true);
+    expect(isEmptySourceSelection(parseSourceKeys(["1"]))).toBe(false);
+    expect(isEmptySourceSelection(parseSourceKeys([EXTERNAL_SOURCE_KEY]))).toBe(
+      false,
+    );
+    expect(
+      isEmptySourceSelection(parseSourceKeys([UNASSIGNED_SOURCE_KEY])),
+    ).toBe(false);
+  });
+});
+
+describe("canonicalSourceKeys", () => {
+  it("keeps null as null — an absent filter is not a list of every source", () => {
+    expect(canonicalSourceKeys(null)).toBeNull();
+  });
+
+  it("is order-independent", () => {
+    expect(canonicalSourceKeys(["97", "1"])).toEqual(
+      canonicalSourceKeys(["1", "97"]),
+    );
+  });
+
+  it("puts the reserved keys last and in a fixed order", () => {
+    expect(
+      canonicalSourceKeys([EXTERNAL_SOURCE_KEY, "5", UNASSIGNED_SOURCE_KEY]),
+    ).toEqual(["5", UNASSIGNED_SOURCE_KEY, EXTERNAL_SOURCE_KEY]);
+  });
+
+  it("round-trips through JSON to the same array", () => {
+    const canonical = canonicalSourceKeys(["97", "1", EXTERNAL_SOURCE_KEY])!;
+    expect(canonicalSourceKeys(JSON.parse(JSON.stringify(canonical)))).toEqual(
+      canonical,
+    );
+  });
+});
+
+describe("buildManifest sources block", () => {
+  const base = {
+    version: "v9",
+    contentHash: "abc",
+    createdAt: new Date("2026-09-13T00:00:00Z"),
+    createdBy: "a@b.c",
+    minExamplesThreshold: 50,
+    classList: ["Panthera onca"],
+    droppedSpecies: {},
+    counts: { total: 0, train: 0, val: 0, test: 0, perClass: {} },
+    deployments: [],
+    warnings: [],
+    pipeline: {
+      detectorModel: "MDV6-yolov9-c",
+      detectionConfidenceFloor: 0.1,
+      detectionThresholdAtCapture: 0.1,
+      cropPadding: 0.05,
+      cropLongEdge: 512,
+      jpegQuality: 90,
+    },
+  };
+
+  it("records the selection and what each source contributed", () => {
+    const m = buildManifest({
+      ...base,
+      sources: {
+        selected: ["1"],
+        perSource: [{ key: "1", name: "BioChoco", imageCount: 42 }],
+      },
+    });
+    expect(m.sources).toEqual({
+      selected: ["1"],
+      perSource: [{ key: "1", name: "BioChoco", imageCount: 42 }],
+    });
+  });
+
+  it("emits selected:null for an unfiltered export rather than omitting the key", () => {
+    const m = buildManifest(base);
+    expect(m.sources).toEqual({ selected: null, perSource: [] });
   });
 });

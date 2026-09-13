@@ -9,6 +9,7 @@ import { JOB_TYPES } from "@/lib/job-types";
 import { LILA_DATASETS, DEFAULT_REQUESTED_CLASSES } from "@/lib/external/datasets";
 import { SortIcon } from "@/components/sort-icon";
 import { ExportForm } from "./export-form";
+import { listExportSources } from "./actions";
 import { ExportArchiveCell } from "./export-archive-cell";
 import { ImportForm } from "./import-form";
 import { LilaCacheControls } from "./lila-cache-controls";
@@ -67,6 +68,48 @@ function SortableHeader({
   );
 }
 
+/**
+ * What corpus an export drew from. A NULL `source_keys_json` means no filter
+ * was applied — every export before 2026-09-13 is in that state, and so is any
+ * export made with every project ticked.
+ *
+ * Names are resolved against the live source list, so a project renamed or
+ * deleted since the export falls back to its key rather than vanishing.
+ */
+function ExportScopeCell({
+  sourceKeysJson,
+  nameByKey,
+}: {
+  sourceKeysJson: string | null;
+  nameByKey: Map<string, string>;
+}) {
+  if (!sourceKeysJson) {
+    return <span className="text-muted-foreground">Todos</span>;
+  }
+  let keys: string[];
+  try {
+    const parsed: unknown = JSON.parse(sourceKeysJson);
+    keys = Array.isArray(parsed) ? parsed.filter((k) => typeof k === "string") : [];
+  } catch {
+    return <span className="text-muted-foreground">—</span>;
+  }
+  if (keys.length === 0) {
+    return <span className="text-muted-foreground">—</span>;
+  }
+  return (
+    <span className="inline-flex flex-wrap gap-1">
+      {keys.map((key) => (
+        <span
+          key={key}
+          className="rounded bg-muted px-1.5 py-0.5 text-[11px] font-medium"
+        >
+          {nameByKey.get(key) ?? key}
+        </span>
+      ))}
+    </span>
+  );
+}
+
 export default async function TrainingExportsPage({
   searchParams,
 }: {
@@ -113,6 +156,15 @@ export default async function TrainingExportsPage({
     name: d.name,
   }));
 
+  // Selectable corpus sources for the export form. A failure here degrades to
+  // an empty list, which hides the picker and leaves the export unfiltered —
+  // the behaviour this page had before the filter existed.
+  const sourcesResult = await listExportSources();
+  const exportSources = sourcesResult.success ? sourcesResult.data : [];
+  const sourceNameByKey = new Map(
+    exportSources.map((src) => [src.key, src.name]),
+  );
+
   return (
     <div className="max-w-6xl mx-auto">
       {/* Breadcrumb */}
@@ -136,7 +188,7 @@ export default async function TrainingExportsPage({
 
       <div className="border rounded-lg p-4 mb-6 bg-muted/30">
         <h2 className="font-semibold mb-2">Crear nuevo exporte</h2>
-        <ExportForm />
+        <ExportForm sources={exportSources} />
       </div>
 
       <h2 className="text-xl font-semibold mb-3">Historial</h2>
@@ -170,6 +222,7 @@ export default async function TrainingExportsPage({
                   align="right"
                 />
                 <th className="px-3 py-2 font-semibold text-right">Fuente</th>
+                <th className="px-3 py-2 font-semibold">Proyectos</th>
                 <SortableHeader
                   column="classes"
                   label="Clases"
@@ -217,6 +270,12 @@ export default async function TrainingExportsPage({
                     ) : (
                       <span className="text-muted-foreground">FCAT</span>
                     )}
+                  </td>
+                  <td className="px-3 py-2 text-xs">
+                    <ExportScopeCell
+                      sourceKeysJson={d.sourceKeysJson}
+                      nameByKey={sourceNameByKey}
+                    />
                   </td>
                   <td className="px-3 py-2 text-right">{d.classCount}</td>
                   <td className="px-3 py-2 text-right">

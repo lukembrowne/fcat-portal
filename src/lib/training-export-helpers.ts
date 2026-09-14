@@ -702,6 +702,13 @@ export function buildManifest(input: {
   minExamplesThreshold: number;
   classList: string[];
   droppedSpecies: Record<string, number>;
+  /** Person crops withheld from this export. Distinct from droppedSpecies,
+   * which is a threshold outcome and would re-admit its entries at a lower
+   * `minExamplesThreshold`; this one is a policy exclusion with no threshold
+   * behind it. Emitted even when zero, so a reader of an all-animal manifest
+   * can tell "the filter ran and found none" from "this export predates the
+   * filter". */
+  excludedHumanCrops: number;
   counts: ManifestCounts;
   deployments: Array<{ id: number; split: Split; imageCount: number }>;
   warnings: string[];
@@ -738,6 +745,7 @@ export function buildManifest(input: {
     minExamplesThreshold: input.minExamplesThreshold,
     classList: input.classList,
     droppedSpecies: input.droppedSpecies,
+    excludedHumanCrops: input.excludedHumanCrops,
     counts: input.counts,
     // Corpus scope. Always emitted (even for an unfiltered export) so a reader
     // never has to infer from the absence of a key whether the exporter

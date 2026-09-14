@@ -1108,6 +1108,7 @@ describe("buildManifest sources block", () => {
     minExamplesThreshold: 50,
     classList: ["Panthera onca"],
     droppedSpecies: {},
+    excludedHumanCrops: 0,
     counts: { total: 0, train: 0, val: 0, test: 0, perClass: {} },
     deployments: [],
     warnings: [],

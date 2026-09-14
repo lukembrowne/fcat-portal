@@ -24,6 +24,7 @@ import {
 import { getCurrentUser } from "@/lib/auth";
 import { getUserCameraTrapProjects, ctProjectFilter } from "@/lib/camera-trap-auth";
 import { eq, inArray, and, ne, isNull, or } from "drizzle-orm";
+import { isHumanLabel } from "@/lib/species-filters";
 
 export const dynamic = "force-dynamic";
 
@@ -60,15 +61,25 @@ function toISO(val: string | Date | null | undefined): string {
   return `${s}T00:00:00Z`;
 }
 
-/** Map MegaDetector detection class to Camtrap DP observationType. */
+/**
+ * Map MegaDetector detection class to Camtrap DP observationType.
+ *
+ * MegaDetector numbers its classes 0 = animal, 1 = person, 2 = vehicle — see
+ * `scripts/model-server.py`, which runs the species classifier on class 0 only,
+ * and `assignSpecies` in camera-trap/actions.ts, which calls a non-zero class a
+ * "person/vehicle promotion" when a reviewer overrules it. This function used
+ * to read 2 as human and 3 as vehicle, with everything else falling through to
+ * animal, which put all 5,569 person boxes in the corpus into observations.csv
+ * as `animal` and the 108 vehicles in as `human`.
+ */
 function observationTypeFromClass(cls: number): string {
   switch (cls) {
-    case 2:
+    case 1:
       return "human";
-    case 3:
+    case 2:
       return "vehicle";
     default:
-      return "animal"; // 0 (manual) and 1 (animal)
+      return "animal";
   }
 }
 
@@ -334,8 +345,15 @@ export async function GET(request: NextRequest) {
   const detectionObsRows = filteredObservationRows.map((o) => {
     imagesWithObservations.add(o.imageId);
 
-    const obsType = observationTypeFromClass(o.detectionClass);
+    // A person box carries its class, but a person box a reviewer has labelled
+    // "Homo sapiens" does not: assignSpecies promotes it to class 0 so the
+    // identification renders, which reads back here as an animal. The label is
+    // the only thing left that still says person, so it decides the type.
     const effectiveSpecies = o.correctedSpecies ?? o.species ?? null;
+    const obsType =
+      effectiveSpecies && isHumanLabel(effectiveSpecies)
+        ? "human"
+        : observationTypeFromClass(o.detectionClass);
     const isHumanVerified =
       o.verificationStatus === "verified" ||
       o.verificationStatus === "corrected";

@@ -50,6 +50,7 @@ import {
   deleteDriveFile,
 } from "@/lib/drive-client";
 import { ML_DEFAULTS } from "@/lib/ml-defaults";
+import { isHumanLabel } from "@/lib/species-filters";
 import { loadImageBytes } from "@/lib/external/image-bytes";
 import {
   recordEvent,
@@ -195,6 +196,10 @@ export interface ExportPreview {
    * threshold appears alongside `minExamples` in the dropped-list summary. */
   minDeployments: number;
   totalCandidates: number;
+  /** Person crops this export refuses, regardless of `minExamples`. Surfaced
+   * so an admin can confirm the exclusion ran rather than infer it from an
+   * absence. */
+  excludedHumanCrops: number;
   classList: string[];
   droppedSpecies: Record<string, number>;
   /** Distinct deployment count for each dropped species. Lets the UI show
@@ -423,6 +428,9 @@ interface CollectedCandidates {
    * these back; getExportPreview ignores them. */
   newAssignments: Array<{ id: number; split: Split }>;
   totalCandidatesBeforeFilter: number;
+  /** Crops removed because their label denotes a person. Always excluded, at
+   * any threshold — reported only so the exclusion is auditable. */
+  excludedHumanCrops: number;
   /** True when there's no prior v2 manifest, so the next export will clear
    * all persisted splits and re-stratify from scratch. */
   migrationApplied: boolean;
@@ -525,7 +533,7 @@ async function collectExportCandidates(
       ),
     );
 
-  const candidates: CandidateRow[] = rawRows.map((r) => ({
+  let candidates: CandidateRow[] = rawRows.map((r) => ({
     detectionId: r.detectionId,
     imageId: r.imageId,
     deploymentId: r.deploymentId,
@@ -557,6 +565,38 @@ async function collectExportCandidates(
       ? EXTERNAL_SOURCE_NAME
       : (r.ctProjectName ?? UNASSIGNED_SOURCE_NAME),
   }));
+
+  // 1b. Drop every crop of a person, unconditionally and before anything else
+  //     counts it.
+  //
+  //     Two facts make this a hard filter rather than a threshold effect. The
+  //     SQL above admits `detection_class = 0` (animal), but a person box gets
+  //     PROMOTED to class 0 the moment a reviewer assigns it a species
+  //     (`assignSpecies` in camera-trap/actions.ts flips the class so the bbox
+  //     renders as an identification) — and the species they assign is
+  //     "Homo sapiens". Such a row is verified, animal-classed, fetchable, and
+  //     therefore a perfectly ordinary export candidate. The only thing that
+  //     has ever kept it out of an archive is arithmetic: the class needs
+  //     `minExamples` crops, and `minExamples` is a free-text number in the
+  //     export form. It was 30 for v1 and v2, and both of those manifests ship
+  //     `homo_sapiens` as a training class.
+  //
+  //     Removing the rows here (not in the class-inclusion step) keeps them out
+  //     of labelCounts, the class list, droppedSpecies, the content hash, the
+  //     stratifier, crops.csv and the crop loop in one move — there is no path
+  //     by which a lower threshold, a new source, or a rarer human label
+  //     reintroduces them. The count is reported rather than silently swallowed
+  //     so the exclusion stays visible in the preview and the manifest.
+  const humanCandidates = candidates.filter((c) => isHumanLabel(c.finalLabel));
+  const excludedHumanCrops = humanCandidates.length;
+  if (excludedHumanCrops > 0) {
+    const labels = [...new Set(humanCandidates.map((c) => c.finalLabel))];
+    candidates = candidates.filter((c) => !isHumanLabel(c.finalLabel));
+    log.info(
+      `[training-export] excluded ${excludedHumanCrops} human crops ` +
+        `(${labels.join(", ")}) — never exportable`,
+    );
+  }
 
   // 2. Group by label, drop labels that fail either pre-filter:
   //    - total examples below minExamples → not enough signal
@@ -755,6 +795,7 @@ async function collectExportCandidates(
     splitByDeployment,
     newAssignments,
     totalCandidatesBeforeFilter: candidates.length,
+    excludedHumanCrops,
     migrationApplied,
     forcedReassignments: survivingForcedReassignments,
     deploymentNameById,
@@ -1022,6 +1063,7 @@ export async function getExportPreview(
         minExamples,
         minDeployments: STRATIFY_MIN_DEPLOYMENTS,
         totalCandidates: collected.totalCandidatesBeforeFilter,
+        excludedHumanCrops: collected.excludedHumanCrops,
         classList: collected.classList,
         droppedSpecies: collected.droppedSpecies,
         droppedDeployments,
@@ -1186,7 +1228,30 @@ export async function exportTrainingDataset(
       splitByDeployment,
       newAssignments,
       migrationApplied,
+      excludedHumanCrops,
     } = collected;
+
+    // Fail-closed re-check of the human exclusion, on the exact set about to be
+    // written. collectExportCandidates already removed these rows; this asserts
+    // that nothing between here and there put one back. It runs before the
+    // first crop is written rather than inside the crop loop on purpose — an
+    // abort here costs an error message, whereas a mid-loop throw would leave a
+    // half-written archive of the very images the check exists to withhold.
+    const leakedHuman = filtered.filter((c) => isHumanLabel(c.finalLabel));
+    if (leakedHuman.length > 0) {
+      const labels = [...new Set(leakedHuman.map((c) => c.finalLabel))];
+      log.error(
+        `[training-export] ABORT: ${leakedHuman.length} human crops reached the ` +
+          `write set (${labels.join(", ")})`,
+      );
+      return {
+        success: false,
+        error:
+          `El exporte se canceló: ${leakedHuman.length} recortes de personas ` +
+          `(${labels.join(", ")}) llegaron al conjunto final. Las imágenes de ` +
+          `personas nunca se exportan; reportá este error.`,
+      };
+    }
 
     // Persist the split assignments BEFORE computing the hash, so a re-run
     // over the same corpus produces the same hash. On the one-time v2
@@ -1316,6 +1381,7 @@ export async function exportTrainingDataset(
       filtered,
       classList,
       droppedSpecies,
+      excludedHumanCrops,
       splitByDeployment,
       quality,
       minExamples,
@@ -1347,6 +1413,9 @@ interface ProcessExportArgs {
   filtered: CandidateRow[];
   classList: string[];
   droppedSpecies: Record<string, number>;
+  /** Person crops the collector refused; carried through so the manifest can
+   * record the exclusion. */
+  excludedHumanCrops: number;
   splitByDeployment: Map<number, Split>;
   quality: ExportQuality;
   minExamples: number;
@@ -1375,6 +1444,7 @@ async function processTrainingExportJobInternal(
     filtered,
     classList,
     droppedSpecies,
+    excludedHumanCrops,
     splitByDeployment,
     quality,
     minExamples,
@@ -1742,6 +1812,7 @@ async function processTrainingExportJobInternal(
       minExamplesThreshold: minExamples,
       classList: finalClassList.map((label) => speciesFolderName(label)),
       droppedSpecies,
+      excludedHumanCrops,
       counts,
       deployments: deploymentSummaries,
       warnings,

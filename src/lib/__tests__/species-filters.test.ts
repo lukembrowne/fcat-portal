@@ -3,6 +3,7 @@ import { describe, it, expect } from "vitest";
 import {
   DOMESTIC,
   isDomestic,
+  isHumanLabel,
   isRealSpecies,
   isWildSpecies,
   type SpeciesTypeMeta,
@@ -105,5 +106,84 @@ describe("DOMESTIC as a shared constant", () => {
     const before = asMutable.size;
     expect(before).toBe(7);
     expect(DOMESTIC.has("Felis catus")).toBe(true);
+  });
+});
+
+describe("isHumanLabel", () => {
+  it("catches the portal's own label", () => {
+    expect(isHumanLabel("Homo sapiens")).toBe(true);
+  });
+
+  it("catches it however it was typed or stored", () => {
+    for (const label of [
+      "homo sapiens",
+      "HOMO SAPIENS",
+      "  Homo   sapiens  ",
+      "homo_sapiens", // the exporter's folder-name form
+      "Homo sapiens (Human)",
+    ]) {
+      expect(isHumanLabel(label), label).toBe(true);
+    }
+  });
+
+  it("catches every binomial under the genus, and the bare genus", () => {
+    expect(isHumanLabel("Homo")).toBe(true);
+    expect(isHumanLabel("Homo sapiens sapiens")).toBe(true);
+    expect(isHumanLabel("Homo neanderthalensis")).toBe(true);
+  });
+
+  it("catches the vocabularies an imported corpus would bring", () => {
+    // MegaDetector / COCO-Camera-Traps call the class `person`; LILA metadata
+    // uses common names. None of these exist in biochoco_species, so the
+    // lookup-based rules would never see them.
+    for (const label of ["person", "Person", "human", "Humans", "people"]) {
+      expect(isHumanLabel(label), label).toBe(true);
+    }
+  });
+
+  it("catches the Spanish forms the UI uses", () => {
+    for (const label of ["Humano", "humanos", "Persona", "personas", "gente"]) {
+      expect(isHumanLabel(label), label).toBe(true);
+    }
+  });
+
+  it("does not catch a real taxon that merely starts with the same letters", () => {
+    // The prefix rule requires a word boundary precisely so these survive.
+    expect(isHumanLabel("Homoptera")).toBe(false);
+    expect(isHumanLabel("Pachyramphus homochrous")).toBe(false);
+    expect(isHumanLabel("Homalopsis")).toBe(false);
+  });
+
+  it("does not catch the other system labels", () => {
+    // Unknown and Blank are excluded from the training export by the class
+    // thresholds, not by this rule — it answers one question only.
+    expect(isHumanLabel("Unknown")).toBe(false);
+    expect(isHumanLabel("Blank")).toBe(false);
+  });
+
+  it("treats an empty or whitespace label as not human", () => {
+    expect(isHumanLabel("")).toBe(false);
+    expect(isHumanLabel("   ")).toBe(false);
+  });
+
+  it("keeps every wild species in the fixture set", () => {
+    for (const label of [
+      "Leopardus pardalis",
+      "Cuniculus paca",
+      "Proechimys semispinosus",
+      "Dasypus fenestratus",
+      "Aramides wolfi",
+      "Leptotila sp.",
+      "Aves",
+      "Rodentia",
+    ]) {
+      expect(isHumanLabel(label), label).toBe(false);
+    }
+  });
+
+  it("keeps the domestic animals — they are excluded by a different rule", () => {
+    for (const label of DOMESTIC) {
+      expect(isHumanLabel(label), label).toBe(false);
+    }
   });
 });

@@ -81,6 +81,7 @@ describe("buildManifest — externalSources", () => {
     minExamplesThreshold: 50,
     classList: ["Leopardus pardalis"],
     droppedSpecies: {},
+    excludedHumanCrops: 0,
     counts: buildCounts([
       { finalLabel: "Leopardus pardalis", split: "train", isExternal: true },
     ]),

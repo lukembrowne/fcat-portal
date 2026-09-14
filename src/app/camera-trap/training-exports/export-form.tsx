@@ -768,6 +768,16 @@ function PreviewCard({
         </details>
       )}
 
+      {/* Policy exclusion, not a threshold outcome — so it sits outside the
+          dropped-species list, which an admin reads as "lower the threshold and
+          these come back". These never come back. */}
+      {preview.excludedHumanCrops > 0 && (
+        <p className="mt-3 text-xs text-muted-foreground">
+          Se excluyeron {preview.excludedHumanCrops} recortes de personas. Las
+          imágenes de personas nunca se exportan, sin importar el umbral.
+        </p>
+      )}
+
       {droppedEntries.length > 0 && (
         <details className="mt-3 text-xs">
           <summary className="cursor-pointer text-muted-foreground">

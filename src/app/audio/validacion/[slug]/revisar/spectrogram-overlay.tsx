@@ -86,6 +86,28 @@ export function playheadPercent(
 }
 
 /**
+ * The clip's length, for the readout in the corner.
+ *
+ * Every clip is resized to the same pixel width (`spectrogram-image.ts` uses
+ * `fit: "fill"`, and the live canvas matches it), so a 5 s clip and a 9 s clip
+ * are indistinguishable on screen. That is what let a misplaced band go
+ * unnoticed: there was nothing to contradict the assumption that every clip
+ * was the same 9 s. One decimal, because the differences that matter here are
+ * whole seconds and a jittering third decimal in the corner of a spectrogram
+ * is noise a reviewer has to learn to ignore.
+ *
+ * A dot, not a comma, to match the confidence readout on the same page —
+ * consistency within one screen beats locale correctness in one corner of it.
+ *
+ * Returns null for a duration that is not yet known, so nothing renders rather
+ * than "NaN s".
+ */
+export function formatClipSeconds(seconds: number | null | undefined): string | null {
+  if (seconds == null || !Number.isFinite(seconds) || seconds <= 0) return null;
+  return `${seconds.toFixed(1)} s`;
+}
+
+/**
  * The marks that sit on top of a clip surface: scrims, detection edges,
  * playhead, caption.
  *
@@ -126,6 +148,7 @@ export function centeredScrollLeft(
 export function ClipMarks({
   bandLeftPct,
   bandRightPct,
+  clipSeconds,
   audioRef,
   resetKey,
   surface,
@@ -133,6 +156,8 @@ export function ClipMarks({
 }: {
   bandLeftPct: number;
   bandRightPct: number;
+  /** Measured clip length, shown in the corner. Null until metadata loads. */
+  clipSeconds?: number | null;
   audioRef: RefObject<HTMLAudioElement | null>;
   /** Changing this resets the playhead — the clip changed underneath it. */
   resetKey: string;
@@ -248,8 +273,17 @@ export function ClipMarks({
         style={{ left: "0%" }}
       />
 
-      <span className="pointer-events-none absolute bottom-1 right-1 rounded bg-black/50 px-1 text-[10px] text-white/80">
-        detección
+      {/* Length first, then the caption, both bottom-right so they read as one
+          line and neither collides with call energy at the left edge. */}
+      <span className="pointer-events-none absolute bottom-1 right-1 flex gap-1">
+        {formatClipSeconds(clipSeconds) ? (
+          <span className="rounded bg-black/50 px-1 text-[10px] tabular-nums text-white/80">
+            {formatClipSeconds(clipSeconds)}
+          </span>
+        ) : null}
+        <span className="rounded bg-black/50 px-1 text-[10px] text-white/80">
+          detección
+        </span>
       </span>
     </>
   );
@@ -260,12 +294,14 @@ export function SpectrogramOverlay({
   src,
   bandLeftPct,
   bandRightPct,
+  clipSeconds,
   audioRef,
   height = 300,
 }: {
   src: string;
   bandLeftPct: number;
   bandRightPct: number;
+  clipSeconds?: number | null;
   audioRef: RefObject<HTMLAudioElement | null>;
   height?: number;
 }) {
@@ -277,6 +313,7 @@ export function SpectrogramOverlay({
       <ClipMarks
         bandLeftPct={bandLeftPct}
         bandRightPct={bandRightPct}
+        clipSeconds={clipSeconds}
         audioRef={audioRef}
         resetKey={src}
         surface={

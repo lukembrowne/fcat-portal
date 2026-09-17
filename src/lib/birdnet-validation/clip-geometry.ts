@@ -126,3 +126,49 @@ export function recordingInstant(
     ` ${pad(at.getUTCHours())}:${pad(at.getUTCMinutes())}:${pad(at.getUTCSeconds())}`
   );
 }
+
+/**
+ * The detection's extent measured against the clip the browser ACTUALLY got.
+ *
+ * `clipWindow` can only describe the cut we ASKED ffmpeg for. When the window
+ * runs past the end of the recording, ffmpeg returns a shorter file without
+ * complaint and the two diverge — so a band positioned from the requested
+ * window points at the wrong audio.
+ *
+ * That is not hypothetical. `audio_files.duration` is NULL on essentially every
+ * row (464,445 of 464,459 in production as of 2026-09), so the end clamp in
+ * `clipWindow` never fires, and BirdNET's final window on a 60 s recording is
+ * `[58, 60]`. The requested window is `[55, 63]` = 8 s; ffmpeg delivers 5 s.
+ * The band was drawn at 37.5-62.5%, which on that 5 s image points at
+ * 56.9-58.1 s — while BirdNET actually judged 58-60 s, the last 40% of the
+ * picture. Reviewers reported the call sitting outside the marked window; it
+ * was the mark that had moved, not the call.
+ *
+ * So the client re-derives the band from the decoded duration once the audio
+ * element reports it. That is the same number `playheadPercent` already uses,
+ * which is the point: band and playhead then sit on one timeline by
+ * construction instead of by coincidence. It also absorbs short recordings
+ * (190 files are 50 s, not 60 s) and AAC priming delay, without anyone having
+ * to know a file's duration in advance.
+ *
+ * Returns null when the duration is not yet known or not usable, so the caller
+ * keeps the server's estimate rather than rendering a band at NaN%.
+ */
+export function measuredBand(
+  clipStartSeconds: number,
+  detection: { startTime: number; endTime: number },
+  measuredDurationSeconds: number | null | undefined
+): DetectionBand | null {
+  if (
+    measuredDurationSeconds == null ||
+    !Number.isFinite(measuredDurationSeconds) ||
+    measuredDurationSeconds <= 0 ||
+    !Number.isFinite(clipStartSeconds)
+  ) {
+    return null;
+  }
+  return detectionBand(
+    { start: clipStartSeconds, end: clipStartSeconds + measuredDurationSeconds },
+    detection
+  );
+}

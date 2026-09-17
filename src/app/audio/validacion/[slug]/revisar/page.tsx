@@ -82,6 +82,9 @@ export default async function ReviewPage({
     habitat: row.habitat,
     bandLeftPct: row.bandLeftPct,
     bandRightPct: row.bandRightPct,
+    clipStartSeconds: row.clipStartSeconds,
+    detectionStartSeconds: row.detectionStartSeconds,
+    detectionEndSeconds: row.detectionEndSeconds,
     recordedAt: row.recordedAt,
   }));
 

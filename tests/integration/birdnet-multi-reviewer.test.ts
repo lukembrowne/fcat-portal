@@ -353,6 +353,12 @@ describe("getReviewQueue — independent per-reviewer queues", () => {
       "bandLeftPct",
       "bandRightPct",
       "clipSpanSeconds",
+      // Where the detection sits in its recording, so the client can re-derive
+      // the band against the clip it actually decoded (see `measuredBand`).
+      // Timing only — nothing here varies with the model's score.
+      "clipStartSeconds",
+      "detectionStartSeconds",
+      "detectionEndSeconds",
       "recordedAt",
     ]);
     for (const row of queue.data) {

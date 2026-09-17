@@ -15,6 +15,8 @@ import {
 
 import { abandonCampaign, recordReview } from "@/app/audio/validacion/actions";
 import { xenoCantoUrl } from "@/lib/xeno-canto";
+import { measuredBand } from "@/lib/birdnet-validation/clip-geometry";
+import { useClipDuration } from "./use-clip-duration";
 import { useReviewShortcuts } from "./use-review-shortcuts";
 import { SpectrogramOverlay } from "./spectrogram-overlay";
 import { LiveSpectrogram, type RenderStats } from "./live-spectrogram";
@@ -28,9 +30,16 @@ export interface ReviewItem {
   binIndex: number;
   siteName: string | null;
   habitat: string | null;
-  /** Detection extent within the clip, as percentages. See clip-geometry.ts. */
+  /**
+   * Detection extent within the clip, as percentages — the SERVER's estimate,
+   * used only until the clip's real duration is known. See clip-geometry.ts.
+   */
   bandLeftPct: number;
   bandRightPct: number;
+  /** Absolute seconds, for re-deriving the band against the decoded clip. */
+  clipStartSeconds: number;
+  detectionStartSeconds: number;
+  detectionEndSeconds: number;
   /** Wall-clock recording time, or null when the filename carries none. */
   recordedAt: string | null;
 }
@@ -153,6 +162,33 @@ export function ReviewClient({
   const specSrc = current
     ? `/api/audio/validation-spectrogram?sample=${current.sampleId}`
     : null;
+
+  /*
+    The band is positioned against the clip the browser actually decoded, not
+    the window the server asked ffmpeg for. Those differ whenever the window
+    runs past the end of a recording — BirdNET's last window on a 60 s file is
+    one such case, and it put the mark a second and a quarter early on every
+    clip drawn from it. `measuredBand` carries the full account.
+
+    `audio.duration` rather than the canvas's own decode, deliberately: it is
+    the number `playheadPercent` uses, so band and playhead cannot end up on
+    different timelines.
+  */
+  const clipSeconds = useClipDuration(audioRef, clipSrc);
+  const band = useMemo(() => {
+    if (!current) return null;
+    const fallback = { leftPct: current.bandLeftPct, rightPct: current.bandRightPct };
+    return (
+      measuredBand(
+        current.clipStartSeconds,
+        {
+          startTime: current.detectionStartSeconds,
+          endTime: current.detectionEndSeconds,
+        },
+        clipSeconds
+      ) ?? fallback
+    );
+  }, [current, clipSeconds]);
 
   // Warm the next clips so advancing does not stall on a cache miss. Fetching
   // the URL is enough — the route populates the on-disk cache as a side effect.
@@ -386,8 +422,9 @@ export function ReviewClient({
         {useLive && clipSrc ? (
           <LiveSpectrogram
             src={clipSrc}
-            bandLeftPct={current.bandLeftPct}
-            bandRightPct={current.bandRightPct}
+            bandLeftPct={band?.leftPct ?? current.bandLeftPct}
+            bandRightPct={band?.rightPct ?? current.bandRightPct}
+            clipSeconds={clipSeconds}
             audioRef={audioRef}
             settings={specSettings}
             onStats={onSpecStats}
@@ -396,8 +433,9 @@ export function ReviewClient({
         ) : specSrc ? (
           <SpectrogramOverlay
             src={specSrc}
-            bandLeftPct={current.bandLeftPct}
-            bandRightPct={current.bandRightPct}
+            bandLeftPct={band?.leftPct ?? current.bandLeftPct}
+            bandRightPct={band?.rightPct ?? current.bandRightPct}
+            clipSeconds={clipSeconds}
             audioRef={audioRef}
           />
         ) : null}

@@ -1103,12 +1103,26 @@ export async function getReviewQueue(
       siteName: string | null;
       habitat: string | null;
       orderIndex: number;
-      /** Left edge of the detection within the clip, as a percentage. */
+      /**
+       * Left edge of the detection within the clip, as a percentage.
+       *
+       * An ESTIMATE, computed from the window we asked ffmpeg for. The client
+       * replaces it with `measuredBand` as soon as the audio element reports a
+       * duration, because a window running past the end of the recording comes
+       * back short and these percentages then point at the wrong audio. Sent
+       * anyway so the band renders on the first frame rather than appearing a
+       * beat later.
+       */
       bandLeftPct: number;
-      /** Right edge, likewise. */
+      /** Right edge, likewise — same estimate, same replacement. */
       bandRightPct: number;
-      /** Clip length in seconds, before AAC encoder padding. */
+      /** Estimated clip length in seconds, before AAC encoder padding. */
       clipSpanSeconds: number;
+      /** Offset of the clip's first sample into the recording, in seconds. */
+      clipStartSeconds: number;
+      /** The BirdNET window's bounds within the recording, in seconds. */
+      detectionStartSeconds: number;
+      detectionEndSeconds: number;
       /** Wall-clock recording time, or null when the filename carries none. */
       recordedAt: string | null;
     }>
@@ -1158,8 +1172,10 @@ export async function getReviewQueue(
       .orderBy(asc(birdnetValidationSamples.orderIndex))
       .limit(limit);
 
-    // Geometry is computed here, once per clip, rather than in the client:
-    // the clamp rule belongs with the audio cut that shares it.
+    // The clamp rule lives with the audio cut that shares it, so the window is
+    // computed here. The BAND it implies is only a first guess: the client
+    // re-derives it from the decoded clip, which is the only thing that knows
+    // how much audio ffmpeg actually returned.
     const data = rows.map((row) => {
       const win = clipWindow({
         startTime: row.detectionStart,
@@ -1181,6 +1197,11 @@ export async function getReviewQueue(
         bandLeftPct: band.leftPct,
         bandRightPct: band.rightPct,
         clipSpanSeconds: win.end - win.start,
+        // Absolute seconds, so the client can recompute the band against the
+        // clip it actually received. See `measuredBand`.
+        clipStartSeconds: win.start,
+        detectionStartSeconds: row.detectionStart,
+        detectionEndSeconds: row.detectionEnd,
         recordedAt: recordingInstant(row.filename, row.detectionStart),
       };
     });

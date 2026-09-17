@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
 
-import { bandScrims, centeredScrollLeft, playheadPercent } from "../spectrogram-overlay";
+import {
+  bandScrims,
+  centeredScrollLeft,
+  formatClipSeconds,
+  playheadPercent,
+} from "../spectrogram-overlay";
 
 describe("playheadPercent", () => {
   it("maps playback position across the clip", () => {
@@ -135,5 +140,24 @@ describe("centeredScrollLeft", () => {
     const early = centeredScrollLeft((0 + 33) / 2, 4800, 1200);
     const centred = centeredScrollLeft((33.3 + 66.7) / 2, 4800, 1200);
     expect(early).toBeLessThan(centred!);
+  });
+});
+
+describe("formatClipSeconds", () => {
+  it("renders one decimal, matching the confidence readout's dot", () => {
+    expect(formatClipSeconds(5)).toBe("5.0 s");
+    expect(formatClipSeconds(8.976)).toBe("9.0 s");
+    expect(formatClipSeconds(6.04)).toBe("6.0 s");
+  });
+
+  it("renders nothing before the duration is known", () => {
+    // The pre-metadata state on every advance: a readout must be absent, not
+    // "NaN s" in the corner of the picture the reviewer is judging.
+    expect(formatClipSeconds(null)).toBeNull();
+    expect(formatClipSeconds(undefined)).toBeNull();
+    expect(formatClipSeconds(NaN)).toBeNull();
+    expect(formatClipSeconds(0)).toBeNull();
+    expect(formatClipSeconds(Infinity)).toBeNull();
+    expect(formatClipSeconds(-3)).toBeNull();
   });
 });

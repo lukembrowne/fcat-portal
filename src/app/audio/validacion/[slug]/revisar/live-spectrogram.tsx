@@ -115,6 +115,7 @@ export function LiveSpectrogram({
   src,
   bandLeftPct,
   bandRightPct,
+  clipSeconds,
   audioRef,
   settings,
   height = 300,
@@ -125,6 +126,8 @@ export function LiveSpectrogram({
   src: string;
   bandLeftPct: number;
   bandRightPct: number;
+  /** Measured clip length, shown in the corner. Null until metadata loads. */
+  clipSeconds?: number | null;
   audioRef: RefObject<HTMLAudioElement | null>;
   settings: ReviewSpectrogramSettings;
   height?: number;
@@ -327,6 +330,7 @@ export function LiveSpectrogram({
         <ClipMarks
           bandLeftPct={bandLeftPct}
           bandRightPct={bandRightPct}
+          clipSeconds={clipSeconds}
           audioRef={audioRef}
           resetKey={src}
           scrollRef={scrollRef}

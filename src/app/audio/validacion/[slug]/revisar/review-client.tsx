@@ -330,8 +330,10 @@ export function ReviewClient({
           ) : null}
 
           {/* Offered on the reviewer's own usable count, matching the fit's own
-              refusal — advertising it earlier produces "muestra insuficiente". */}
-          {fitReady ? (
+              refusal — advertising it earlier produces "muestra insuficiente".
+              Editor-only because `runFit` is: a reviewer who followed this
+              would land on a species page with no button to press. */}
+          {canEdit && fitReady ? (
             <Choice
               label="Ajustar el modelo"
               detail="Estima el umbral con lo revisado hasta ahora. Se abre en la página de la especie, con la curva y el umbral."

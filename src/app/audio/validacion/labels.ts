@@ -223,19 +223,31 @@ export interface RowAction {
  * The label says where the button goes, because the row has TWO destinations:
  * this one and the species name, which leads to the species page. Unlabelled,
  * the pair reads as one control behaving inconsistently.
+ *
+ * `canEdit` only changes the no-sample case. Reviewing is open to viewers, but
+ * DRAWING the sample is editor-gated, so labelling that row "Preparar" for a
+ * reviewer would name an action they cannot take.
  */
-export function rowAction(sampled: number): RowAction {
-  return sampled > 0
+export function rowAction(sampled: number, canEdit: boolean): RowAction {
+  if (sampled > 0) {
+    return {
+      label: "Revisar",
+      suffix: "/revisar",
+      icon: "headphones",
+      title: "Escuchar y clasificar las detecciones muestreadas",
+    };
+  }
+  return canEdit
     ? {
-        label: "Revisar",
-        suffix: "/revisar",
-        icon: "headphones",
-        title: "Escuchar y clasificar las detecciones muestreadas",
-      }
-    : {
         label: "Preparar",
         suffix: "",
         icon: "settings",
         title: "Extraer la muestra antes de poder revisar",
+      }
+    : {
+        label: "Ver",
+        suffix: "",
+        icon: "settings",
+        title: "Todavía no hay muestra que revisar en esta especie",
       };
 }

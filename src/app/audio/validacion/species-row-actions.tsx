@@ -11,6 +11,11 @@
  * campaign carries no review rows at all — the same condition `deleteCampaign`
  * enforces server-side. The button is a hint, not the guard; hiding it does not
  * make the action safe, the server check does.
+ *
+ * Both actions are editor-only, so `canEdit` renders nothing at all for a
+ * reviewer. That matters now that reviewers reach this table: `deleteCampaign`
+ * would redirect them, but a red "Eliminar" on every row of a page built for
+ * students is an invitation to find that out by clicking.
  */
 
 import { useState, useTransition } from "react";
@@ -25,12 +30,14 @@ export function SpeciesRowActions({
   displayName,
   status,
   reviewerCount,
+  canEdit,
 }: {
   campaignId: number;
   species: string;
   displayName: string;
   status: string;
   reviewerCount: number;
+  canEdit: boolean;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState<"delete" | "restore" | null>(null);
@@ -40,6 +47,7 @@ export function SpeciesRowActions({
   const abandoned = status === "abandoned";
   const deletable = reviewerCount === 0;
 
+  if (!canEdit) return null;
   if (!abandoned && !deletable) return null;
 
   const run = (kind: "delete" | "restore") => {

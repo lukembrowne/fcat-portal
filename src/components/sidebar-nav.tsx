@@ -67,24 +67,17 @@ export function buildBiochocoPublicNav({
  * Pure + exported for unit testing (no DB, no React), same as
  * `buildBiochocoPublicNav` above.
  */
-export function buildAudioNav({
-  isGrabacionesEditor,
-}: {
-  isGrabacionesEditor: boolean;
-}): NavItem[] {
-  const children: NavItem[] = [
+export function buildAudioNav(): NavItem[] {
+  // Not role-gated. This entry used to be editor-only, on the reasoning that a
+  // viewer could not review and so would find only read-only scaffolding. That
+  // stopped being true when reviewing became a viewer capability (see
+  // `recordReview`) — and a reviewer who cannot find the page cannot review,
+  // which was the whole point of opening it.
+  return [
     { label: "Instalaciones", href: "/audio" },
     { label: "Explorar por especie", href: "/audio/species" },
+    { label: "Validación de umbrales", href: "/audio/validacion" },
   ];
-  // Editor-gated: viewers cannot run campaigns, draw samples, or review, so the
-  // page would be read-only scaffolding for them.
-  if (isGrabacionesEditor) {
-    children.push({
-      label: "Validación de umbrales",
-      href: "/audio/validacion",
-    });
-  }
-  return children;
 }
 
 export function SidebarNav({ user }: SidebarNavProps) {
@@ -206,14 +199,6 @@ export function SidebarNav({ user }: SidebarNavProps) {
   // Análisis section — reusable analysis modules
   const analysisItems: NavItem[] = [];
 
-  const isGrabacionesEditor =
-    user.globalRole === "super_admin" ||
-    user.permissions.some(
-      (p) =>
-        p.projectId === "grabaciones" &&
-        (p.role === "editor" || p.role === "admin")
-    );
-
   const isCameraTrapEditor =
     user.globalRole === "super_admin" ||
     user.permissions.some(
@@ -254,7 +239,7 @@ export function SidebarNav({ user }: SidebarNavProps) {
     analysisItems.push({
       label: "Grabaciones",
       icon: "audio-lines",
-      children: buildAudioNav({ isGrabacionesEditor }),
+      children: buildAudioNav(),
     });
   }
 

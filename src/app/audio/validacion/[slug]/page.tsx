@@ -193,7 +193,11 @@ export default async function SpeciesValidationPage({
   const nameNote = fallbackNote(display.fallback, nameLang);
 
   const sampled = progress?.sampled ?? 0;
-  const canReview = canEdit && sampled > 0;
+  // NOT gated on `canEdit`: reviewing is a viewer capability (see
+  // `recordReview`). Gated on the sample existing, not on progress —
+  // `progress.reviewed` counts the primary reviewer's answers, so gating on it
+  // would hide the link from everyone else the moment the primary finished.
+  const canReview = sampled > 0;
 
   return (
     <div className="mx-auto max-w-4xl space-y-4 p-4">
@@ -257,11 +261,8 @@ export default async function SpeciesValidationPage({
       {/* One action strip, with reviewing as the obvious thing to do. The
           controls below it are things you do once per species; this is the
           thing you do two hundred times. */}
-      {canEdit ? (
+      {canReview || canEdit ? (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border bg-muted/40 p-2">
-          {/* Gated on the sample existing, not on progress: `progress.reviewed`
-              counts the primary reviewer's answers, so gating on it would hide
-              the link from everyone else the moment the primary finished. */}
           {canReview ? (
             <>
               <Link
@@ -278,22 +279,26 @@ export default async function SpeciesValidationPage({
           ) : null}
           {/* Pushed right only when there is a primary action to be pushed away
               from; on a species with no sample yet, "Extraer muestra" IS the
-              action and belongs at the left edge. */}
-          <div className={canReview ? "ml-auto" : ""}>
-            <CampaignControls
-              campaignId={campaign.id}
-              canEdit={canEdit}
-              hasSamples={sampled > 0}
-              hasDrawnSample={campaign.sampledAt != null}
-              status={campaign.status}
-              latestThresholdId={latest?.id ?? null}
-              latestIsUsable={summary?.usable ?? false}
-              latestIsActive={latest?.isActive ?? false}
-              latestIsNoFilter={latest?.source === "no_filter"}
-              reviewerCount={progress?.reviewerCount ?? 0}
-              species={target.scientificName}
-            />
-          </div>
+              action and belongs at the left edge. Not rendered at all for a
+              reviewer: `CampaignControls` returns null without `canEdit`, and
+              an empty `ml-auto` wrapper would still occupy the row. */}
+          {canEdit ? (
+            <div className={canReview ? "ml-auto" : ""}>
+              <CampaignControls
+                campaignId={campaign.id}
+                canEdit={canEdit}
+                hasSamples={sampled > 0}
+                hasDrawnSample={campaign.sampledAt != null}
+                status={campaign.status}
+                latestThresholdId={latest?.id ?? null}
+                latestIsUsable={summary?.usable ?? false}
+                latestIsActive={latest?.isActive ?? false}
+                latestIsNoFilter={latest?.source === "no_filter"}
+                reviewerCount={progress?.reviewerCount ?? 0}
+                species={target.scientificName}
+              />
+            </div>
+          ) : null}
         </div>
       ) : null}
 

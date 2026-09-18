@@ -35,7 +35,10 @@ export default async function ReviewPage({
 }: {
   params: Promise<{ slug: string }>;
 }) {
-  const user = await requirePermission("grabaciones", "editor");
+  // Viewer: reviewing is the one thing in this module a non-editor may do.
+  // See `recordReview` for why. `canEdit` below still decides whether this
+  // reviewer is offered the actions that END a species.
+  const user = await requirePermission("grabaciones", "viewer");
   const { slug } = await params;
 
   const target = await resolveSpeciesFromSlug(slug);

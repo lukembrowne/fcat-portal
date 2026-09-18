@@ -610,7 +610,29 @@ export async function recordReview(
   outcome: ReviewOutcome,
   notes?: string
 ): Promise<ActionResult> {
-  const user = await requirePermission("grabaciones", "editor");
+  /*
+    VIEWER, deliberately, and this is the one write in the module that a viewer
+    can perform.
+
+    Listening is the scarce resource and the people who have it — students,
+    visiting taxonomists — are exactly the people who should not hold `editor`
+    on `grabaciones`, which also carries `deleteAudioDetection`,
+    `bulkUpdateAudioMetadata` and `cancelBirdNETJob`. Gating review on editor
+    made "can judge a clip" and "can delete the corpus" the same grant.
+
+    What this write can actually do is bounded: it inserts or updates ONE row
+    in `birdnet_validation_reviews`, which is `UNIQUE(sample_id,
+    reviewer_email)` — a reviewer can only ever overwrite their own answer,
+    never a colleague's — enrols the caller in the roster, and advances the
+    species from `sampled` to `reviewing`. It deletes nothing and touches no
+    recording, detection or identification.
+
+    Nor does a viewer's answer reach production on its own: `setPrimaryReviewer`,
+    `runFit`, `applyThreshold` and `markSpeciesNoFilter` all stay editor, so an
+    editor still decides whose reviews the fit reads and whether the resulting
+    threshold is applied.
+  */
+  const user = await requirePermission("grabaciones", "viewer");
 
   try {
     const [sample] = await db
@@ -1128,7 +1150,9 @@ export async function getReviewQueue(
     }>
   >
 > {
-  const user = await requirePermission("grabaciones", "editor");
+  // Viewer, matching `recordReview` — a reviewer who may answer must be able
+  // to load the clips they are answering about.
+  const user = await requirePermission("grabaciones", "viewer");
 
   try {
     const rows = await db

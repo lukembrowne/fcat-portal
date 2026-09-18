@@ -224,24 +224,42 @@ describe("PRIORITY_FILTERS", () => {
 
 describe("rowAction", () => {
   it("offers review once a sample exists", () => {
-    expect(rowAction(200)).toMatchObject({ label: "Revisar", suffix: "/revisar" });
+    expect(rowAction(200, true)).toMatchObject({ label: "Revisar", suffix: "/revisar" });
+  });
+
+  it("offers review to a reviewer who cannot edit", () => {
+    // Reviewing is a viewer capability. The row that sends someone to the
+    // queue must not be editor-gated, or the students doing the listening
+    // never reach it.
+    expect(rowAction(200, false)).toMatchObject({
+      label: "Revisar",
+      suffix: "/revisar",
+    });
   });
 
   it("offers preparation when nothing has been sampled", () => {
     // Sending someone to an empty review queue is worse than sending them to
     // the page that holds the controls.
-    expect(rowAction(0)).toMatchObject({ label: "Preparar", suffix: "" });
+    expect(rowAction(0, true)).toMatchObject({ label: "Preparar", suffix: "" });
+  });
+
+  it("does not offer preparation to a reviewer who cannot draw the sample", () => {
+    // `drawSample` is editor-gated; "Preparar" would name an action they
+    // cannot take.
+    expect(rowAction(0, false)).toMatchObject({ label: "Ver", suffix: "" });
   });
 
   it("treats a single sampled clip as reviewable", () => {
-    expect(rowAction(1).label).toBe("Revisar");
+    expect(rowAction(1, true).label).toBe("Revisar");
   });
 
   it("returns an icon IDENTIFIER, never a component", () => {
     // React components cannot cross the Server→Client boundary as props, and
     // `npm run build` does not catch it — the failure is at runtime.
     for (const sampled of [0, 1, 200]) {
-      expect(typeof rowAction(sampled).icon).toBe("string");
+      for (const canEdit of [true, false]) {
+        expect(typeof rowAction(sampled, canEdit).icon).toBe("string");
+      }
     }
   });
 
@@ -249,8 +267,10 @@ describe("rowAction", () => {
     // The row has two destinations. An unlabelled pair reads as one control
     // behaving inconsistently, which is the confusion this fixes.
     for (const sampled of [0, 200]) {
-      expect(rowAction(sampled).title.length).toBeGreaterThan(10);
+      for (const canEdit of [true, false]) {
+        expect(rowAction(sampled, canEdit).title.length).toBeGreaterThan(10);
+      }
     }
-    expect(rowAction(200).title).not.toBe(rowAction(0).title);
+    expect(rowAction(200, true).title).not.toBe(rowAction(0, true).title);
   });
 });

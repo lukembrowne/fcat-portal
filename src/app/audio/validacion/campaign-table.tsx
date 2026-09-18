@@ -310,7 +310,7 @@ export function CampaignTable({
       <tbody>
         {rows.map((row) => {
           const precision = precisionOf(row);
-          const action = rowAction(row.sampled);
+          const action = rowAction(row.sampled, canEdit);
           return (
             <tr key={row.id} className="border-b last:border-0 hover:bg-muted/50">
               {/* Editable in place, for the same reason the notes are: the
@@ -439,6 +439,7 @@ export function CampaignTable({
                     displayName={row.displayName}
                     status={row.status}
                     reviewerCount={row.reviewerCount}
+                    canEdit={canEdit}
                   />
                 </span>
               </td>

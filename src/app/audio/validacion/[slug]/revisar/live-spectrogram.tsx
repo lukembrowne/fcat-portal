@@ -45,13 +45,14 @@ import {
   decodeAudio,
   computeMagnitudes,
   binFromHz,
+  hzFromBin,
   type DecodedAudio,
   type Magnitudes,
 } from "@/lib/audio-fft";
 import { renderImageData } from "@/lib/spectrogram-render";
 import { COLORMAPS } from "@/lib/spectrogram-colormaps";
 
-import { centeredScrollLeft, ClipMarks } from "./spectrogram-overlay";
+import { AxisFrame, centeredScrollLeft, ClipMarks } from "./spectrogram-overlay";
 import type { ReviewSpectrogramSettings } from "./spectrogram-settings";
 
 /*
@@ -83,6 +84,34 @@ function measure(name: string, startedAt: number): number {
  * WebP it stands in for.
  */
 const BASE_BITMAP_WIDTH = 1600;
+
+/**
+ * The rows the canvas paints, and the frequency at the top of them.
+ *
+ * Used by BOTH the paint pass and the frequency axis, deliberately: the axis is
+ * a claim about what was painted, and the two must not be able to disagree.
+ * The ceiling is often NOT `settings.displayMaxHz` — the bin count clamps it,
+ * so a reviewer asking for 12 kHz on a 16 kHz recording gets 8, and an axis
+ * built from the setting would label that picture 12 kHz.
+ *
+ * `hzFromBin(maxBin - 1)` because the top ROW is the top bin: the image spans
+ * bin 0 (0 Hz) to bin `maxBin - 1`, one row each. Treating rows as bin centres
+ * puts the true top edge half a bin higher — 23 Hz at the default 1024-point
+ * window on 48 kHz audio, well under a pixel of the gutter.
+ */
+function displayBand(
+  mags: Magnitudes,
+  displayMaxHz: number
+): { maxBin: number; ceilingHz: number } {
+  const maxBin = Math.min(
+    mags.binCount,
+    binFromHz(displayMaxHz, mags.fftSize, mags.sampleRate) + 1
+  );
+  return {
+    maxBin,
+    ceilingHz: hzFromBin(maxBin - 1, mags.fftSize, mags.sampleRate),
+  };
+}
 
 export interface RenderStats {
   decodeMs: number;
@@ -225,6 +254,12 @@ export function LiveSpectrogram({
   // canvas carries the same horizontal detail as the WebP it replaces.
   const bitmapWidth = BASE_BITMAP_WIDTH * settings.zoom;
 
+  // Before the first FFT there is nothing painted to describe, so the axis
+  // states the setting; from then on it states the picture.
+  const axisMaxHz = magnitudes
+    ? displayBand(magnitudes, settings.displayMaxHz).ceilingHz
+    : settings.displayMaxHz;
+
   // ---- 3. Paint -----------------------------------------------------------
   // Colour mapping only. No FFT here — that is what keeps the sliders live.
   useEffect(() => {
@@ -232,10 +267,7 @@ export function LiveSpectrogram({
     if (!magnitudes || !canvas) return;
 
     const t0 = performance.now();
-    const displayMaxBin = Math.min(
-      magnitudes.binCount,
-      binFromHz(settings.displayMaxHz, magnitudes.fftSize, magnitudes.sampleRate) + 1
-    );
+    const { maxBin: displayMaxBin } = displayBand(magnitudes, settings.displayMaxHz);
 
     const img = renderImageData({
       magnitudes: magnitudes.magnitudes,
@@ -318,15 +350,14 @@ export function LiveSpectrogram({
   }, [src, settings.zoom, bandLeftPct, bandRightPct]);
 
   return (
-    <div
-      ref={scrollRef}
-      className="relative w-full overflow-x-auto overflow-y-hidden rounded bg-[rgb(20,20,28)]"
-      style={{ height }}
+    <AxisFrame
+      height={height}
+      maxHz={axisMaxHz}
+      clipSeconds={clipSeconds}
+      zoom={settings.zoom}
+      scrollRef={scrollRef}
     >
-      {/* Inner element carries the zoomed width, and the marks live inside it
-          so their percentages stay percentages OF THE CLIP, not of the
-          viewport. */}
-      <div className="relative h-full" style={{ width: `${settings.zoom * 100}%` }}>
+      <>
         <ClipMarks
           bandLeftPct={bandLeftPct}
           bandRightPct={bandRightPct}
@@ -357,7 +388,7 @@ export function LiveSpectrogram({
             </span>
           </div>
         ) : null}
-      </div>
-    </div>
+      </>
+    </AxisFrame>
   );
 }

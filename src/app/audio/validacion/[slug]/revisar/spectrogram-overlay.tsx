@@ -17,9 +17,11 @@
  * went black on the quiet clips where it matters most. The amber edges carry
  * the boundary, so the dimming does not have to.
  *
- * Time axis only — `min_freq`/`max_freq` are placeholders in the data (0 and
- * 15000 on essentially every row), so a frequency box would be a full-height
- * rectangle on every clip.
+ * The BAND is time-only — `min_freq`/`max_freq` are placeholders in the data
+ * (0 and 15000 on essentially every row), so a frequency box would be a
+ * full-height rectangle on every clip. The frequency AXIS around the picture is
+ * a different claim: it describes what the renderer painted, which is known
+ * exactly. See `clip-axes.ts`.
  *
  * A PLAYHEAD tracks `currentTime` above the scrims.
  *
@@ -32,7 +34,24 @@
  * how confident the model was.
  */
 
-import { useEffect, useRef, type RefObject } from "react";
+import {
+  Fragment,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
+
+import {
+  freqTicks,
+  timeTicks,
+  FREQ_AXIS_WIDTH,
+  TIME_AXIS_HEIGHT,
+  type FreqTick,
+  type TimeTick,
+} from "./clip-axes";
+import { DEFAULT_SETTINGS } from "./spectrogram-settings";
 
 export interface Scrim {
   leftPct: number;
@@ -289,7 +308,264 @@ export function ClipMarks({
   );
 }
 
-/** The pre-rendered server WebP with the detection marked over it. */
+/**
+ * Chart furniture around a clip: frequency gutter, time ruler, gridlines.
+ *
+ * Shared by the live canvas and the pre-rendered image so the two surfaces
+ * cannot end up labelled differently — the same failure mode `ClipMarks`
+ * exists to prevent for the band.
+ *
+ * LAYOUT. The frequency gutter sits OUTSIDE the scrolling viewport, because it
+ * is true of every column of the picture and must stay put when a zoomed clip
+ * scrolls. The time ruler is the opposite: it is only true of the columns
+ * beneath it, so it TRACKS the scroll. It is kept out of the scrolling element
+ * anyway and moved by transform, because a classic (space-taking) scrollbar
+ * would otherwise cut the labels off at the bottom of a zoomed clip on Windows
+ * and Linux, where the plot box loses ~15 px it does not have to spare.
+ */
+export function AxisFrame({
+  height,
+  maxHz,
+  clipSeconds,
+  zoom = 1,
+  scrollRef,
+  children,
+}: {
+  height: number;
+  /**
+   * The frequency at the TOP of the painted image — not necessarily the
+   * ceiling the reviewer chose. See `freqTicks`.
+   */
+  maxHz: number;
+  /** Measured clip length. Null until metadata loads; the ruler waits. */
+  clipSeconds?: number | null;
+  zoom?: number;
+  /** The scrolling viewport, when the caller zooms. */
+  scrollRef?: RefObject<HTMLDivElement | null>;
+  children: React.ReactNode;
+}) {
+  const fallbackRef = useRef<HTMLDivElement>(null);
+  const boxRef = scrollRef ?? fallbackRef;
+  const rulerRef = useRef<HTMLDivElement>(null);
+  const viewportWidth = useViewportWidth(boxRef);
+
+  const fTicks = useMemo(() => freqTicks(maxHz), [maxHz]);
+  const tTicks = useMemo(
+    () =>
+      viewportWidth == null ? [] : timeTicks(clipSeconds, viewportWidth * zoom),
+    [clipSeconds, viewportWidth, zoom]
+  );
+
+  /*
+    Fade the ruler's ends once it can scroll.
+
+    A label centred on its tick is CUT, not dropped, when the tick scrolls past
+    the edge of the strip — and the tail of "4.50 s" reads as "0 s" sitting at
+    the left edge, which is a wrong number in the one place a reviewer looks for
+    a right one. The fade runs well past the widest label, so whatever survives
+    of a cut one is left at a third of its opacity and reads as a smudge rather
+    than as a value; it doubles as the affordance that says the ruler continues,
+    which is why the annotation page fades its edges too. Not applied at 1×,
+    where nothing scrolls and the first label must stay fully legible.
+  */
+  const rulerMask =
+    zoom > 1
+      ? "linear-gradient(to right, transparent 0, black 56px, black calc(100% - 56px), transparent 100%)"
+      : undefined;
+
+  // Written straight to the node, like the playhead: a zoomed clip scrolls at
+  // 60 fps while it plays (`ClipMarks` drags the view along), and re-rendering
+  // the ruler on each of those frames would cost a React pass per frame for a
+  // strip of a dozen labels.
+  const syncRuler = () => {
+    const ruler = rulerRef.current;
+    const box = boxRef.current;
+    if (ruler && box) ruler.style.transform = `translateX(${-box.scrollLeft}px)`;
+  };
+  // No dependency array: the ruler has to catch programmatic scrolls too — the
+  // centre-on-the-detection effect in `LiveSpectrogram` moves the viewport
+  // whenever the clip or the zoom changes.
+  useEffect(syncRuler);
+
+  return (
+    <div className="flex w-full items-start">
+      <FreqAxis ticks={fTicks} height={height} />
+      <div className="min-w-0 flex-1">
+        <div
+          ref={boxRef}
+          onScroll={syncRuler}
+          className="overflow-x-auto overflow-y-hidden rounded bg-[rgb(20,20,28)]"
+          style={{ height }}
+        >
+          {/* Inner element carries the zoomed width, and the marks live inside
+              it so their percentages stay percentages OF THE CLIP, not of the
+              viewport. */}
+          <div className="relative h-full" style={{ width: `${zoom * 100}%` }}>
+            {children}
+            <AxisGrid freqTicks={fTicks} timeTicks={tTicks} />
+          </div>
+        </div>
+        <div
+          className="overflow-hidden"
+          style={{
+            height: TIME_AXIS_HEIGHT,
+            maskImage: rulerMask,
+            WebkitMaskImage: rulerMask,
+          }}
+        >
+          <div
+            ref={rulerRef}
+            className="relative h-full"
+            style={{ width: `${zoom * 100}%` }}
+          >
+            <TimeRuler ticks={tTicks} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The clip box's width in CSS px, or null before it has been measured.
+ *
+ * Measured rather than assumed because it is what decides how fine the time
+ * grid can be: the same nine seconds carry a tick every 0.25 s on a wide
+ * desktop at 4× zoom and every 2 s on a phone.
+ */
+function useViewportWidth(ref: RefObject<HTMLElement | null>): number | null {
+  const [width, setWidth] = useState<number | null>(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+
+    const read = () =>
+      setWidth((prev) => (prev === el.clientWidth ? prev : el.clientWidth));
+    read();
+
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(read);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [ref]);
+
+  return width;
+}
+
+function FreqAxis({ ticks, height }: { ticks: FreqTick[]; height: number }) {
+  return (
+    <div
+      aria-hidden
+      className="relative shrink-0 select-none"
+      style={{ width: FREQ_AXIS_WIDTH, height }}
+    >
+      {ticks.map((tick) => (
+        <div
+          key={tick.hz}
+          className="absolute right-0 flex items-center gap-1"
+          style={{ top: `${tick.topPct}%`, transform: edgeShiftY(tick.topPct) }}
+        >
+          <span className="whitespace-nowrap text-[10px] leading-none tabular-nums text-muted-foreground">
+            {tick.label}
+          </span>
+          <span className="block h-px w-1.5 bg-border" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TimeRuler({ ticks }: { ticks: TimeTick[] }) {
+  return (
+    <div aria-hidden className="relative h-full select-none">
+      {ticks.map((tick) => (
+        <Fragment key={tick.seconds}>
+          {/* The stub is never shifted — it marks the instant. Only the label
+              is nudged inboard at the ends so it is not half cut off. */}
+          <span
+            className="absolute top-0 block h-1 w-px bg-border"
+            style={{ left: `${tick.leftPct}%` }}
+          />
+          <span
+            className="absolute top-1.5 whitespace-nowrap text-[10px] leading-none tabular-nums text-muted-foreground"
+            style={{ left: `${tick.leftPct}%`, transform: edgeShiftX(tick.leftPct) }}
+          >
+            {tick.label}
+          </span>
+        </Fragment>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Faint gridlines across the picture.
+ *
+ * The gutter alone is not enough to read a call's frequency: the eye cannot
+ * carry a horizontal line 600 px across a noisy magma image. The lines are what
+ * make the axis usable, and they are kept at low opacity so they never read as
+ * energy.
+ *
+ * Drawn ABOVE the marks, so they stay visible inside the dimmed context
+ * either side of the detection — that is where a reviewer is comparing a
+ * neighbouring call against the one BirdNET pointed at. The clip's own edges
+ * (0 Hz, the ceiling, t=0) are skipped: a line there is a box, not a grid.
+ */
+function AxisGrid({
+  freqTicks: fTicks,
+  timeTicks: tTicks,
+}: {
+  freqTicks: FreqTick[];
+  timeTicks: TimeTick[];
+}) {
+  return (
+    <div aria-hidden className="pointer-events-none absolute inset-0">
+      {fTicks.map((tick) =>
+        tick.topPct <= 0.01 || tick.topPct >= 99.99 ? null : (
+          <div
+            key={`f${tick.hz}`}
+            className="absolute inset-x-0 h-px bg-white/15"
+            style={{ top: `${tick.topPct}%` }}
+          />
+        )
+      )}
+      {tTicks.map((tick) =>
+        tick.leftPct <= 0.01 ? null : (
+          <div
+            key={`t${tick.seconds}`}
+            className="absolute inset-y-0 w-px bg-white/10"
+            style={{ left: `${tick.leftPct}%` }}
+          />
+        )
+      )}
+    </div>
+  );
+}
+
+/** Keep a label at either end of an axis inside the box rather than centred on
+ *  a tick that sits on the boundary. */
+function edgeShiftY(pct: number): string {
+  if (pct <= 0.5) return "translateY(0)";
+  if (pct >= 99.5) return "translateY(-100%)";
+  return "translateY(-50%)";
+}
+
+function edgeShiftX(pct: number): string {
+  if (pct <= 0.5) return "translateX(0)";
+  if (pct >= 99.5) return "translateX(-100%)";
+  return "translateX(-50%)";
+}
+
+/**
+ * The pre-rendered server WebP with the detection marked over it.
+ *
+ * The FALLBACK surface, used only where the browser cannot decode the clip
+ * (see `review-client.tsx`). Its frequency ceiling is the server renderer's
+ * constant, NOT the reviewer's setting — the image is rendered once, before
+ * anyone touches a control, and the controls say so on this path. The test in
+ * `__tests__/spectrogram-settings.test.ts` pins the two together.
+ */
 export function SpectrogramOverlay({
   src,
   bandLeftPct,
@@ -306,9 +582,10 @@ export function SpectrogramOverlay({
   height?: number;
 }) {
   return (
-    <div
-      className="relative w-full overflow-hidden rounded bg-[rgb(20,20,28)]"
-      style={{ height }}
+    <AxisFrame
+      height={height}
+      maxHz={DEFAULT_SETTINGS.displayMaxHz}
+      clipSeconds={clipSeconds}
     >
       <ClipMarks
         bandLeftPct={bandLeftPct}
@@ -321,11 +598,11 @@ export function SpectrogramOverlay({
           <img
             src={src}
             alt="Espectrograma de la detección"
-            className="block w-full"
-            style={{ height, objectFit: "fill" }}
+            className="block h-full w-full"
+            style={{ objectFit: "fill" }}
           />
         }
       />
-    </div>
+    </AxisFrame>
   );
 }

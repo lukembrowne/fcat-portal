@@ -16,6 +16,11 @@ map $http_user_agent $is_social_crawler {
 # Rate limiting for unauthenticated public endpoints
 limit_req_zone $binary_remote_addr zone=public_api:10m rate=10r/s;
 limit_req_zone $binary_remote_addr zone=public_pages:10m rate=5r/s;
+# /_next/image is unauthenticated and every distinct (url, w, q) triple is a
+# sharp transform plus a new file under .next/cache/images, so an unlimited
+# client can burn CPU and grow the disk. Sized for a share-link grid, which
+# renders 50 <Image>s per page (public-image-grid.tsx PAGE_SIZE) in one burst.
+limit_req_zone $binary_remote_addr zone=public_images:10m rate=30r/s;
 
 # HTTP to HTTPS redirect
 server {
@@ -129,6 +134,7 @@ server {
     }
 
     location /_next/image {
+        limit_req zone=public_images burst=120 nodelay;
         proxy_pass http://127.0.0.1:3003;
         proxy_http_version 1.1;
         proxy_set_header Host $host;

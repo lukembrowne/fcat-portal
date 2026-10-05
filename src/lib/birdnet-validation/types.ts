@@ -67,6 +67,23 @@ export type CampaignStatus =
   | "abandoned";
 
 /**
+ * Stages at which a species' review is over: a fit has been run (usable or
+ * not), applied, or the species was dropped. Blinding rules that hide a
+ * colleague's answers relax here — there is no longer a judgment for the
+ * reader to anchor. `draft`, `sampled` and `reviewing` are NOT past review.
+ */
+export const POST_REVIEW_STATUSES = [
+  "fitted",
+  "unusable",
+  "applied",
+  "abandoned",
+] as const satisfies readonly CampaignStatus[];
+
+export function isPastReview(status: string): boolean {
+  return (POST_REVIEW_STATUSES as readonly string[]).includes(status);
+}
+
+/**
  * How urgently a species wants reviewing, set by hand.
  *
  * Orthogonal to `CampaignStatus`, which says where a species IS. This says

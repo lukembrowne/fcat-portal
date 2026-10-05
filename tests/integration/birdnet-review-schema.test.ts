@@ -148,6 +148,42 @@ describe("birdnet_validation_reviews constraints", () => {
   });
 });
 
+describe("reviewer-feedback columns", () => {
+  it("defaults a review's corrected species to null", () => {
+    review(ALICE, "incorrect");
+    const [row] = db.select().from(schema.birdnetValidationReviews).all();
+    expect(row.correctedSpecies).toBeNull();
+  });
+
+  it("stores a corrected species on the review row", () => {
+    db.insert(schema.birdnetValidationReviews)
+      .values({
+        sampleId,
+        reviewerEmail: ALICE,
+        outcome: "incorrect",
+        correctedSpecies: "Zonotrichia albicollis",
+      })
+      .run();
+    const [row] = db.select().from(schema.birdnetValidationReviews).all();
+    expect(row.correctedSpecies).toBe("Zonotrichia albicollis");
+  });
+
+  it("defaults a campaign's needs-expert tag to false", () => {
+    const [row] = db.select().from(schema.birdnetValidationCampaigns).all();
+    expect(row.needsExpert).toBe(false);
+  });
+
+  it("indexes corrected_species for the suggested-clips lookup", () => {
+    const indexes = db
+      .all<{ sql: string | null }>(
+        `SELECT sql FROM sqlite_master WHERE type = 'index'
+           AND tbl_name = 'birdnet_validation_reviews'`
+      )
+      .map((r) => (r.sql ?? "").toLowerCase());
+    expect(indexes.some((sql) => sql.includes("corrected_species"))).toBe(true);
+  });
+});
+
 describe("birdnet_validation_campaign_reviewers constraints", () => {
   it("rejects enrolling the same reviewer twice", () => {
     db.insert(schema.birdnetValidationCampaignReviewers)

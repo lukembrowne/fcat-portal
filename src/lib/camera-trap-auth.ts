@@ -21,6 +21,10 @@ import {
 import { eq, inArray } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import type { AuthUser } from "@/lib/types";
+import {
+  DeploymentAccessDeniedError,
+  DeploymentNotFoundError,
+} from "@/lib/deployment-access-errors";
 
 /**
  * Returns array of camera trap project IDs the user can access,
@@ -51,7 +55,9 @@ export function ctProjectFilter(
 
 /**
  * Verify user has access to a specific deployment's project.
- * Throws if no access. Used by mutation actions.
+ * Throws `DeploymentNotFoundError` / `DeploymentAccessDeniedError` (both plain
+ * `Error` subclasses with the original Spanish messages). Used by mutation
+ * actions and the audio routes.
  */
 export async function requireDeploymentAccess(
   user: AuthUser,
@@ -62,14 +68,14 @@ export async function requireDeploymentAccess(
     .select({ ctProjectId: deployments.cameraTrapProjectId })
     .from(deployments)
     .where(eq(deployments.id, deploymentId));
-  if (!deployment) throw new Error("Instalación no encontrada");
+  if (!deployment) throw new DeploymentNotFoundError();
   const projects = await getUserCameraTrapProjects(user);
   if (projects === "all") return;
   if (
     !deployment.ctProjectId ||
     !projects.includes(deployment.ctProjectId)
   ) {
-    throw new Error("No tienes acceso a este proyecto");
+    throw new DeploymentAccessDeniedError();
   }
 }
 

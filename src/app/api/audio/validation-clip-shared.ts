@@ -20,6 +20,10 @@ import type { ClipSource } from "@/lib/birdnet-validation/clip-cache";
 
 export interface ResolvedClipSource extends ClipSource {
   deploymentId: number | null;
+  /** The source recording's original name (`…_090000.flac`), for downloads. */
+  filename: string;
+  mimeType: string | null;
+  fileSize: number | null;
 }
 
 /**
@@ -42,6 +46,9 @@ export async function loadClipSource(
       sampleId: birdnetValidationSamples.id,
       driveFileId: audioFiles.driveFileId,
       deploymentId: audioFiles.deploymentId,
+      filename: audioFiles.filename,
+      mimeType: audioFiles.mimeType,
+      fileSize: audioFiles.fileSize,
       duration: audioFiles.duration,
       startTime: audioDetections.startTime,
       endTime: audioDetections.endTime,
@@ -67,5 +74,8 @@ export async function loadClipSource(
     endTime: row.endTime,
     duration: row.duration,
     deploymentId: row.deploymentId,
+    filename: row.filename,
+    mimeType: row.mimeType,
+    fileSize: row.fileSize,
   };
 }

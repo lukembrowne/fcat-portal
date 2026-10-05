@@ -9,7 +9,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 
 import { db } from "@/db";
 import {
@@ -35,7 +35,18 @@ import {
   resolveModelVersion,
 } from "@/lib/birdnet-validation/fit-job";
 import { drawSampleCore } from "@/lib/birdnet-validation/sample-core";
+import { countByBin } from "@/lib/birdnet-validation/sampling";
+import {
+  detectedSpeciesCache,
+  projectScopeKey,
+} from "@/lib/birdnet-validation/ttl-cache";
 import { speciesSlug } from "@/lib/species-slug";
+import {
+  canonicalBirdnetName,
+  isNonSpeciesLabel,
+  loadBirdnetNames,
+  resolveBirdnetName,
+} from "@/lib/birdnet-taxonomy";
 import {
   clipWindow,
   detectionBand,
@@ -57,7 +68,9 @@ import {
   DEFAULT_TARGET_SAMPLE_SIZE,
   FIT_ELIGIBILITY_REASON_ES,
   MIN_REVIEWS_FOR_FIT,
+  POST_REVIEW_STATUSES,
   SCORE_FLOOR,
+  isPastReview,
   type CampaignPriority,
   type CampaignStatus,
   type FitEligibilityReason,
@@ -105,6 +118,11 @@ export interface CampaignSummary {
   status: CampaignStatus;
   /** Which species to review next; `medium` for everything not singled out. */
   priority: CampaignPriority;
+  /**
+   * "Requiere experto": the current reviewers cannot judge this species.
+   * Orthogonal to priority — a species can be urgent AND need an expert.
+   */
+  needsExpert: boolean;
   targetSampleSize: number;
   binCount: number;
   abandonedReason: string | null;
@@ -134,6 +152,15 @@ export interface SiteCoverage {
   siteName: string | null;
   drawn: number;
   reviewed: number;
+  /**
+   * Fit-eligible reviews at this site answered `correct` — the primary
+   * reviewer's (or the sole reviewer's) answers, never pooled.
+   *
+   * NULL — withheld from the payload, not merely unrendered — when the
+   * eligible set cannot be resolved (`fitEligibilityReason`), or when the
+   * caller is still blind to it (`siteCorrectBlinded`).
+   */
+  correct: number | null;
 }
 
 export interface CampaignProgress extends CampaignSummary {
@@ -148,6 +175,17 @@ export interface CampaignProgress extends CampaignSummary {
    * tell whose answers to read — not because nobody has reviewed.
    */
   fitEligibilityReason: FitEligibilityReason | null;
+  /**
+   * True when `sites[].correct` is withheld from THIS caller for blinding.
+   *
+   * The review client shows each clip's site, so per-site correct counts made
+   * of the primary's answers would let a colleague still reviewing read the
+   * primary's judgments off by site ("confirmed at COV-A" + "this clip is from
+   * COV-A"). They are released once the caller has answered every clip in the
+   * sample, once the species' review is over (`POST_REVIEW_STATUSES`), or to
+   * the fit-eligible reviewer, whose own answers they are.
+   */
+  siteCorrectBlinded: boolean;
 }
 
 function errorResult(error: unknown, fallback: string): ActionResult<never> {
@@ -392,6 +430,41 @@ export async function updateCampaignPriority(
     return { success: true, data: undefined };
   } catch (error) {
     return errorResult(error, "Error al guardar la prioridad");
+  }
+}
+
+/**
+ * Tag or untag a species as needing an expert ("Requiere experto").
+ *
+ * Independent of priority: priority says which species to review next, this
+ * says the current reviewers cannot judge it. Mirrors `updateCampaignPriority`
+ * in every other respect — editor, editable at any stage, and deliberately NOT
+ * audited, because it gets flipped repeatedly in one triage sitting.
+ */
+export async function updateCampaignNeedsExpert(
+  campaignId: number,
+  needsExpert: boolean
+): Promise<ActionResult> {
+  await requirePermission("grabaciones", "editor");
+
+  try {
+    if (typeof needsExpert !== "boolean") {
+      return { success: false, error: "Valor no válido" };
+    }
+
+    const campaign = await loadCampaign(campaignId);
+    if (!campaign) return { success: false, error: "Especie no encontrada" };
+
+    await db
+      .update(birdnetValidationCampaigns)
+      .set({ needsExpert })
+      .where(eq(birdnetValidationCampaigns.id, campaignId));
+
+    revalidatePath("/audio/validacion");
+    revalidatePath(`/audio/validacion/${speciesSlug(campaign.species)}`);
+    return { success: true, data: undefined };
+  } catch (error) {
+    return errorResult(error, "Error al guardar la etiqueta de experto");
   }
 }
 
@@ -673,7 +746,16 @@ export async function recordReview(
     if (existing) {
       await db
         .update(birdnetValidationReviews)
-        .set({ outcome, notes: notes ?? null, reviewedAt: new Date() })
+        .set({
+          outcome,
+          notes: notes ?? null,
+          reviewedAt: new Date(),
+          // A correction names what the clip was INSTEAD of this species, so it
+          // only means anything on an `incorrect` answer. Leaving `incorrect`
+          // clears it; re-affirming `incorrect` keeps it (the column is simply
+          // not in the SET).
+          ...(outcome === "incorrect" ? {} : { correctedSpecies: null }),
+        })
         .where(eq(birdnetValidationReviews.id, existing.id));
     } else {
       await db.insert(birdnetValidationReviews).values({
@@ -700,6 +782,490 @@ export async function recordReview(
     return { success: true, data: undefined };
   } catch (error) {
     return errorResult(error, "Error al registrar la revisión");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Reviewer corrections ("what the clip really was")
+// ---------------------------------------------------------------------------
+
+/**
+ * Attach, change or clear the species a clip REALLY was, on the caller's own
+ * `incorrect` review.
+ *
+ * A separate write from `recordReview` on purpose: the answer is saved the
+ * instant "No" is pressed, and the species arrives later as an optional second
+ * write. It lands on the caller's own review row only — never on
+ * `audio_identifications.corrected_species` — so it changes no count, chart,
+ * export, occupancy input or fit. Suggestions are read elsewhere and never pass
+ * through `resolveFitEligibleReviews`.
+ *
+ * The submitted name is re-resolved here against BirdNET's label list; the
+ * client picker is a convenience, not the guard.
+ *
+ * Viewer, like `recordReview`, and equally bounded: one column of one row the
+ * caller already owns. Not audited — a per-clip write, like the review itself.
+ */
+export async function setReviewCorrection(
+  sampleId: number,
+  species: string | null
+): Promise<ActionResult<{ correctedSpecies: string | null }>> {
+  const user = await requirePermission("grabaciones", "viewer");
+
+  try {
+    if (!Number.isInteger(sampleId)) {
+      return { success: false, error: "Detección no válida" };
+    }
+
+    const [sample] = await db
+      .select({
+        id: birdnetValidationSamples.id,
+        campaignId: birdnetValidationSamples.campaignId,
+      })
+      .from(birdnetValidationSamples)
+      .where(eq(birdnetValidationSamples.id, sampleId));
+    if (!sample) return { success: false, error: "Detección no encontrada" };
+
+    const campaign = await loadCampaign(sample.campaignId);
+    if (!campaign) return { success: false, error: "Validación no encontrada" };
+    if (campaign.status === "abandoned") {
+      return { success: false, error: "Esta validación fue descartada" };
+    }
+
+    const [review] = await db
+      .select({
+        id: birdnetValidationReviews.id,
+        outcome: birdnetValidationReviews.outcome,
+      })
+      .from(birdnetValidationReviews)
+      .where(
+        and(
+          eq(birdnetValidationReviews.sampleId, sampleId),
+          eq(birdnetValidationReviews.reviewerEmail, user.email)
+        )
+      );
+    if (!review) {
+      return {
+        success: false,
+        error: "Primero responde esta detección antes de indicar la especie",
+      };
+    }
+    if (review.outcome !== "incorrect") {
+      return {
+        success: false,
+        error:
+          "Solo se puede indicar la especie real en una detección marcada como incorrecta",
+      };
+    }
+
+    let correctedSpecies: string | null = null;
+    if (species !== null) {
+      if (typeof species !== "string" || !species.trim()) {
+        return { success: false, error: "Indica una especie" };
+      }
+      const canonical = canonicalBirdnetName(species);
+      if (!canonical) {
+        return {
+          success: false,
+          error: `"${species.trim()}" no está en la lista de especies de BirdNET`,
+        };
+      }
+      if (isNonSpeciesLabel(canonical)) {
+        return {
+          success: false,
+          error: `"${canonical}" no es una especie`,
+        };
+      }
+      if (canonical === campaign.species) {
+        return {
+          success: false,
+          error:
+            "La especie real no puede ser la misma que se está validando; si lo era, marca la detección como correcta",
+        };
+      }
+      correctedSpecies = canonical;
+    }
+
+    // reviewed_at deliberately untouched: naming the species is not a new
+    // judgment of the clip, and "reviews since fit" must not count it as one.
+    await db
+      .update(birdnetValidationReviews)
+      .set({ correctedSpecies })
+      .where(eq(birdnetValidationReviews.id, review.id));
+
+    return { success: true, data: { correctedSpecies } };
+  } catch (error) {
+    return errorResult(error, "Error al guardar la especie real");
+  }
+}
+
+/**
+ * One option in the correction picker, as a positional tuple to keep ~6.5k
+ * rows lean on a phone: `[scientificName, englishName, spanishName | null]`.
+ */
+export type CorrectionSpeciesOption = [
+  scientificName: string,
+  commonName: string,
+  spanishName: string | null,
+];
+
+export interface CorrectionSpeciesList {
+  /**
+   * Labels detected at least once in the caller's accessible projects, most
+   * detected first. Ranked ahead because the clip's real species is far more
+   * likely one this portal has heard before.
+   */
+  detected: CorrectionSpeciesOption[];
+  /** Every other BirdNET species label, alphabetical by scientific name. */
+  others: CorrectionSpeciesOption[];
+}
+
+/**
+ * The vocabulary for the "what was it really?" picker: BirdNET's own species
+ * labels (the same list `setReviewCorrection` validates against), minus the
+ * non-species classes (Dog, Engine, Noise, ...). Fetched once per review
+ * session, not per clip, and the detected-species ranking behind it is cached
+ * per project scope for `DETECTED_SPECIES_TTL_MS`.
+ *
+ * Detected-first uses the same project scope as `listValidatableSpecies`. A
+ * detected label that is not in BirdNET's list is left out: the write would
+ * refuse it.
+ */
+export async function listCorrectionSpecies(): Promise<
+  ActionResult<CorrectionSpeciesList>
+> {
+  const user = await requirePermission("grabaciones", "viewer");
+
+  try {
+    const ctProjects = await getUserCameraTrapProjects(user);
+    // Cached per project scope: the GROUP BY spans every identification, and
+    // the result only ranks a picker list, so minutes-stale is harmless.
+    const counts = detectedSpeciesCache.get(projectScopeKey(ctProjects), () =>
+      detectedSpeciesCounts(ctProjects)
+    );
+    const names = loadBirdnetNames();
+
+    const detectedCount = new Map<string, number>();
+    for (const row of counts) {
+      if (names.has(row.species)) detectedCount.set(row.species, Number(row.n));
+    }
+
+    const detected: Array<[CorrectionSpeciesOption, number]> = [];
+    const others: CorrectionSpeciesOption[] = [];
+    for (const [scientificName, n] of names) {
+      if (isNonSpeciesLabel(scientificName)) continue;
+      const option: CorrectionSpeciesOption = [
+        scientificName,
+        n.commonName,
+        n.spanishName,
+      ];
+      const count = detectedCount.get(scientificName);
+      if (count !== undefined) detected.push([option, count]);
+      else others.push(option);
+    }
+
+    detected.sort((a, b) => b[1] - a[1] || a[0][0].localeCompare(b[0][0]));
+    others.sort((a, b) => a[0].localeCompare(b[0]));
+
+    return {
+      success: true,
+      data: { detected: detected.map(([option]) => option), others },
+    };
+  } catch (error) {
+    return errorResult(error, "Error al cargar la lista de especies");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Reviewer suggestions ("clips attributed to this species")
+// ---------------------------------------------------------------------------
+
+/**
+ * The caller's camera-trap project scope as a SQL predicate over the `d`
+ * (biochoco_deployments) alias — the same scope `detectedSpeciesCounts` and
+ * the sampler apply.
+ *
+ * Over a LEFT JOIN it also decides recordings with no deployment: `'all'`
+ * (`1 = 1`) keeps them, while a project list never matches a NULL
+ * `d.ct_project_id`, so a scoped caller does not see them.
+ */
+function deploymentScopeSql(
+  ctProjects: Awaited<ReturnType<typeof getUserCameraTrapProjects>>
+) {
+  if (ctProjects === "all") return sql`1 = 1`;
+  if (ctProjects.length === 0) return sql`1 = 0`;
+  return sql`d.ct_project_id IN (${sql.join(
+    ctProjects.map((id) => sql`${id}`),
+    sql`, `
+  )})`;
+}
+
+/**
+ * Common names for a scientific name: the species table first (curated), then
+ * BirdNET's own label list, which covers a corrected species with no
+ * `biochoco_species` row.
+ */
+async function speciesNamesFor(
+  scientificNames: string[]
+): Promise<Map<string, { commonName: string | null; spanishName: string | null }>> {
+  const out = new Map<string, { commonName: string | null; spanishName: string | null }>();
+  if (scientificNames.length === 0) return out;
+  const rows = await db
+    .select({
+      scientificName: speciesTable.scientificName,
+      commonName: speciesTable.commonName,
+      spanishName: speciesTable.spanishName,
+    })
+    .from(speciesTable)
+    .where(inArray(speciesTable.scientificName, scientificNames));
+  for (const row of rows) {
+    out.set(row.scientificName, {
+      commonName: row.commonName,
+      spanishName: row.spanishName,
+    });
+  }
+  for (const name of scientificNames) {
+    if (out.has(name)) continue;
+    const birdnet = resolveBirdnetName(name);
+    out.set(name, {
+      commonName: birdnet?.commonName ?? null,
+      spanishName: birdnet?.spanishName ?? null,
+    });
+  }
+  return out;
+}
+
+/** One reviewer's attribution of another species' clip to this one. */
+export interface SpeciesSuggestion {
+  /** The review row; unique per (sample, reviewer), so a stable row key. */
+  reviewId: number;
+  sampleId: number;
+  /** The species whose sample the clip was drawn for (and judged incorrect). */
+  sourceSpecies: string;
+  sourceCommonName: string | null;
+  sourceSpanishName: string | null;
+  siteName: string | null;
+  /** Wall-clock recording time of the detection, or null. */
+  recordedAt: string | null;
+  reviewerEmail: string;
+  reviewerName: string | null;
+  /** ISO timestamp of the review. */
+  reviewedAt: string;
+}
+
+/** What the species page may show of the suggestions for one species. */
+export interface SpeciesSuggestions {
+  /** Rows the caller may see — see `getSpeciesSuggestions` for the rule. */
+  suggestions: SpeciesSuggestion[];
+  /**
+   * Suggestions withheld from the caller because they would reveal a
+   * colleague's `incorrect` answer on a clip the caller still has to judge.
+   * A bare count: no clip, site, time or reviewer travels with it.
+   */
+  hidden: number;
+}
+
+/**
+ * Clips reviewers marked `incorrect` for another species and attributed to
+ * `species` — one row per (sample, reviewer), so two reviewers naming the same
+ * clip show twice, each labelled.
+ *
+ * Deliberately a separate read: these clips are NOT part of `species`' sample.
+ * Nothing here passes through `resolveFitEligibleReviews`, and no fit, bin or
+ * site coverage, or total reads it — mixing them in would break the
+ * score-bin stratification the fit depends on.
+ *
+ * BLINDING. A suggestion is a colleague's `incorrect` answer with the clip's
+ * site, recording time and reviewer attached — the review client shows the same
+ * site and time, so a rostered reviewer who read this list first would know a
+ * colleague's answer before judging the clip. A row is therefore returned only
+ * when the caller:
+ *   - has their own review of that sample (their judgment is already made), or
+ *   - IS the suggesting reviewer, or
+ *   - the SOURCE species' review is over (`POST_REVIEW_STATUSES`).
+ * Withheld rows are counted, never returned — filtering in the page would still
+ * put them in the RSC payload.
+ *
+ * Viewer, like every other read in the module, and scoped to the caller's
+ * accessible projects the way `listValidatableSpecies` is. A recording with no
+ * deployment is visible only to an unscoped (`'all'`) caller, which is exactly
+ * what `deploymentScopeSql` over a LEFT JOIN yields.
+ */
+export async function getSpeciesSuggestions(
+  species: string
+): Promise<ActionResult<SpeciesSuggestions>> {
+  const user = await requirePermission("grabaciones", "viewer");
+
+  try {
+    const target = typeof species === "string" ? species.trim() : "";
+    if (!target) return { success: true, data: { suggestions: [], hidden: 0 } };
+
+    const ctProjects = await getUserCameraTrapProjects(user);
+    // `r.outcome = 'incorrect'` is belt-and-braces: `recordReview` clears the
+    // correction whenever the answer leaves incorrect.
+    //
+    // The visibility test runs in SQL and hidden rows are reduced to a count
+    // here, so their details never leave this function.
+    const rows = db.all<{
+      reviewId: number;
+      sampleId: number;
+      sourceSpecies: string;
+      siteName: string | null;
+      filename: string | null;
+      detectionStart: number;
+      reviewerEmail: string;
+      reviewedAt: number;
+      visible: number;
+    }>(sql`
+      SELECT r.id AS reviewId,
+             s.id AS sampleId,
+             c.species AS sourceSpecies,
+             s.site_name AS siteName,
+             af.filename AS filename,
+             ad.start_time AS detectionStart,
+             r.reviewer_email AS reviewerEmail,
+             r.reviewed_at AS reviewedAt,
+             CASE WHEN r.reviewer_email = ${user.email}
+                    OR c.status IN (${sql.join(
+                      POST_REVIEW_STATUSES.map((st) => sql`${st}`),
+                      sql`, `
+                    )})
+                    OR EXISTS (
+                      SELECT 1 FROM birdnet_validation_reviews mine
+                       WHERE mine.sample_id = r.sample_id
+                         AND mine.reviewer_email = ${user.email}
+                    )
+                  THEN 1 ELSE 0 END AS visible
+      FROM birdnet_validation_reviews r
+      JOIN birdnet_validation_samples s ON s.id = r.sample_id
+      JOIN birdnet_validation_campaigns c ON c.id = s.campaign_id
+      JOIN audio_identifications ai ON ai.id = s.audio_identification_id
+      JOIN audio_detections ad ON ad.id = ai.audio_detection_id
+      JOIN audio_files af ON af.id = ad.audio_file_id
+      LEFT JOIN biochoco_deployments d ON d.id = af.deployment_id
+      WHERE r.corrected_species = ${target}
+        AND r.outcome = 'incorrect'
+        AND ${deploymentScopeSql(ctProjects)}
+      ORDER BY r.reviewed_at DESC, r.id DESC
+    `);
+
+    const visibleRows = rows.filter((r) => Number(r.visible) === 1);
+    const hidden = rows.length - visibleRows.length;
+
+    const names = await speciesNamesFor([
+      ...new Set(visibleRows.map((r) => r.sourceSpecies)),
+    ]);
+    const reviewerEmails = [...new Set(visibleRows.map((r) => r.reviewerEmail))];
+    const userRows = reviewerEmails.length
+      ? await db
+          .select({ email: users.email, name: users.name })
+          .from(users)
+          .where(inArray(users.email, reviewerEmails))
+      : [];
+    const nameByEmail = new Map(userRows.map((u) => [u.email, u.name]));
+
+    const suggestions: SpeciesSuggestion[] = visibleRows.map((row) => {
+      const n = names.get(row.sourceSpecies);
+      return {
+        reviewId: row.reviewId,
+        sampleId: row.sampleId,
+        sourceSpecies: row.sourceSpecies,
+        sourceCommonName: n?.commonName ?? null,
+        sourceSpanishName: n?.spanishName ?? null,
+        siteName: row.siteName,
+        recordedAt: recordingInstant(row.filename, row.detectionStart),
+        reviewerEmail: row.reviewerEmail,
+        reviewerName: nameByEmail.get(row.reviewerEmail) ?? null,
+        // Drizzle's `timestamp` mode stores Unix SECONDS; this is a raw read.
+        reviewedAt: new Date(Number(row.reviewedAt) * 1000).toISOString(),
+      };
+    });
+
+    return { success: true, data: { suggestions, hidden } };
+  } catch (error) {
+    return errorResult(error, "Error al cargar las sugerencias de los revisores");
+  }
+}
+
+/**
+ * How many detections a draw for `species` could find in the caller's scope —
+ * the same filter `drawSampleCore` applies (BirdNET's raw prediction, the
+ * [0.1, 1.0] score range, the caller's projects).
+ *
+ * The suggestions-only page reads this before offering "Añadir especie": a
+ * reviewer can name any BirdNET label, and adding one with nothing to draw
+ * would leave a permanent `draft` row.
+ */
+export async function countDrawableDetections(
+  species: string
+): Promise<ActionResult<number>> {
+  const user = await requirePermission("grabaciones", "viewer");
+  try {
+    const target = typeof species === "string" ? species.trim() : "";
+    if (!target) return { success: true, data: 0 };
+    const ctProjects = await getUserCameraTrapProjects(user);
+    const perBin = await countByBin(target, ctProjects, DEFAULT_BIN_COUNT);
+    return { success: true, data: perBin.reduce((a, b) => a + b, 0) };
+  } catch (error) {
+    return errorResult(error, "Error al contar las detecciones");
+  }
+}
+
+/** Suggestion totals for one attributed species, for the species table. */
+export interface SuggestionCount {
+  species: string;
+  commonName: string | null;
+  spanishName: string | null;
+  /** (sample, reviewer) rows — what the species page lists. */
+  suggestions: number;
+  /** Distinct clips among them. */
+  clips: number;
+}
+
+/**
+ * How many reviewer suggestions each species has, scoped like
+ * `getSpeciesSuggestions`. Includes species with no validation at all — that
+ * is how they become discoverable.
+ *
+ * Aggregate counts only, so they are NOT blinded: a number per attributed
+ * species names no clip, site or reviewer. The species page may therefore list
+ * fewer rows than this counts, and says how many it is withholding.
+ */
+export async function listSuggestionCounts(): Promise<ActionResult<SuggestionCount[]>> {
+  const user = await requirePermission("grabaciones", "viewer");
+
+  try {
+    const ctProjects = await getUserCameraTrapProjects(user);
+    const rows = db.all<{ species: string; suggestions: number; clips: number }>(sql`
+      SELECT r.corrected_species AS species,
+             COUNT(*) AS suggestions,
+             COUNT(DISTINCT r.sample_id) AS clips
+      FROM birdnet_validation_reviews r
+      JOIN birdnet_validation_samples s ON s.id = r.sample_id
+      JOIN audio_identifications ai ON ai.id = s.audio_identification_id
+      JOIN audio_detections ad ON ad.id = ai.audio_detection_id
+      JOIN audio_files af ON af.id = ad.audio_file_id
+      LEFT JOIN biochoco_deployments d ON d.id = af.deployment_id
+      WHERE r.corrected_species IS NOT NULL
+        AND r.outcome = 'incorrect'
+        AND ${deploymentScopeSql(ctProjects)}
+      GROUP BY r.corrected_species
+    `);
+
+    const names = await speciesNamesFor(rows.map((r) => r.species));
+    const data: SuggestionCount[] = rows
+      .map((row) => ({
+        species: row.species,
+        commonName: names.get(row.species)?.commonName ?? null,
+        spanishName: names.get(row.species)?.spanishName ?? null,
+        suggestions: Number(row.suggestions),
+        clips: Number(row.clips),
+      }))
+      .sort((a, b) => b.suggestions - a.suggestions || a.species.localeCompare(b.species));
+
+    return { success: true, data };
+  } catch (error) {
+    return errorResult(error, "Error al contar las sugerencias de los revisores");
   }
 }
 
@@ -835,7 +1401,7 @@ export async function setPrimaryReviewer(
 export async function getCampaignProgress(
   campaignId: number
 ): Promise<ActionResult<CampaignProgress>> {
-  await requirePermission("grabaciones", "viewer");
+  const user = await requirePermission("grabaciones", "viewer");
 
   try {
     const campaign = await loadCampaign(campaignId);
@@ -900,16 +1466,49 @@ export async function getCampaignProgress(
       .from(birdnetValidationSamples)
       .where(eq(birdnetValidationSamples.campaignId, campaignId));
 
-    const reviewedSampleIds = new Set(eligibleReviews.map((r) => r.sampleId));
-    const bySite = new Map<string | null, { drawn: number; reviewed: number }>();
+    // Site correctness reads the same fit-eligible set as everything else, so
+    // the per-site `correct` counts sum to the fit's correct total. When the
+    // set cannot be resolved the counts are withheld — never a pooled count
+    // across reviewers.
+    const outcomeBySample = new Map(
+      eligibleReviews.map((r) => [r.sampleId, r.outcome])
+    );
+
+    // Blinding (see `CampaignProgress.siteCorrectBlinded`).
+    const callerIsFitReviewer = eligible.ok && eligible.reviewerEmail === user.email;
+    let siteCorrectBlinded = false;
+    if (!callerIsFitReviewer && !isPastReview(campaign.status)) {
+      const [ownRow] = db.all<{ n: number }>(sql`
+        SELECT COUNT(*) AS n
+          FROM birdnet_validation_samples s
+         WHERE s.campaign_id = ${campaignId}
+           AND NOT EXISTS (
+             SELECT 1 FROM birdnet_validation_reviews r
+              WHERE r.sample_id = s.id AND r.reviewer_email = ${user.email}
+           )
+      `);
+      siteCorrectBlinded = Number(ownRow?.n ?? 0) > 0;
+    }
+    const releaseSiteCorrect = eligible.ok && !siteCorrectBlinded;
+    const bySite = new Map<
+      string | null,
+      { drawn: number; reviewed: number; correct: number }
+    >();
     for (const row of sampleRows) {
-      const entry = bySite.get(row.siteName) ?? { drawn: 0, reviewed: 0 };
+      const entry = bySite.get(row.siteName) ?? { drawn: 0, reviewed: 0, correct: 0 };
       entry.drawn += 1;
-      if (reviewedSampleIds.has(row.id)) entry.reviewed += 1;
+      const outcome = outcomeBySample.get(row.id);
+      if (outcome) entry.reviewed += 1;
+      if (outcome === "correct") entry.correct += 1;
       bySite.set(row.siteName, entry);
     }
     const sites: SiteCoverage[] = [...bySite.entries()]
-      .map(([siteName, counts]) => ({ siteName, ...counts }))
+      .map(([siteName, counts]) => ({
+        siteName,
+        drawn: counts.drawn,
+        reviewed: counts.reviewed,
+        correct: releaseSiteCorrect ? counts.correct : null,
+      }))
       .sort((a, b) => b.drawn - a.drawn || (a.siteName ?? "").localeCompare(b.siteName ?? ""));
 
     const reviewed = totals.reviewed;
@@ -922,6 +1521,7 @@ export async function getCampaignProgress(
         species: campaign.species,
         status: campaign.status as CampaignStatus,
         priority: campaign.priority as CampaignPriority,
+        needsExpert: campaign.needsExpert,
         targetSampleSize: campaign.targetSampleSize,
         binCount: campaign.binCount,
         abandonedReason: campaign.abandonedReason,
@@ -930,6 +1530,7 @@ export async function getCampaignProgress(
         primaryReviewerEmail: campaign.primaryReviewerEmail,
         reviewerCount: Number(reviewerCountRow?.n ?? 0),
         fitEligibilityReason: eligible.ok ? null : eligible.reason,
+        siteCorrectBlinded,
         sampled: Number(sampledRow?.sampled ?? 0),
         reviewed,
         correct: totals.correct,
@@ -963,6 +1564,7 @@ export async function listCampaigns(): Promise<ActionResult<CampaignSummary[]>> 
         species: birdnetValidationCampaigns.species,
         status: birdnetValidationCampaigns.status,
         priority: birdnetValidationCampaigns.priority,
+        needsExpert: birdnetValidationCampaigns.needsExpert,
         targetSampleSize: birdnetValidationCampaigns.targetSampleSize,
         binCount: birdnetValidationCampaigns.binCount,
         abandonedReason: birdnetValidationCampaigns.abandonedReason,
@@ -1019,6 +1621,28 @@ export interface ValidatableSpecies {
 }
 
 /**
+ * BirdNET detection counts per label, scoped to the caller's accessible
+ * camera-trap projects. Shared by the validatable-species picker and the
+ * correction picker so both rank from the same scope.
+ */
+function detectedSpeciesCounts(
+  ctProjects: Awaited<ReturnType<typeof getUserCameraTrapProjects>>
+): Array<{ species: string; n: number }> {
+  // Raw SQL for the join to deployments: the project scope is expressed over
+  // the `d` alias, matching the sampling module's `projectScope`.
+  return db.all<{ species: string; n: number }>(sql`
+    SELECT ai.species AS species, COUNT(*) AS n
+    FROM audio_identifications ai
+    JOIN audio_detections ad ON ad.id = ai.audio_detection_id
+    JOIN audio_files af ON af.id = ad.audio_file_id
+    JOIN biochoco_deployments d ON d.id = af.deployment_id
+    WHERE ai.species IS NOT NULL
+      AND ${deploymentScopeSql(ctProjects)}
+    GROUP BY ai.species
+  `);
+}
+
+/**
  * Every species BirdNET has actually detected, with what it takes to decide
  * whether to validate it.
  *
@@ -1041,28 +1665,7 @@ export async function listValidatableSpecies(): Promise<
 
   try {
     const ctProjects = await getUserCameraTrapProjects(user);
-
-    // Raw SQL for the join to deployments: the project scope is expressed over
-    // the `d` alias, matching the sampling module's `projectScope`.
-    const counts = db.all<{ species: string; n: number }>(sql`
-      SELECT ai.species AS species, COUNT(*) AS n
-      FROM audio_identifications ai
-      JOIN audio_detections ad ON ad.id = ai.audio_detection_id
-      JOIN audio_files af ON af.id = ad.audio_file_id
-      JOIN biochoco_deployments d ON d.id = af.deployment_id
-      WHERE ai.species IS NOT NULL
-        AND ${
-          ctProjects === "all"
-            ? sql`1 = 1`
-            : ctProjects.length === 0
-              ? sql`1 = 0`
-              : sql`d.ct_project_id IN (${sql.join(
-                  ctProjects.map((id) => sql`${id}`),
-                  sql`, `
-                )})`
-        }
-      GROUP BY ai.species
-    `);
+    const counts = detectedSpeciesCounts(ctProjects);
 
     const speciesRows = await db
       .select({
@@ -1147,6 +1750,13 @@ export async function getReviewQueue(
       detectionEndSeconds: number;
       /** Wall-clock recording time, or null when the filename carries none. */
       recordedAt: string | null;
+      /**
+       * The source recording's own filename (e.g. `…_090000.flac`), named after
+       * the recording START — the displayed `recordedAt` adds the detection
+       * offset, so without this a reviewer searching Drive finds nothing.
+       * Carries no score.
+       */
+      filename: string;
     }>
   >
 > {
@@ -1227,6 +1837,7 @@ export async function getReviewQueue(
         detectionStartSeconds: row.detectionStart,
         detectionEndSeconds: row.detectionEnd,
         recordedAt: recordingInstant(row.filename, row.detectionStart),
+        filename: row.filename,
       };
     });
 

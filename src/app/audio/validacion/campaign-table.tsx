@@ -3,7 +3,8 @@ import { Headphones, Settings2 } from "lucide-react";
 
 import { SortIcon } from "@/components/sort-icon";
 import { speciesSlug } from "@/lib/species-slug";
-import { priorityRank, rowAction, stageLabel } from "./labels";
+import { priorityRank, rowAction, stageLabel, suggestionCountLabel } from "./labels";
+import { ExpertCell } from "./expert-cell";
 import { NotesCell } from "./notes-cell";
 import { PriorityCell } from "./priority-cell";
 import { normalizeSpeciesName } from "./species-import";
@@ -22,6 +23,7 @@ import type { CampaignSummary } from "./actions";
  */
 export const SORTABLE_COLUMNS = [
   "priority",
+  "expert",
   "species",
   "status",
   "progress",
@@ -58,6 +60,12 @@ export interface CampaignRow extends CampaignSummary {
   latestIsNoFilter: boolean;
   unusableReason: string | null;
   totalDetections: number;
+  /**
+   * Clips reviewers attributed to this species while validating another one
+   * (one per reviewer). Never part of this species' sample or fit — just a
+   * pointer to the "Sugeridos por revisores" section of its page.
+   */
+  suggestionCount?: number;
 }
 
 function precisionOf(row: CampaignRow): number | null {
@@ -71,6 +79,8 @@ export interface CampaignFilter {
   status: string;
   /** A CampaignPriority, or "todas". */
   priority: string;
+  /** "si" (tagged "Requiere experto"), "no" (untagged), or "todas". */
+  expert?: string;
 }
 
 /**
@@ -94,6 +104,7 @@ export function filterCampaignRows(
   const q = normalizeSpeciesName(filter.search ?? "");
   const status = filter.status || "activas";
   const priority = filter.priority || "todas";
+  const expert = filter.expert || "todas";
 
   return rows.filter((row) => {
     if (status === "activas") {
@@ -106,6 +117,11 @@ export function filterCampaignRows(
     // and none of them means "not being worked on", so there is nothing for a
     // default narrowing to hide.
     if (priority !== "todas" && row.priority !== priority) return false;
+
+    // Same shape as priority: a boolean tag has no "not being worked on"
+    // value either, so nothing is hidden by default.
+    if (expert === "si" && !row.needsExpert) return false;
+    if (expert === "no" && row.needsExpert) return false;
 
     if (!q) return true;
     return (
@@ -137,6 +153,10 @@ export function sortCampaignRows(
         // The RANK, never the label: "Alta" < "Baja" < "Media" as strings puts
         // the middle level at the bottom of the list.
         return priorityRank(row.priority);
+      case "expert":
+        // Tagged first on ascending — the reader sorting by this column is
+        // looking for the species that need someone else's ears.
+        return row.needsExpert ? 0 : 1;
       case "species":
         return row.displayName.toLowerCase();
       case "status":
@@ -171,7 +191,7 @@ export function sortCampaignRows(
    * `sign` — names read A-Z inside each band whichever way the bands run.
    */
   const tiebreak = (a: CampaignRow, b: CampaignRow): number => {
-    if (column === "priority") {
+    if (column === "priority" || column === "expert") {
       const na = a.displayName.toLowerCase();
       const nb = b.displayName.toLowerCase();
       if (na < nb) return -1;
@@ -223,6 +243,7 @@ function SortableHeader({
   if (filter.priority && filter.priority !== "todas") {
     query.set("priority", filter.priority);
   }
+  if (filter.expert && filter.expert !== "todas") query.set("experto", filter.expert);
 
   // Every header but the first is indented, and none of them wrap. With nine
   // columns the table sits at its natural width, so the browser has no slack
@@ -280,7 +301,7 @@ export function CampaignTable({
   }
 
   return (
-    <table className="w-full min-w-[58rem] text-sm">
+    <table className="w-full min-w-[63rem] text-sm">
       <thead>
         <tr className="border-b text-xs text-muted-foreground">
           {/* First column, and the default sort. It answers "which species
@@ -288,6 +309,9 @@ export function CampaignTable({
               name answers "where is this one", which the search box does
               better. */}
           <SortableHeader column="priority" label="Prioridad" currentSort={sortBy} currentDir={sortDir} filter={filter} first />
+          {/* Beside priority, not merged into it: urgency and "who can judge
+              this" are independent, and a species can be both. */}
+          <SortableHeader column="expert" label="Experto" currentSort={sortBy} currentDir={sortDir} filter={filter} />
           <SortableHeader column="species" label="Especie" currentSort={sortBy} currentDir={sortDir} filter={filter} />
           <SortableHeader column="status" label="Estado" currentSort={sortBy} currentDir={sortDir} filter={filter} />
           <SortableHeader column="progress" label="Revisadas" currentSort={sortBy} currentDir={sortDir} align="right" filter={filter} />
@@ -325,6 +349,14 @@ export function CampaignTable({
                 />
               </td>
               <td className="py-1.5 pl-2">
+                <ExpertCell
+                  campaignId={row.id}
+                  displayName={row.displayName}
+                  needsExpert={row.needsExpert}
+                  canEdit={canEdit}
+                />
+              </td>
+              <td className="py-1.5 pl-2">
                 <Link
                   href={`/audio/validacion/${speciesSlug(row.species)}`}
                   title="Progreso, umbral y ajustes de esta especie"
@@ -332,8 +364,19 @@ export function CampaignTable({
                 >
                   {row.displayName}
                 </Link>
-                <div className="text-[11px] italic text-muted-foreground">
-                  {row.species}
+                <div className="text-[11px] text-muted-foreground">
+                  <span className="italic">{row.species}</span>
+                  {/* On the scientific-name line rather than a line of its own: a
+                      third line in this cell would stretch every row. */}
+                  {row.suggestionCount ? (
+                    <Link
+                      href={`/audio/validacion/${speciesSlug(row.species)}#sugeridos`}
+                      title="Clips que los revisores atribuyeron a esta especie al validar otra. No entran en su muestra ni en su ajuste."
+                      className="ml-1.5 inline-block whitespace-nowrap rounded-full border border-zinc-300 px-1.5 text-[10px] leading-4 text-zinc-600 hover:bg-muted"
+                    >
+                      {suggestionCountLabel(row.suggestionCount)}
+                    </Link>
+                  ) : null}
                 </div>
               </td>
               {/* The pill only. Both reasons are full sentences and rendering

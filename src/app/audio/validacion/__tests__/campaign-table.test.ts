@@ -15,6 +15,7 @@ const row = (over: Partial<CampaignRow>): CampaignRow =>
     displayName: "Aaa",
     status: "fitted",
     priority: "medium",
+    needsExpert: false,
     targetSampleSize: 200,
     binCount: 9,
     triageSize: 10,
@@ -148,6 +149,7 @@ describe("sortCampaignRows", () => {
     expect(SORTABLE_COLUMNS).not.toContain("action" as never);
     expect(SORTABLE_COLUMNS).toEqual([
       "priority",
+      "expert",
       "species",
       "status",
       "progress",
@@ -350,5 +352,64 @@ describe("filterCampaignRows", () => {
       filter
     );
     expect(ids(filterThenSort)).toEqual(ids(sortThenFilter));
+  });
+});
+
+describe("Requiere experto", () => {
+  const ids = (out: CampaignRow[]) => out.map((r) => r.id);
+  const rows = [
+    row({ id: 1, displayName: "Tucán", needsExpert: true, priority: "high", status: "reviewing" }),
+    row({ id: 2, displayName: "Búho", needsExpert: false, priority: "high", status: "reviewing" }),
+    row({ id: 3, displayName: "Manakín", needsExpert: true, priority: "low", status: "reviewing" }),
+    row({ id: 4, displayName: "Atila", needsExpert: true, priority: "high", status: "abandoned" }),
+  ];
+
+  it("filters to tagged species only", () => {
+    expect(ids(filterCampaignRows(rows, { search: "", status: "todas", priority: "todas", expert: "si" }))).toEqual([
+      1, 3, 4,
+    ]);
+  });
+
+  it("filters to untagged species only", () => {
+    expect(ids(filterCampaignRows(rows, { search: "", status: "todas", priority: "todas", expert: "no" }))).toEqual([2]);
+  });
+
+  it("hides nothing when the tag filter is absent or 'todas'", () => {
+    expect(filterCampaignRows(rows, { search: "", status: "todas", priority: "todas" })).toHaveLength(4);
+    expect(
+      filterCampaignRows(rows, { search: "", status: "todas", priority: "todas", expert: "todas" })
+    ).toHaveLength(4);
+  });
+
+  it("combines with the priority and stage filters", () => {
+    expect(
+      ids(filterCampaignRows(rows, { search: "", status: "activas", priority: "high", expert: "si" }))
+    ).toEqual([1]);
+  });
+
+  it("sorts tagged species first, alphabetical within each band", () => {
+    expect(sortCampaignRows(rows, "expert", "asc").map((r) => r.displayName)).toEqual([
+      "Atila",
+      "Manakín",
+      "Tucán",
+      "Búho",
+    ]);
+  });
+
+  it("keeps the alphabetical tiebreak in both directions, like priority", () => {
+    expect(sortCampaignRows(rows, "expert", "desc").map((r) => r.displayName)).toEqual([
+      "Búho",
+      "Atila",
+      "Manakín",
+      "Tucán",
+    ]);
+  });
+
+  it("falls back to id when names tie", () => {
+    const twins = [
+      row({ id: 9, displayName: "Igual", needsExpert: true }),
+      row({ id: 5, displayName: "Igual", needsExpert: true }),
+    ];
+    expect(sortCampaignRows(twins, "expert", "asc").map((r) => r.id)).toEqual([5, 9]);
   });
 });

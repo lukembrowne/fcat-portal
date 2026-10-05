@@ -1378,6 +1378,11 @@ export const birdnetValidationCampaigns = sqliteTable(
     priority: text("priority", { enum: ["high", "medium", "low"] })
       .notNull()
       .default("medium"),
+    // "Requiere experto": the current reviewers can't judge this species.
+    // Orthogonal to priority (a species can be urgent AND need an expert).
+    needsExpert: integer("needs_expert", { mode: "boolean" })
+      .notNull()
+      .default(false),
     targetSampleSize: integer("target_sample_size").notNull().default(200),
     // 9 gives clean 0.1-wide deciles over [0.1, 1.0]. Keep in sync with
     // DEFAULT_BIN_COUNT in src/lib/birdnet-validation/types.ts (not imported:
@@ -1473,6 +1478,12 @@ export const birdnetValidationReviews = sqliteTable(
       enum: ["correct", "incorrect", "uncertain"],
     }).notNull(),
     notes: text("notes"),
+    // The species this reviewer says the clip really was — only ever set on an
+    // `incorrect` review, cleared when the outcome leaves `incorrect`.
+    // Canonical BirdNET scientific name (resolved server-side). Deliberately
+    // NOT audio_identifications.corrected_species: a reviewer's suggestion
+    // must change no count, chart, export, occupancy input or fit.
+    correctedSpecies: text("corrected_species"),
     reviewedAt: integer("reviewed_at", { mode: "timestamp" })
       .notNull()
       .default(sql`(unixepoch())`),
@@ -1486,6 +1497,11 @@ export const birdnetValidationReviews = sqliteTable(
     index("idx_birdnet_reviews_reviewer").on(table.reviewerEmail, table.sampleId),
     // Drives the agreement and disagreement reads, which group by sample.
     index("idx_birdnet_reviews_sample").on(table.sampleId),
+    // Drives "clips reviewers attributed to species X". Partial in the
+    // authoritative DDL (scripts/push-schema.mjs).
+    index("idx_birdnet_reviews_corrected_species")
+      .on(table.correctedSpecies)
+      .where(sql`corrected_species IS NOT NULL`),
   ]
 );
 

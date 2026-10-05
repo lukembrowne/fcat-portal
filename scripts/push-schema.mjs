@@ -595,6 +595,7 @@ const statements = [
       CHECK(status IN ('draft','sampled','reviewing','fitted','unusable','applied','abandoned')),
     priority TEXT NOT NULL DEFAULT 'medium'
       CHECK(priority IN ('high','medium','low')),
+    needs_expert INTEGER NOT NULL DEFAULT 0,
     target_sample_size INTEGER NOT NULL DEFAULT 200,
     bin_count INTEGER NOT NULL DEFAULT 9,
     seed INTEGER NOT NULL,
@@ -639,6 +640,7 @@ const statements = [
     reviewer_email TEXT NOT NULL,
     outcome TEXT NOT NULL CHECK(outcome IN ('correct','incorrect','uncertain')),
     notes TEXT,
+    corrected_species TEXT,
     reviewed_at INTEGER NOT NULL DEFAULT (unixepoch())
   )`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_birdnet_reviews_sample_reviewer ON birdnet_validation_reviews(sample_id, reviewer_email)`,
@@ -1294,6 +1296,17 @@ const migrations = [
   // JSON array of source keys; NULL on every pre-existing row, which reads as
   // "no filter" — correct, since those exports drew from everything.
   `ALTER TABLE camera_trap_training_datasets ADD COLUMN source_keys_json TEXT`,
+
+  // BirdNET validation reviewer feedback (2026-09-29). A reviewer who answers
+  // `incorrect` may name the species the clip really was; it lives on THEIR
+  // review row (two reviewers can disagree without overwriting each other) and
+  // never on audio_identifications, so it changes no count, chart or fit.
+  // Canonical BirdNET scientific name, resolved server-side — no CHECK, the
+  // vocabulary is the vendored label list, not a fixed enum.
+  `ALTER TABLE birdnet_validation_reviews ADD COLUMN corrected_species TEXT`,
+  // "Requiere experto": a triage tag orthogonal to priority. Integer boolean;
+  // every existing campaign migrates to 0 (not tagged).
+  `ALTER TABLE birdnet_validation_campaigns ADD COLUMN needs_expert INTEGER NOT NULL DEFAULT 0`,
 ];
 for (const m of migrations) {
   try { db.exec(m); } catch { /* column already exists */ }
@@ -1339,6 +1352,11 @@ const postMigrationIndexes = [
   `CREATE INDEX IF NOT EXISTS idx_biochoco_deployments_shared_drive_id ON biochoco_deployments(shared_drive_id)`,
   // Project-scoped fan-out: selection hot path (2026-05-27)
   `CREATE INDEX IF NOT EXISTS idx_shared_drives_project_status ON shared_drives(camera_trap_project_id, status, archived_at)`,
+  // Reviewer-suggested species lookup: "clips reviewers attributed to X".
+  // Partial — the vast majority of reviews carry no correction (2026-09-29).
+  `CREATE INDEX IF NOT EXISTS idx_birdnet_reviews_corrected_species
+     ON birdnet_validation_reviews(corrected_species)
+     WHERE corrected_species IS NOT NULL`,
 ];
 for (const idx of postMigrationIndexes) {
   db.exec(idx);

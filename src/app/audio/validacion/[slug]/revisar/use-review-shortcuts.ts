@@ -89,6 +89,17 @@ export function isEditableTarget(target: EventTarget | null): boolean {
 }
 
 /**
+ * True when the event came from inside an open menu (the download menu).
+ *
+ * Radix moves focus into the menu while it is open and binds Space, Enter,
+ * the arrows and typeahead letters there. A page shortcut firing as well
+ * would answer the clip from inside a download menu.
+ */
+export function isMenuTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && target.closest('[role="menu"]') !== null;
+}
+
+/**
  * True when the event came from the audio player's own controls.
  *
  * A keypress on a shadow-DOM control reports the host `<audio>` element as its
@@ -133,7 +144,8 @@ export function useReviewShortcuts(
 
     const onKeyDown = (event: KeyboardEvent) => {
       const intent = resolveReviewKey(event.key, {
-        inEditableField: isEditableTarget(event.target),
+        // An open menu owns the keyboard as fully as a text field does.
+        inEditableField: isEditableTarget(event.target) || isMenuTarget(event.target),
         inMediaControl: isMediaTarget(event.target),
         index: indexRef.current,
       });

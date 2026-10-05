@@ -274,3 +274,47 @@ describe("rowAction", () => {
     expect(rowAction(200, true).title).not.toBe(rowAction(0, true).title);
   });
 });
+
+describe("Requiere experto and suggestion vocabulary", () => {
+  it("tones the expert tag in a hue neither stage nor priority uses", async () => {
+    const { EXPERT_TONE } = await import("../labels");
+    const taken = ["amber", "sky", "blue", "violet", "stone", "emerald", "rose", "orange", "slate"];
+    for (const hue of taken) {
+      expect(EXPERT_TONE, `expert tone collides with ${hue}`).not.toContain(`${hue}-`);
+    }
+  });
+
+  it("never says 'campaña' in the new strings", async () => {
+    const labels = await import("../labels");
+    const strings = [
+      labels.EXPERT_LABEL,
+      labels.EXPERT_SHORT_LABEL,
+      labels.EXPERT_HINT,
+      labels.SUGGESTIONS_TITLE,
+      labels.SUGGESTIONS_HINT,
+      ...labels.EXPERT_FILTERS.map((f) => f.label),
+    ];
+    for (const text of strings) {
+      expect(text.toLowerCase()).not.toContain("campañ");
+      expect(text.toLowerCase()).not.toContain("campaign");
+    }
+  });
+
+  it("says how many suggestions are withheld until the reader reviews them", async () => {
+    const { hiddenSuggestionsNote } = await import("../labels");
+    expect(hiddenSuggestionsNote(0, 3)).toBeNull();
+    expect(hiddenSuggestionsNote(3, 2)).toBe(
+      "3 sugerencias más se mostrarán cuando termines de revisar esos clips."
+    );
+    expect(hiddenSuggestionsNote(1, 0)).toBe(
+      "1 sugerencia se mostrará cuando termines de revisar esos clips."
+    );
+    expect(hiddenSuggestionsNote(2, 0)!.toLowerCase()).not.toContain("campañ");
+  });
+
+  it("pluralises the suggestion count", async () => {
+    const { suggestionCountLabel } = await import("../labels");
+    expect(suggestionCountLabel(1)).toBe("1 sugerido");
+    expect(suggestionCountLabel(4)).toBe("4 sugeridos");
+  });
+});

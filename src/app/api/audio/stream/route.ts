@@ -18,8 +18,7 @@ import { audioFiles, deployments } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { getCurrentUser } from "@/lib/auth";
 import { getUserCameraTrapProjects } from "@/lib/camera-trap-auth";
-import { downloadFileAsStream } from "@/lib/drive-client";
-import { log } from "@/lib/log";
+import { driveAudioResponse } from "@/lib/drive-audio-response";
 
 export const dynamic = "force-dynamic";
 
@@ -85,48 +84,14 @@ export async function GET(request: NextRequest) {
   }
 
   // Stream from Drive with Range support
-  const rangeHeader = request.headers.get("range") ?? undefined;
-
-  try {
-    const result = await downloadFileAsStream(fileId, rangeHeader);
-
-    const headers: Record<string, string> = {
-      "Content-Type": audioFile.mimeType ?? result.contentType,
-      "Cache-Control": "public, max-age=31536000, immutable",
-      "Accept-Ranges": "bytes",
-    };
-
-    if (result.contentLength != null) {
-      headers["Content-Length"] = String(result.contentLength);
-    } else if (!rangeHeader && audioFile.fileSize != null) {
-      // Drive may omit Content-Length for chunked streams; without it the
-      // browser can't determine audio duration. Use the DB file size as fallback.
-      headers["Content-Length"] = String(audioFile.fileSize);
-    }
-    if (result.contentRange) {
-      headers["Content-Range"] = result.contentRange;
-    }
-    if (download) {
-      headers["Content-Disposition"] =
-        `attachment; filename="${audioFile.filename}"`;
-    }
-
-    const status = result.contentRange ? 206 : 200;
-
-    return new Response(result.stream as unknown as ReadableStream, {
-      status,
-      headers,
-    });
-  } catch (err) {
-    log.error(
-      { err, fileId },
-      "[audio-stream] Failed to stream file"
-    );
-    const is404 =
-      err && typeof err === "object" && "code" in err && (err as { code: number }).code === 404;
-    return NextResponse.json(
-      { error: is404 ? "Archivo no encontrado en Drive" : "Error de Drive API" },
-      { status: is404 ? 404 : 502 }
-    );
-  }
+  return driveAudioResponse({
+    driveFileId: fileId,
+    filename: audioFile.filename,
+    mimeType: audioFile.mimeType,
+    fileSize: audioFile.fileSize,
+    rangeHeader: request.headers.get("range") ?? undefined,
+    download,
+    cacheControl: "public, max-age=31536000, immutable",
+    logTag: "[audio-stream]",
+  });
 }

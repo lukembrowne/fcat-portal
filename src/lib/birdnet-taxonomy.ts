@@ -22,6 +22,12 @@ export interface BirdnetName {
 }
 
 let cache: Map<string, BirdnetName> | null = null;
+/**
+ * Lower-cased scientific name → canonical label, derived from `cache`. Held
+ * beside it (and cleared by the same reset) so the two can never disagree
+ * about which label list they describe.
+ */
+let lowerCache: Map<string, string> | null = null;
 
 /** Path to the vendored reference file (in the persistent data volume). */
 export function referenceCsvPath(): string {
@@ -93,9 +99,30 @@ export function resolveBirdnetName(scientificName: string): BirdnetName | null {
   return loadBirdnetNames().get(scientificName) ?? null;
 }
 
-/** Test hook: reset the module cache. */
+/**
+ * Resolve a submitted name to BirdNET's canonical scientific label, or null.
+ *
+ * Exact first (a picker sends the canonical label), then case- and
+ * whitespace-insensitive against the same label list. Never fuzzy: a
+ * misspelling must be refused, not guessed, or free text reaches the record by
+ * the back door.
+ */
+export function canonicalBirdnetName(input: string): string | null {
+  const trimmed = input.trim().replace(/\s+/g, " ");
+  if (!trimmed) return null;
+  const names = loadBirdnetNames();
+  if (names.has(trimmed)) return trimmed;
+  if (!lowerCache) {
+    lowerCache = new Map();
+    for (const sci of names.keys()) lowerCache.set(sci.toLowerCase(), sci);
+  }
+  return lowerCache.get(trimmed.toLowerCase()) ?? null;
+}
+
+/** Test hook: reset the module caches (the name map and its lower-case index). */
 export function __resetBirdnetNameCache(): void {
   cache = null;
+  lowerCache = null;
 }
 
 /**

@@ -509,6 +509,7 @@ const CAMERA_TRAP_DDL =
       CHECK(status IN ('draft','sampled','reviewing','fitted','unusable','applied','abandoned')),
     priority TEXT NOT NULL DEFAULT 'medium'
       CHECK(priority IN ('high','medium','low')),
+    needs_expert INTEGER NOT NULL DEFAULT 0,
     target_sample_size INTEGER NOT NULL DEFAULT 200,
     bin_count INTEGER NOT NULL DEFAULT 9,
     seed INTEGER NOT NULL,
@@ -546,6 +547,7 @@ const CAMERA_TRAP_DDL =
     reviewer_email TEXT NOT NULL,
     outcome TEXT NOT NULL CHECK(outcome IN ('correct','incorrect','uncertain')),
     notes TEXT,
+    corrected_species TEXT,
     reviewed_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
   CREATE UNIQUE INDEX idx_birdnet_reviews_sample_reviewer
@@ -554,6 +556,9 @@ const CAMERA_TRAP_DDL =
     ON birdnet_validation_reviews(reviewer_email, sample_id);
   CREATE INDEX idx_birdnet_reviews_sample
     ON birdnet_validation_reviews(sample_id);
+  CREATE INDEX idx_birdnet_reviews_corrected_species
+    ON birdnet_validation_reviews(corrected_species)
+    WHERE corrected_species IS NOT NULL;
 
   CREATE TABLE birdnet_validation_campaign_reviewers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

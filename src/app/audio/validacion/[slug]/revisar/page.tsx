@@ -89,6 +89,7 @@ export default async function ReviewPage({
     detectionStartSeconds: row.detectionStartSeconds,
     detectionEndSeconds: row.detectionEndSeconds,
     recordedAt: row.recordedAt,
+    filename: row.filename,
   }));
 
   const progress = progressResult.success ? progressResult.data : null;
@@ -100,6 +101,8 @@ export default async function ReviewPage({
   const mine = reviewersResult.success
     ? reviewersResult.data.find((r) => r.email === user.email)
     : undefined;
+
+  const nameLang = parseNameLang((await cookies()).get(NAME_LANG_COOKIE)?.value);
 
   const canEdit =
     user.globalRole === "super_admin" ||
@@ -124,10 +127,8 @@ export default async function ReviewPage({
       <ReviewClient
         key={batchKey(items)}
         species={target.scientificName}
-        displayName={resolveDisplayName(
-          target,
-          parseNameLang((await cookies()).get(NAME_LANG_COOKIE)?.value)
-        )}
+        displayName={resolveDisplayName(target, nameLang)}
+        nameLang={nameLang}
         slug={slug}
         items={items}
         reviewedCount={mine?.reviewed ?? 0}

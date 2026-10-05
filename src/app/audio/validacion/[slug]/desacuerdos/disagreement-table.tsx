@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import type { Disagreement } from "@/app/audio/validacion/actions";
 import { SortIcon } from "@/components/sort-icon";
 
+import { ClipPlayer } from "../clip-player";
 import { reviewerLabel } from "../reviewer-label";
 
 type SortKey = "confidence" | "site" | "habitat" | "answers";
@@ -131,33 +132,11 @@ export function DisagreementTable({ rows }: { rows: Disagreement[] }) {
                 </div>
               </td>
               <td className="px-2 py-2">
-                {openId === row.sampleId ? (
-                  <div className="space-y-1">
-                    <audio
-                      controls
-                      autoPlay
-                      className="h-8 w-56"
-                      src={`/api/audio/validation-clip?sample=${row.sampleId}`}
-                    />
-                    {/* Matches the review client: the spectrogram is a
-                        server-rendered PNG from a dynamic route, which
-                        next/image cannot optimize. */}
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={`/api/audio/validation-spectrogram?sample=${row.sampleId}`}
-                      alt="Espectrograma"
-                      className="h-20 w-56 rounded border object-cover"
-                    />
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => setOpenId(row.sampleId)}
-                    className="rounded border px-2 py-1 text-[11px] hover:bg-muted"
-                  >
-                    Reproducir
-                  </button>
-                )}
+                <ClipPlayer
+                  sampleId={row.sampleId}
+                  open={openId === row.sampleId}
+                  onOpen={() => setOpenId(row.sampleId)}
+                />
               </td>
             </tr>
           ))}

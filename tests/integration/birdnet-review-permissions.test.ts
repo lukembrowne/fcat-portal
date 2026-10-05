@@ -66,6 +66,38 @@ describe("reviewing is open to a viewer", () => {
     expect(roleRequested()).toBe("viewer");
   });
 
+  it("records the reviewer's own species correction at viewer level", async () => {
+    // The second viewer-level write, bounded like the review itself: one
+    // column on a row the caller already owns.
+    const { setReviewCorrection } = await import("@/app/audio/validacion/actions");
+    await setReviewCorrection(1, "Zonotrichia albicollis");
+    expect(roleRequested()).toBe("viewer");
+  });
+
+  it("loads the correction picker list at viewer level", async () => {
+    const { listCorrectionSpecies } = await import("@/app/audio/validacion/actions");
+    await listCorrectionSpecies();
+    expect(roleRequested()).toBe("viewer");
+  });
+
+  it("reads the reviewer suggestions for a species at viewer level", async () => {
+    const { getSpeciesSuggestions } = await import("@/app/audio/validacion/actions");
+    await getSpeciesSuggestions("Zonotrichia albicollis");
+    expect(roleRequested()).toBe("viewer");
+  });
+
+  it("reads the suggestion counts for the species table at viewer level", async () => {
+    const { listSuggestionCounts } = await import("@/app/audio/validacion/actions");
+    await listSuggestionCounts();
+    expect(roleRequested()).toBe("viewer");
+  });
+
+  it("counts a species' drawable detections at viewer level", async () => {
+    const { countDrawableDetections } = await import("@/app/audio/validacion/actions");
+    await countDrawableDetections("Zonotrichia albicollis");
+    expect(roleRequested()).toBe("viewer");
+  });
+
   it("reads progress and agreement at viewer level", async () => {
     const { getCampaignProgress } = await import("@/app/audio/validacion/actions");
     await getCampaignProgress(1);
@@ -89,6 +121,8 @@ describe("everything that ends a species, or changes what the portal filters, st
     ["applyThreshold", (m) => m.applyThreshold(1)],
     ["markSpeciesNoFilter", (m) => m.markSpeciesNoFilter(1)],
     ["revertThreshold", (m) => m.revertThreshold(1)],
+    // Triage annotation, like priority: decides who the species waits for.
+    ["updateCampaignNeedsExpert", (m) => m.updateCampaignNeedsExpert(1, true)],
   ];
 
   for (const [name, call] of guarded) {

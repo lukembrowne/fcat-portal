@@ -13,7 +13,13 @@ import {
   ExternalLink,
 } from "lucide-react";
 
-import { abandonCampaign, recordReview } from "@/app/audio/validacion/actions";
+import {
+  abandonCampaign,
+  listCorrectionSpecies,
+  recordReview,
+  setReviewCorrection,
+} from "@/app/audio/validacion/actions";
+import type { NameLang } from "@/app/audio/validacion/name-language";
 import { xenoCantoUrl } from "@/lib/xeno-canto";
 import { measuredBand } from "@/lib/birdnet-validation/clip-geometry";
 import { useClipDuration } from "./use-clip-duration";
@@ -23,6 +29,24 @@ import { LiveSpectrogram, type RenderStats } from "./live-spectrogram";
 import { SpectrogramControls } from "./spectrogram-controls";
 import { useReviewSpectrogramSettings } from "./use-spectrogram-settings";
 import { batchState, canFit, queuePosition, remainingForReviewer } from "./review-progress";
+import { CorrectionPicker } from "./correction-picker";
+import { DownloadMenu } from "./download-menu";
+import { buildCorrectionIndex, type CorrectionEntry } from "./correction-search";
+import {
+  EMPTY_FLOW,
+  advanceIfStillOn,
+  afterAnswer,
+  answerSlot,
+  answerVersion,
+  applyAnswer,
+  closeReopened,
+  commitCorrection,
+  reopenAnswer,
+  rollbackAnswer,
+  settleCorrection,
+  type Outcome,
+  type ReviewFlowState,
+} from "./review-flow";
 
 export interface ReviewItem {
   sampleId: number;
@@ -42,9 +66,9 @@ export interface ReviewItem {
   detectionEndSeconds: number;
   /** Wall-clock recording time, or null when the filename carries none. */
   recordedAt: string | null;
+  /** The source recording's filename, named after the recording START. */
+  filename: string;
 }
-
-type Outcome = "correct" | "incorrect" | "uncertain";
 
 interface ReviewClientProps {
   species: string;
@@ -63,6 +87,8 @@ interface ReviewClientProps {
   targetSampleSize: number;
   campaignId: number;
   canEdit: boolean;
+  /** Common-name language, from the validation pages' cookie. */
+  nameLang: NameLang;
 }
 
 /** How many upcoming clips to warm while the reviewer works on the current one. */
@@ -84,11 +110,36 @@ export function ReviewClient({
   targetSampleSize,
   campaignId,
   canEdit,
+  nameLang,
 }: ReviewClientProps) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [index, setIndex] = useState(0);
-  const [answers, setAnswers] = useState<Record<number, Outcome>>({});
+  // This session's own answers and "what it really was" corrections. See
+  // review-flow.ts: the server never sends either back.
+  const [flow, setFlow] = useState<ReviewFlowState>(EMPTY_FLOW);
+  // Synchronous mirror of `flow`, written on every update. A correction save
+  // that returns late must be judged against the answers as they are NOW (see
+  // `settleCorrection`), not as of the last render.
+  const flowRef = useRef<ReviewFlowState>(EMPTY_FLOW);
+  const updateFlow = useCallback(
+    (fn: (prev: ReviewFlowState) => ReviewFlowState) => {
+      flowRef.current = fn(flowRef.current);
+      setFlow(flowRef.current);
+    },
+    []
+  );
+  const answers = flow.answers;
+  // Set when "No" is pressed, naming the clip whose picker should take focus.
+  // Cleared on any navigation, so going BACK to a "No" clip shows the picker
+  // without swallowing the page shortcuts.
+  const [focusRequest, setFocusRequest] = useState<{ sampleId: number; n: number } | null>(
+    null
+  );
+  // The correction vocabulary: fetched once, on the first "No".
+  const [correctionIndex, setCorrectionIndex] = useState<CorrectionEntry[] | null>(null);
+  const [correctionLoadError, setCorrectionLoadError] = useState<string | null>(null);
+  const correctionLoadRef = useRef(false);
   // The ONLY thing that shows the BirdNET score. Answering used to reveal it
   // too, which meant the score arrived unbidden 200 times a run and turned the
   // checkbox into a control over nothing but the first glance.
@@ -146,6 +197,12 @@ export function ReviewClient({
     spectrogram prefetches this component fires on every advance.
   */
   const inFlightRef = useRef<Set<number>>(new Set());
+  /**
+   * The latest answer save per clip, resolving to whether it landed. A
+   * correction waits on it: sent first, it would be refused for a review that
+   * was about to exist.
+   */
+  const answerSavesRef = useRef<Map<number, Promise<boolean>>>(new Map());
 
   const current = items[index];
   const done = index >= items.length;
@@ -243,37 +300,101 @@ export function ReviewClient({
       inFlightRef.current.add(sampleId);
       // Optimistic: mark the answer, advance, and persist in the background.
       // Blocking the queue on a round-trip is what makes review feel slow, and
-      // this loop runs 40,000 times.
-      setAnswers((prev) => ({ ...prev, [sampleId]: outcome }));
+      // this loop runs 40,000 times. Leaving "No" also drops the correction
+      // locally — `recordReview` clears it on the server.
+      updateFlow((prev) => applyAnswer(prev, sampleId, outcome));
       setError(null);
 
-      void recordReview(sampleId, outcome)
+      const saved = recordReview(sampleId, outcome)
         .then((result) => {
           if (!result.success) {
             setError(result.error);
             // Roll the row back so the count never overstates what was saved.
-            setAnswers((prev) => {
-              const next = { ...prev };
-              delete next[sampleId];
-              return next;
-            });
+            updateFlow((prev) => rollbackAnswer(prev, sampleId));
           }
+          return result.success;
         })
-        .catch(() => setError("No se pudo guardar la revisión"))
+        .catch(() => {
+          setError("No se pudo guardar la revisión");
+          updateFlow((prev) => rollbackAnswer(prev, sampleId));
+          return false;
+        })
         .finally(() => {
           inFlightRef.current.delete(sampleId);
         });
+      answerSavesRef.current.set(sampleId, saved);
 
+      if (afterAnswer(outcome) === "ask-species") {
+        // "No" stays on the clip and asks what it really was. The answer is
+        // already saved; the species is an optional second write.
+        setFocusRequest((prev) => ({ sampleId, n: (prev?.n ?? 0) + 1 }));
+        return;
+      }
+
+      setFocusRequest(null);
       // Brief pause so the pressed button lights up before the clip changes —
-      // without it a held key reads as nothing having happened.
-      window.setTimeout(() => setIndex((i) => i + 1), 320);
+      // without it a held key reads as nothing having happened. Guarded: if
+      // anything else moved the queue off this clip in the meantime, this
+      // advance must not move it a second step.
+      window.setTimeout(() => setIndex(advanceIfStillOn(items, sampleId)), 320);
     },
-    [current]
+    [current, items, updateFlow]
   );
 
-  const back = useCallback(() => setIndex((i) => Math.max(0, i - 1)), []);
+  const back = useCallback(() => {
+    setFocusRequest(null);
+    updateFlow(closeReopened);
+    setIndex((i) => Math.max(0, i - 1));
+  }, [updateFlow]);
 
-  const skip = useCallback(() => setIndex((i) => i + 1), []);
+  const skip = useCallback(() => {
+    setFocusRequest(null);
+    updateFlow(closeReopened);
+    setIndex((i) => i + 1);
+  }, [updateFlow]);
+
+  const loadCorrectionSpecies = useCallback(() => {
+    correctionLoadRef.current = true;
+    // Only async setState here: this runs from an effect.
+    void listCorrectionSpecies()
+      .then((result) => {
+        if (result.success) {
+          setCorrectionIndex(buildCorrectionIndex(result.data, species));
+          setCorrectionLoadError(null);
+        } else setCorrectionLoadError(result.error);
+      })
+      .catch(() => setCorrectionLoadError("No se pudo cargar la lista de especies"));
+  }, [species]);
+
+  const pickerVisible = current ? answerSlot(flow, current.sampleId) === "species" : false;
+
+  // Lazily, on the first clip that needs it: a reviewer who never says "No"
+  // never downloads the ~6.5k-label vocabulary.
+  useEffect(() => {
+    if (pickerVisible && !correctionLoadRef.current) loadCorrectionSpecies();
+  }, [pickerVisible, loadCorrectionSpecies]);
+
+  const commitCorrectionFor = useCallback(
+    async (sampleId: number, chosen: string | null) => {
+      // The answer generation this correction belongs to. If the clip is
+      // answered again before the save returns, the result is stale.
+      const version = answerVersion(flowRef.current, sampleId);
+      const result = await commitCorrection(sampleId, chosen, {
+        pendingAnswer: answerSavesRef.current.get(sampleId),
+        save: setReviewCorrection,
+      });
+      const settled = settleCorrection(flowRef.current, sampleId, version, result, chosen);
+      if (settled.state !== flowRef.current) updateFlow(() => settled.state);
+      if (settled.advance) {
+        setFocusRequest(null);
+        // Advance from THIS clip only — never skip one the reviewer has
+        // since moved to.
+        setIndex(advanceIfStillOn(items, sampleId));
+      }
+      return settled.commit;
+    },
+    [items, updateFlow]
+  );
 
   useReviewShortcuts(
     index,
@@ -453,13 +574,37 @@ export function ReviewClient({
 
         <audio ref={audioRef} src={clipSrc ?? undefined} preload="auto" controls className="w-full" />
 
-        <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-          <span>{current.siteName ?? "Sitio desconocido"}</span>
-          {current.habitat ? <span>· {current.habitat}</span> : null}
-          {/* Absent, not "Invalid Date", when the filename carries no stamp. */}
-          {current.recordedAt ? (
-            <span className="tabular-nums">· {current.recordedAt}</span>
-          ) : null}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+          {/* Each separator trails its item rather than leading the next, so
+              when the line wraps on a phone no row starts with a stray "·". */}
+          {[
+            { key: "site", text: current.siteName ?? "Sitio desconocido", className: "" },
+            current.habitat
+              ? { key: "habitat", text: current.habitat, className: "" }
+              : null,
+            // Absent, not "Invalid Date", when the filename carries no stamp.
+            current.recordedAt
+              ? { key: "time", text: current.recordedAt, className: "tabular-nums" }
+              : null,
+            // The Drive file is named after the recording START, not the
+            // detection time above — this is the string to search for.
+            { key: "file", text: current.filename, className: "break-all" },
+          ]
+            .filter((part): part is { key: string; text: string; className: string } =>
+              part !== null
+            )
+            .map((part, i, parts) => (
+              <span key={part.key} className={part.className}>
+                {part.text}
+                {i < parts.length - 1 ? (
+                  <span aria-hidden="true" className="ml-3">
+                    ·
+                  </span>
+                ) : null}
+              </span>
+            ))}
+          {/* Last on the line, after the filename it downloads. */}
+          <DownloadMenu sampleId={current.sampleId} />
           {/*
             Blinding: the BirdNET score stays hidden unless the reviewer asks
             for it. Seeing "0.93" before judging a marginal call anchors the
@@ -482,29 +627,58 @@ export function ReviewClient({
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-2">
-        <AnswerButton
-          outcome="correct"
-          icon={<Check className="h-4 w-4" />}
-          hint="1 · S"
-          active={priorAnswer === "correct"}
-          onClick={() => answer("correct")}
+      {/*
+        One slot, two contents. On a clip answered "No" the species search takes
+        the place of the three answer buttons instead of appearing under them,
+        where on a laptop it landed below the fold on every "No". The answer
+        keys still work from outside the search box either way.
+      */}
+      {pickerVisible ? (
+        <CorrectionPicker
+          // Remount per clip: the typed text belongs to one detection.
+          key={current.sampleId}
+          index={correctionIndex}
+          loadError={correctionLoadError}
+          onRetryLoad={loadCorrectionSpecies}
+          lang={nameLang}
+          chosen={flow.corrections[current.sampleId] ?? null}
+          focusSignal={
+            focusRequest?.sampleId === current.sampleId ? focusRequest.n : 0
+          }
+          onCommit={(chosen) => commitCorrectionFor(current.sampleId, chosen)}
+          onChangeAnswer={() => {
+            const sampleId = current.sampleId;
+            setFocusRequest(null);
+            updateFlow((prev) => reopenAnswer(prev, sampleId));
+          }}
+          onSkip={skip}
+          onBack={back}
         />
-        <AnswerButton
-          outcome="incorrect"
-          icon={<X className="h-4 w-4" />}
-          hint="2 · N"
-          active={priorAnswer === "incorrect"}
-          onClick={() => answer("incorrect")}
-        />
-        <AnswerButton
-          outcome="uncertain"
-          icon={<HelpCircle className="h-4 w-4" />}
-          hint="3 · U"
-          active={priorAnswer === "uncertain"}
-          onClick={() => answer("uncertain")}
-        />
-      </div>
+      ) : (
+        <div className="grid grid-cols-3 gap-2">
+          <AnswerButton
+            outcome="correct"
+            icon={<Check className="h-4 w-4" />}
+            hint="1 · S"
+            active={priorAnswer === "correct"}
+            onClick={() => answer("correct")}
+          />
+          <AnswerButton
+            outcome="incorrect"
+            icon={<X className="h-4 w-4" />}
+            hint="2 · N"
+            active={priorAnswer === "incorrect"}
+            onClick={() => answer("incorrect")}
+          />
+          <AnswerButton
+            outcome="uncertain"
+            icon={<HelpCircle className="h-4 w-4" />}
+            hint="3 · U"
+            active={priorAnswer === "uncertain"}
+            onClick={() => answer("uncertain")}
+          />
+        </div>
+      )}
 
       {/* The arrow keys already did this; nothing said so. The answer buttons
           advertise their keys, so these do too. */}

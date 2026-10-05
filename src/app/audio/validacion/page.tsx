@@ -1,4 +1,5 @@
 import { cookies } from "next/headers";
+import Link from "next/link";
 import { desc, inArray, sql } from "drizzle-orm";
 
 import { db } from "@/db";
@@ -9,7 +10,9 @@ import {
 } from "@/db/schema";
 import { requirePermission } from "@/lib/auth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { listCampaigns } from "./actions";
+import { listCampaigns, listSuggestionCounts } from "./actions";
+import { speciesSlug } from "@/lib/species-slug";
+import { suggestionCountLabel } from "./labels";
 import {
   CampaignTable,
   filterCampaignRows,
@@ -38,6 +41,7 @@ export default async function ValidacionIndexPage({
     search?: string;
     status?: string;
     priority?: string;
+    experto?: string;
   }>;
 }) {
   const user = await requirePermission("grabaciones", "viewer");
@@ -56,6 +60,7 @@ export default async function ValidacionIndexPage({
     search: params.search ?? "",
     status: params.status ?? "activas",
     priority: params.priority ?? "todas",
+    expert: params.experto === "si" || params.experto === "no" ? params.experto : "todas",
   };
 
   const canEdit =
@@ -70,6 +75,20 @@ export default async function ValidacionIndexPage({
   }
   const campaigns = campaignsResult.data;
   const names = campaigns.map((c) => c.species);
+
+  // Reviewer attributions ("this clip was really X"). A failure here only
+  // costs the indicators, never the table.
+  const suggestionsResult = await listSuggestionCounts();
+  const suggestionCounts = suggestionsResult.success ? suggestionsResult.data : [];
+  const suggestionsBySpecies = new Map(
+    suggestionCounts.map((s) => [s.species, s.suggestions])
+  );
+  const campaignSpecies = new Set(names);
+  // Species nobody is validating yet: no row in the table to carry a count,
+  // so they are listed under it instead.
+  const orphanSuggestions = suggestionCounts.filter(
+    (s) => !campaignSpecies.has(s.species)
+  );
 
   // Latest fit per campaign, plus display names and total detection counts.
   const fits = names.length
@@ -118,6 +137,7 @@ export default async function ValidacionIndexPage({
       latestIsNoFilter: latest?.source === "no_filter",
       unusableReason: latest?.unusableReason ?? null,
       totalDetections: countBySpecies.get(c.species) ?? 0,
+      suggestionCount: suggestionsBySpecies.get(c.species) ?? 0,
     };
   });
 
@@ -211,6 +231,50 @@ export default async function ValidacionIndexPage({
           </div>
         </CardContent>
       </Card>
+
+      {orphanSuggestions.length > 0 ? (
+        <Card>
+          <CardHeader className="gap-1">
+            <CardTitle className="text-base">
+              Sugerencias de revisores sin especie en validación
+            </CardTitle>
+            <p className="max-w-3xl text-xs text-muted-foreground">
+              Al validar otra especie, un revisor marcó estos clips como
+              incorrectos e indicó la especie que realmente era. Estas especies
+              todavía no se validan; su página reúne los clips para escucharlos.
+            </p>
+          </CardHeader>
+          <CardContent>
+            <ul className="flex flex-wrap gap-2">
+              {orphanSuggestions.map((s) => (
+                <li key={s.species}>
+                  <Link
+                    href={`/audio/validacion/${speciesSlug(s.species)}#sugeridos`}
+                    className="inline-flex items-baseline gap-1.5 rounded-md border px-2 py-1 text-sm hover:bg-muted"
+                  >
+                    <span>
+                      {resolveDisplayName(
+                        {
+                          scientificName: s.species,
+                          commonName: s.commonName,
+                          spanishName: s.spanishName,
+                        },
+                        nameLang
+                      )}
+                    </span>
+                    <span className="text-[11px] italic text-muted-foreground">
+                      {s.species}
+                    </span>
+                    <span className="whitespace-nowrap text-[11px] tabular-nums text-muted-foreground">
+                      · {suggestionCountLabel(s.suggestions)}
+                    </span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      ) : null}
     </div>
   );
 }

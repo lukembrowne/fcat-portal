@@ -199,6 +199,73 @@ export const PRIORITY_FILTERS = [
   })),
 ] as const;
 
+// ---------------------------------------------------------------------------
+// "Requiere experto"
+// ---------------------------------------------------------------------------
+
+/** The tag's full name, for the species page and the filter. */
+export const EXPERT_LABEL = "Requiere experto";
+
+/**
+ * The tag as it reads inside the table's "Experto" column, where the header
+ * already says what it is about. The full label would widen a table that is
+ * already at its natural width.
+ */
+export const EXPERT_SHORT_LABEL = "Requiere";
+
+/** What the tag means, on its tooltip and beside the species-page toggle. */
+export const EXPERT_HINT =
+  "Los revisores actuales no pueden juzgar esta especie con confianza: hace falta alguien que la conozca.";
+
+/**
+ * Tailwind tone for the tag.
+ *
+ * Fuchsia, because every nearer hue is taken: stage owns amber, sky, blue,
+ * violet, stone, emerald and rose; priority owns orange and slate. Three
+ * coloured pills sit side by side in one row, and none of them may read as a
+ * step on another's scale.
+ */
+export const EXPERT_TONE = "border-fuchsia-300 bg-fuchsia-100 text-fuchsia-900";
+
+/** The untagged state an editor sees: present enough to click, quiet enough to ignore. */
+export const EXPERT_OFF_TONE =
+  "border-dashed border-zinc-200 bg-transparent text-zinc-400";
+
+/** Options for the tag filter; `todas` is the default and never in the URL. */
+export const EXPERT_FILTERS = [
+  { value: "todas", label: "Con o sin experto" },
+  { value: "si", label: EXPERT_LABEL },
+  { value: "no", label: "Sin marcar experto" },
+] as const;
+
+// ---------------------------------------------------------------------------
+// Reviewer suggestions
+// ---------------------------------------------------------------------------
+
+export const SUGGESTIONS_TITLE = "Sugeridos por revisores";
+
+export const SUGGESTIONS_HINT =
+  "Clips que un revisor marcó como incorrectos al validar otra especie e indicó que en realidad eran esta. No forman parte de la muestra de esta especie ni entran en su ajuste: son una referencia para escuchar.";
+
+/**
+ * Said beside the suggestions a reader may see, when some are withheld: a
+ * suggestion is a colleague's "incorrect" answer on a clip, so it stays hidden
+ * until the reader has judged that clip themselves (or the source species'
+ * review is over). Null when nothing is withheld.
+ */
+export function hiddenSuggestionsNote(hidden: number, shown: number): string | null {
+  if (hidden <= 0) return null;
+  const which = hidden === 1 ? "1 sugerencia" : `${hidden} sugerencias`;
+  const more = shown > 0 ? " más" : "";
+  const verb = hidden === 1 ? "se mostrará" : "se mostrarán";
+  return `${which}${more} ${verb} cuando termines de revisar esos clips.`;
+}
+
+/** "1 sugerido" / "3 sugeridos", for the table indicator. */
+export function suggestionCountLabel(n: number): string {
+  return `${n} ${n === 1 ? "sugerido" : "sugeridos"}`;
+}
+
 /** Icon identifiers the table resolves to components on the client. */
 export type RowActionIcon = "headphones" | "settings";
 

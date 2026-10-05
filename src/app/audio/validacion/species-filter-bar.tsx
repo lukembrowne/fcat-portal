@@ -17,10 +17,11 @@ import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useTransition } from "react";
 import { Loader2, Search } from "lucide-react";
 
-import { PRIORITY_FILTERS, STAGE_FILTERS } from "./labels";
+import { EXPERT_FILTERS, PRIORITY_FILTERS, STAGE_FILTERS } from "./labels";
 
 const DEFAULT_STAGE = "activas";
 const DEFAULT_PRIORITY = "todas";
+const DEFAULT_EXPERT = "todas";
 
 export function SpeciesFilterBar({ shown, total }: { shown: number; total: number }) {
   const router = useRouter();
@@ -55,6 +56,7 @@ export function SpeciesFilterBar({ shown, total }: { shown: number; total: numbe
 
   const stage = params.get("status") ?? DEFAULT_STAGE;
   const priority = params.get("priority") ?? DEFAULT_PRIORITY;
+  const expert = params.get("experto") ?? DEFAULT_EXPERT;
 
   return (
     <form
@@ -105,6 +107,27 @@ export function SpeciesFilterBar({ shown, total }: { shown: number; total: numbe
         className="rounded-md border px-2 py-1.5 text-sm"
       >
         {PRIORITY_FILTERS.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+
+      {/* Its own control, not a priority level: whether the current reviewers
+          can judge a species is independent of how urgent it is. */}
+      <select
+        name="experto"
+        value={expert}
+        onChange={(e) => {
+          const next = e.target.value;
+          commit((sp) => {
+            if (next && next !== DEFAULT_EXPERT) sp.set("experto", next);
+            else sp.delete("experto");
+          });
+        }}
+        className="rounded-md border px-2 py-1.5 text-sm"
+      >
+        {EXPERT_FILTERS.map((o) => (
           <option key={o.value} value={o.value}>
             {o.label}
           </option>

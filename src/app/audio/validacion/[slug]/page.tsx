@@ -11,14 +11,17 @@ import {
   audioIdentifications,
 } from "@/db/schema";
 import { requirePermission } from "@/lib/auth";
-import { resolveSpeciesFromSlug } from "@/lib/species-slug-server";
+import { resolveValidationSpeciesFromSlug } from "@/lib/birdnet-validation/resolve-species-slug";
 import {
+  countDrawableDetections,
   getAgreement,
   getCampaignProgress,
   getDisagreements,
   getReviewerProgress,
   getSpeciesOccupancyThresholdStatus,
+  getSpeciesSuggestions,
 } from "@/app/audio/validacion/actions";
+import { resolveBirdnetName } from "@/lib/birdnet-taxonomy";
 import { resolveFitEligibleReviews } from "@/lib/birdnet-validation/fit-eligibility";
 import {
   binEdges,
@@ -30,6 +33,7 @@ import { xenoCantoUrl } from "@/lib/xeno-canto";
 import { stageHint } from "@/app/audio/validacion/labels";
 import { StageTag } from "@/app/audio/validacion/stage-tag";
 import { PriorityCell } from "@/app/audio/validacion/priority-cell";
+import { ExpertCell } from "@/app/audio/validacion/expert-cell";
 import { NameLanguageToggle } from "@/app/audio/validacion/name-language-toggle";
 import {
   NAME_LANG_COOKIE,
@@ -44,6 +48,10 @@ import { NoFilterButton } from "./no-filter-button";
 import { OccupancyStatusCard } from "./occupancy-status-card";
 import { ReviewerRoster } from "./reviewer-roster";
 import { AgreementPanel } from "./agreement-panel";
+import { SuggestionsSection } from "./suggestions-section";
+import { SiteCoverageTable } from "./site-coverage-table";
+import { AddSuggestedSpeciesButton } from "./add-suggested-species-button";
+import { addSuggestedSpeciesState } from "./add-suggested-species-state";
 import {
   summarizeFit,
   isFitStale,
@@ -74,7 +82,8 @@ export default async function SpeciesValidationPage({
   const user = await requirePermission("grabaciones", "viewer");
   const { slug } = await params;
 
-  const target = await resolveSpeciesFromSlug(slug);
+  // Validation-specific: also resolves a species only a reviewer has named.
+  const target = await resolveValidationSpeciesFromSlug(slug);
   if (!target) notFound();
 
   const canEdit =
@@ -96,16 +105,87 @@ export default async function SpeciesValidationPage({
     .orderBy(desc(birdnetValidationCampaigns.createdAt))
     .limit(1);
 
+  const nameLang = parseNameLang((await cookies()).get(NAME_LANG_COOKIE)?.value);
+  // A synthesized target (no species-table row, e.g. a species only a reviewer
+  // has named) carries its scientific name as its "common name"; BirdNET's own
+  // label list has the real ones.
+  const birdnetNames = target.id === -1 ? resolveBirdnetName(target.scientificName) : null;
+  const names = birdnetNames
+    ? {
+        scientificName: target.scientificName,
+        commonName: birdnetNames.commonName,
+        spanishName: birdnetNames.spanishName,
+      }
+    : target;
+  const display = describeDisplayName(names, nameLang);
+  // Said out loud, because otherwise the language toggle reads as broken on the
+  // ~1-in-12 species that has no Spanish name: the button flips and the heading
+  // does not.
+  const nameNote = fallbackNote(display.fallback, nameLang);
+
+  // Clips reviewers attributed to this species while validating another one.
+  // Read separately from everything below and never mixed into the sample.
+  const suggestionsResult = await getSpeciesSuggestions(target.scientificName);
+  const suggestions = suggestionsResult.success ? suggestionsResult.data.suggestions : [];
+  const hiddenSuggestions = suggestionsResult.success ? suggestionsResult.data.hidden : 0;
+  const suggestionsError = suggestionsResult.success ? null : suggestionsResult.error;
+
   if (!campaign) {
+    // Suggestions-only view: nobody is validating this species, but reviewers
+    // have pointed at it, and this is where those clips can be heard.
+    const drawable = canEdit
+      ? await countDrawableDetections(target.scientificName)
+      : null;
+    const addState = addSuggestedSpeciesState(
+      canEdit,
+      drawable?.success ? drawable.data : 0
+    );
     return (
-      <div className="mx-auto max-w-4xl space-y-3 p-4">
-        <h1 className="text-xl font-semibold">{target.scientificName}</h1>
-        <p className="text-sm text-muted-foreground">
-          Esta especie todavía no se está validando.
-        </p>
-        <Link href="/audio/validacion" className="text-sm text-sky-700 hover:underline">
-          Volver a validación
+      <div className="mx-auto max-w-4xl space-y-4 p-4">
+        <Link
+          href="/audio/validacion"
+          className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground hover:underline"
+        >
+          <ArrowLeft className="h-3 w-3" />
+          Volver a la lista de especies
         </Link>
+        <header className="space-y-1.5">
+          <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
+            <h1 className="text-xl font-semibold">{display.name}</h1>
+            <NameLanguageToggle current={nameLang} />
+          </div>
+          <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+            <span className="italic">{target.scientificName}</span>
+            {nameNote ? <span className="text-xs">· {nameNote}</span> : null}
+            <a
+              href={xenoCantoUrl(target.scientificName)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-xs text-sky-700 hover:underline"
+            >
+              xeno-canto
+              <ExternalLink className="h-3 w-3" />
+            </a>
+          </p>
+          <p className="text-sm text-muted-foreground">
+            Esta especie todavía no se está validando.
+          </p>
+        </header>
+        {addState.kind !== "hidden" ? (
+          <div className="rounded-lg border bg-muted/40 p-2">
+            <AddSuggestedSpeciesButton
+              species={target.scientificName}
+              disabledReason={addState.kind === "disabled" ? addState.reason : null}
+            />
+          </div>
+        ) : null}
+        <SuggestionsSection
+          suggestions={suggestions}
+          hidden={hiddenSuggestions}
+          nameLang={nameLang}
+          error={suggestionsError}
+          showEmpty
+        />
       </div>
     );
   }
@@ -185,14 +265,17 @@ export default async function SpeciesValidationPage({
   const modelVersions = describeModelVersions(latest?.modelVersion ?? null);
 
   const edges = binEdges(campaign.binCount);
-  const nameLang = parseNameLang((await cookies()).get(NAME_LANG_COOKIE)?.value);
-  const display = describeDisplayName(target, nameLang);
-  // Said out loud, because otherwise the language toggle reads as broken on the
-  // ~1-in-12 species that has no Spanish name: the button flips and the heading
-  // does not.
-  const nameNote = fallbackNote(display.fallback, nameLang);
 
   const sampled = progress?.sampled ?? 0;
+  // Null counts mean withheld: no eligible set, or the reader is still blind
+  // to them (see `CampaignProgress.siteCorrectBlinded`).
+  const siteCorrectAvailable =
+    progress != null &&
+    progress.fitEligibilityReason === null &&
+    !progress.siteCorrectBlinded;
+  const sitesWithCorrect = progress
+    ? progress.sites.filter((s) => (s.correct ?? 0) > 0).length
+    : 0;
   // NOT gated on `canEdit`: reviewing is a viewer capability (see
   // `recordReview`). Gated on the sample existing, not on progress —
   // `progress.reviewed` counts the primary reviewer's answers, so gating on it
@@ -242,6 +325,15 @@ export default async function SpeciesValidationPage({
             displayName={display.name}
             priority={campaign.priority}
             canEdit={canEdit}
+          />
+          {/* Beside priority, independent of it: urgency and "can the current
+              reviewers judge this" are separate questions. */}
+          <ExpertCell
+            campaignId={campaign.id}
+            displayName={display.name}
+            needsExpert={campaign.needsExpert}
+            canEdit={canEdit}
+            full
           />
           <StageTag status={campaign.status} />
           {campaign.abandonedReason ? (
@@ -663,37 +755,51 @@ export default async function SpeciesValidationPage({
               </strong>{" "}
               clips de un mismo sitio
             </p>
+            {/* From the fit-eligible answers only — the same reviews the model
+                reads — so the per-site counts sum to its correct total. With
+                several reviewers and no primary there is no such set, and the
+                count is withheld rather than pooled. */}
+            {siteCorrectAvailable ? (
+              <p className="text-xs">
+                Confirmada en{" "}
+                <strong className="tabular-nums">{sitesWithCorrect}</strong> de{" "}
+                <strong className="tabular-nums">{progress!.sites.length}</strong>{" "}
+                sitios
+                <span className="text-muted-foreground">
+                  {" "}
+                  (con al menos un clip correcto según{" "}
+                  {progress!.reviewerCount > 1 ? "el revisor principal" : "la revisión"})
+                </span>
+              </p>
+            ) : progress!.fitEligibilityReason === "no_primary_reviewer" ? (
+              <p className="text-xs text-amber-900">
+                Sitios confirmados: sin calcular hasta designar un revisor
+                principal.
+              </p>
+            ) : progress!.siteCorrectBlinded ? (
+              // The review page shows each clip's site, so these counts would
+              // hand a reviewer the primary's answers before they judge.
+              <p className="text-xs text-muted-foreground">
+                Sitios confirmados: visible cuando termines tu revisión o
+                cuando la especie esté ajustada.
+              </p>
+            ) : null}
             <div className="max-h-64 overflow-y-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b text-left text-xs text-muted-foreground">
-                    <th className="py-1">Sitio</th>
-                    <th className="py-1 text-right">Muestreadas</th>
-                    <th className="py-1 text-right">Revisadas</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {progress!.sites.map((s) => (
-                    <tr key={s.siteName ?? "__sin_sitio__"} className="border-b last:border-0">
-                      {/* Labelled, not dropped: at least one deployment in the
-                          data carries no site name. */}
-                      <td className="py-1">
-                        {s.siteName ?? (
-                          <span className="italic text-muted-foreground">
-                            Sitio sin nombre
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-1 text-right tabular-nums">{s.drawn}</td>
-                      <td className="py-1 text-right tabular-nums">{s.reviewed}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <SiteCoverageTable
+                sites={progress!.sites}
+                showCorrect={siteCorrectAvailable}
+              />
             </div>
           </CardContent>
         </Card>
       ) : null}
+
+      <SuggestionsSection
+        suggestions={suggestions}
+        hidden={hiddenSuggestions}
+        nameLang={nameLang}
+        error={suggestionsError}
+      />
 
       {fits.length > 1 ? (
         <Card>

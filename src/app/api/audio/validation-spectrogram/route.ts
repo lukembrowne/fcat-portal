@@ -17,6 +17,7 @@ import { requireDeploymentAccess } from "@/lib/camera-trap-auth";
 import { ensureClipSpectrogram } from "@/lib/birdnet-validation/clip-cache";
 import { log } from "@/lib/log";
 import { loadClipSource } from "../validation-clip-shared";
+import { deploymentAccessFailure } from "../deployment-access-response";
 
 export async function GET(request: NextRequest) {
   const user = await requirePermission("grabaciones", "viewer");
@@ -31,7 +32,13 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Muestra no encontrada" }, { status: 404 });
   }
   if (source.deploymentId != null) {
-    await requireDeploymentAccess(user, source.deploymentId);
+    const deploymentId = source.deploymentId;
+    const denied = await deploymentAccessFailure(
+      () => requireDeploymentAccess(user, deploymentId),
+      "[validation-spectrogram]",
+      sampleId
+    );
+    if (denied) return denied;
   }
 
   try {

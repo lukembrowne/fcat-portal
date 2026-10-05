@@ -360,6 +360,9 @@ describe("getReviewQueue — independent per-reviewer queues", () => {
       "detectionStartSeconds",
       "detectionEndSeconds",
       "recordedAt",
+      // The source recording's filename, so a reviewer can find the whole
+      // minute in Drive. Named after the recorder and start time — no score.
+      "filename",
     ]);
     for (const row of queue.data) {
       for (const key of Object.keys(row)) {

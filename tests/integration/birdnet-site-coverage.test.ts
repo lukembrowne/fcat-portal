@@ -203,3 +203,203 @@ describe("getCampaignProgress sites", () => {
     expect(progress.data.sites).toEqual([]);
   });
 });
+
+describe("getCampaignProgress sites — correct clips per site", () => {
+  const GLORIA = "gloria@fcat-ecuador.org";
+
+  function insertReview(sampleId: number, email: string, outcome: string) {
+    db.insert(schema.birdnetValidationReviews)
+      .values({
+        sampleId,
+        reviewerEmail: email,
+        outcome: outcome as "correct" | "incorrect" | "uncertain",
+      })
+      .run();
+  }
+
+  async function sitesOf() {
+    const { getCampaignProgress } = await actions();
+    const progress = await getCampaignProgress(campaignId);
+    if (!progress.success) throw new Error(progress.error);
+    return {
+      progress: progress.data,
+      bySite: new Map(progress.data.sites.map((s) => [s.siteName, s])),
+    };
+  }
+
+  it("counts only the primary reviewer's correct answers", async () => {
+    const a = addSample("COV-A", 0);
+    const b = addSample("COV-B", 1);
+
+    insertReview(a.id, testUser.email, "correct");
+    insertReview(b.id, testUser.email, "incorrect");
+    // Gloria hears the COV-B clip as correct; she is not the primary, so COV-B
+    // must not become a confirmed site.
+    insertReview(b.id, GLORIA, "correct");
+
+    const { setPrimaryReviewer } = await actions();
+    await setPrimaryReviewer(campaignId, testUser.email);
+
+    const { bySite, progress } = await sitesOf();
+    expect(bySite.get("COV-A")!.correct).toBe(1);
+    expect(bySite.get("COV-B")!.correct).toBe(0);
+    expect(progress.fitEligibilityReason).toBeNull();
+  });
+
+  it("counts a sole reviewer's answers without a designated primary", async () => {
+    const a = addSample("COV-A", 0);
+    const a2 = addSample("COV-A", 1);
+    const b = addSample("COV-B", 2);
+    insertReview(a.id, GLORIA, "correct");
+    insertReview(a2.id, GLORIA, "correct");
+    insertReview(b.id, GLORIA, "correct");
+
+    // Read as Gloria: she is the fit-eligible reviewer, so the counts are hers.
+    mockRequirePermission.mockResolvedValue({ ...testUser, email: GLORIA });
+    const { bySite } = await sitesOf();
+    expect(bySite.get("COV-A")!.correct).toBe(2);
+    expect(bySite.get("COV-B")!.correct).toBe(1);
+  });
+
+  it("does not pool answers when several reviewers have no primary", async () => {
+    const a = addSample("COV-A", 0);
+    const b = addSample("COV-B", 1);
+    insertReview(a.id, testUser.email, "correct");
+    insertReview(b.id, GLORIA, "correct");
+
+    const { bySite, progress } = await sitesOf();
+    expect(progress.fitEligibilityReason).toBe("no_primary_reviewer");
+    // Withheld, not 1 each (pooled) — the page reads the reason and shows a dash.
+    expect(bySite.get("COV-A")!.correct).toBeNull();
+    expect(bySite.get("COV-B")!.correct).toBeNull();
+  });
+
+  it("reports 0 for a site with only incorrect or uncertain answers", async () => {
+    const a = addSample("COV-A", 0);
+    const a2 = addSample("COV-A", 1);
+    const b = addSample("COV-B", 2);
+    insertReview(a.id, testUser.email, "incorrect");
+    insertReview(a2.id, testUser.email, "uncertain");
+    insertReview(b.id, testUser.email, "correct");
+
+    const { bySite } = await sitesOf();
+    expect(bySite.get("COV-A")!.reviewed).toBe(2);
+    expect(bySite.get("COV-A")!.correct).toBe(0);
+    expect(bySite.get("COV-B")!.correct).toBe(1);
+  });
+
+  it("per-site counts sum to the fit-eligible correct total", async () => {
+    const outcomes = ["correct", "correct", "incorrect", "correct", "uncertain"];
+    const sites = ["COV-A", "COV-B", "COV-B", "COV-C", null];
+    outcomes.forEach((outcome, i) => {
+      const s = addSample(sites[i], i);
+      insertReview(s.id, testUser.email, outcome);
+    });
+
+    const { progress } = await sitesOf();
+    const sum = progress.sites.reduce((acc, s) => acc + (s.correct ?? 0), 0);
+    expect(sum).toBe(progress.correct);
+    expect(sum).toBe(3);
+  });
+});
+
+describe("getCampaignProgress sites — blinding of per-site correct counts", () => {
+  // The review page shows each clip's site. Per-site correct counts made of
+  // the primary's answers would let a colleague still reviewing read those
+  // answers off by site, so they are withheld server-side.
+  const GLORIA = "gloria@fcat-ecuador.org";
+  const PEDRO = "pedro@fcat-ecuador.org";
+
+  function as(email: string) {
+    mockRequirePermission.mockResolvedValue({ ...testUser, email });
+  }
+
+  function insertReview(sampleId: number, email: string, outcome: string) {
+    db.insert(schema.birdnetValidationReviews)
+      .values({
+        sampleId,
+        reviewerEmail: email,
+        outcome: outcome as "correct" | "incorrect" | "uncertain",
+      })
+      .run();
+  }
+
+  function setStatus(status: string) {
+    db.update(schema.birdnetValidationCampaigns)
+      .set({ status: status as "reviewing" })
+      .run();
+  }
+
+  let a: { id: number };
+  let b: { id: number };
+
+  beforeEach(async () => {
+    a = addSample("COV-A", 0);
+    b = addSample("COV-B", 1);
+    // The primary has answered everything; COV-A is confirmed.
+    insertReview(a.id, testUser.email, "correct");
+    insertReview(b.id, testUser.email, "incorrect");
+    as(testUser.email);
+    const { setPrimaryReviewer } = await actions();
+    await setPrimaryReviewer(campaignId, testUser.email);
+    setStatus("reviewing");
+  });
+
+  async function progressAs(email: string) {
+    as(email);
+    const { getCampaignProgress } = await actions();
+    const progress = await getCampaignProgress(campaignId);
+    if (!progress.success) throw new Error(progress.error);
+    return progress.data;
+  }
+
+  it("withholds the counts from a colleague with clips still to review", async () => {
+    insertReview(a.id, GLORIA, "correct"); // one of two answered
+
+    const data = await progressAs(GLORIA);
+    expect(data.siteCorrectBlinded).toBe(true);
+    expect(data.sites.map((s) => s.correct)).toEqual([null, null]);
+    // Not merely unrendered: the drawn/reviewed spread is still there, but no
+    // correct count travels in the payload.
+    for (const site of data.sites) expect(site.correct).toBeNull();
+  });
+
+  it("releases them once the colleague has answered every clip", async () => {
+    insertReview(a.id, GLORIA, "correct");
+    insertReview(b.id, GLORIA, "uncertain");
+
+    const data = await progressAs(GLORIA);
+    expect(data.siteCorrectBlinded).toBe(false);
+    const bySite = new Map(data.sites.map((s) => [s.siteName, s.correct]));
+    expect(bySite.get("COV-A")).toBe(1);
+    expect(bySite.get("COV-B")).toBe(0);
+  });
+
+  it("shows the fit-eligible reviewer their own counts", async () => {
+    // Even with a clip added that the primary has not reached yet.
+    addSample("COV-C", 2);
+    const data = await progressAs(testUser.email);
+    expect(data.siteCorrectBlinded).toBe(false);
+    expect(data.sites.find((s) => s.siteName === "COV-A")!.correct).toBe(1);
+  });
+
+  it.each(["draft", "sampled", "reviewing"])(
+    "keeps withholding from someone who reviewed nothing while %s",
+    async (status) => {
+      setStatus(status);
+      const data = await progressAs(PEDRO);
+      expect(data.siteCorrectBlinded).toBe(true);
+      expect(data.sites.every((s) => s.correct === null)).toBe(true);
+    }
+  );
+
+  it.each(["fitted", "unusable", "applied", "abandoned"])(
+    "shows everyone the counts once the species is %s",
+    async (status) => {
+      setStatus(status);
+      const data = await progressAs(PEDRO);
+      expect(data.siteCorrectBlinded).toBe(false);
+      expect(data.sites.find((s) => s.siteName === "COV-A")!.correct).toBe(1);
+    }
+  );
+});

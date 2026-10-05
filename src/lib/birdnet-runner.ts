@@ -24,6 +24,7 @@ import {
 import { eq, inArray } from "drizzle-orm";
 import { log } from "@/lib/log";
 import { resolveBirdnetName, isNonSpeciesLabel } from "@/lib/birdnet-taxonomy";
+import { invalidateAudioDeploymentStats } from "@/lib/audio-deployment-stats-cache";
 
 const BIRDNET_SCRIPT = path.join(
   process.cwd(),
@@ -280,6 +281,8 @@ export async function runBirdNETAnalysis(
             detectedSpecies.add(det.scientific_name);
             totalDetections++;
           }
+          // The /audio page's per-deployment totals now include this file.
+          if (msg.detections.length > 0) invalidateAudioDeploymentStats();
 
           const globalIdx = globalOffset + totalProcessed;
           await db

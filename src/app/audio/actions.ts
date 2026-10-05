@@ -60,6 +60,12 @@ import {
   canonicalThreshold,
 } from "@/lib/audio-confidence";
 import { loadActiveSpeciesThresholds } from "@/lib/birdnet-validation/threshold-map";
+import {
+  cachedDeploymentStats,
+  deploymentStatsKey,
+  invalidateAudioDeploymentStats,
+  type DeploymentStatsMap,
+} from "@/lib/audio-deployment-stats-cache";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -126,6 +132,46 @@ export interface AudioStats {
 // Queries
 // ---------------------------------------------------------------------------
 
+/**
+ * Per-deployment BirdNET totals for every deployment: one pass over the
+ * identifications -> detections -> files join, with all four aggregates
+ * sharing it via conditional sums. ~2 s on the full table, hence the cache in
+ * `fetchAudioDeployments`.
+ */
+async function computeDeploymentDetectionStats(
+  threshold: number,
+  speciesThresholds: ReadonlyMap<string, number>
+): Promise<DeploymentStatsMap> {
+  const visible = applySpeciesConfidenceFilter(threshold, speciesThresholds);
+  const rows = await db
+    .select({
+      deploymentId: audioFiles.deploymentId,
+      totalDetections: sql<number>`SUM(CASE WHEN ${visible} THEN 1 ELSE 0 END)`,
+      totalSpecies: sql<number>`COUNT(DISTINCT CASE WHEN ${visible} THEN ${audioIdentifications.species} END)`,
+      verifiedCount: sql<number>`SUM(CASE WHEN ${audioIdentifications.verificationStatus} = 'verified' THEN 1 ELSE 0 END)`,
+      unverifiedCount: sql<number>`SUM(CASE WHEN ${audioIdentifications.verificationStatus} = 'unverified' AND (${audioIdentifications.confidence} IS NULL OR ${audioIdentifications.confidence} >= ${threshold}) THEN 1 ELSE 0 END)`,
+    })
+    .from(audioIdentifications)
+    .innerJoin(
+      audioDetections,
+      eq(audioDetections.id, audioIdentifications.audioDetectionId)
+    )
+    .innerJoin(audioFiles, eq(audioFiles.id, audioDetections.audioFileId))
+    .groupBy(audioFiles.deploymentId);
+
+  return new Map(
+    rows.map((r) => [
+      r.deploymentId,
+      {
+        totalDetections: Number(r.totalDetections ?? 0),
+        totalSpecies: Number(r.totalSpecies ?? 0),
+        verifiedCount: Number(r.verifiedCount ?? 0),
+        unverifiedCount: Number(r.unverifiedCount ?? 0),
+      },
+    ])
+  );
+}
+
 export async function fetchAudioDeployments(
   opts?: { threshold?: number }
 ): Promise<ActionResult<AudioDeploymentRow[]>> {
@@ -135,10 +181,7 @@ export async function fetchAudioDeployments(
   const threshold = canonicalThreshold(
     opts?.threshold ?? DEFAULT_CONFIDENCE_THRESHOLD
   );
-  const visible = applySpeciesConfidenceFilter(
-    threshold,
-    await loadActiveSpeciesThresholds()
-  );
+  const speciesThresholds = await loadActiveSpeciesThresholds();
 
   // Load the deployment rows once. Per-deployment stats are then computed with
   // a small fixed set of batched GROUP BY queries (see below) instead of one
@@ -181,25 +224,15 @@ export async function fetchAudioDeployments(
     .groupBy(audioFiles.deploymentId);
   const fileStats = new Map(fileStatsRows.map((r) => [r.deploymentId, r]));
 
-  // One pass over the identifications -> detections -> files join, grouped by
-  // deployment. All four aggregates share the single join via conditional sums.
-  const detStatsRows = await db
-    .select({
-      deploymentId: audioFiles.deploymentId,
-      totalDetections: sql<number>`SUM(CASE WHEN ${visible} THEN 1 ELSE 0 END)`,
-      totalSpecies: sql<number>`COUNT(DISTINCT CASE WHEN ${visible} THEN ${audioIdentifications.species} END)`,
-      verifiedCount: sql<number>`SUM(CASE WHEN ${audioIdentifications.verificationStatus} = 'verified' THEN 1 ELSE 0 END)`,
-      unverifiedCount: sql<number>`SUM(CASE WHEN ${audioIdentifications.verificationStatus} = 'unverified' AND (${audioIdentifications.confidence} IS NULL OR ${audioIdentifications.confidence} >= ${threshold}) THEN 1 ELSE 0 END)`,
-    })
-    .from(audioIdentifications)
-    .innerJoin(
-      audioDetections,
-      eq(audioDetections.id, audioIdentifications.audioDetectionId)
-    )
-    .innerJoin(audioFiles, eq(audioFiles.id, audioDetections.audioFileId))
-    .where(inArray(audioFiles.deploymentId, ids))
-    .groupBy(audioFiles.deploymentId);
-  const detStats = new Map(detStatsRows.map((r) => [r.deploymentId, r]));
+  // The detection totals are the expensive part (a pass over every BirdNET
+  // identification) and are cached process-wide — see
+  // `audio-deployment-stats-cache.ts`. They are computed for every deployment,
+  // not just the caller's, so one computation serves every user; `baseRows`
+  // above is what applies the caller's project scope.
+  const detStats = await cachedDeploymentStats(
+    deploymentStatsKey(threshold, speciesThresholds),
+    () => computeDeploymentDetectionStats(threshold, speciesThresholds)
+  );
 
   // One pass over the in-flight audio jobs, grouped by deployment.
   const jobStatsRows = await db
@@ -448,6 +481,7 @@ export async function createBirdNETJob(
     )
     AND job_id IS NOT NULL
   `);
+  invalidateAudioDeploymentStats();
 
   // Create job
   const [job] = await db
@@ -716,6 +750,7 @@ export async function cancelBirdNETJob(
 
   // Delete partial detections from this job
   await db.delete(audioDetections).where(eq(audioDetections.jobId, jobId));
+  invalidateAudioDeploymentStats();
 
   await db
     .update(processingJobs)
@@ -1256,6 +1291,7 @@ export async function createAudioAnalysisJob(
       )
       AND job_id IS NOT NULL
     `);
+    invalidateAudioDeploymentStats();
   }
 
   const phaseLabel = wantCompress

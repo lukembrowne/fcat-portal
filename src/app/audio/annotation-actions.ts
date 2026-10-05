@@ -15,6 +15,7 @@ import {
   getDeploymentIdForAudioIdentification,
 } from "@/lib/camera-trap-auth";
 import { revalidatePath } from "next/cache";
+import { invalidateAudioDeploymentStats } from "@/lib/audio-deployment-stats-cache";
 import type { ActionResult } from "@/lib/types";
 
 // ---------------------------------------------------------------------------
@@ -121,6 +122,7 @@ export async function createAudioDetection(
       })
       .returning();
 
+    invalidateAudioDeploymentStats();
     revalidatePath("/audio");
     return {
       success: true,
@@ -155,6 +157,7 @@ export async function updateAudioDetection(
       .set({ startTime, endTime, minFreq, maxFreq })
       .where(eq(audioDetections.id, detectionId));
 
+    invalidateAudioDeploymentStats();
     revalidatePath("/audio");
     return { success: true, data: undefined };
   } catch (error) {
@@ -179,6 +182,7 @@ export async function deleteAudioDetection(
       .delete(audioDetections)
       .where(eq(audioDetections.id, detectionId));
 
+    invalidateAudioDeploymentStats();
     revalidatePath("/audio");
     return { success: true, data: undefined };
   } catch (error) {
@@ -234,6 +238,7 @@ export async function assignAudioSpecies(
       })
       .where(eq(audioIdentifications.id, identificationId));
 
+    invalidateAudioDeploymentStats();
     revalidatePath("/audio");
     return { success: true, data: undefined };
   } catch (error) {
@@ -271,6 +276,7 @@ export async function verifyAudioIdentification(
         )
       );
 
+    invalidateAudioDeploymentStats();
     revalidatePath("/audio");
     return { success: true, data: undefined };
   } catch (error) {
@@ -303,6 +309,7 @@ export async function rejectAudioIdentification(
       })
       .where(eq(audioIdentifications.id, identificationId));
 
+    invalidateAudioDeploymentStats();
     revalidatePath("/audio");
     return { success: true, data: undefined };
   } catch (error) {
@@ -345,6 +352,7 @@ export async function bulkVerifyAudio(
         );
     }
 
+    invalidateAudioDeploymentStats();
     revalidatePath("/audio");
     return { success: true, data: { count: identificationIds.length } };
   } catch (error) {
@@ -409,6 +417,7 @@ export async function verifyAllAudioAndAdvance(
       .limit(1);
 
     if (forward.length > 0) {
+      invalidateAudioDeploymentStats();
       revalidatePath("/audio");
       return { success: true, data: { nextFileId: forward[0].id } };
     }
@@ -435,6 +444,7 @@ export async function verifyAllAudioAndAdvance(
       .orderBy(audioFiles.id)
       .limit(1);
 
+    invalidateAudioDeploymentStats();
     revalidatePath("/audio");
     return {
       success: true,

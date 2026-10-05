@@ -66,6 +66,7 @@ import {
   CAMERA_TRAP_ML_JOB_TYPES,
 } from "@/lib/job-locks";
 import { JOB_TYPES } from "@/lib/job-types";
+import { invalidateAudioDeploymentStats } from "@/lib/audio-deployment-stats-cache";
 
 const CAMERA_TRAP_PATH = "/camera-trap";
 
@@ -2163,6 +2164,8 @@ export async function deleteDeployments(
     await db
       .delete(deployments)
       .where(inArray(deployments.id, ids));
+    // Cascades to audio detections; also stops a reused id inheriting cached totals.
+    invalidateAudioDeploymentStats();
 
     // Remove on-disk thumbnail directories (not covered by the DB cascade and
     // not reclaimed by LRU eviction since the deployment no longer exists).
@@ -5166,6 +5169,7 @@ export async function updateSpecies(
 
         return updated;
       });
+      invalidateAudioDeploymentStats();
 
       await recordEvent({
         source: "camera-trap",

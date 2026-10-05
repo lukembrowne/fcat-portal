@@ -1630,6 +1630,11 @@ function detectedSpeciesCounts(
 ): Array<{ species: string; n: number }> {
   // Raw SQL for the join to deployments: the project scope is expressed over
   // the `d` alias, matching the sampling module's `projectScope`.
+  //
+  // `+ai.species` (unary plus) keeps the planner OFF idx_audio_id_species. With
+  // the index it walks every row in species order to skip the GROUP BY sort,
+  // then fetches each row's detection/file/deployment at random — 1.3 s → 4.9 s
+  // on the dev DB. A sequential scan plus a temp b-tree is the faster plan here.
   return db.all<{ species: string; n: number }>(sql`
     SELECT ai.species AS species, COUNT(*) AS n
     FROM audio_identifications ai
@@ -1638,7 +1643,7 @@ function detectedSpeciesCounts(
     JOIN biochoco_deployments d ON d.id = af.deployment_id
     WHERE ai.species IS NOT NULL
       AND ${deploymentScopeSql(ctProjects)}
-    GROUP BY ai.species
+    GROUP BY +ai.species
   `);
 }
 

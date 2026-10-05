@@ -176,9 +176,12 @@ export async function computeStats(): Promise<ReportStats> {
         JOIN biochoco_deployments d ON d.id = af.deployment_id
        WHERE d.ct_project_id = ${PROJECT_ID} AND ai.confidence >= ${AUDIO_CONF}`))?.n,
   );
+  // `+ai.species` (here and below) keeps the planner off idx_audio_id_species:
+  // walking it in species order with random row fetches is ~6x slower than a
+  // sequential scan + sort for these whole-project aggregates.
   const audioSpeciesCount = num(
     (await db.get<{ n: number }>(sql`
-      SELECT COUNT(DISTINCT ai.species) n FROM audio_identifications ai
+      SELECT COUNT(DISTINCT +ai.species) n FROM audio_identifications ai
         JOIN audio_detections ad ON ad.id = ai.audio_detection_id
         JOIN audio_files af ON af.id = ad.audio_file_id
         JOIN biochoco_deployments d ON d.id = af.deployment_id
@@ -186,7 +189,7 @@ export async function computeStats(): Promise<ReportStats> {
   );
   const audioReviewedSpeciesCount = num(
     (await db.get<{ n: number }>(sql`
-      SELECT COUNT(DISTINCT ai.species) n FROM audio_identifications ai
+      SELECT COUNT(DISTINCT +ai.species) n FROM audio_identifications ai
         JOIN audio_detections ad ON ad.id = ai.audio_detection_id
         JOIN audio_files af ON af.id = ad.audio_file_id
         JOIN biochoco_deployments d ON d.id = af.deployment_id
@@ -199,7 +202,7 @@ export async function computeStats(): Promise<ReportStats> {
         JOIN audio_files af ON af.id = ad.audio_file_id
         JOIN biochoco_deployments d ON d.id = af.deployment_id
        WHERE d.ct_project_id = ${PROJECT_ID} AND ai.confidence >= ${AUDIO_CONF}
-       GROUP BY ai.species ORDER BY detections DESC LIMIT 20`)
+       GROUP BY +ai.species ORDER BY detections DESC LIMIT 20`)
   ).map((r) => ({ sci: r.sci, detections: num(r.detections) }));
 
   // ---- iButton (only readings + processed are surfaced) ----

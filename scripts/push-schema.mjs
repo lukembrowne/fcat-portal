@@ -1337,6 +1337,12 @@ const postMigrationIndexes = [
   `CREATE INDEX IF NOT EXISTS idx_audio_id_corrected
     ON audio_identifications(corrected_species, audio_detection_id)
     WHERE verification_status = 'corrected'`,
+  // Unfiltered per-species counts (the /audio/validacion "Detecciones" column).
+  // The partial index above can't serve a count with no status filter, so
+  // without this it is a full scan of ~2.5M rows on every page load (~1.1 s
+  // warm, ~3.6 s cold in dev); with it, a covering-index search (~125 ms).
+  `CREATE INDEX IF NOT EXISTS idx_audio_id_species
+    ON audio_identifications(species)`,
   // Occupancy: fold `variant` into the per-model uniqueness so two variants
   // (geo + habitat) coexist per species×stream. Drop the legacy 3-col index and
   // recreate 4-col; existing rows are all 'combined' so uniqueness still holds

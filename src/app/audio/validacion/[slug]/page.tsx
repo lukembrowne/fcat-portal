@@ -35,6 +35,7 @@ import { StageTag } from "@/app/audio/validacion/stage-tag";
 import { PriorityCell } from "@/app/audio/validacion/priority-cell";
 import { ExpertCell } from "@/app/audio/validacion/expert-cell";
 import { NameLanguageToggle } from "@/app/audio/validacion/name-language-toggle";
+import { ExportCorrectLink } from "@/app/audio/validacion/export-correct-link";
 import {
   NAME_LANG_COOKIE,
   describeDisplayName,
@@ -790,6 +791,15 @@ export default async function SpeciesValidationPage({
                 showCorrect={siteCorrectAvailable}
               />
             </div>
+            {/* Offered whenever any reviewer has a "correct": the CSV uses
+                every reviewer's answers, not only the fit-eligible set the
+                counts above read, and is not blinded. */}
+            {reviewers.some((r) => r.correct > 0) ? (
+              <ExportCorrectLink
+                species={campaign.species}
+                label="Descargar clips correctos (CSV)"
+              />
+            ) : null}
           </CardContent>
         </Card>
       ) : null}

@@ -28,6 +28,7 @@ import { AddSpeciesPanel } from "./new-campaign-dialog";
 import { SpeciesImportCard } from "./species-import-card";
 import { SpeciesFilterBar } from "./species-filter-bar";
 import { NameLanguageToggle } from "./name-language-toggle";
+import { ExportCorrectLink } from "./export-correct-link";
 import { NAME_LANG_COOKIE, parseNameLang, resolveDisplayName } from "./name-language";
 
 export const metadata = { title: "Validación de umbrales" };
@@ -170,7 +171,10 @@ export default async function ValidacionIndexPage({
             son correctas.
           </p>
         </div>
-        <NameLanguageToggle current={nameLang} />
+        <div className="flex flex-wrap items-center gap-2">
+          <ExportCorrectLink label="Exportar correctas (CSV)" />
+          <NameLanguageToggle current={nameLang} />
+        </div>
       </header>
 
       {/* Below the header, not inside it: both panels expand into wide forms

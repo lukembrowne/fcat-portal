@@ -18,7 +18,9 @@ import {
   listCorrectionSpecies,
   recordReview,
   setReviewCorrection,
+  setReviewNote,
 } from "@/app/audio/validacion/actions";
+import { noteIsDirty, normalizeReviewNote } from "@/lib/birdnet-validation/review-notes";
 import type { NameLang } from "@/app/audio/validacion/name-language";
 import { xenoCantoUrl } from "@/lib/xeno-canto";
 import { measuredBand } from "@/lib/birdnet-validation/clip-geometry";
@@ -30,10 +32,11 @@ import { SpectrogramControls } from "./spectrogram-controls";
 import { useReviewSpectrogramSettings } from "./use-spectrogram-settings";
 import { batchState, canFit, queuePosition, remainingForReviewer } from "./review-progress";
 import { CorrectionPicker } from "./correction-picker";
+import { ClipNote, type NoteStatus } from "./clip-note";
 import { DownloadMenu } from "./download-menu";
+import { clearNoteDraft, readNoteDraft, writeNoteDraft } from "./note-drafts";
 import { buildCorrectionIndex, type CorrectionEntry } from "./correction-search";
 import {
-  EMPTY_FLOW,
   advanceIfStillOn,
   afterAnswer,
   answerSlot,
@@ -41,6 +44,9 @@ import {
   applyAnswer,
   closeReopened,
   commitCorrection,
+  commitNote,
+  hydrateFlow,
+  priorAnswer as priorAnswerOf,
   reopenAnswer,
   rollbackAnswer,
   settleCorrection,
@@ -70,11 +76,26 @@ export interface ReviewItem {
   filename: string;
 }
 
+/** A clip this reviewer already answered, with their OWN answer and note. */
+export interface ReviewedItem extends ReviewItem {
+  outcome: Outcome;
+  correctedSpecies: string | null;
+  note: string | null;
+}
+
 interface ReviewClientProps {
   species: string;
   displayName: string;
   slug: string;
+  /** This batch's unanswered clips, in queue order. */
   items: ReviewItem[];
+  /**
+   * The caller's most recent answers, oldest first, placed BEHIND the queue
+   * so ← reaches them after a reload — with their answer, species and note.
+   */
+  history: ReviewedItem[];
+  /** Keys the browser-side note drafts, so a shared computer keeps them apart. */
+  reviewerEmail: string;
   /**
    * The CALLER's own already-reviewed count, not the campaign's. Every
    * reviewer answers every clip, so the denominator is shared but the
@@ -104,7 +125,9 @@ export function ReviewClient({
   species,
   displayName,
   slug,
-  items,
+  items: queue,
+  history,
+  reviewerEmail,
   reviewedCount,
   uncertainCount,
   targetSampleSize,
@@ -114,14 +137,18 @@ export function ReviewClient({
 }: ReviewClientProps) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
-  const [index, setIndex] = useState(0);
+  // Earlier answers sit in front of the queue; the page opens on the first
+  // unanswered clip, with ← walking back through them.
+  const items = useMemo(() => [...history, ...queue], [history, queue]);
+  const historyIds = useMemo(() => new Set(history.map((h) => h.sampleId)), [history]);
+  const [index, setIndex] = useState(history.length);
   // This session's own answers and "what it really was" corrections. See
   // review-flow.ts: the server never sends either back.
-  const [flow, setFlow] = useState<ReviewFlowState>(EMPTY_FLOW);
+  const [flow, setFlow] = useState<ReviewFlowState>(() => hydrateFlow(history));
   // Synchronous mirror of `flow`, written on every update. A correction save
   // that returns late must be judged against the answers as they are NOW (see
   // `settleCorrection`), not as of the last render.
-  const flowRef = useRef<ReviewFlowState>(EMPTY_FLOW);
+  const flowRef = useRef<ReviewFlowState>(flow);
   const updateFlow = useCallback(
     (fn: (prev: ReviewFlowState) => ReviewFlowState) => {
       flowRef.current = fn(flowRef.current);
@@ -204,12 +231,86 @@ export function ReviewClient({
    */
   const answerSavesRef = useRef<Map<number, Promise<boolean>>>(new Map());
 
+  /*
+    Clip notes. Drafts are what the reviewer has typed, per clip, kept for the
+    session so ← brings a note back; `savedNotesRef` is what the server holds.
+    Earlier answers arrive with their saved note; a queue clip has no review
+    row yet, so its only note is a browser-side draft (`note-drafts.ts`).
+
+    Saves run one at a time per clip (`noteChainRef`) and read the draft when
+    they RUN, not when queued, so a blur followed quickly by an answer sends
+    the latest text once rather than two versions out of order.
+  */
+  const [noteDrafts, setNoteDrafts] = useState<Record<number, string>>(() =>
+    Object.fromEntries(history.map((h) => [h.sampleId, h.note ?? ""]))
+  );
+  const noteDraftsRef = useRef<Record<number, string>>(noteDrafts);
+  const [savedNotes, setSavedNotes] = useState<Record<number, string | null>>(() =>
+    Object.fromEntries(history.map((h) => [h.sampleId, h.note]))
+  );
+  const savedNotesRef = useRef<Record<number, string | null>>(savedNotes);
+
+  // Drafts typed on unanswered clips before a reload. Read after mount, not
+  // in the initializer: the server render has no storage, and reading it
+  // there would make the first client render disagree with the HTML.
+  useEffect(() => {
+    const restored: Record<number, string> = {};
+    for (const item of queue) {
+      const draft = readNoteDraft(reviewerEmail, item.sampleId);
+      if (draft !== null && noteDraftsRef.current[item.sampleId] === undefined) {
+        restored[item.sampleId] = draft;
+      }
+    }
+    if (Object.keys(restored).length === 0) return;
+    noteDraftsRef.current = { ...noteDraftsRef.current, ...restored };
+    setNoteDrafts(noteDraftsRef.current);
+  }, [queue, reviewerEmail]);
+  const [noteStatus, setNoteStatus] = useState<Record<number, NoteStatus>>({});
+  const noteChainRef = useRef<Map<number, Promise<void>>>(new Map());
+  const [noteFocus, setNoteFocus] = useState(0);
+
+  const editNote = useCallback((sampleId: number, value: string) => {
+    noteDraftsRef.current = { ...noteDraftsRef.current, [sampleId]: value };
+    setNoteDrafts(noteDraftsRef.current);
+    // Only an unanswered clip needs the browser copy; an answered one saves
+    // to the server on blur.
+    if (!flowRef.current.answers[sampleId]) writeNoteDraft(reviewerEmail, sampleId, value);
+    setNoteStatus((prev) =>
+      prev[sampleId]?.kind === "error" ? { ...prev, [sampleId]: { kind: "idle" } } : prev
+    );
+  }, [reviewerEmail]);
+
+  const saveNote = useCallback((sampleId: number) => {
+    const previous = noteChainRef.current.get(sampleId) ?? Promise.resolve();
+    const next = previous.then(async () => {
+      const draft = noteDraftsRef.current[sampleId];
+      if (draft === undefined || !noteIsDirty(draft, savedNotesRef.current[sampleId])) return;
+      setNoteStatus((prev) => ({ ...prev, [sampleId]: { kind: "saving" } }));
+      const result = await commitNote(sampleId, normalizeReviewNote(draft), {
+        pendingAnswer: answerSavesRef.current.get(sampleId),
+        save: setReviewNote,
+      });
+      if (result.ok) {
+        savedNotesRef.current = { ...savedNotesRef.current, [sampleId]: result.note };
+        setSavedNotes(savedNotesRef.current);
+        clearNoteDraft(reviewerEmail, sampleId);
+      }
+      setNoteStatus((prev) => ({
+        ...prev,
+        [sampleId]: result.ok ? { kind: "saved" } : { kind: "error", message: result.error },
+      }));
+    });
+    noteChainRef.current.set(sampleId, next);
+  }, [reviewerEmail]);
+
   const current = items[index];
   const done = index >= items.length;
 
+  // New answers only: an earlier answer loaded behind the queue is already in
+  // `reviewedCount`, changed or not.
   const answeredHere = useMemo(
-    () => Object.keys(answers).length,
-    [answers]
+    () => Object.keys(answers).filter((id) => !historyIds.has(Number(id))).length,
+    [answers, historyIds]
   );
   const totalReviewed = reviewedCount + answeredHere;
 
@@ -302,6 +403,7 @@ export function ReviewClient({
       // Blocking the queue on a round-trip is what makes review feel slow, and
       // this loop runs 40,000 times. Leaving "No" also drops the correction
       // locally — `recordReview` clears it on the server.
+      const prior = priorAnswerOf(flowRef.current, sampleId);
       updateFlow((prev) => applyAnswer(prev, sampleId, outcome));
       setError(null);
 
@@ -310,19 +412,22 @@ export function ReviewClient({
           if (!result.success) {
             setError(result.error);
             // Roll the row back so the count never overstates what was saved.
-            updateFlow((prev) => rollbackAnswer(prev, sampleId));
+            updateFlow((prev) => rollbackAnswer(prev, sampleId, prior));
           }
           return result.success;
         })
         .catch(() => {
           setError("No se pudo guardar la revisión");
-          updateFlow((prev) => rollbackAnswer(prev, sampleId));
+          updateFlow((prev) => rollbackAnswer(prev, sampleId, prior));
           return false;
         })
         .finally(() => {
           inFlightRef.current.delete(sampleId);
         });
       answerSavesRef.current.set(sampleId, saved);
+      // A note typed before answering rides in behind the answer. A no-op
+      // when there is nothing new to send.
+      saveNote(sampleId);
 
       if (afterAnswer(outcome) === "ask-species") {
         // "No" stays on the clip and asks what it really was. The answer is
@@ -338,7 +443,7 @@ export function ReviewClient({
       // advance must not move it a second step.
       window.setTimeout(() => setIndex(advanceIfStillOn(items, sampleId)), 320);
     },
-    [current, items, updateFlow]
+    [current, items, updateFlow, saveNote]
   );
 
   const back = useCallback(() => {
@@ -398,7 +503,14 @@ export function ReviewClient({
 
   useReviewShortcuts(
     index,
-    { onAnswer: answer, onToggle: toggle, onReplay: replay, onBack: back, onSkip: skip },
+    {
+      onAnswer: answer,
+      onToggle: toggle,
+      onReplay: replay,
+      onBack: back,
+      onSkip: skip,
+      onNote: () => setNoteFocus((n) => n + 1),
+    },
     !done
   );
 
@@ -441,7 +553,7 @@ export function ReviewClient({
           {/* Batch exhausted is NOT the same as species finished. */}
           {state === "more-available" ? (
             <Choice
-              label={`Cargar las siguientes ${Math.min(remaining, items.length || remaining)}`}
+              label={`Cargar las siguientes ${Math.min(remaining, queue.length || remaining)}`}
               detail={`Quedan ${remaining} detecciones por revisar en esta especie.`}
               onClick={() => startTransition(() => router.refresh())}
               disabled={pending}
@@ -488,6 +600,7 @@ export function ReviewClient({
   }
 
   const priorAnswer = answers[current.sampleId];
+  const noteDraft = noteDrafts[current.sampleId] ?? "";
 
   return (
     <div className="space-y-4">
@@ -517,8 +630,9 @@ export function ReviewClient({
             {/* Position within the loaded batch. Safe to show only because
                 queue order no longer tracks confidence — see presentationOrder. */}
             <div className="text-[11px]">
-              Clip {queuePosition(index, items.length)} de {items.length} en esta
-              tanda
+              {index < history.length
+                ? "Ya respondida"
+                : `Clip ${queuePosition(index - history.length, queue.length)} de ${queue.length} en esta tanda`}
             </div>
           </div>
           {/* Available throughout, not just at the end: leaving mid-batch is
@@ -635,8 +749,11 @@ export function ReviewClient({
       */}
       {pickerVisible ? (
         <CorrectionPicker
-          // Remount per clip: the typed text belongs to one detection.
-          key={current.sampleId}
+          // Remount per clip: the typed text belongs to one detection. Prefixed
+          // because ClipNote is a keyed sibling in this same container: two
+          // children sharing a key make React lose track of which is which,
+          // and stale pickers piled up on screen as the reviewer moved ← →.
+          key={`picker-${current.sampleId}`}
           index={correctionIndex}
           loadError={correctionLoadError}
           onRetryLoad={loadCorrectionSpecies}
@@ -679,6 +796,21 @@ export function ReviewClient({
           />
         </div>
       )}
+
+      <ClipNote
+        key={`note-${current.sampleId}`}
+        value={noteDraft}
+        onChange={(value) => editNote(current.sampleId, value)}
+        onBlur={() => {
+          // Before an answer there is no review row to hold it; `answer`
+          // sends the draft once there is.
+          if (flowRef.current.answers[current.sampleId]) saveNote(current.sampleId);
+        }}
+        answered={priorAnswer !== undefined}
+        dirty={noteIsDirty(noteDraft, savedNotes[current.sampleId])}
+        status={noteStatus[current.sampleId] ?? { kind: "idle" }}
+        focusSignal={noteFocus}
+      />
 
       {/* The arrow keys already did this; nothing said so. The answer buttons
           advertise their keys, so these do too. */}

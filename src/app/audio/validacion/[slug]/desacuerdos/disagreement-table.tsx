@@ -130,6 +130,20 @@ export function DisagreementTable({ rows }: { rows: Disagreement[] }) {
                     </span>
                   ))}
                 </div>
+                {/* Notes are usually the WHY of a disagreement ("es un Turdus"),
+                    so they sit right under the answers they explain. */}
+                {row.answers.some((a) => a.note) ? (
+                  <ul className="mt-1.5 space-y-0.5 text-xs">
+                    {row.answers
+                      .filter((a) => a.note)
+                      .map((a) => (
+                        <li key={a.email} className="whitespace-pre-wrap break-words">
+                          <span className="font-medium">{reviewerLabel(a)}:</span>{" "}
+                          {a.note}
+                        </li>
+                      ))}
+                  </ul>
+                ) : null}
               </td>
               <td className="px-2 py-2">
                 <ClipPlayer

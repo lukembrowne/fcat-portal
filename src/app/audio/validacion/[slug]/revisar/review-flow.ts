@@ -8,9 +8,10 @@
  * `recordReview` clears a correction on its own when the outcome leaves
  * `incorrect` — this only keeps the screen in step without a refetch.
  *
- * Corrections live ONLY here. `getReviewQueue` never returns them (nor any
- * outcome), so going back to a clip shows what this reviewer chose in this
- * session and nothing a colleague did.
+ * `getReviewQueue` never returns an outcome or a correction; the caller's OWN
+ * earlier ones arrive separately (`getMyRecentReviews` → `hydrateFlow`), so
+ * going back to a clip shows what this reviewer chose and nothing a colleague
+ * did.
  */
 
 import type { ActionResult } from "@/lib/types";
@@ -76,14 +77,58 @@ export function applyAnswer(
   };
 }
 
-/** Undo an answer the server refused, so the count never overstates what was saved. */
-export function rollbackAnswer(state: ReviewFlowState, sampleId: number): ReviewFlowState {
+/** What a clip held before an answer, so a refused change can put it back. */
+export interface PriorAnswer {
+  outcome: Outcome;
+  correction: string | null;
+}
+
+/** The clip's answer and correction as they stand, or null when unanswered. */
+export function priorAnswer(state: ReviewFlowState, sampleId: number): PriorAnswer | null {
+  const outcome = state.answers[sampleId];
+  if (!outcome) return null;
+  return { outcome, correction: state.corrections[sampleId] ?? null };
+}
+
+/**
+ * Undo an answer the server refused, so the count never overstates what was
+ * saved. A clip that was already answered goes back to that answer — it is
+ * still on the server — rather than reading as unanswered.
+ */
+export function rollbackAnswer(
+  state: ReviewFlowState,
+  sampleId: number,
+  prior: PriorAnswer | null = null
+): ReviewFlowState {
   return {
-    answers: without(state.answers, sampleId),
-    corrections: without(state.corrections, sampleId),
+    answers: prior
+      ? { ...state.answers, [sampleId]: prior.outcome }
+      : without(state.answers, sampleId),
+    corrections: prior?.correction
+      ? { ...state.corrections, [sampleId]: prior.correction }
+      : without(state.corrections, sampleId),
     versions: bump(state.versions, sampleId),
     reopened: state.reopened === sampleId ? null : state.reopened,
   };
+}
+
+/**
+ * The flow for a page that opens with the caller's earlier answers loaded
+ * behind the queue (`getMyRecentReviews`), so ← shows them after a reload.
+ * Only the caller's own answers ever arrive here.
+ */
+export function hydrateFlow(
+  history: Array<{ sampleId: number; outcome: Outcome; correctedSpecies: string | null }>
+): ReviewFlowState {
+  const answers: Record<number, Outcome> = {};
+  const corrections: Record<number, string> = {};
+  for (const h of history) {
+    answers[h.sampleId] = h.outcome;
+    if (h.outcome === "incorrect" && h.correctedSpecies) {
+      corrections[h.sampleId] = h.correctedSpecies;
+    }
+  }
+  return { answers, corrections, versions: {}, reopened: null };
 }
 
 export function applyCorrection(
@@ -222,4 +267,38 @@ export function advanceIfStillOn(
   sampleId: number
 ): (index: number) => number {
   return (i) => (items[i]?.sampleId === sampleId ? i + 1 : i);
+}
+
+export type NoteSave = (
+  sampleId: number,
+  note: string | null
+) => Promise<ActionResult<{ note: string | null }>>;
+
+export type NoteCommit = { ok: true; note: string | null } | { ok: false; error: string };
+
+/**
+ * Save a clip note, after the answer it hangs on has landed.
+ *
+ * Same wait as `commitCorrection`, for the same reason: a note typed before
+ * answering is sent the moment the answer is, and would otherwise race it and
+ * be refused ("Primero responde…") for a review about to exist. Unlike a
+ * correction there is no staleness check — a note describes the clip, not the
+ * answer, so a later answer change does not invalidate it.
+ */
+export async function commitNote(
+  sampleId: number,
+  note: string | null,
+  deps: { pendingAnswer?: Promise<boolean>; save: NoteSave }
+): Promise<NoteCommit> {
+  if (deps.pendingAnswer) {
+    const saved = await deps.pendingAnswer;
+    if (!saved) return { ok: false, error: "No se guardó la respuesta de esta detección" };
+  }
+  try {
+    const result = await deps.save(sampleId, note);
+    if (!result.success) return { ok: false, error: result.error };
+    return { ok: true, note: result.data.note };
+  } catch {
+    return { ok: false, error: "No se pudo guardar la nota" };
+  }
 }

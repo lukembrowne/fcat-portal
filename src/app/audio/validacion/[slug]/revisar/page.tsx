@@ -9,6 +9,7 @@ import { requirePermission } from "@/lib/auth";
 import { resolveSpeciesFromSlug } from "@/lib/species-slug-server";
 import {
   getCampaignProgress,
+  getMyRecentReviews,
   getReviewQueue,
   getReviewerProgress,
 } from "@/app/audio/validacion/actions";
@@ -18,7 +19,7 @@ import {
   resolveDisplayName,
 } from "@/app/audio/validacion/name-language";
 import { batchKey } from "./review-progress";
-import { ReviewClient, type ReviewItem } from "./review-client";
+import { ReviewClient, type ReviewItem, type ReviewedItem } from "./review-client";
 
 export const metadata = {
   title: "Revisión de detecciones",
@@ -29,6 +30,9 @@ export const metadata = {
  * small enough that the initial payload stays light.
  */
 const QUEUE_SIZE = 50;
+
+/** How many of the reviewer's own earlier answers ← can reach after a reload. */
+const HISTORY_SIZE = 20;
 
 export default async function ReviewPage({
   params,
@@ -67,8 +71,9 @@ export default async function ReviewPage({
     );
   }
 
-  const [queueResult, progressResult, reviewersResult] = await Promise.all([
+  const [queueResult, historyResult, progressResult, reviewersResult] = await Promise.all([
     getReviewQueue(campaign.id, QUEUE_SIZE),
+    getMyRecentReviews(campaign.id, HISTORY_SIZE),
     getCampaignProgress(campaign.id),
     getReviewerProgress(campaign.id),
   ]);
@@ -77,7 +82,7 @@ export default async function ReviewPage({
     return <div className="p-6 text-sm text-rose-700">{queueResult.error}</div>;
   }
 
-  const items: ReviewItem[] = queueResult.data.map((row) => ({
+  const toItem = (row: (typeof queueResult.data)[number]): ReviewItem => ({
     sampleId: row.sampleId,
     confidence: row.confidence,
     binIndex: row.binIndex,
@@ -90,7 +95,18 @@ export default async function ReviewPage({
     detectionEndSeconds: row.detectionEndSeconds,
     recordedAt: row.recordedAt,
     filename: row.filename,
-  }));
+  });
+  const items: ReviewItem[] = queueResult.data.map(toItem);
+  // Losing ← is not worth failing the page over: without it the reviewer
+  // still has every unanswered clip.
+  const history: ReviewedItem[] = historyResult.success
+    ? historyResult.data.map((row) => ({
+        ...toItem(row),
+        outcome: row.outcome,
+        correctedSpecies: row.correctedSpecies,
+        note: row.note,
+      }))
+    : [];
 
   const progress = progressResult.success ? progressResult.data : null;
 
@@ -131,6 +147,8 @@ export default async function ReviewPage({
         nameLang={nameLang}
         slug={slug}
         items={items}
+        history={history}
+        reviewerEmail={user.email}
         reviewedCount={mine?.reviewed ?? 0}
         uncertainCount={mine?.uncertain ?? 0}
         targetSampleSize={progress?.sampled ?? campaign.targetSampleSize}

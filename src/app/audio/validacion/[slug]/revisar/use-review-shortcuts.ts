@@ -15,6 +15,7 @@ export type ReviewIntent =
   | { kind: "replay" }
   | { kind: "back" }
   | { kind: "skip" }
+  | { kind: "note" }
   | null;
 
 export interface KeyContext {
@@ -71,6 +72,10 @@ export function resolveReviewKey(key: string, ctx: KeyContext): ReviewIntent {
       return ctx.index > 0 ? { kind: "back" } : null;
     case "ArrowRight":
       return ctx.inMediaControl ? null : { kind: "skip" };
+    // "texto": N is already "No". Focuses the clip's note field; Esc leaves it.
+    case "t":
+    case "T":
+      return { kind: "note" };
     default:
       return null;
   }
@@ -116,6 +121,7 @@ export interface ReviewShortcutHandlers {
   onReplay: () => void;
   onBack: () => void;
   onSkip: () => void;
+  onNote: () => void;
 }
 
 /**
@@ -170,6 +176,9 @@ export function useReviewShortcuts(
           break;
         case "skip":
           h.onSkip();
+          break;
+        case "note":
+          h.onNote();
           break;
       }
     };

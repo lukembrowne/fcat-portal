@@ -20,6 +20,7 @@ import {
   getReviewerProgress,
   getSpeciesOccupancyThresholdStatus,
   getSpeciesSuggestions,
+  getReviewNotes,
 } from "@/app/audio/validacion/actions";
 import { resolveBirdnetName } from "@/lib/birdnet-taxonomy";
 import { resolveFitEligibleReviews } from "@/lib/birdnet-validation/fit-eligibility";
@@ -50,6 +51,7 @@ import { OccupancyStatusCard } from "./occupancy-status-card";
 import { ReviewerRoster } from "./reviewer-roster";
 import { AgreementPanel } from "./agreement-panel";
 import { SuggestionsSection } from "./suggestions-section";
+import { ReviewNotesSection } from "./review-notes-section";
 import { SiteCoverageTable } from "./site-coverage-table";
 import { AddSuggestedSpeciesButton } from "./add-suggested-species-button";
 import { addSuggestedSpeciesState } from "./add-suggested-species-state";
@@ -229,13 +231,19 @@ export default async function SpeciesValidationPage({
       ? isFitStale(latest.nReviewed, progress.reviewed, progress.uncertain)
       : false;
 
-  const [reviewersResult, agreementResult, disagreementsResult, occupancyResult] =
-    await Promise.all([
-      getReviewerProgress(campaign.id),
-      getAgreement(campaign.id),
-      getDisagreements(campaign.id),
-      getSpeciesOccupancyThresholdStatus(target.scientificName),
-    ]);
+  const [
+    reviewersResult,
+    agreementResult,
+    disagreementsResult,
+    occupancyResult,
+    reviewNotesResult,
+  ] = await Promise.all([
+    getReviewerProgress(campaign.id),
+    getAgreement(campaign.id),
+    getDisagreements(campaign.id),
+    getSpeciesOccupancyThresholdStatus(target.scientificName),
+    getReviewNotes(campaign.id),
+  ]);
   const reviewers = reviewersResult.success ? reviewersResult.data : [];
   const agreement = agreementResult.success ? agreementResult.data : [];
   const disagreements = disagreementsResult.success ? disagreementsResult.data : [];
@@ -803,6 +811,12 @@ export default async function SpeciesValidationPage({
           </CardContent>
         </Card>
       ) : null}
+
+      <ReviewNotesSection
+        notes={reviewNotesResult.success ? reviewNotesResult.data.notes : []}
+        hidden={reviewNotesResult.success ? reviewNotesResult.data.hidden : 0}
+        error={reviewNotesResult.success ? null : reviewNotesResult.error}
+      />
 
       <SuggestionsSection
         suggestions={suggestions}

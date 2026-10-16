@@ -23,7 +23,7 @@ import { deploymentScopeSql, speciesNamesFor } from "./query-helpers";
  * the threshold fit still reads exactly one answer per clip
  * (`resolveFitEligibleReviews`), and nothing here feeds it.
  *
- * NOT BLINDED. Every reviewer's answers are exported even while a species is
+ * NOT BLINDED. Every reviewer's answers and notes are exported even while a species is
  * still under review, including to someone part-way through reviewing it — a
  * deliberate choice for this download, unlike the review page and the site
  * coverage counts. `validation_status` says whether the species is finished.
@@ -70,6 +70,11 @@ export interface CorrectDetectionRow {
   nUncertain: number;
   /** Most recent "correct" answer. */
   lastReviewedAt: Date | null;
+  /**
+   * Every reviewer's note on the clip, whatever their answer, by reviewer
+   * email. Unblinded, like the answer counts beside it.
+   */
+  reviewNotes: Array<{ reviewer: string; note: string }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -140,6 +145,7 @@ export const CORRECT_EXPORT_COLUMNS = [
   "n_incorrect",
   "n_uncertain",
   "last_reviewed_at",
+  "review_notes",
   "drive_file_id",
   "sample_id",
   "audio_identification_id",
@@ -152,6 +158,17 @@ function csvVal(val: string | number | boolean | null | undefined): string {
   if (val === null || val === undefined || val === "") return "";
   const str = String(val);
   return /[",\n\r]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+}
+
+/**
+ * `reviewer: note | reviewer: note`, one cell. Line breaks inside a note become
+ * spaces: a quoted multi-line cell is valid CSV, but it breaks every
+ * line-oriented tool a collaborator is likely to point at the file.
+ */
+export function formatReviewNotes(notes: Array<{ reviewer: string; note: string }>): string {
+  return notes
+    .map((n) => `${n.reviewer}: ${n.note.replace(/\s*[\r\n]+\s*/g, " ")}`)
+    .join(" | ");
 }
 
 /** The CSV text: header row, then one row per correct clip. */
@@ -189,6 +206,7 @@ export function buildCorrectDetectionsCsv(rows: CorrectDetectionRow[]): string {
         r.nIncorrect,
         r.nUncertain,
         r.lastReviewedAt ? r.lastReviewedAt.toISOString() : null,
+        formatReviewNotes(r.reviewNotes),
         r.driveFileId,
         r.sampleId,
         r.audioIdentificationId,
@@ -220,6 +238,8 @@ interface RawRow {
   n_incorrect: number;
   n_uncertain: number;
   last_reviewed_at: number | null;
+  /** `email<US>note<RS>email<US>note…` — control separators, as a note may hold any text. */
+  review_notes: string | null;
   model_version: string | null;
   detection_id: number;
   start_time: number;
@@ -273,6 +293,11 @@ export async function collectCorrectDetections(opts: {
              SUM(r.outcome = 'incorrect') AS n_incorrect,
              SUM(r.outcome = 'uncertain') AS n_uncertain,
              MAX(CASE WHEN r.outcome = 'correct' THEN r.reviewed_at END) AS last_reviewed_at,
+             GROUP_CONCAT(
+               CASE WHEN r.notes IS NOT NULL
+                    THEN r.reviewer_email || char(31) || r.notes END,
+               char(30)
+             ) AS review_notes,
              ai.model_version,
              ad.id AS detection_id, ad.start_time, ad.end_time,
              af.filename, af.drive_file_id,
@@ -341,6 +366,7 @@ export async function collectCorrectDetections(opts: {
         nUncertain: Number(r.n_uncertain),
         lastReviewedAt:
           r.last_reviewed_at === null ? null : new Date(Number(r.last_reviewed_at) * 1000),
+        reviewNotes: parseReviewNotes(r.review_notes),
       });
     }
   }
@@ -357,6 +383,17 @@ export async function collectCorrectDetections(opts: {
       a.sampleId - b.sampleId
   );
   return rows;
+}
+
+function parseReviewNotes(raw: string | null): Array<{ reviewer: string; note: string }> {
+  if (!raw) return [];
+  return raw
+    .split("\u001e")
+    .map((entry) => {
+      const cut = entry.indexOf("\u001f");
+      return { reviewer: entry.slice(0, cut), note: entry.slice(cut + 1) };
+    })
+    .sort((a, b) => a.reviewer.localeCompare(b.reviewer));
 }
 
 /** Does this species have a validation at all? For a 404 on an unknown name. */

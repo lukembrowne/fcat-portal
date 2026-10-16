@@ -76,6 +76,10 @@ import {
   type FitEligibilityReason,
   type ReviewOutcome,
 } from "@/lib/birdnet-validation/types";
+import {
+  MAX_REVIEW_NOTE_LENGTH,
+  normalizeReviewNote,
+} from "@/lib/birdnet-validation/review-notes";
 import { deriveRestoredStatus } from "./restore-status";
 import { loadSpeciesOccupancyStatus } from "@/lib/occupancy/threshold-status";
 import type { ActionResult } from "@/lib/types";
@@ -677,11 +681,14 @@ export async function restoreCampaign(
  * and a held key or retried request must not move the timestamp. Recording a
  * different outcome revises the caller's own answer, so stepping back to
  * correct yourself works.
+ *
+ * Never writes the reviewer's note — see `setReviewNote`. It used to accept
+ * one and wrote `notes ?? null` on every answer, so changing an answer would
+ * have silently erased the note the moment anything started sending them.
  */
 export async function recordReview(
   sampleId: number,
-  outcome: ReviewOutcome,
-  notes?: string
+  outcome: ReviewOutcome
 ): Promise<ActionResult> {
   /*
     VIEWER, deliberately, and this is the one write in the module that a viewer
@@ -739,7 +746,7 @@ export async function recordReview(
 
     // Same answer again: leave the original timestamp so a double keystroke is
     // a true no-op rather than a silent edit.
-    if (existing && existing.outcome === outcome && !notes) {
+    if (existing && existing.outcome === outcome) {
       return { success: true, data: undefined };
     }
 
@@ -748,8 +755,11 @@ export async function recordReview(
         .update(birdnetValidationReviews)
         .set({
           outcome,
-          notes: notes ?? null,
           reviewedAt: new Date(),
+          // The note is deliberately not in the SET: it describes the clip,
+          // not the answer, so revising "Sí" to "No" must keep it. It has its
+          // own write, `setReviewNote`.
+          //
           // A correction names what the clip was INSTEAD of this species, so it
           // only means anything on an `incorrect` answer. Leaving `incorrect`
           // clears it; re-affirming `incorrect` keeps it (the column is simply
@@ -762,7 +772,6 @@ export async function recordReview(
         sampleId,
         reviewerEmail: user.email,
         outcome,
-        notes: notes ?? null,
         reviewedAt: new Date(),
       });
     }
@@ -896,6 +905,205 @@ export async function setReviewCorrection(
     return { success: true, data: { correctedSpecies } };
   } catch (error) {
     return errorResult(error, "Error al guardar la especie real");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Reviewer notes (free text on one clip)
+// ---------------------------------------------------------------------------
+
+/**
+ * Set or clear the caller's note on their own review of one clip — "canto con
+ * trino final", "dos individuos", "ruido de lluvia". Requested by a reviewer
+ * who wanted to label call types and peculiarities per clip.
+ *
+ * Shaped like `setReviewCorrection`: viewer, one column of one row the caller
+ * already owns, refused before the clip is answered (the review client holds a
+ * typed note as a draft and sends it once the answer lands). Unlike a
+ * correction it is valid on ANY outcome and survives an answer change — a note
+ * describes the clip, not the verdict — which is why `recordReview` no longer
+ * writes this column at all.
+ *
+ * `reviewed_at` is untouched: a note is not a new judgment, and "reviews since
+ * fit" must not count it as one. Not audited — a per-clip write.
+ */
+export async function setReviewNote(
+  sampleId: number,
+  note: string | null
+): Promise<ActionResult<{ note: string | null }>> {
+  const user = await requirePermission("grabaciones", "viewer");
+
+  try {
+    if (!Number.isInteger(sampleId)) {
+      return { success: false, error: "Detección no válida" };
+    }
+    if (note !== null && typeof note !== "string") {
+      return { success: false, error: "Nota no válida" };
+    }
+    const normalized = normalizeReviewNote(note);
+    if (normalized !== null && normalized.length > MAX_REVIEW_NOTE_LENGTH) {
+      return {
+        success: false,
+        error: `La nota supera los ${MAX_REVIEW_NOTE_LENGTH} caracteres`,
+      };
+    }
+
+    const [sample] = await db
+      .select({
+        id: birdnetValidationSamples.id,
+        campaignId: birdnetValidationSamples.campaignId,
+      })
+      .from(birdnetValidationSamples)
+      .where(eq(birdnetValidationSamples.id, sampleId));
+    if (!sample) return { success: false, error: "Detección no encontrada" };
+
+    const campaign = await loadCampaign(sample.campaignId);
+    if (!campaign) return { success: false, error: "Validación no encontrada" };
+    if (campaign.status === "abandoned") {
+      return { success: false, error: "Esta validación fue descartada" };
+    }
+
+    const [review] = await db
+      .select({ id: birdnetValidationReviews.id })
+      .from(birdnetValidationReviews)
+      .where(
+        and(
+          eq(birdnetValidationReviews.sampleId, sampleId),
+          eq(birdnetValidationReviews.reviewerEmail, user.email)
+        )
+      );
+    if (!review) {
+      return {
+        success: false,
+        error: "Primero responde esta detección antes de guardar la nota",
+      };
+    }
+
+    await db
+      .update(birdnetValidationReviews)
+      .set({ notes: normalized })
+      .where(eq(birdnetValidationReviews.id, review.id));
+
+    return { success: true, data: { note: normalized } };
+  } catch (error) {
+    return errorResult(error, "Error al guardar la nota");
+  }
+}
+
+/** One reviewer's note on one clip of a species' sample. */
+export interface ReviewNote {
+  reviewId: number;
+  sampleId: number;
+  siteName: string | null;
+  recordedAt: string | null;
+  reviewerEmail: string;
+  reviewerName: string | null;
+  /** The note-writer's own answer on the clip. */
+  outcome: ReviewOutcome;
+  note: string;
+  /** ISO timestamp of the answer (a note edit does not move it). */
+  reviewedAt: string;
+}
+
+export interface ReviewNotes {
+  notes: ReviewNote[];
+  /** Notes withheld by the blinding rule — a bare count, nothing else. */
+  hidden: number;
+}
+
+/**
+ * Every reviewer's notes on one species' sampled clips, for the species page.
+ *
+ * BLINDED like `getSpeciesSuggestions`, for the same reason: a note usually
+ * gives its answer away ("no es, es un Turdus"), and the row carries the site
+ * and time the review page shows. A note is returned only when the caller
+ * wrote it, has answered that clip themselves, or the species is past review
+ * (`POST_REVIEW_STATUSES`). Withheld notes are counted in SQL and never leave
+ * this function. `/desacuerdos` and the CSV are deliberately unblinded, as
+ * they already were for answers.
+ *
+ * Scoped to the caller's projects like the suggestions read.
+ */
+export async function getReviewNotes(
+  campaignId: number
+): Promise<ActionResult<ReviewNotes>> {
+  const user = await requirePermission("grabaciones", "viewer");
+
+  try {
+    const ctProjects = await getUserCameraTrapProjects(user);
+    const rows = db.all<{
+      reviewId: number;
+      sampleId: number;
+      siteName: string | null;
+      filename: string | null;
+      detectionStart: number;
+      reviewerEmail: string;
+      outcome: ReviewOutcome;
+      note: string;
+      reviewedAt: number;
+      visible: number;
+    }>(sql`
+      SELECT r.id AS reviewId,
+             s.id AS sampleId,
+             s.site_name AS siteName,
+             af.filename AS filename,
+             ad.start_time AS detectionStart,
+             r.reviewer_email AS reviewerEmail,
+             r.outcome AS outcome,
+             r.notes AS note,
+             r.reviewed_at AS reviewedAt,
+             CASE WHEN r.reviewer_email = ${user.email}
+                    OR c.status IN (${sql.join(
+                      POST_REVIEW_STATUSES.map((st) => sql`${st}`),
+                      sql`, `
+                    )})
+                    OR EXISTS (
+                      SELECT 1 FROM birdnet_validation_reviews mine
+                       WHERE mine.sample_id = r.sample_id
+                         AND mine.reviewer_email = ${user.email}
+                    )
+                  THEN 1 ELSE 0 END AS visible
+      FROM birdnet_validation_reviews r
+      JOIN birdnet_validation_samples s ON s.id = r.sample_id
+      JOIN birdnet_validation_campaigns c ON c.id = s.campaign_id
+      JOIN audio_identifications ai ON ai.id = s.audio_identification_id
+      JOIN audio_detections ad ON ad.id = ai.audio_detection_id
+      JOIN audio_files af ON af.id = ad.audio_file_id
+      LEFT JOIN biochoco_deployments d ON d.id = af.deployment_id
+      WHERE s.campaign_id = ${campaignId}
+        AND r.notes IS NOT NULL
+        AND ${deploymentScopeSql(ctProjects)}
+      ORDER BY r.reviewed_at DESC, r.id DESC
+    `);
+
+    const visibleRows = rows.filter((r) => Number(r.visible) === 1);
+    const hidden = rows.length - visibleRows.length;
+
+    const reviewerEmails = [...new Set(visibleRows.map((r) => r.reviewerEmail))];
+    const userRows = reviewerEmails.length
+      ? await db
+          .select({ email: users.email, name: users.name })
+          .from(users)
+          .where(inArray(users.email, reviewerEmails))
+      : [];
+    const nameByEmail = new Map(userRows.map((u) => [u.email, u.name]));
+
+    const notes: ReviewNote[] = visibleRows.map((row) => ({
+      reviewId: row.reviewId,
+      sampleId: row.sampleId,
+      siteName: row.siteName,
+      recordedAt: recordingInstant(row.filename, row.detectionStart),
+      reviewerEmail: row.reviewerEmail,
+      reviewerName: nameByEmail.get(row.reviewerEmail) ?? null,
+      outcome: row.outcome,
+      note: row.note,
+      // Drizzle's `timestamp` mode stores Unix SECONDS; this is a raw read.
+      reviewedAt: new Date(Number(row.reviewedAt) * 1000).toISOString(),
+    }));
+
+    return { success: true, data: { notes, hidden } };
+  } catch (error) {
+    return errorResult(error, "Error al cargar las notas de revisión");
   }
 }
 
@@ -1655,6 +1863,115 @@ export async function listValidatableSpecies(): Promise<
   }
 }
 
+/** One clip as the review page needs it. Carries no outcome of anyone's. */
+export interface ReviewQueueItem {
+  sampleId: number;
+  audioIdentificationId: number;
+  confidence: number;
+  binIndex: number;
+  siteName: string | null;
+  habitat: string | null;
+  orderIndex: number;
+  /**
+   * Left edge of the detection within the clip, as a percentage.
+   *
+   * An ESTIMATE, computed from the window we asked ffmpeg for. The client
+   * replaces it with `measuredBand` as soon as the audio element reports a
+   * duration, because a window running past the end of the recording comes
+   * back short and these percentages then point at the wrong audio. Sent
+   * anyway so the band renders on the first frame rather than appearing a
+   * beat later.
+   */
+  bandLeftPct: number;
+  /** Right edge, likewise — same estimate, same replacement. */
+  bandRightPct: number;
+  /** Estimated clip length in seconds, before AAC encoder padding. */
+  clipSpanSeconds: number;
+  /** Offset of the clip's first sample into the recording, in seconds. */
+  clipStartSeconds: number;
+  /** The BirdNET window's bounds within the recording, in seconds. */
+  detectionStartSeconds: number;
+  detectionEndSeconds: number;
+  /** Wall-clock recording time, or null when the filename carries none. */
+  recordedAt: string | null;
+  /**
+   * The source recording's own filename (e.g. `…_090000.flac`), named after
+   * the recording START — the displayed `recordedAt` adds the detection
+   * offset, so without this a reviewer searching Drive finds nothing.
+   * Carries no score.
+   */
+  filename: string;
+}
+
+/**
+ * The clip columns both review-page loaders select. Same join chain as
+ * `loadClipSource`: the sample points at an IDENTIFICATION, so going straight
+ * to `audio_detections` would join on an unrelated id space. Bounds come from
+ * the detection, which is stable, not from the sample's snapshot.
+ */
+const reviewClipColumns = {
+  sampleId: birdnetValidationSamples.id,
+  audioIdentificationId: birdnetValidationSamples.audioIdentificationId,
+  confidence: birdnetValidationSamples.confidence,
+  binIndex: birdnetValidationSamples.binIndex,
+  siteName: birdnetValidationSamples.siteName,
+  habitat: birdnetValidationSamples.habitat,
+  orderIndex: birdnetValidationSamples.orderIndex,
+  detectionStart: audioDetections.startTime,
+  detectionEnd: audioDetections.endTime,
+  fileDuration: audioFiles.duration,
+  filename: audioFiles.filename,
+};
+
+type ReviewClipRow = {
+  sampleId: number;
+  audioIdentificationId: number;
+  confidence: number;
+  binIndex: number;
+  siteName: string | null;
+  habitat: string | null;
+  orderIndex: number;
+  detectionStart: number;
+  detectionEnd: number;
+  fileDuration: number | null;
+  filename: string;
+};
+
+function toReviewQueueItem(row: ReviewClipRow): ReviewQueueItem {
+  // The clamp rule lives with the audio cut that shares it, so the window is
+  // computed here. The BAND it implies is only a first guess: the client
+  // re-derives it from the decoded clip, which is the only thing that knows
+  // how much audio ffmpeg actually returned.
+  const win = clipWindow({
+    startTime: row.detectionStart,
+    endTime: row.detectionEnd,
+    duration: row.fileDuration,
+  });
+  const band = detectionBand(win, {
+    startTime: row.detectionStart,
+    endTime: row.detectionEnd,
+  });
+  return {
+    sampleId: row.sampleId,
+    audioIdentificationId: row.audioIdentificationId,
+    confidence: row.confidence,
+    binIndex: row.binIndex,
+    siteName: row.siteName,
+    habitat: row.habitat,
+    orderIndex: row.orderIndex,
+    bandLeftPct: band.leftPct,
+    bandRightPct: band.rightPct,
+    clipSpanSeconds: win.end - win.start,
+    // Absolute seconds, so the client can recompute the band against the
+    // clip it actually received. See `measuredBand`.
+    clipStartSeconds: win.start,
+    detectionStartSeconds: row.detectionStart,
+    detectionEndSeconds: row.detectionEnd,
+    recordedAt: recordingInstant(row.filename, row.detectionStart),
+    filename: row.filename,
+  };
+}
+
 /**
  * The caller's own next unreviewed samples, in queue order.
  *
@@ -1668,71 +1985,14 @@ export async function listValidatableSpecies(): Promise<
 export async function getReviewQueue(
   campaignId: number,
   limit = 25
-): Promise<
-  ActionResult<
-    Array<{
-      sampleId: number;
-      audioIdentificationId: number;
-      confidence: number;
-      binIndex: number;
-      siteName: string | null;
-      habitat: string | null;
-      orderIndex: number;
-      /**
-       * Left edge of the detection within the clip, as a percentage.
-       *
-       * An ESTIMATE, computed from the window we asked ffmpeg for. The client
-       * replaces it with `measuredBand` as soon as the audio element reports a
-       * duration, because a window running past the end of the recording comes
-       * back short and these percentages then point at the wrong audio. Sent
-       * anyway so the band renders on the first frame rather than appearing a
-       * beat later.
-       */
-      bandLeftPct: number;
-      /** Right edge, likewise — same estimate, same replacement. */
-      bandRightPct: number;
-      /** Estimated clip length in seconds, before AAC encoder padding. */
-      clipSpanSeconds: number;
-      /** Offset of the clip's first sample into the recording, in seconds. */
-      clipStartSeconds: number;
-      /** The BirdNET window's bounds within the recording, in seconds. */
-      detectionStartSeconds: number;
-      detectionEndSeconds: number;
-      /** Wall-clock recording time, or null when the filename carries none. */
-      recordedAt: string | null;
-      /**
-       * The source recording's own filename (e.g. `…_090000.flac`), named after
-       * the recording START — the displayed `recordedAt` adds the detection
-       * offset, so without this a reviewer searching Drive finds nothing.
-       * Carries no score.
-       */
-      filename: string;
-    }>
-  >
-> {
+): Promise<ActionResult<ReviewQueueItem[]>> {
   // Viewer, matching `recordReview` — a reviewer who may answer must be able
   // to load the clips they are answering about.
   const user = await requirePermission("grabaciones", "viewer");
 
   try {
     const rows = await db
-      .select({
-        sampleId: birdnetValidationSamples.id,
-        audioIdentificationId: birdnetValidationSamples.audioIdentificationId,
-        confidence: birdnetValidationSamples.confidence,
-        binIndex: birdnetValidationSamples.binIndex,
-        siteName: birdnetValidationSamples.siteName,
-        habitat: birdnetValidationSamples.habitat,
-        orderIndex: birdnetValidationSamples.orderIndex,
-        // Same join chain as `loadClipSource`: the sample points at an
-        // IDENTIFICATION, so going straight to `audio_detections` would join on
-        // an unrelated id space. Bounds come from the detection, which is
-        // stable, not from the sample's snapshot.
-        detectionStart: audioDetections.startTime,
-        detectionEnd: audioDetections.endTime,
-        fileDuration: audioFiles.duration,
-        filename: audioFiles.filename,
-      })
+      .select(reviewClipColumns)
       .from(birdnetValidationSamples)
       .innerJoin(
         audioIdentifications,
@@ -1756,44 +2016,75 @@ export async function getReviewQueue(
       .orderBy(asc(birdnetValidationSamples.orderIndex))
       .limit(limit);
 
-    // The clamp rule lives with the audio cut that shares it, so the window is
-    // computed here. The BAND it implies is only a first guess: the client
-    // re-derives it from the decoded clip, which is the only thing that knows
-    // how much audio ffmpeg actually returned.
-    const data = rows.map((row) => {
-      const win = clipWindow({
-        startTime: row.detectionStart,
-        endTime: row.detectionEnd,
-        duration: row.fileDuration,
-      });
-      const band = detectionBand(win, {
-        startTime: row.detectionStart,
-        endTime: row.detectionEnd,
-      });
-      return {
-        sampleId: row.sampleId,
-        audioIdentificationId: row.audioIdentificationId,
-        confidence: row.confidence,
-        binIndex: row.binIndex,
-        siteName: row.siteName,
-        habitat: row.habitat,
-        orderIndex: row.orderIndex,
-        bandLeftPct: band.leftPct,
-        bandRightPct: band.rightPct,
-        clipSpanSeconds: win.end - win.start,
-        // Absolute seconds, so the client can recompute the band against the
-        // clip it actually received. See `measuredBand`.
-        clipStartSeconds: win.start,
-        detectionStartSeconds: row.detectionStart,
-        detectionEndSeconds: row.detectionEnd,
-        recordedAt: recordingInstant(row.filename, row.detectionStart),
-        filename: row.filename,
-      };
-    });
-
-    return { success: true, data };
+    return { success: true, data: rows.map(toReviewQueueItem) };
   } catch (error) {
     return errorResult(error, "Error al cargar la cola de revisión");
+  }
+}
+
+/** A clip the caller already answered, with THEIR answer, species and note. */
+export interface MyReviewedClip extends ReviewQueueItem {
+  outcome: "correct" | "incorrect" | "uncertain";
+  correctedSpecies: string | null;
+  note: string | null;
+}
+
+/**
+ * The caller's most recently answered clips on this species, oldest first, so
+ * the review page can put them BEHIND the queue and ← keeps working after a
+ * reload. Without this a reload loaded only unanswered clips: "Anterior" was
+ * greyed out and a note saved a minute ago looked lost.
+ *
+ * Only the caller's own rows, filtered by `reviewer_email` in SQL — a
+ * colleague's answer never reaches the review client (see `getReviewQueue`).
+ */
+export async function getMyRecentReviews(
+  campaignId: number,
+  limit = 20
+): Promise<ActionResult<MyReviewedClip[]>> {
+  const user = await requirePermission("grabaciones", "viewer");
+
+  try {
+    const rows = await db
+      .select({
+        ...reviewClipColumns,
+        outcome: birdnetValidationReviews.outcome,
+        correctedSpecies: birdnetValidationReviews.correctedSpecies,
+        note: birdnetValidationReviews.notes,
+      })
+      .from(birdnetValidationReviews)
+      .innerJoin(
+        birdnetValidationSamples,
+        eq(birdnetValidationSamples.id, birdnetValidationReviews.sampleId)
+      )
+      .innerJoin(
+        audioIdentifications,
+        eq(audioIdentifications.id, birdnetValidationSamples.audioIdentificationId)
+      )
+      .innerJoin(
+        audioDetections,
+        eq(audioDetections.id, audioIdentifications.audioDetectionId)
+      )
+      .innerJoin(audioFiles, eq(audioFiles.id, audioDetections.audioFileId))
+      .where(
+        and(
+          eq(birdnetValidationSamples.campaignId, campaignId),
+          eq(birdnetValidationReviews.reviewerEmail, user.email)
+        )
+      )
+      // Latest answers, then flipped so ← walks back in time.
+      .orderBy(desc(birdnetValidationReviews.reviewedAt), desc(birdnetValidationReviews.id))
+      .limit(limit);
+
+    const data = rows.reverse().map((row) => ({
+      ...toReviewQueueItem(row),
+      outcome: row.outcome,
+      correctedSpecies: row.correctedSpecies,
+      note: row.note,
+    }));
+    return { success: true, data };
+  } catch (error) {
+    return errorResult(error, "Error al cargar tus respuestas anteriores");
   }
 }
 
@@ -1970,7 +2261,13 @@ export interface Disagreement {
   binIndex: number;
   siteName: string | null;
   habitat: string | null;
-  answers: Array<{ email: string; name: string | null; outcome: ReviewOutcome }>;
+  answers: Array<{
+    email: string;
+    name: string | null;
+    outcome: ReviewOutcome;
+    /** That reviewer's note on the clip, or null. Unblinded, like the answer. */
+    note: string | null;
+  }>;
 }
 
 export async function getDisagreements(
@@ -1989,6 +2286,7 @@ export async function getDisagreements(
         habitat: birdnetValidationSamples.habitat,
         reviewerEmail: birdnetValidationReviews.reviewerEmail,
         outcome: birdnetValidationReviews.outcome,
+        note: birdnetValidationReviews.notes,
       })
       .from(birdnetValidationSamples)
       .innerJoin(
@@ -2017,6 +2315,7 @@ export async function getDisagreements(
         email: row.reviewerEmail,
         name: nameMap.get(row.reviewerEmail) ?? null,
         outcome: row.outcome as ReviewOutcome,
+        note: row.note,
       });
       bySample.set(row.sampleId, entry);
     }

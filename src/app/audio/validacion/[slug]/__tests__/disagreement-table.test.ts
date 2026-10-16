@@ -29,9 +29,9 @@ const ROWS: Disagreement[] = [
     siteName: "AAA-001",
     habitat: "cacao",
     answers: [
-      { email: "a@x.org", name: null, outcome: "correct" },
-      { email: "b@x.org", name: null, outcome: "incorrect" },
-      { email: "c@x.org", name: null, outcome: "uncertain" },
+      { email: "a@x.org", name: null, outcome: "correct", note: null },
+      { email: "b@x.org", name: null, outcome: "incorrect", note: null },
+      { email: "c@x.org", name: null, outcome: "uncertain", note: null },
     ],
   }),
   row({ sampleId: 3, confidence: 0.42, siteName: "BBB-002", habitat: "pasto" }),

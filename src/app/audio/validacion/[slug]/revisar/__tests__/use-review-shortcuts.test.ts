@@ -86,6 +86,13 @@ describe("resolveReviewKey", () => {
     }
   });
 
+  it("maps T to the note field, and never while already typing", () => {
+    // N is taken by "No"; T is "texto".
+    expect(resolveReviewKey("t", ctx())).toEqual({ kind: "note" });
+    expect(resolveReviewKey("T", ctx())).toEqual({ kind: "note" });
+    expect(resolveReviewKey("t", ctx({ inEditableField: true }))).toBeNull();
+  });
+
   it("ignores unrelated keys", () => {
     for (const key of ["4", "a", "Enter", "Escape", "Tab", "0", "q"]) {
       expect(resolveReviewKey(key, ctx())).toBeNull();

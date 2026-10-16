@@ -343,8 +343,9 @@ describe("recordReview keeps the correction tied to an incorrect answer", () => 
     await recordReview(sampleId, "incorrect");
     expect(reviewOf(JUAN).correctedSpecies).toBe(SPARROW);
 
-    // With notes, the row IS rewritten — the correction must still survive.
-    await recordReview(sampleId, "incorrect", "canto de fondo");
+    // A note is its own write and must not disturb the correction either.
+    const { setReviewNote } = await actions();
+    await setReviewNote(sampleId, "canto de fondo");
     expect(reviewOf(JUAN).correctedSpecies).toBe(SPARROW);
   });
 });

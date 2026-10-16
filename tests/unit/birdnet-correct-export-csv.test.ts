@@ -49,6 +49,7 @@ function row(over: Partial<CorrectDetectionRow> = {}): CorrectDetectionRow {
     nIncorrect: 1,
     nUncertain: 0,
     lastReviewedAt: new Date("2026-09-01T12:00:00Z"),
+    reviewNotes: [],
     ...over,
   };
 }
@@ -105,6 +106,34 @@ describe("buildCorrectDetectionsCsv", () => {
   it("lists every reviewer who said correct, with the answer counts", () => {
     const data = buildCorrectDetectionsCsv([row()]).trimEnd().split("\n").at(-1)!;
     expect(data).toContain("me@fcat-ecuador.org; other@fcat-ecuador.org,2,1,0,");
+  });
+
+  it("puts every reviewer's note in one review_notes cell", () => {
+    const csv = buildCorrectDetectionsCsv([
+      row({
+        reviewNotes: [
+          { reviewer: "me@fcat-ecuador.org", note: "alarm call, two birds" },
+          { reviewer: "other@fcat-ecuador.org", note: "song" },
+        ],
+      }),
+    ]);
+    expect(csv).toContain(
+      '"me@fcat-ecuador.org: alarm call, two birds | other@fcat-ecuador.org: song"'
+    );
+  });
+
+  it("flattens line breaks in a note so each clip stays on one line", () => {
+    const csv = buildCorrectDetectionsCsv([
+      row({ reviewNotes: [{ reviewer: "me@fcat-ecuador.org", note: "song\n  then call" }] }),
+    ]);
+    expect(csv.trimEnd().split("\n")).toHaveLength(2);
+    expect(csv).toContain("me@fcat-ecuador.org: song then call");
+  });
+
+  it("leaves review_notes empty when nobody wrote one", () => {
+    const header = CORRECT_EXPORT_COLUMNS.indexOf("review_notes");
+    const data = buildCorrectDetectionsCsv([row()]).trimEnd().split("\n").at(-1)!;
+    expect(data.split(",")[header]).toBe("");
   });
 
   it("quotes values containing commas or quotes", () => {

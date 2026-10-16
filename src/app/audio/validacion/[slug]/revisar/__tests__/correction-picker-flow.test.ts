@@ -27,6 +27,8 @@ import {
   applyCorrection,
   closeReopened,
   commitCorrection,
+  hydrateFlow,
+  priorAnswer,
   reopenAnswer,
   rollbackAnswer,
   settleCorrection,
@@ -91,6 +93,38 @@ describe("review flow after an answer", () => {
     s = rollbackAnswer(s, 1);
     expect(s.answers).toEqual({});
     expect(s.corrections).toEqual({});
+  });
+});
+
+describe("earlier answers loaded behind the queue", () => {
+  it("hydrates the reviewer's own answers, and corrections only on a No", () => {
+    const s = hydrateFlow([
+      { sampleId: 1, outcome: "incorrect", correctedSpecies: "Turdus fuscater" },
+      { sampleId: 2, outcome: "correct", correctedSpecies: null },
+      // A stale correction on a non-"No" answer is never shown.
+      { sampleId: 3, outcome: "uncertain", correctedSpecies: "Turdus fuscater" },
+    ]);
+    expect(s.answers).toEqual({ 1: "incorrect", 2: "correct", 3: "uncertain" });
+    expect(s.corrections).toEqual({ 1: "Turdus fuscater" });
+    expect(answerSlot(s, 1)).toBe("species");
+  });
+
+  it("a refused CHANGE puts the earlier answer and species back, not nothing", () => {
+    let s = hydrateFlow([
+      { sampleId: 1, outcome: "incorrect", correctedSpecies: "Turdus fuscater" },
+    ]);
+    const prior = priorAnswer(s, 1);
+    s = applyAnswer(s, 1, "correct");
+    expect(s.corrections).toEqual({});
+    s = rollbackAnswer(s, 1, prior);
+    expect(s.answers).toEqual({ 1: "incorrect" });
+    expect(s.corrections).toEqual({ 1: "Turdus fuscater" });
+  });
+
+  it("an unanswered clip has no prior, so a refusal still clears it", () => {
+    expect(priorAnswer(EMPTY_FLOW, 1)).toBeNull();
+    const s = rollbackAnswer(applyAnswer(EMPTY_FLOW, 1, "correct"), 1, null);
+    expect(s.answers).toEqual({});
   });
 });
 

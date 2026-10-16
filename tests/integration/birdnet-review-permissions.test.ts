@@ -74,6 +74,26 @@ describe("reviewing is open to a viewer", () => {
     expect(roleRequested()).toBe("viewer");
   });
 
+  it("records the reviewer's own clip note at viewer level", async () => {
+    // Same bound as the correction: one column on a row the caller owns.
+    const { setReviewNote } = await import("@/app/audio/validacion/actions");
+    await setReviewNote(1, "canto");
+    expect(roleRequested()).toBe("viewer");
+  });
+
+  it("reads a species' review notes at viewer level", async () => {
+    const { getReviewNotes } = await import("@/app/audio/validacion/actions");
+    await getReviewNotes(1);
+    expect(roleRequested()).toBe("viewer");
+  });
+
+  it("loads the reviewer's own earlier answers at viewer level", async () => {
+    // Read-only, and filtered to the caller's own rows.
+    const { getMyRecentReviews } = await import("@/app/audio/validacion/actions");
+    await getMyRecentReviews(1);
+    expect(roleRequested()).toBe("viewer");
+  });
+
   it("loads the correction picker list at viewer level", async () => {
     const { listCorrectionSpecies } = await import("@/app/audio/validacion/actions");
     await listCorrectionSpecies();

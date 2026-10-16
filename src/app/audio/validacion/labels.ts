@@ -318,3 +318,21 @@ export function rowAction(sampled: number, canEdit: boolean): RowAction {
         title: "Todavía no hay muestra que revisar en esta especie",
       };
 }
+
+export const REVIEW_NOTES_TITLE = "Notas de revisión";
+
+export const REVIEW_NOTES_HINT =
+  "Lo que cada revisor anotó sobre un clip de la muestra: tipo de llamada, otra especie de fondo, algo peculiar. Cada revisor tiene su propia nota por clip. Las notas no cambian ningún conteo ni el ajuste.";
+
+/**
+ * Said beside the notes a reader may see, when some are withheld: a note
+ * usually gives its writer's answer away, so it stays hidden until the reader
+ * has judged that clip (or the species' review is over). Null when nothing is.
+ */
+export function hiddenReviewNotesNote(hidden: number, shown: number): string | null {
+  if (hidden <= 0) return null;
+  const which = hidden === 1 ? "1 nota" : `${hidden} notas`;
+  const more = shown > 0 ? " más" : "";
+  const verb = hidden === 1 ? "se mostrará" : "se mostrarán";
+  return `${which}${more} de otros revisores ${verb} cuando respondas esos clips.`;
+}

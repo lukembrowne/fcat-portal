@@ -104,9 +104,14 @@ function addClip(
   return sample.id;
 }
 
-function review(sampleId: number, email: string, outcome: "correct" | "incorrect" | "uncertain") {
+function review(
+  sampleId: number,
+  email: string,
+  outcome: "correct" | "incorrect" | "uncertain",
+  notes: string | null = null
+) {
   db.insert(schema.birdnetValidationReviews)
-    .values({ sampleId, reviewerEmail: email, outcome })
+    .values({ sampleId, reviewerEmail: email, outcome, notes })
     .run();
 }
 
@@ -217,6 +222,25 @@ describe("collectCorrectDetections", () => {
     expect(bySample.get(onlyOther)!.nIncorrect).toBe(1);
     expect(bySample.get(split)!.reviewersCorrect).toEqual([OTHER, PRIMARY]);
     expect(bySample.get(split)!.nCorrect).toBe(2);
+  });
+
+  it("carries every reviewer's note, whatever their answer, and none when absent", async () => {
+    const c = addCampaign("Tinamus major", "reviewing");
+    const noted = addClip(c);
+    const plain = addClip(c);
+    // A note may hold the separators a naive GROUP_CONCAT would split on.
+    review(noted, ME, "correct", "song | two birds, close");
+    review(noted, OTHER, "incorrect", "sounds like Crypturellus");
+    review(plain, ME, "correct");
+
+    const { collectCorrectDetections } = await lib();
+    const rows = await collectCorrectDetections({ ctProjects: "all" });
+    const bySample = new Map(rows.map((r) => [r.sampleId, r]));
+    expect(bySample.get(noted)!.reviewNotes).toEqual([
+      { reviewer: ME, note: "song | two birds, close" },
+      { reviewer: OTHER, note: "sounds like Crypturellus" },
+    ]);
+    expect(bySample.get(plain)!.reviewNotes).toEqual([]);
   });
 
   it("exports everyone's answers while the species is still under review", async () => {

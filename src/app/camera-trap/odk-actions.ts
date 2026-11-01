@@ -2,13 +2,14 @@
 
 import { db } from "@/db";
 import { deployments } from "@/db/schema";
-import { eq, isNull, or, and } from "drizzle-orm";
+import { and } from "drizzle-orm";
 import { requirePermission } from "@/lib/auth";
 import { getUserCameraTrapProjects, ctProjectFilter, requireDeploymentAccess } from "@/lib/camera-trap-auth";
 import { log } from "@/lib/log";
 import { revalidatePath } from "next/cache";
 import type { ActionResult } from "@/lib/types";
 import {
+  incompleteOdkMetadata,
   matchOdkDeploymentsInternal,
   type MatchResult,
 } from "@/lib/camera-trap-sync-internals";
@@ -68,12 +69,7 @@ export async function matchAllUnmatched(): Promise<ActionResult<MatchResult>> {
     .from(deployments)
     .where(
       and(
-        or(
-          isNull(deployments.odkSubmissionId),
-          eq(deployments.odkSubmissionId, ""),
-          isNull(deployments.dateStart),
-          isNull(deployments.dateEnd),
-        ),
+        incompleteOdkMetadata,
         ctProjectFilter(ctProjects),
       )
     );

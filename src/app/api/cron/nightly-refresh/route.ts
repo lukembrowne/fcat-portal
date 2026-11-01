@@ -29,6 +29,7 @@ import {
   runDriveSyncWorker,
 } from "@/lib/camera-trap-sync-worker";
 import { processNextQueueable } from "@/lib/job-queue";
+import { relinkIncompleteOdkDeploymentsInternal } from "@/lib/camera-trap-sync-internals";
 import { JOB_TYPES } from "@/lib/job-types";
 import { buildPortalUpdatesPayload } from "@/lib/portal-updates/aggregator";
 import type { PortalUpdatesPayload } from "@/lib/portal-updates/types";
@@ -187,6 +188,20 @@ export async function POST(request: Request) {
         },
         "[nightly] audio_sync terminal",
       );
+    }
+
+    // Step 2c: re-link deployments still missing ODK metadata, so a
+    // retrieve_sensors form submitted after the folder was first linked
+    // reaches date_end within a day. Linking used to happen only when a folder
+    // was discovered, so retrieval dates never arrived on their own. Never
+    // fails the cron: ODK being down costs a night, not the email.
+    let odkRelink: Awaited<ReturnType<typeof relinkIncompleteOdkDeploymentsInternal>> | null =
+      null;
+    try {
+      odkRelink = await relinkIncompleteOdkDeploymentsInternal();
+      log.info(odkRelink, "[nightly] ODK re-link done");
+    } catch (err) {
+      log.error({ err }, "[nightly] ODK re-link failed");
     }
 
     // Step 3: promote previous_* columns from the prior snapshot for any row
@@ -389,6 +404,7 @@ export async function POST(request: Request) {
         totalAudio: snapshot.totalAudio,
         totalIbutton: snapshot.totalIbutton,
         totalSizeBytes: totalSize,
+        odkRelink,
       },
     });
 

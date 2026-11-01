@@ -2,7 +2,7 @@ import "server-only";
 
 import { db } from "@/db";
 import { deployments, images, videos } from "@/db/schema";
-import { eq, inArray, sql } from "drizzle-orm";
+import { eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { checkDeploymentUploads, listMediaRecursive } from "@/lib/drive-client";
 import { fetchEntities, fetchSubmissions } from "@/lib/odk-client";
 import {
@@ -370,4 +370,55 @@ export async function matchOdkDeploymentsInternal(
   );
 
   return { matched, unmatched };
+}
+
+/**
+ * Deployments whose ODK metadata is still incomplete: never linked, or linked
+ * but missing an install or retrieval date. The shared condition behind the
+ * nightly re-link and the scoped `matchAllUnmatched` action.
+ */
+export const incompleteOdkMetadata = or(
+  isNull(deployments.odkSubmissionId),
+  eq(deployments.odkSubmissionId, ""),
+  isNull(deployments.dateStart),
+  isNull(deployments.dateEnd),
+);
+
+/**
+ * Re-link every deployment with incomplete ODK metadata. Run nightly.
+ *
+ * Linking used to happen once, when the deployment's Drive folder was first
+ * found — normally right after installation, BEFORE the retrieve_sensors form
+ * exists. Nothing re-ran it, so retrieval dates piled up in ODK without ever
+ * reaching `date_end`: by 2026-10-20, 56 BioChoco deployments had a retrieval
+ * in ODK and none in the portal, and every consumer of the deployment window
+ * (camera-trap days, /biochoco/resultados, the public overview's deployment
+ * count) undercounted. The Datos page never showed it because it reads ODK
+ * live. Safe to repeat: {@link shouldUpdateDateEnd} never clobbers a manual
+ * edit, and the other fields only fill nulls.
+ */
+export async function relinkIncompleteOdkDeploymentsInternal(): Promise<{
+  checked: number;
+  matched: number;
+  datesFilled: number;
+}> {
+  const missingEnd = () =>
+    db.select({ id: deployments.id }).from(deployments).where(isNull(deployments.dateEnd)).all()
+      .length;
+
+  const ids = db
+    .select({ id: deployments.id })
+    .from(deployments)
+    .where(incompleteOdkMetadata)
+    .all()
+    .map((r) => r.id);
+  if (ids.length === 0) return { checked: 0, matched: 0, datesFilled: 0 };
+
+  const before = missingEnd();
+  const result = await matchOdkDeploymentsInternal(ids);
+  return {
+    checked: ids.length,
+    matched: result.matched.length,
+    datesFilled: before - missingEnd(),
+  };
 }

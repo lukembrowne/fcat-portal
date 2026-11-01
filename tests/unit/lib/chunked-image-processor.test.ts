@@ -28,10 +28,13 @@ vi.mock("@/db/schema", () => ({ processingJobs: {} }));
 vi.mock("@/lib/log", () => ({ log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 
 const releaseCalls: number[][] = [];
+const groupBudgets: Array<number | undefined> = [];
+let chunkBudget: number | null = 10 * 1024 * 1024 * 1024;
 const downloadCalls: number[][] = [];
 vi.mock("@/lib/drive-downloader", () => ({
   // Deterministic 2-per-chunk grouping for the loop test.
-  groupRowsIntoChunks: (rows: Array<{ id: number }>) => {
+  groupRowsIntoChunks: (rows: Array<{ id: number }>, budget?: number) => {
+    groupBudgets.push(budget);
     const out: Array<Array<{ id: number }>> = [];
     for (let i = 0; i < rows.length; i += 2) out.push(rows.slice(i, i + 2));
     return out;
@@ -50,8 +53,10 @@ vi.mock("@/lib/drive-downloader", () => ({
   }),
   getFreeDiskBytes: vi.fn(async () => 100 * 1024 * 1024 * 1024),
   diskFits: () => true,
+  chunkBudgetBytes: () => chunkBudget,
+  MIN_CHUNK_BYTES: 1024 * 1024 * 1024,
   evictIfOverLimit: vi.fn(async () => undefined),
-  InsufficientDiskError: class extends Error {},
+  InsufficientDiskError: class InsufficientDiskError extends Error {},
 }));
 
 const mlConfigs: MLConfig[] = [];
@@ -104,6 +109,8 @@ beforeEach(() => {
   releaseCalls.length = 0;
   downloadCalls.length = 0;
   mlConfigs.length = 0;
+  groupBudgets.length = 0;
+  chunkBudget = 10 * 1024 * 1024 * 1024;
   mlImpl = async (_jobId, config) => ({
     success: true,
     totalProcessed: config.imagePaths.length,
@@ -175,5 +182,18 @@ describe("processDeploymentImagesChunked", () => {
     const outcome = await run({ rowCount: 4, checkCancelled }); // chunks [2,2]
     expect(outcome.cancelled).toBe(true);
     expect(outcome.anyFailed).toBe(false);
+  });
+
+  it("groups by the disk-derived chunk budget, not the fixed target", async () => {
+    chunkBudget = 8 * 1024 * 1024 * 1024;
+    await run({ rowCount: 3 });
+    expect(groupBudgets).toEqual([8 * 1024 * 1024 * 1024]);
+  });
+
+  it("fails cleanly, before downloading anything, when no chunk fits above the margin", async () => {
+    chunkBudget = null;
+    await expect(run({ rowCount: 3 })).rejects.toThrow();
+    expect(downloadCalls).toEqual([]);
+    expect(mlConfigs).toEqual([]);
   });
 });

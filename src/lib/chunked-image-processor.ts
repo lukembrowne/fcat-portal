@@ -26,6 +26,8 @@ import {
   releaseChunkFiles,
   getFreeDiskBytes,
   diskFits,
+  chunkBudgetBytes,
+  MIN_CHUNK_BYTES,
   evictIfOverLimit,
   InsufficientDiskError,
   type ImageRow,
@@ -51,7 +53,19 @@ export async function processDeploymentImagesChunked(opts: {
   checkCancelled: () => Promise<boolean>;
 }): Promise<ChunkedProcessingOutcome> {
   const { deploymentId, jobId, cacheDir, rows, mlConfigBase, checkCancelled } = opts;
-  const chunks = groupRowsIntoChunks(rows);
+
+  // Free disk held by OTHER deployments' caches before we start (skips this
+  // deployment). Self-bounding per chunk handles our own footprint.
+  await evictIfOverLimit(deploymentId);
+
+  // Size chunks to the headroom actually free now (after eviction), so a tight
+  // disk means smaller chunks rather than one chunk that can't fit.
+  const freeAtStart = await getFreeDiskBytes();
+  const budget = chunkBudgetBytes(freeAtStart);
+  if (budget === null) {
+    throw new InsufficientDiskError(MIN_CHUNK_BYTES, freeAtStart ?? 0);
+  }
+  const chunks = groupRowsIntoChunks(rows, budget);
   const pendingTotal = rows.length;
   let totalProcessed = 0;
   let totalDetections = 0;
@@ -59,13 +73,15 @@ export async function processDeploymentImagesChunked(opts: {
   let anyFailed = false;
 
   log.info(
-    { jobId, deploymentId, chunks: chunks.length, images: pendingTotal },
+    {
+      jobId,
+      deploymentId,
+      chunks: chunks.length,
+      images: pendingTotal,
+      chunkBudgetGb: +(budget / 1024 / 1024 / 1024).toFixed(1),
+    },
     "[chunked] disk-bounded processing start"
   );
-
-  // Free disk held by OTHER deployments' caches before we start (skips this
-  // deployment). Self-bounding per chunk handles our own footprint.
-  await evictIfOverLimit(deploymentId);
 
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];

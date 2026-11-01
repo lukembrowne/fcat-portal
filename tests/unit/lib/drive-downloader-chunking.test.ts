@@ -29,7 +29,9 @@ vi.mock("fs", () => ({ promises: { statfs: vi.fn(), access: vi.fn(), mkdir: vi.f
 const MB = 1024 * 1024;
 const GB = 1024 * MB;
 
-const { groupRowsIntoChunks, filterDownloadableRows } = await import("@/lib/drive-downloader");
+const { groupRowsIntoChunks, filterDownloadableRows, chunkBudgetBytes, MIN_CHUNK_BYTES } = await import(
+  "@/lib/drive-downloader"
+);
 import type { ImageRow } from "@/lib/drive-downloader";
 
 function row(over: Partial<ImageRow>): ImageRow {
@@ -41,6 +43,31 @@ function row(over: Partial<ImageRow>): ImageRow {
     ...over,
   } as ImageRow;
 }
+
+describe("chunkBudgetBytes", () => {
+  it("keeps the configured target when the disk has room for it", () => {
+    expect(chunkBudgetBytes(100 * GB, 20 * GB, 10 * GB)).toBe(10 * GB);
+  });
+
+  it("shrinks to the headroom above the margin on a tight disk", () => {
+    // GIZ-009_V2: 28.2 GB free, 20 GB margin → 8.2 GB chunks, not one 9.1 GB chunk.
+    const free = 28.2 * GB;
+    expect(chunkBudgetBytes(free, 20 * GB, 10 * GB)).toBeCloseTo(free - 20 * GB);
+  });
+
+  it("refuses when less than the minimum chunk fits above the margin", () => {
+    expect(chunkBudgetBytes(20.5 * GB, 20 * GB, 10 * GB)).toBeNull();
+    expect(chunkBudgetBytes(10 * GB, 20 * GB, 10 * GB)).toBeNull();
+  });
+
+  it("accepts exactly the minimum", () => {
+    expect(chunkBudgetBytes(20 * GB + MIN_CHUNK_BYTES, 20 * GB, 10 * GB)).toBe(MIN_CHUNK_BYTES);
+  });
+
+  it("keeps the target when the disk can't be measured (per-chunk gate decides)", () => {
+    expect(chunkBudgetBytes(null, 20 * GB, 10 * GB)).toBe(10 * GB);
+  });
+});
 
 describe("groupRowsIntoChunks", () => {
   it("returns [] for no rows", () => {

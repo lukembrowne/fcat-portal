@@ -194,6 +194,27 @@ export function diskFits(
   return pendingBytes + marginBytes <= freeBytes;
 }
 
+/** Smallest chunk worth running: below this, ML start-up dominates each chunk. */
+export const MIN_CHUNK_BYTES = 1024 * 1024 * 1024;
+
+/**
+ * Bytes per chunk for a chunked run: the configured target, shrunk to what free
+ * disk actually allows above the margin. A fixed 10 GB target meant a 9.1 GB
+ * deployment on a disk with 8.2 GB of headroom (GIZ-009_V2, 2026-10-21 and -31)
+ * became ONE chunk that didn't fit either, and failed instead of splitting.
+ * Returns null when even `MIN_CHUNK_BYTES` won't fit — the caller fails cleanly.
+ * Unmeasurable disk (null) keeps the target, matching the per-chunk gate. Pure.
+ */
+export function chunkBudgetBytes(
+  freeBytes: number | null,
+  marginBytes: number = DISK_MARGIN_BYTES,
+  targetBytes: number = CHUNK_TARGET_BYTES,
+): number | null {
+  if (freeBytes === null) return targetBytes;
+  const budget = Math.min(targetBytes, freeBytes - marginBytes);
+  return budget >= MIN_CHUNK_BYTES ? budget : null;
+}
+
 /**
  * Thrown when a deployment's pending download (or a single chunk) cannot fit in
  * free disk with the safety margin. The runner's outer catch turns this into a

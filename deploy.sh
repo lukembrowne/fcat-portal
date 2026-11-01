@@ -55,6 +55,16 @@ else
     ssh -A "$SERVER" "cd ${SERVER_PATH} && git pull && docker compose up -d && docker compose ps"
 fi
 
+# Cap the Docker build cache. Every build leaves ~1-1.5 GB of layers behind and
+# nothing ever removed them: by 2026-10-31 they had grown to 30 GB, pushing the
+# disk under the camera-trap download margin. Trimming to 5 GB (oldest first)
+# rather than clearing it keeps the npm-install layers, so builds stay fast.
+if [ -n "$REBUILD" ]; then
+    echo ""
+    echo "Trimming Docker build cache..."
+    ssh "$SERVER" "docker builder prune -f --max-used-space 5gb > /dev/null && df -h / | tail -1"
+fi
+
 # Ensure backup directory exists
 ssh "$SERVER" "mkdir -p ${SERVER_PATH}/data/backups"
 

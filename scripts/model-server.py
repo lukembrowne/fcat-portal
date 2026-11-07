@@ -22,6 +22,7 @@ Protocol:
     <- {"type": "complete", ..., "cancelled": true}
 """
 
+import gc
 import json
 import sys
 import os
@@ -318,10 +319,14 @@ class OpenClipClassifier(_CropClassifier):
     the load is strict. The weights are a BARE state_dict — we deliberately do
     NOT apply timm's checkpoint-unwrap heuristic (every v3 key contains '.').
 
-    Building the arch downloads the hub checkpoint into the HF cache (its weights
-    are discarded by the strict load); the producer-emitted weights.pt provides
-    the real parameters. Requires open_clip_torch + HF reachability (or a
-    pre-warmed cache) at first reconstruction.
+    Only the image tower is built, from the backbone's model config, and none
+    of the hub's pretrained weights are loaded: weights.pt replaces every
+    trunk parameter under the strict load anyway. Building the whole CLIP via
+    create_model_and_transforms("hf-hub:...") loaded the 3.9 GB hub checkpoint
+    into a 3.9 GB model just to throw both away, peaking start-up at ~7.2 GB
+    (measured on the droplet) — the host OOM killer took the model server on
+    2026-09-20, 10-21 and three times on 11-06. An hf-hub: backbone now needs
+    only its small open_clip_config.json from the hub (cached after first use).
     """
 
     @classmethod
@@ -330,6 +335,8 @@ class OpenClipClassifier(_CropClassifier):
         import torch
         import torch.nn as nn
         import open_clip
+        from open_clip import factory as oc_factory
+        from open_clip.model import _build_vision_tower
 
         weights_path, class_mapping_path, backbone, transform_json = _custom_classifier_env()
         class_list = _load_class_list(class_mapping_path)
@@ -337,17 +344,23 @@ class OpenClipClassifier(_CropClassifier):
 
         _check_free_disk(min_gb=6)
 
-        # Mirror the producer's models._build_open_clip prefix handling exactly:
-        #   hf-hub:<repo>   -> create_model_and_transforms(<full string>)  (loads hub)
-        #   open_clip:<arch> -> create_model_and_transforms(<arch>, pretrained=None)
-        # open_clip itself only understands hf-hub:; "open_clip:" is the contract's
-        # own convention for a plain (offline) arch. Production uses hf-hub:.
-        if backbone.startswith("open_clip:"):
-            arch = backbone[len("open_clip:"):]
-            oc_model, _, _ = open_clip.create_model_and_transforms(arch, pretrained=None)
+        # Same prefix handling as the producer's models._build_open_clip:
+        #   hf-hub:<repo>    -> the repo's open_clip_config.json
+        #   open_clip:<arch> -> open_clip's bundled config for <arch>
+        # "open_clip:" is the contract's own convention for a plain (offline)
+        # arch. Production uses hf-hub:.
+        if backbone.startswith("hf-hub:"):
+            model_cfg = oc_factory._get_hf_config(backbone[len("hf-hub:"):])["model_cfg"]
         else:
-            oc_model, _, _ = open_clip.create_model_and_transforms(backbone)
-        trunk = oc_model.visual
+            arch = backbone[len("open_clip:"):] if backbone.startswith("open_clip:") else backbone
+            model_cfg = open_clip.get_model_config(arch)
+        if model_cfg is None:
+            raise RuntimeError(f"open_clip config not found for backbone {backbone}")
+        # Exactly the call CLIP/CustomTextCLIP.__init__ make for self.visual
+        # (open_clip 2.32), with cast_dtype None = the fp32 create_model default.
+        trunk = _build_vision_tower(
+            model_cfg["embed_dim"], model_cfg["vision_cfg"], model_cfg.get("quick_gelu", False), None
+        )
         embed_dim = int(getattr(trunk, "output_dim", None) or trunk.proj.shape[-1])
 
         class _OpenClipModule(nn.Module):
@@ -365,8 +378,16 @@ class OpenClipClassifier(_CropClassifier):
 
         model = _OpenClipModule(trunk, embed_dim, len(class_list))
         # Bare state_dict, strict — no unwrap heuristic (v3 is always bare).
-        state = torch.load(weights_path, map_location="cpu")
+        # mmap: the 2.4 GB of tensors stay file-backed page cache (reclaimable)
+        # while load_state_dict copies them in, not a second anonymous copy.
+        try:
+            state = torch.load(weights_path, map_location="cpu", mmap=True, weights_only=True)
+        except RuntimeError:
+            # Legacy (non-zipfile) checkpoints can't be mmapped.
+            state = torch.load(weights_path, map_location="cpu", weights_only=True)
         model.load_state_dict(state, strict=True)
+        del state
+        gc.collect()
         model.eval().to(device)
 
         return cls(

@@ -71,6 +71,16 @@ describe("capture-date", () => {
     expect(parseCaptureDayFromExif(null)).toBeNull();
   });
 
+  it("bins a 21:00 Ecuador capture on its own local day, not the next UTC day", () => {
+    // 2026-04-24 21:30 in Ecuador = 2026-04-25 02:30 UTC.
+    const fm = Date.parse("2026-04-25T02:30:00Z") / 1000;
+    expect(parseCaptureDayFromFileModified(fm)).toEqual(utc(2026, 4, 24));
+    expect(parseCaptureDayFromExif("2026-04-25T02:30:00.000Z")).toEqual(utc(2026, 4, 24));
+    // 18:59 local stays put; 00:30 local is the next day.
+    expect(parseCaptureDayFromFileModified(Date.parse("2026-04-24T23:59:00Z") / 1000)).toEqual(utc(2026, 4, 24));
+    expect(parseCaptureDayFromFileModified(Date.parse("2026-04-25T05:30:00Z") / 1000)).toEqual(utc(2026, 4, 25));
+  });
+
   it("falls back to file_modified for dateless filenames + no exif", () => {
     // 1777038230 = 2026-04-24 (prod dep-121 shape: HHMMSS_seq filename, no exif)
     const d = resolveCaptureDay({

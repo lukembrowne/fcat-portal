@@ -6,6 +6,7 @@ import { db } from "@/db";
 import { videos } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { PreviewImageViewer } from "./preview-image-viewer";
+import { ECUADOR_TZ } from "@/lib/ecuador-time";
 
 interface PageProps {
   params: Promise<{ id: string; imageId: string }>;
@@ -36,11 +37,13 @@ export default async function PreviewImagePage({ params }: PageProps) {
           day: "numeric",
           month: "short",
           year: "numeric",
+          timeZone: ECUADOR_TZ,
         }) +
         ", " +
         rawTimestamp.toLocaleTimeString("es-EC", {
           hour: "2-digit",
           minute: "2-digit",
+          timeZone: ECUADOR_TZ,
         })
       : null;
 

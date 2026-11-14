@@ -9,12 +9,15 @@
  * tracks true capture day: on prod (2026-07-10) dep 121's 2,121 images spread
  * over 30 distinct file_modified days aligned to its 30-day deployment window —
  * a bulk-upload time would collapse to 1–2 days, so this is capture time, not
- * upload time. Resolution order: filename → exif → file_modified. A UTC calendar
- * day is all occupancy needs — occasion bins are day-granular, so we deliberately
- * discard sub-day time and timezone.
+ * upload time. Resolution order: filename → exif → file_modified. Occasion bins
+ * are day-granular, so sub-day time is discarded — but the day is the ECUADOR
+ * local day (UTC-5), the same day the filename-dated audio stream and the ODK /
+ * QA windows use. exif and file_modified are instants, so they are converted.
  */
 
-/** A capture date reduced to a UTC calendar day (midnight UTC). */
+import { ecuadorParts } from "@/lib/ecuador-time";
+
+/** A capture date reduced to its Ecuador calendar day, held as midnight UTC. */
 export type CaptureDay = Date;
 
 const YYYYMMDD = /(?<!\d)(\d{4})(\d{2})(\d{2})(?!\d)/g;
@@ -61,19 +64,26 @@ export function parseCaptureDayFromFilename(
   return null;
 }
 
-/** Parse an ISO-ish exif timestamp into a UTC calendar day. */
+/**
+ * Parse an ISO-ish exif timestamp into its ECUADOR calendar day (held as UTC
+ * midnight, like every CaptureDay). Taking the UTC day instead put every
+ * capture after 19:00 local on the next day — 12% of camera detections on prod
+ * (2026-11-09), mostly nocturnal species — while audio days come from the
+ * filename's local clock, so the two streams disagreed about what "a day" is.
+ */
 export function parseCaptureDayFromExif(
   exif: string | null | undefined,
 ): CaptureDay | null {
   if (!exif) return null;
   const t = Date.parse(exif);
   if (Number.isNaN(t)) return null;
-  const d = new Date(t);
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  const { year, month, day } = ecuadorParts(new Date(t));
+  return new Date(Date.UTC(year, month - 1, day));
 }
 
 /**
- * Parse a Unix-seconds file-modification time into a UTC calendar day. Reuses
+ * Parse a Unix-seconds file-modification time (an instant — the camera clock
+ * preserved through the SD copy) into its ECUADOR calendar day. Reuses
  * `toUtcDay`'s 2000–2100 bound so a 0/garbage epoch (→ 1970) is rejected rather
  * than binned as a real occasion.
  */
@@ -83,7 +93,8 @@ export function parseCaptureDayFromFileModified(
   if (fileModified == null || !Number.isFinite(fileModified)) return null;
   const d = new Date(fileModified * 1000);
   if (Number.isNaN(d.getTime())) return null;
-  return toUtcDay(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate());
+  const { year, month, day } = ecuadorParts(d);
+  return toUtcDay(year, month, day);
 }
 
 /**

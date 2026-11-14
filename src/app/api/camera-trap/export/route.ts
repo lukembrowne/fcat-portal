@@ -25,6 +25,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { getUserCameraTrapProjects, ctProjectFilter } from "@/lib/camera-trap-auth";
 import { eq, inArray, and, ne, isNull, or } from "drizzle-orm";
 import { isHumanLabel } from "@/lib/species-filters";
+import { ecuadorWallClock } from "@/lib/ecuador-time";
 
 export const dynamic = "force-dynamic";
 
@@ -183,9 +184,12 @@ export async function GET(request: NextRequest) {
     const window = deploymentValidWindowMap.get(m.deploymentId);
     if (!window || (!window.validStart && !window.validEnd)) return true;
 
-    const ts =
-      m.exifTimestamp ??
-      (m.fileModified ? m.fileModified.toISOString() : null);
+    // The QA window is Ecuador wall-clock text ("2026-03-17T10:33"); compare it
+    // against the capture instant rendered the same way. Comparing it against a
+    // UTC ISO string (5 h ahead) used to keep photos from up to 5 h before the
+    // window start and drop real photos from the last 5 h before its end.
+    const at = m.exifTimestamp ? new Date(m.exifTimestamp) : m.fileModified;
+    const ts = at && !isNaN(at.getTime()) ? ecuadorWallClock(at) : null;
     if (!ts) return true; // No timestamp — include (don't lose data)
 
     if (window.validStart && ts < window.validStart) return false;

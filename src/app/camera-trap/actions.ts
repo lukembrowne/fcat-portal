@@ -67,6 +67,7 @@ import {
 } from "@/lib/job-locks";
 import { JOB_TYPES } from "@/lib/job-types";
 import { invalidateAudioDeploymentStats } from "@/lib/audio-deployment-stats-cache";
+import { ecuadorWallClock } from "@/lib/ecuador-time";
 
 const CAMERA_TRAP_PATH = "/camera-trap";
 
@@ -5923,9 +5924,10 @@ export async function toggleSetupTag(
           : null;
 
       if (timestamp && !isNaN(timestamp.getTime())) {
-        // Format as YYYY-MM-DDTHH:mm (datetime-local input format)
-        const pad = (n: number) => String(n).padStart(2, "0");
-        const formatted = `${timestamp.getFullYear()}-${pad(timestamp.getMonth() + 1)}-${pad(timestamp.getDate())}T${pad(timestamp.getHours())}:${pad(timestamp.getMinutes())}`;
+        // YYYY-MM-DDTHH:mm (datetime-local format) in ECUADOR time. Local
+        // getters here read the server's zone (America/New_York in prod), which
+        // stored every window tagged during US daylight saving one hour late.
+        const formatted = ecuadorWallClock(timestamp);
 
         suggestion = {
           field: tag === "deployment" ? "validStart" : "validEnd",

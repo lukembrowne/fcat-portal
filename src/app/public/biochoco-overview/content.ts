@@ -34,7 +34,6 @@ export interface MethodCard {
 export interface GalleryShot {
   /** Screenshot filename under public/biochoco-overview/gallery/ (same value in en/es). */
   file: string;
-  addr: string;
   title: string;
   caption: string;
 }
@@ -61,18 +60,16 @@ export interface AckGroup {
 
 export interface ReportContent {
   hero: {
-    eyebrow: string;
     title: string;
     sub: string;
-    liveDate: string; // "Data current {date}"
-    metaSensors: string;
+    liveDate: string; // "Data as of {date}"
   };
 
   learn: {
     heading: string;
     /** Rendered one `<p>` per entry, in order. Last entry leads into `objectives`. */
     intro: string[];
-    objectives: { num: string; title: string; body: string }[]; // 4
+    objectives: { title: string; body: string }[]; // 4
   };
 
   methods: {
@@ -85,11 +82,8 @@ export interface ReportContent {
   };
 
   stats: {
-    eyebrow: string;
     heading: string;
-    spanLine: string; // "... covering {span}."
-    tiles: StatLabel[]; // 7, in Desktop order
-    note: string; // statNote template with {deploymentCount} {retrievedCount} {inField}
+    tiles: StatLabel[]; // 8, index-coupled to the values in report-shell.tsx and download/route.ts
   };
 
   map: {
@@ -146,7 +140,6 @@ export interface ReportContent {
   footer: {
     org: string;
     tagline: string;
-    date: string; // "Data current as of {date}"
   };
 
   ui: {
@@ -161,11 +154,9 @@ export interface ReportContent {
 
 const en: ReportContent = {
   hero: {
-    eyebrow: "",
     title: "BioChocó",
     sub: "An integrated biodiversity monitoring network across a forest-to-farm landscape in the Chocó of western Ecuador.",
-    liveDate: "Data current {date}",
-    metaSensors: "Camera traps · passive acoustics · habitat · endangered species",
+    liveDate: "Data as of {date}",
   },
 
   learn: {
@@ -177,22 +168,18 @@ const en: ReportContent = {
     ],
     objectives: [
       {
-        num: "01",
         title: "Track conservation outcomes",
         body: "Follow the real-time conservation outcomes of FCAT's corridor-building and restoration interventions, so we can see how biodiversity recovers as it happens.",
       },
       {
-        num: "02",
         title: "Understand land-use change",
         body: "Measure how biodiversity and ecosystems respond to land-use change across a gradient of land use types, from primary forest through cacao agroforestry to open pasture.",
       },
       {
-        num: "03",
         title: "Assess priority species",
         body: "Provide scientifically rigorous habitat-use assessments for the Chocó's endangered and keystone species across birds, mammals, frogs, and insects.",
       },
       {
-        num: "04",
         title: "Elevate the Chocó locally & globally",
         body: "Raise local & global awareness of and engagement with this understudied rainforest through personalized farmer-reports and an open, real-time data platform.",
       },
@@ -206,12 +193,12 @@ const en: ReportContent = {
     cards: [
       {
         title: "Motion-activated camera",
-        model: "Trail camera · photo mode",
+        model: "Trail camera in photo mode",
         body: "Runs at least 30 days per deployment. We pass photos through a custom species classifier we fine-tuned for the Chocó and each image is reviewed and verified.",
       },
       {
         title: "Passive acoustic recorder",
-        model: "Song Meter Micro 2 · 48 kHz",
+        model: "Song Meter Micro 2 at 48 kHz",
         body: "Records soundscapes to capture calls and songs from birds, mammals, frogs, and insects, recording one minute in every ten.",
       },
       {
@@ -221,7 +208,7 @@ const en: ReportContent = {
       },
       {
         title: "Habitat structure",
-        model: "Field survey · drone overflight",
+        model: "Field survey and drone flights",
         body: "The field team measures canopy cover, tree size and density, and forest cover around each station, then links structure to what the sensors detect.",
       },
     ],
@@ -234,20 +221,17 @@ const en: ReportContent = {
   },
 
   stats: {
-    eyebrow: "",
     heading: "Where the network stands today",
-    spanLine: "",
     tiles: [
-      { label: "monitoring deployments", sub: "{cam} camera · {audio} audio · {climate} climate" },
+      { label: "monitoring deployments", sub: "{cam} camera, {audio} audio, and {climate} temperature" },
       { label: "camera-trap days", sub: "{span}" },
-      { label: "camera-trap photos", sub: "collected in the field" },
-      { label: "animal detections", sub: "animals found in photos" },
-      { label: "species on camera", sub: "{mammals} mammals · {birds} birds" },
+      { label: "camera-trap photos", sub: "" },
+      { label: "animal detections", sub: "" },
+      { label: "species on camera", sub: "{mammals} mammals and {birds} birds" },
       { label: "audio recordings", sub: "{tb} TB of sound" },
-      { label: "bird detections by sound", sub: "BirdNET at ≥{conf} confidence" },
-      { label: "microclimate readings", sub: "{loggers} temperature loggers" },
+      { label: "bird detections by sound", sub: "BirdNET confidence of {conf} or higher" },
+      { label: "temperature readings", sub: "from {loggers} loggers" },
     ],
-    note: "",
   },
 
   map: {
@@ -279,28 +263,24 @@ const en: ReportContent = {
     gallery: [
       {
         file: "species-classifier.jpg",
-        addr: "FCAT Portal · Clasificador de especies",
         title: "Custom species classifier",
         caption:
           "A fine-tuned BioCLIP model for the species of the Chocó is built into a custom camera-trap annotation pipeline to review and correct identifications.",
       },
       {
         file: "bioacoustics.jpg",
-        addr: "FCAT Portal · Audio",
         title: "Bioacoustics with BirdNET",
         caption:
           "Continuous day-and-night recordings run through BirdNET, with an interactive spectrogram for verifying species identifications.",
       },
       {
         file: "occupancy.jpg",
-        addr: "FCAT Portal · Ocupación",
         title: "Live habitat use modeling",
         caption:
           "Single-species occupancy models that refit automatically as new camera and audio detections arrive, rendered as predicted-occurrence maps.",
       },
       {
         file: "landowner-pages.jpg",
-        addr: "FCAT Portal · Fichas por sitio",
         title: "Personalized landowner pages",
         caption:
           "Each participating landowner gets their own page that includes species recorded on their land and information about species' ecological role management.",
@@ -394,8 +374,7 @@ const en: ReportContent = {
 
   footer: {
     org: "Fundación para la Conservación de los Andes Tropicales",
-    tagline: "BioChocó biodiversity monitoring network · Chocó, Ecuador",
-    date: "Data current as of {date}",
+    tagline: "BioChocó biodiversity monitoring network in the Chocó of Ecuador",
   },
 
   ui: {
@@ -410,11 +389,9 @@ const en: ReportContent = {
 
 const es: ReportContent = {
   hero: {
-    eyebrow: "",
     title: "BioChocó",
     sub: "Una red integrada de monitoreo de biodiversidad a lo largo de un paisaje de bosque a finca en el Chocó del occidente de Ecuador.",
     liveDate: "Datos al {date}",
-    metaSensors: "Cámaras trampa · acústica pasiva · hábitat · especies amenazadas",
   },
 
   learn: {
@@ -426,22 +403,18 @@ const es: ReportContent = {
     ],
     objectives: [
       {
-        num: "01",
         title: "Seguir los resultados de conservación",
         body: "Seguir en tiempo real los resultados de conservación de las intervenciones de construcción de corredores y restauración de FCAT, para ver qué recupera la biodiversidad a medida que sucede.",
       },
       {
-        num: "02",
         title: "Entender el cambio de uso del suelo",
         body: "Medir cómo responden la biodiversidad y los ecosistemas al cambio de uso del suelo a lo largo del gradiente, desde el bosque primario, pasando por la agroforestería de cacao, hasta el pastizal abierto.",
       },
       {
-        num: "03",
         title: "Evaluar especies prioritarias",
         body: "Proveer evaluaciones de uso de hábitat científicamente rigurosas para las especies amenazadas y clave del Chocó, en aves, mamíferos, ranas e insectos.",
       },
       {
-        num: "04",
         title: "Elevar el Chocó a escala local y global",
         body: "Aumentar la conciencia y la participación local y global en torno a este bosque poco estudiado mediante informes personalizados para los agricultores y una plataforma de datos abierta y en tiempo real.",
       },
@@ -455,12 +428,12 @@ const es: ReportContent = {
     cards: [
       {
         title: "Cámara activada por movimiento",
-        model: "Cámara trampa · modo foto",
+        model: "Cámara trampa en modo foto",
         body: "Funciona al menos 30 días por instalación. Pasamos las fotos por un clasificador de especies propio, afinado para el Chocó, y cada imagen es revisada y verificada.",
       },
       {
         title: "Grabadora acústica pasiva",
-        model: "Song Meter Micro 2 · 48 kHz",
+        model: "Song Meter Micro 2 a 48 kHz",
         body: "Graba paisajes sonoros para capturar cantos y llamados de aves, mamíferos, ranas e insectos, grabando un minuto de cada diez.",
       },
       {
@@ -470,7 +443,7 @@ const es: ReportContent = {
       },
       {
         title: "Estructura del hábitat",
-        model: "Muestreo de campo · sobrevuelo con dron",
+        model: "Muestreo de campo y vuelos con dron",
         body: "El equipo de campo mide la cobertura del dosel, el tamaño y densidad de los árboles, y la cobertura boscosa alrededor de cada estación, y luego vincula la estructura con lo que detectan los sensores.",
       },
     ],
@@ -483,20 +456,17 @@ const es: ReportContent = {
   },
 
   stats: {
-    eyebrow: "",
     heading: "Dónde se encuentra la red hoy",
-    spanLine: "",
     tiles: [
-      { label: "instalaciones de monitoreo", sub: "{cam} cámara · {audio} audio · {climate} clima" },
+      { label: "instalaciones de monitoreo", sub: "{cam} de cámara, {audio} de audio y {climate} de temperatura" },
       { label: "días-cámara-trampa", sub: "{span}" },
-      { label: "fotos de cámara trampa", sub: "recolectadas en el campo" },
-      { label: "detecciones de animales", sub: "animales encontrados en las fotos" },
-      { label: "especies en cámara", sub: "{mammals} mamíferos · {birds} aves" },
+      { label: "fotos de cámara trampa", sub: "" },
+      { label: "detecciones de animales", sub: "" },
+      { label: "especies en cámara", sub: "{mammals} mamíferos y {birds} aves" },
       { label: "grabaciones de audio", sub: "{tb} TB de sonido" },
-      { label: "detecciones de aves por sonido", sub: "BirdNET con confianza ≥{conf}" },
-      { label: "registros de microclima", sub: "{loggers} registradores de temperatura" },
+      { label: "detecciones de aves por sonido", sub: "BirdNET con confianza de {conf} o más" },
+      { label: "registros de temperatura", sub: "de {loggers} registradores" },
     ],
-    note: "",
   },
 
   map: {
@@ -528,28 +498,24 @@ const es: ReportContent = {
     gallery: [
       {
         file: "species-classifier.jpg",
-        addr: "FCAT Portal · Clasificador de especies",
         title: "Clasificador de especies propio",
         caption:
           "Un modelo BioCLIP afinado para las especies del Chocó está integrado en un flujo propio de anotación de cámara trampa para revisar y corregir identificaciones.",
       },
       {
         file: "bioacoustics.jpg",
-        addr: "FCAT Portal · Audio",
         title: "Bioacústica con BirdNET",
         caption:
           "Grabaciones continuas de día y de noche procesadas con BirdNET, con un espectrograma interactivo para verificar identificaciones de especies.",
       },
       {
         file: "occupancy.jpg",
-        addr: "FCAT Portal · Ocupación",
         title: "Modelamiento de uso de hábitat en vivo",
         caption:
           "Modelos de ocupación de una sola especie que se reajustan automáticamente a medida que llegan nuevas detecciones de cámara y audio, presentados como mapas de ocurrencia predicha.",
       },
       {
         file: "landowner-pages.jpg",
-        addr: "FCAT Portal · Fichas por sitio",
         title: "Páginas personalizadas para propietarios",
         caption:
           "Cada propietario participante recibe su propia página, que incluye las especies registradas en su terreno e información sobre el papel ecológico de las especies y su manejo.",
@@ -643,8 +609,7 @@ const es: ReportContent = {
 
   footer: {
     org: "Fundación para la Conservación de los Andes Tropicales",
-    tagline: "Red de monitoreo de biodiversidad BioChocó · Chocó, Ecuador",
-    date: "Datos actualizados al {date}",
+    tagline: "Red de monitoreo de biodiversidad BioChocó en el Chocó de Ecuador",
   },
 
   ui: {

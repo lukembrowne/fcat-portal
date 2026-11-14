@@ -126,7 +126,6 @@ img{max-width:100%;display:block}
 a{color:var(--forest)}
 h1,h2,h3{font-family:var(--serif);font-weight:600;line-height:1.14;margin:0}
 .wrap{max-width:900px;margin:0 auto;padding:0 24px}
-.eyebrow{text-transform:uppercase;letter-spacing:.14em;font-size:12px;font-weight:700;color:var(--forest);margin:0 0 10px}
 section{padding:40px 0;border-top:1px solid var(--line)}
 .hero{background:var(--forest-deep);color:#fff;padding:0;border:0}
 .hero img{width:100%;max-height:52vh;object-fit:cover;object-position:center 42%}
@@ -134,17 +133,15 @@ section{padding:40px 0;border-top:1px solid var(--line)}
 .hero h1{font-size:clamp(38px,8vw,72px);margin:0 0 8px}
 .hero .sub{font-family:var(--serif);font-size:clamp(18px,3vw,24px);max-width:34ch;color:#eef3e6}
 h2{font-size:clamp(24px,4vw,34px);margin-bottom:14px}
-.rule{height:3px;width:52px;background:var(--forest);border-radius:2px;margin-bottom:16px}
 p{color:var(--ink-soft);max-width:64ch}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
 .card{background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
-.card .num{font-family:var(--serif);color:var(--forest);font-weight:600}
 .card .model{font-size:12px;color:var(--gold);font-weight:600;margin:2px 0 8px}
 .card h3{font-size:18px;margin:6px 0 4px}
 .card p{font-size:14px;margin:0}
 .stats{background:var(--forest-deep);color:#fff;border:0}
-.stats .eyebrow{color:#a9c891}.stats h2{color:#fff}.stats p{color:#cbdabc}
+.stats h2{color:#fff}.stats p{color:#cbdabc}
 .stat-grid{display:flex;flex-wrap:wrap;gap:1px;background:rgba(255,255,255,.12);border-radius:12px;overflow:hidden}
 .stat{background:var(--forest-deep);padding:18px 16px;flex:1 1 calc(25% - 1px)}
 .stat .n{font-family:var(--serif);font-size:32px;font-weight:600;color:#fff}
@@ -164,7 +161,6 @@ p{color:var(--ink-soft);max-width:64ch}
 .mapnote{background:var(--paper);border:1px dashed var(--line);border-radius:12px;padding:28px;text-align:center;color:var(--ink-soft);font-size:14px}
 figure{margin:0}
 .shot{background:#fff;border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-bottom:24px}
-.shot .addr{font-size:12px;color:var(--ink-soft);padding:8px 12px;background:#ece5d4;border-bottom:1px solid var(--line)}
 .shot .cap{padding:12px 14px}
 .shot .cap b{font-family:var(--serif)}
 .shot .cap span{font-size:13px;color:var(--ink-soft)}
@@ -215,7 +211,6 @@ export function buildHtml(
   const byType = s.cameraSpeciesByType ?? {};
   const span = spanLabel(s.samplingSpan.start, s.samplingSpan.end, lang);
   const tb = (s.audio.bytes / 1e12).toFixed(2);
-  const inField = Math.max(0, s.deploymentCount - s.retrievedCount);
   const publishedDate = new Date(snapshot.generatedAt).toLocaleDateString(
     lang === "es" ? "es-EC" : "en-US",
     { year: "numeric", month: "long", day: "numeric" },
@@ -247,12 +242,12 @@ export function buildHtml(
   const statTiles = c.stats.tiles
     .map(
       (tile, i) =>
-        `<div class="stat"><div class="n">${esc(fmt(statValues[i]))}</div><div class="l">${esc(tile.label)}</div><div class="s">${esc(tpl(tile.sub, statVars))}</div></div>`,
+        `<div class="stat"><div class="n">${esc(fmt(statValues[i]))}</div><div class="l">${esc(tile.label)}</div>${tile.sub ? `<div class="s">${esc(tpl(tile.sub, statVars))}</div>` : ""}</div>`,
     )
     .join("");
 
   const objectives = c.learn.objectives
-    .map((o) => `<div class="card"><div class="num">${esc(o.num)}</div><h3>${esc(o.title)}</h3><p>${esc(o.body)}</p></div>`)
+    .map((o) => `<div class="card"><h3>${esc(o.title)}</h3><p>${esc(o.body)}</p></div>`)
     .join("");
   const methodCards = c.methods.cards
     .map((m) => `<div class="card"><h3>${esc(m.title)}</h3><div class="model">${esc(m.model)}</div><p>${esc(m.body)}</p></div>`)
@@ -281,7 +276,7 @@ export function buildHtml(
     .map((shot, i) => {
       const uri = assets.gallery[i];
       const imgTag = uri ? `<img src="${uri}" alt="${esc(shot.title)}"/>` : "";
-      return `<figure class="shot"><figcaption class="cap"><b>${esc(shot.title)}</b><br/><span>${esc(shot.caption)}</span></figcaption><div class="addr">${esc(shot.addr)}</div>${imgTag}</figure>`;
+      return `<figure class="shot">${imgTag}<figcaption class="cap"><b>${esc(shot.title)}</b><br/><span>${esc(shot.caption)}</span></figcaption></figure>`;
     })
     .join("");
 
@@ -311,12 +306,12 @@ export function buildHtml(
   const audioClips = snapshot.audio
     .map(
       (clip) =>
-        `<li><em>${esc(clip.speciesLabel)}</em> — ${esc(clip.caption[lang])} · <a href="${PUBLIC_BASE_URL}/api/public/report-audio/${clip.audioId}">▶</a></li>`,
+        `<li><span><em>${esc(clip.speciesLabel)}</em><br/>${esc(clip.caption[lang])}</span><a href="${PUBLIC_BASE_URL}/api/public/report-audio/${clip.audioId}">▶</a></li>`,
     )
     .join("");
   const bonus =
     photos || audioClips
-      ? `<section><div class="wrap"><div class="rule"></div><h2>${esc(c.bonus.heading)}</h2>
+      ? `<section><div class="wrap"><h2>${esc(c.bonus.heading)}</h2>
     ${photos ? `<h3>${esc(c.bonus.photosHeading)}</h3><div class="grid3">${photos}</div>` : ""}
     ${audioClips ? `<h3>${esc(c.bonus.audioHeading)}</h3><ul class="bars">${audioClips}</ul>` : ""}</div></section>`
       : "";
@@ -335,21 +330,20 @@ export function buildHtml(
   <header class="hero">
     ${heroImg}
     <div class="inner">
-      <p class="eyebrow" style="color:#cfe0bd">${esc(c.hero.eyebrow)}</p>
       <h1>${esc(c.hero.title)}</h1>
       <p class="sub">${esc(c.hero.sub)}</p>
-      <p style="color:#d7e3c8;font-size:13px;margin-top:16px">${esc(tpl(c.hero.liveDate, { date: publishedDate }))} · ${esc(c.hero.metaSensors)}</p>
+      <p style="color:#d7e3c8;font-size:13px;margin-top:16px">${esc(tpl(c.hero.liveDate, { date: publishedDate }))}</p>
     </div>
   </header>
 
   <section><div class="wrap">
-    <div class="rule"></div><h2>${esc(c.learn.heading)}</h2>
+    <h2>${esc(c.learn.heading)}</h2>
     ${c.learn.intro.map((p) => `<p>${esc(p)}</p>`).join("")}
     <div class="grid2" style="margin-top:18px">${objectives}</div>
   </div></section>
 
   <section><div class="wrap">
-    <div class="rule"></div><h2>${esc(c.methods.heading)}</h2>
+    <h2>${esc(c.methods.heading)}</h2>
     <p>${esc(c.methods.intro)}</p>
     <div class="grid2" style="margin-top:18px">${methodCards}</div>
     <h3 style="font-family:var(--serif);margin:32px 0 6px">${esc(c.methods.habitatHead.title)}</h3>
@@ -358,20 +352,12 @@ export function buildHtml(
   </div></section>
 
   <section class="stats"><div class="wrap">
-    <p class="eyebrow">${esc(c.stats.eyebrow)}</p><h2>${esc(c.stats.heading)}</h2>
-    <p>${esc(tpl(c.stats.spanLine, { span }))}</p>
+    <h2>${esc(c.stats.heading)}</h2>
     <div class="stat-grid" style="margin-top:18px">${statTiles}</div>
-    <p style="color:#c3d5b1;font-size:13px;margin-top:16px">${esc(
-      tpl(c.stats.note, {
-        deploymentCount: fmt(s.deploymentCount),
-        retrievedCount: fmt(s.retrievedCount),
-        inField: fmt(inField),
-      }),
-    )}</p>
   </div></section>
 
   <section><div class="wrap">
-    <div class="rule"></div><h2>${esc(c.map.heading)}</h2>
+    <h2>${esc(c.map.heading)}</h2>
     <p>${esc(c.map.note)}</p>
     <div class="mapnote" style="margin-top:18px">${esc(c.map.heading)} — ${esc(
       lang === "es"
@@ -381,7 +367,7 @@ export function buildHtml(
   </div></section>
 
   <section><div class="wrap">
-    <div class="rule"></div><h2>${esc(c.species.heading)}</h2>
+    <h2>${esc(c.species.heading)}</h2>
     <p>${esc(c.species.intro)}</p>
     <div class="two" style="margin-top:18px">
       <div><h3>${esc(c.species.onCamera)}</h3><p style="font-size:13px">${esc(tpl(c.species.camCap, { n: fmt(s.cameraRealSpecies) }))}</p><ul class="bars">${cameraSpecies}</ul></div>
@@ -392,13 +378,13 @@ export function buildHtml(
   ${bonus}
 
   <section><div class="wrap">
-    <div class="rule"></div><h2>${esc(c.platform.heading)}</h2>
+    <h2>${esc(c.platform.heading)}</h2>
     <p>${esc(c.platform.intro)}</p>
     <div style="margin-top:18px">${gallery}</div>
   </div></section>
 
   <section><div class="wrap">
-    <div class="rule"></div><h2>${esc(c.collaborate.heading)}</h2>
+    <h2>${esc(c.collaborate.heading)}</h2>
     <p>${esc(c.collaborate.intro)}</p>
     <div style="margin-top:18px">
       <b style="font-family:var(--serif)">${esc(c.collaborate.oppListTitle)}</b><ul class="list">${oppList}</ul>
@@ -411,12 +397,12 @@ export function buildHtml(
   </div></section>
 
   <section><div class="wrap">
-    <div class="rule"></div><h2>${esc(c.acknowledgements.heading)}</h2>
+    <h2>${esc(c.acknowledgements.heading)}</h2>
     <div class="grid2" style="margin-top:18px">${ackGroups}</div>
   </div></section>
 
   <footer><div class="wrap">
-    <b>${esc(c.footer.org)}</b><br/>${esc(c.footer.tagline)}<br/>${esc(tpl(c.footer.date, { date: publishedDate }))}
+    <b>${esc(c.footer.org)}</b><br/>${esc(c.footer.tagline)}
   </div></footer>
 </body>
 </html>`;

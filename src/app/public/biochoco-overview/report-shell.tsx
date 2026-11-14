@@ -72,13 +72,11 @@ const CSS = `
 .bc-root a{color:var(--forest);text-decoration:none}.bc-root a:hover{text-decoration:underline}
 .bc-root h1,.bc-root h2,.bc-root h3{font-family:var(--serif);font-weight:600;line-height:1.12;text-wrap:balance;margin:0}
 .bc-root .wrap{max-width:980px;margin:0 auto;padding:0 28px}
-.bc-root .eyebrow{font-size:12.5px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--forest);margin:0 0 14px}
 .bc-root .tnum{font-variant-numeric:tabular-nums}
 .bc-root section{padding:62px 0}
 .bc-root .section-head{margin-bottom:34px}
 .bc-root .section-head h2{font-size:clamp(28px,4.4vw,42px);letter-spacing:-.01em}
 .bc-root .section-head p{color:var(--ink-soft);max-width:64ch;margin:14px 0 0;font-size:17px}
-.bc-root .rule{height:3px;width:52px;background:var(--forest);border-radius:2px;margin-bottom:22px}
 .bc-root .paper{background:var(--paper);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
 
 /* actions (portal-only wrapper) — inline in the hero, just above the meta line */
@@ -91,18 +89,14 @@ const CSS = `
 .bc-root .hero__img{position:absolute;inset:0;background-size:cover;background-position:center 42%}
 .bc-root .hero__scrim{position:absolute;inset:0;background:linear-gradient(180deg,rgba(20,38,18,.34),rgba(20,38,18,.12) 34%,rgba(18,32,16,.62) 78%,rgba(15,28,14,.86))}
 .bc-root .hero__inner{position:relative;width:100%;max-width:980px;margin:0 auto;padding:0 28px 54px}
-.bc-root .hero .eyebrow{color:#cfe0bd;margin-bottom:18px}
 .bc-root .hero h1{font-size:clamp(46px,9vw,104px);letter-spacing:-.01em;margin:0 0 8px;color:#fff;text-shadow:0 2px 24px rgba(10,24,8,.5)}
 .bc-root .hero__sub{font-family:var(--serif);font-size:clamp(19px,2.6vw,27px);font-weight:400;max-width:32ch;line-height:1.3;color:#eef3e6;text-shadow:0 1px 14px rgba(10,24,8,.5)}
-.bc-root .hero__meta{margin-top:12px;display:flex;flex-wrap:wrap;gap:10px 22px;font-size:14px;color:#d7e3c8;align-items:center}
-.bc-root .chip{display:inline-flex;align-items:center;gap:8px;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.28);padding:5px 13px;border-radius:999px;font-size:13px}
-.bc-root .chip .dot{width:7px;height:7px;border-radius:50%;background:var(--canopy)}
+.bc-root .hero__meta{margin:14px 0 0;font-size:14px;color:#d7e3c8}
 
 /* objectives */
 .bc-root .obj-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
-.bc-root .obj{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:22px 24px;box-shadow:var(--shadow)}
-.bc-root .obj .num{font-family:var(--serif);font-size:15px;font-weight:600;color:var(--forest);letter-spacing:.02em}
-.bc-root .obj h3{font-size:19px;margin:8px 0 6px}
+.bc-root .obj{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:22px 24px}
+.bc-root .obj h3{font-size:19px;margin:0 0 6px}
 .bc-root .obj p{margin:0;color:var(--ink-soft);font-size:15px;line-height:1.55}
 .bc-root .goals{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:22px}
 .bc-root .goal{background:var(--forest-deep);color:#eef3e6;border-radius:12px;padding:18px 20px}
@@ -111,8 +105,10 @@ const CSS = `
 
 /* method cards */
 .bc-root .cards{display:grid;grid-template-columns:repeat(2,1fr);gap:18px}
-.bc-root .card{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:24px;box-shadow:var(--shadow)}
-.bc-root .card .ic{width:36px;height:36px;color:var(--forest);margin-bottom:14px}
+.bc-root .card{background:var(--sage);border:1px solid #d6dfca;border-radius:14px;padding:24px}
+.bc-root .card .ic-wrap{width:52px;height:52px;border-radius:50%;background:var(--paper);display:flex;align-items:center;justify-content:center;margin-bottom:14px}
+.bc-root .card .ic{width:28px;height:28px;color:var(--forest)}
+.bc-root .card .model{color:#9a6618}
 .bc-root .card h3{font-size:20px;margin-bottom:5px}
 .bc-root .card .model{font-size:12.5px;color:var(--gold);font-weight:600;margin-bottom:10px}
 .bc-root .card p{margin:0;color:var(--ink-soft);font-size:15px;line-height:1.55}
@@ -125,21 +121,21 @@ const CSS = `
 .bc-root .field-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:22px}
 .bc-root .hc{background:var(--paper);border:1px solid var(--line);border-radius:13px;overflow:hidden;box-shadow:var(--shadow)}
 .bc-root .hc .ph{aspect-ratio:3/2;width:100%;object-fit:cover;background:var(--sage)}
-.bc-root .hc .bar{height:4px}
 .bc-root .hc .body{padding:13px 15px 16px}
 .bc-root .hc .nm{font-family:var(--serif);font-weight:600;font-size:16px;line-height:1.15}
+.bc-root .hc .nm.hab{display:flex;align-items:center;gap:9px}
+.bc-root .hc .mk{width:14px;height:14px;border-radius:50%;flex:none;border:2px solid #fff;box-shadow:0 0 0 1px rgba(47,39,27,.25)}
 .bc-root .hc .ds{color:var(--ink-soft);font-size:12.5px;margin-top:3px;line-height:1.4}
 .bc-root .hc .ct{font-size:12px;color:var(--forest);font-weight:600;margin-top:8px}
 
 /* stat band */
 .bc-root .stats-band{background:var(--forest-deep);color:#eef3e6}
-.bc-root .stats-band .eyebrow{color:#a9c891}.bc-root .stats-band h2{color:#fff}.bc-root .stats-band .section-head p{color:#cbdabc}
+.bc-root .stats-band h2{color:#fff}.bc-root .stats-band .section-head p{color:#cbdabc}
 .bc-root .stat-grid{display:flex;flex-wrap:wrap;gap:1px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.12);border-radius:14px;overflow:hidden}
 .bc-root .stat{background:var(--forest-deep);padding:22px 20px;flex:1 1 calc(25% - 1px)}
 .bc-root .stat .n{font-family:var(--serif);font-size:clamp(30px,4.4vw,44px);font-weight:600;color:#fff;line-height:1;letter-spacing:-.01em}
 .bc-root .stat .l{margin-top:10px;font-size:13.5px;color:#c3d5b1;line-height:1.35}
 .bc-root .stat .sub{font-size:12px;color:#8fae76;margin-top:3px}
-.bc-root .stat-note{margin-top:18px;font-size:13.5px;color:#c3d5b1;line-height:1.55;max-width:78ch}
 
 /* map */
 .bc-root .map-section{background:var(--paper);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
@@ -172,7 +168,8 @@ const CSS = `
 .bc-root .audio-list{list-style:none;padding:0;margin:22px 0 0;display:grid;grid-template-columns:1fr 1fr;gap:22px}
 .bc-root .audio-list li{background:var(--paper);border:1px solid var(--line);border-radius:13px;overflow:hidden;box-shadow:var(--shadow)}
 .bc-root .audio-list .lab{font-size:14.5px;padding:13px 15px 10px}
-.bc-root .audio-list .lab b{font-family:var(--serif);font-weight:600}
+.bc-root .audio-list .lab b{display:block;font-family:var(--serif);font-weight:600}
+.bc-root .audio-list .lab span{display:block;color:var(--ink-soft);font-size:13px;margin-top:2px}
 .bc-root .audio-list .lab i{font-style:italic;color:var(--ink-soft)}
 .bc-root .spec-clip{display:block}
 .bc-root .spec-canvas-wrap{position:relative;height:132px;background:#140b1e}
@@ -186,26 +183,19 @@ const CSS = `
 .bc-root .gal{display:flex;flex-direction:column;gap:38px;margin-top:14px}
 .bc-root .shot{margin:0;max-width:100%}
 .bc-root .browser{border:1px solid var(--line);border-radius:12px;overflow:hidden;box-shadow:var(--shadow);background:#fff}
-.bc-root .browser .bchrome{display:flex;align-items:center;gap:9px;padding:9px 13px;background:#ece5d4;border-bottom:1px solid var(--line)}
-.bc-root .browser .bdots{display:flex;gap:6px;flex:none}
-.bc-root .browser .bdots i{width:11px;height:11px;border-radius:50%;display:block}
-.bc-root .browser .bdots i:nth-child(1){background:#e0655b}.bc-root .browser .bdots i:nth-child(2){background:#e3b341}.bc-root .browser .bdots i:nth-child(3){background:#57a45b}
-.bc-root .browser .baddr{flex:1;background:#fffdf7;border:1px solid var(--line);border-radius:7px;padding:5px 13px;font-size:12.5px;color:var(--ink-soft);max-width:440px}
 .bc-root .browser img{width:100%;display:block}
-.bc-root .shot .cap{padding:0 4px 14px}
+.bc-root .shot .cap{padding:12px 4px 0}
 .bc-root .shot .cap b{font-family:var(--serif);font-size:17px;font-weight:600;display:block;margin-bottom:3px}
 .bc-root .shot .cap span{color:var(--ink-soft);font-size:14px;line-height:1.5}
 .bc-root .also{margin-top:44px;padding-top:30px;border-top:1px solid var(--line)}
-.bc-root .also-t{font-family:var(--serif);font-size:15px;font-weight:600;letter-spacing:.02em;color:var(--forest);text-transform:uppercase;margin-bottom:16px}
+.bc-root .also-t{font-family:var(--serif);font-size:18px;font-weight:600;color:var(--ink);margin-bottom:14px}
 .bc-root .also ul{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:1fr 1fr;gap:12px 30px}
-.bc-root .also li{position:relative;padding-left:22px;color:var(--ink-soft);font-size:14.5px;line-height:1.5}
-.bc-root .also li::before{content:"";position:absolute;left:2px;top:8px;width:7px;height:7px;border-radius:50%;background:var(--canopy)}
+.bc-root .also li{color:var(--ink-soft);font-size:14.5px;line-height:1.5}
 
 /* collaborate */
 .bc-root .list{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:16px}
 .bc-root .list.opp-list{display:grid;grid-template-columns:1fr 1fr;column-gap:42px;row-gap:16px}
-.bc-root .list li{padding-left:26px;position:relative;font-size:15.5px;line-height:1.5}
-.bc-root .list li::before{content:"";position:absolute;left:0;top:9px;width:9px;height:9px;border-radius:50%;background:var(--canopy);box-shadow:0 0 0 3px var(--sage)}
+.bc-root .list li{font-size:15.5px;line-height:1.5}
 .bc-root .list li b{display:block;font-family:var(--serif);font-size:16.5px;font-weight:600;color:var(--ink);margin-bottom:1px}
 .bc-root .list li span{color:var(--ink-soft)}
 .bc-root .cta{margin-top:46px;background:linear-gradient(135deg,var(--forest-deep),var(--forest));color:#eef3e6;border-radius:18px;padding:38px 40px;box-shadow:var(--shadow)}
@@ -219,12 +209,10 @@ const CSS = `
 
 /* funders & acknowledgements */
 .bc-root .ack-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
-.bc-root .ack{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:22px 24px;box-shadow:var(--shadow)}
-.bc-root .ack h3{font-size:15px;font-weight:600;letter-spacing:.02em;text-transform:uppercase;color:var(--forest)}
+.bc-root .ack{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:22px 24px}
+.bc-root .ack h3{font-size:18px;font-weight:600;color:var(--ink)}
 .bc-root .ack .lead{margin:10px 0 0;color:var(--ink-soft);font-size:14.5px;line-height:1.5}
 .bc-root .ack ul{list-style:none;margin:16px 0 0;padding:0;display:flex;flex-direction:column;gap:12px}
-.bc-root .ack li{padding-left:22px;position:relative}
-.bc-root .ack li::before{content:"";position:absolute;left:2px;top:8px;width:7px;height:7px;border-radius:50%;background:var(--canopy)}
 .bc-root .ack .nm{font-family:var(--serif);font-size:16.5px;font-weight:600;color:var(--ink);line-height:1.3}
 .bc-root .ack .note{color:var(--ink-soft);font-size:13.5px;line-height:1.45;margin-top:2px}
 
@@ -234,7 +222,7 @@ const CSS = `
 .bc-root .empty{color:var(--ink-soft);font-size:15px}
 
 @media (max-width:820px){
-  .bc-root .obj-grid,.bc-root .cards,.bc-root .two,.bc-root .opp-list,.bc-root .gal{grid-template-columns:1fr;gap:18px}
+  .bc-root .obj-grid,.bc-root .cards,.bc-root .two,.bc-root .list.opp-list,.bc-root .gal{grid-template-columns:1fr;gap:18px}
   .bc-root .stat{flex-basis:calc(50% - 1px)}
   .bc-root .hab-grid{grid-template-columns:repeat(2,1fr)}
   .bc-root .field-grid{grid-template-columns:1fr}
@@ -306,7 +294,6 @@ export function ReportShell({ snapshot }: { snapshot: ReportSnapshot }) {
 
   const byType = s.cameraSpeciesByType ?? {};
   const tb = (s.audio.bytes / 1e12).toFixed(2);
-  const inField = Math.max(0, s.deploymentCount - s.retrievedCount);
 
   // 8 stat tiles: value + interpolated sub. Index-coupled to c.stats.tiles
   // (content.ts) and to the same arrays in download/route.ts — keep all three
@@ -351,7 +338,6 @@ export function ReportShell({ snapshot }: { snapshot: ReportSnapshot }) {
         <div className="hero__scrim" />
 
         <div className="hero__inner">
-          <p className="eyebrow">{c.hero.eyebrow}</p>
           <h1>{c.hero.title}</h1>
           <p className="hero__sub">{c.hero.sub}</p>
 
@@ -366,12 +352,7 @@ export function ReportShell({ snapshot }: { snapshot: ReportSnapshot }) {
             <LanguageToggle lang={lang} onToggle={setLang} />
           </div>
 
-          <div className="hero__meta">
-            <span className="chip">
-              <span className="dot" /> {tpl(c.hero.liveDate, { date: publishedDate })}
-            </span>
-            <span>{c.hero.metaSensors}</span>
-          </div>
+          <p className="hero__meta">{tpl(c.hero.liveDate, { date: publishedDate })}</p>
         </div>
       </header>
 
@@ -379,7 +360,6 @@ export function ReportShell({ snapshot }: { snapshot: ReportSnapshot }) {
       <section>
         <div className="wrap">
           <div className="section-head">
-            <div className="rule" />
             <h2>{c.learn.heading}</h2>
             {c.learn.intro.map((para, i) => (
               <p key={i}>{para}</p>
@@ -387,8 +367,7 @@ export function ReportShell({ snapshot }: { snapshot: ReportSnapshot }) {
           </div>
           <div className="obj-grid">
             {c.learn.objectives.map((o) => (
-              <div className="obj" key={o.num}>
-                <div className="num">{o.num}</div>
+              <div className="obj" key={o.title}>
                 <h3>{o.title}</h3>
                 <p>{o.body}</p>
               </div>
@@ -401,22 +380,24 @@ export function ReportShell({ snapshot }: { snapshot: ReportSnapshot }) {
       <section className="paper">
         <div className="wrap">
           <div className="section-head">
-            <div className="rule" />
             <h2>{c.methods.heading}</h2>
             <p>{c.methods.intro}</p>
           </div>
           <div className="cards">
             {c.methods.cards.map((card, i) => (
               <div className="card" key={card.title}>
-                <svg
-                  className="ic"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.7"
-                >
-                  {ICONS[i]}
-                </svg>
+                <span className="ic-wrap">
+                  <svg
+                    className="ic"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.7"
+                    aria-hidden="true"
+                  >
+                    {ICONS[i]}
+                  </svg>
+                </span>
                 <h3>{card.title}</h3>
                 <div className="model">{card.model}</div>
                 <p>{card.body}</p>
@@ -436,9 +417,11 @@ export function ReportShell({ snapshot }: { snapshot: ReportSnapshot }) {
                 <div className="hc" key={k}>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img className="ph" src={`/biochoco-overview/habitat/${k}.jpg`} alt={HABITAT[k].name[lang]} />
-                  <div className="bar" style={{ background: HABITAT[k].color }} />
                   <div className="body">
-                    <div className="nm">{HABITAT[k].name[lang]}</div>
+                    <div className="nm hab">
+                      <span className="mk" style={{ background: HABITAT[k].color }} aria-hidden="true" />
+                      {HABITAT[k].name[lang]}
+                    </div>
                     <div className="ds">{HABITAT[k].description[lang]}</div>
                     <div className="ct">
                       {count} {word}
@@ -455,26 +438,17 @@ export function ReportShell({ snapshot }: { snapshot: ReportSnapshot }) {
       <section className="stats-band">
         <div className="wrap">
           <div className="section-head">
-            <p className="eyebrow">{c.stats.eyebrow}</p>
             <h2>{c.stats.heading}</h2>
-            <p>{tpl(c.stats.spanLine, { span })}</p>
           </div>
           <div className="stat-grid">
             {c.stats.tiles.map((tile, i) => (
               <div className="stat" key={tile.label}>
                 <div className="n tnum">{fmt(statValues[i])}</div>
                 <div className="l">{tile.label}</div>
-                <div className="sub">{tpl(tile.sub, statVars)}</div>
+                {tile.sub && <div className="sub">{tpl(tile.sub, statVars)}</div>}
               </div>
             ))}
           </div>
-          <p className="stat-note">
-            {tpl(c.stats.note, {
-              deploymentCount: fmt(s.deploymentCount),
-              retrievedCount: fmt(s.retrievedCount),
-              inField: fmt(inField),
-            })}
-          </p>
         </div>
       </section>
 
@@ -482,7 +456,6 @@ export function ReportShell({ snapshot }: { snapshot: ReportSnapshot }) {
       <section className="map-section">
         <div className="wrap">
           <div className="section-head">
-            <div className="rule" />
             <h2>{c.map.heading}</h2>
             <p>{c.map.note}</p>
           </div>
@@ -499,7 +472,6 @@ export function ReportShell({ snapshot }: { snapshot: ReportSnapshot }) {
       <section className="paper">
         <div className="wrap">
           <div className="section-head">
-            <div className="rule" />
             <h2>{c.species.heading}</h2>
             <p>{c.species.intro}</p>
           </div>
@@ -555,7 +527,6 @@ export function ReportShell({ snapshot }: { snapshot: ReportSnapshot }) {
         <section>
           <div className="wrap">
             <div className="section-head">
-              <div className="rule" />
               <h2>{c.bonus.heading}</h2>
             </div>
             {snapshot.images.length > 0 && (
@@ -582,7 +553,8 @@ export function ReportShell({ snapshot }: { snapshot: ReportSnapshot }) {
                 {snapshot.audio.map((clip) => (
                   <li key={clip.audioId}>
                     <div className="lab">
-                      <b>{clip.speciesLabel}</b> — {clip.caption[lang]}
+                      <b>{clip.speciesLabel}</b>
+                      <span>{clip.caption[lang]}</span>
                     </div>
                     <SpectrogramClip
                       src={`/api/public/report-audio/${clip.audioId}`}
@@ -605,29 +577,20 @@ export function ReportShell({ snapshot }: { snapshot: ReportSnapshot }) {
       <section className="plat">
         <div className="wrap">
           <div className="section-head">
-            <div className="rule" />
             <h2>{c.platform.heading}</h2>
             <p>{c.platform.intro}</p>
           </div>
           <div className="gal">
             {c.platform.gallery.map((shot) => (
               <figure className="shot" key={shot.title}>
+                <div className="browser">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={`/biochoco-overview/gallery/${shot.file}`} alt={shot.title} />
+                </div>
                 <figcaption className="cap">
                   <b>{shot.title}</b>
                   <span>{shot.caption}</span>
                 </figcaption>
-                <div className="browser">
-                  <div className="bchrome">
-                    <div className="bdots">
-                      <i />
-                      <i />
-                      <i />
-                    </div>
-                    <div className="baddr">{shot.addr}</div>
-                  </div>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={`/biochoco-overview/gallery/${shot.file}`} alt={shot.title} />
-                </div>
               </figure>
             ))}
           </div>
@@ -646,7 +609,6 @@ export function ReportShell({ snapshot }: { snapshot: ReportSnapshot }) {
       <section>
         <div className="wrap">
           <div className="section-head">
-            <div className="rule" />
             <h2>{c.collaborate.heading}</h2>
             <p>{c.collaborate.intro}</p>
           </div>
@@ -685,7 +647,6 @@ export function ReportShell({ snapshot }: { snapshot: ReportSnapshot }) {
       <section>
         <div className="wrap">
           <div className="section-head">
-            <div className="rule" />
             <h2>{c.acknowledgements.heading}</h2>
           </div>
           <div className="ack-grid">
@@ -713,8 +674,6 @@ export function ReportShell({ snapshot }: { snapshot: ReportSnapshot }) {
           <b>{c.footer.org}</b>
           <br />
           {c.footer.tagline}
-          <br />
-          {tpl(c.footer.date, { date: publishedDate })}
         </div>
       </div>
     </div>

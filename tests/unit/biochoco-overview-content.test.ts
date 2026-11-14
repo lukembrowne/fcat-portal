@@ -51,17 +51,8 @@ describe("bilingual content parity", () => {
     for (const lang of ["en", "es"] as const) {
       const c = CONTENT[lang];
       expect(c.hero.liveDate).toContain("{date}");
-      // spanLine and note may be intentionally blank per language; when present
-      // they must carry the tokens the shell interpolates.
-      if (c.stats.spanLine) expect(c.stats.spanLine).toContain("{span}");
-      if (c.stats.note) {
-        expect(c.stats.note).toContain("{deploymentCount}");
-        expect(c.stats.note).toContain("{retrievedCount}");
-        expect(c.stats.note).toContain("{inField}");
-      }
       expect(c.species.camCap).toContain("{n}");
       expect(c.species.audCap).toContain("{n}");
-      expect(c.footer.date).toContain("{date}");
     }
     // The eight stat-tile subs reference the expected snapshot tokens.
     const subs = CONTENT.en.stats.tiles.map((t) => t.sub).join(" ");

@@ -17,6 +17,13 @@ capacity bars at **/admin/shared-drives** turn color:
 | **85%** (hard) | `drive_threshold_hard` | error | Provision **now**. The selector refuses new reservations on this drive. Re-nags daily. |
 | **95%** (stop) | `drive_full_readonly` | error | The drive auto-flips to `read-only`. New deployments must have somewhere else to land. |
 
+Separately, if routing **refuses** to create a deployment folder (no active drive
+for the project has room), an email goes out immediately (`folder_create_refused_email`,
+at most once per project per 24 h). This catches the case the daily email can't: each
+new folder reserves `DEPLOYMENT_QUOTA` items until the 3:15 AM reconcile, so creating
+many folders in one afternoon can exhaust a drive's headroom while its real fill is
+well under 75% (FCAT-BIOCHOCO-4, 2026-11-19).
+
 Provisioning lead time is days, so treat the **75%** soft alert as the real trigger.
 Keep at least one `active` drive with headroom at all times. A good rule of thumb:
 provision the next drive when the current one hits **50%**.
@@ -146,7 +153,7 @@ backfills `biochoco_deployments.shared_drive_id`. Idempotent and re-runnable.
   weekly Sunday full `files.list` count). The DB-derived file sum is *not* used for
   routing — it under-counts frames, trash, and manual uploads.
 - **`pending_reservations_count`** is in-flight folder reservations
-  (`DEPLOYMENT_QUOTA` = 40,000 each), trued up by reconcile.
+  (`DEPLOYMENT_QUOTA` = 10,000 each by default, `SHARED_DRIVE_DEPLOYMENT_QUOTA`), trued up by reconcile.
 - Trashed files still count toward the cap until purged (~30 days), so
   `reconciled_count` **includes them** (matches Google's item-cap warning). The
   delta only decrements on a permanent `removed`; a trash is net-zero. The

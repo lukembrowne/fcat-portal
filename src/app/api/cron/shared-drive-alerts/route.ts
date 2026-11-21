@@ -22,6 +22,7 @@ import {
   getSharedDriveCapacityAlerts,
   type SharedDriveCapacityAlerts,
 } from "@/lib/shared-drives";
+import { getSharedDriveAlertRecipients } from "@/lib/shared-drive-refusal-alert";
 
 export const dynamic = "force-dynamic";
 
@@ -38,9 +39,7 @@ export async function POST(request: Request) {
     return Response.json({ ok: true, sent: false, reason: "no_alerts" });
   }
 
-  const recipients = parseRecipients(
-    process.env.SHARED_DRIVE_ALERT_EMAILS ?? process.env.PORTAL_UPDATES_EMAILS,
-  );
+  const recipients = getSharedDriveAlertRecipients();
   if (recipients.length === 0) {
     log.warn(
       "[shared-drive-alerts] No recipients (SHARED_DRIVE_ALERT_EMAILS / PORTAL_UPDATES_EMAILS) — skipping send",
@@ -108,14 +107,6 @@ export async function POST(request: Request) {
     "[shared-drive-alerts] Email sent",
   );
   return Response.json({ ok: true, sent: true, recipientCount: recipients.length });
-}
-
-function parseRecipients(value: string | undefined): string[] {
-  if (!value) return [];
-  return value
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
 }
 
 function pct(n: number): string {

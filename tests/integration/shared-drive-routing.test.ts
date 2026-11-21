@@ -28,6 +28,17 @@ vi.mock("@/lib/drive-client", () => ({
   createDeploymentFolder: vi.fn(),
 }));
 
+// The refusal alert emails through Resend — capture sends instead.
+type SentEmail = { to: string[]; subject: string; html: string };
+const mockSend = vi.fn<(email: SentEmail) => Promise<{ data: { id: string }; error: null }>>(
+  async () => ({ data: { id: "email-1" }, error: null }),
+);
+vi.mock("resend", () => ({
+  Resend: class MockResend {
+    emails = { send: mockSend };
+  },
+}));
+
 const odk = await import("@/lib/odk-client");
 const driveClient = await import("@/lib/drive-client");
 const actions = await import("@/app/biochoco/data/drive-folder-actions");
@@ -158,6 +169,61 @@ describe("createSingleDriveFolder — routing enabled", () => {
       sql`SELECT event_type FROM system_events WHERE source = 'shared-drives'`,
     ) as { event_type: string }[];
     expect(evts.some((e) => e.event_type.startsWith("deployment_folder_create_"))).toBe(true);
+    vi.unstubAllEnvs();
+  });
+});
+
+describe("createSingleDriveFolder — refusal alert email", () => {
+  it("emails once per project for a batch of refused folders", async () => {
+    vi.stubEnv("SHARED_DRIVE_ROUTING_ENABLED", "true");
+    vi.stubEnv("SHARED_DRIVE_ALERT_EMAILS", "admin@example.org");
+    vi.stubEnv("RESEND_API_KEY", "re_test");
+    seedDrive("fcat-biochoco", 460_000);
+
+    // The create-folders panel calls the action once per deployment.
+    for (const id of ["TP-1", "TP-2", "TP-3"]) {
+      const res = await actions.createSingleDriveFolder(id);
+      expect(res.success).toBe(false);
+    }
+
+    expect(mockSend).toHaveBeenCalledTimes(1);
+    const sent = mockSend.mock.calls[0][0];
+    expect(sent.to).toEqual(["admin@example.org"]);
+    expect(sent.subject).toContain("TP-1");
+    expect(sent.html).toContain("fcat-biochoco");
+
+    const emailEvents = testDbRef.current.all(
+      sql`SELECT target_id FROM system_events WHERE event_type = 'folder_create_refused_email'`,
+    ) as { target_id: string }[];
+    expect(emailEvents).toEqual([{ target_id: String(bioChocoProjectId) }]);
+    vi.unstubAllEnvs();
+  });
+
+  it("does not email when a drive has room", async () => {
+    vi.stubEnv("SHARED_DRIVE_ROUTING_ENABLED", "true");
+    vi.stubEnv("SHARED_DRIVE_ALERT_EMAILS", "admin@example.org");
+    vi.stubEnv("RESEND_API_KEY", "re_test");
+    seedDrive("fcat-biochoco", 10_000);
+
+    const res = await actions.createSingleDriveFolder(DEPLOY_ID);
+    expect(res.success).toBe(true);
+    expect(mockSend).not.toHaveBeenCalled();
+    vi.unstubAllEnvs();
+  });
+
+  it("records the refusal without throwing when no recipients are configured", async () => {
+    vi.stubEnv("SHARED_DRIVE_ROUTING_ENABLED", "true");
+    vi.stubEnv("SHARED_DRIVE_ALERT_EMAILS", "");
+    vi.stubEnv("PORTAL_UPDATES_EMAILS", "");
+    seedDrive("fcat-biochoco", 460_000);
+
+    const res = await actions.createSingleDriveFolder(DEPLOY_ID);
+    expect(res.success).toBe(false);
+    expect(mockSend).not.toHaveBeenCalled();
+    const evt = testDbRef.current.get(
+      sql`SELECT severity, summary FROM system_events WHERE event_type = 'folder_create_refused_email'`,
+    ) as { severity: string; summary: string };
+    expect(evt.summary).toMatch(/sin destinatarios/);
     vi.unstubAllEnvs();
   });
 });

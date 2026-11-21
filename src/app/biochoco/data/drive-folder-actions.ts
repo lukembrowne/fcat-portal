@@ -18,6 +18,7 @@ import { revalidatePath } from "next/cache";
 import type { ActionResult } from "@/lib/types";
 import { log } from "@/lib/log";
 import { recordEvent } from "@/lib/system-events";
+import { notifyFolderCreateRefused } from "@/lib/shared-drive-refusal-alert";
 import {
   sharedDriveRoutingEnabled,
   selectAndReserveSlot,
@@ -253,10 +254,19 @@ export async function createSingleDriveFolder(
           source: "shared-drives",
           eventType: `deployment_folder_create_${sel.error}`,
           severity: "error",
-          summary: `Creación de carpeta sin capacidad (${deploymentId})`,
+          summary:
+            sel.error === "no_capacity"
+              ? `Creación de carpeta sin capacidad (${deploymentId})`
+              : `Creación de carpeta sin drives activos (${deploymentId})`,
           targetType: "ct_project",
-          targetId: bioChocoProject?.id ?? null,
+          targetId: bioChocoProject.id,
           details: { deploymentId },
+        });
+        await notifyFolderCreateRefused({
+          projectId: bioChocoProject.id,
+          projectName: "BioChoco",
+          deploymentId,
+          reason: sel.error,
         });
         return {
           deploymentId,
